@@ -28,7 +28,15 @@ export interface Repo {
   listKnowledgeTopics(): Promise<{ topic: string; count: number }[]>;
   updateKnowledgeCard(
     id: number,
-    patch: { title?: string; gist?: string; body?: string; topic?: string; archived?: boolean },
+    patch: {
+      title?: string;
+      gist?: string;
+      body?: string;
+      topic?: string;
+      archived?: boolean;
+      /** 合并进已有卡时必须同步更新来源 id，否则导出和后续合并都会错 */
+      sourceIds?: number[];
+    },
   ): Promise<void>;
   deleteKnowledgeCard(id: number): Promise<void>;
 

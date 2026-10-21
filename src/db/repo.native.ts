@@ -273,6 +273,10 @@ export const repo: Repo = {
       sets.push('archived = ?');
       params.push(patch.archived ? 1 : 0);
     }
+    if (patch.sourceIds !== undefined) {
+      sets.push('source_ids = ?');
+      params.push(JSON.stringify(patch.sourceIds));
+    }
     if (!sets.length) return;
     params.push(id);
     db().runSync(`UPDATE knowledge_cards SET ${sets.join(', ')} WHERE id = ?`, params);

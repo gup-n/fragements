@@ -1,13 +1,17 @@
 import type {
   AiConfig,
+  CardUpdateSuggestion,
   Fragment,
+  KnowledgeCard,
   KnowledgeSuggestion,
   MergeSuggestion,
   OrganizeResult,
   TagSuggestion,
+  Todo,
+  TodoDoneSuggestion,
   TodoSuggestion,
 } from '../types';
-import { SYSTEM_PROMPT, buildUserContent } from './prompt';
+import { SYSTEM_PROMPT, buildRefineContent, buildUserContent } from './prompt';
 
 export type AiErrorCode = 'nokey' | 'network' | 'auth' | 'quota' | 'rate' | 'server' | 'format';
 
@@ -50,11 +54,23 @@ function parseJsonLoose(text: string): unknown {
 /** 日期格式 YYYY-MM-DD */
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** 收敛 `todo_done` / `card_update` 时需要知道哪些 id 真实存在 */
+export interface NormalizeContext {
+  /** 允许被标记为完成的待办 id */
+  todoIds?: number[];
+  /** 允许被补充内容的知识卡 id */
+  cardIds?: number[];
+}
+
 /**
  * 把模型的自由输出收敛成可信结构：ID 必须存在于本次输入，
  * 日期必须合法，去重合并不得指向自己。任何不合规项直接丢弃。
  */
-export function normalizeResult(raw: unknown, fragments: Fragment[]): OrganizeResult {
+export function normalizeResult(
+  raw: unknown,
+  fragments: Fragment[],
+  context: NormalizeContext = {},
+): OrganizeResult {
   const valid = new Set(fragments.map((f) => f.id));
   const obj = (raw ?? {}) as Record<string, unknown>;
 
@@ -137,7 +153,56 @@ export function normalizeResult(raw: unknown, fragments: Fragment[]): OrganizeRe
     knowledge.push({ topic, title: title.slice(0, 60), gist, body, source_ids: sourceIds });
   }
 
-  return { tags: Array.from(tagMap.values()), todos, summary, merge: merges, knowledge };
+  // 标记已有待办完成：只认「真实存在过的待办 id」，并且同一条只处理一次
+  const validTodoIds = new Set(context.todoIds ?? []);
+  const todoDone: TodoDoneSuggestion[] = [];
+  const seenDone = new Set<number>();
+  for (const item of Array.isArray(obj.todo_done) ? obj.todo_done : []) {
+    const d = item as Record<string, unknown>;
+    const todoId = Number(d?.todo_id);
+    if (!Number.isFinite(todoId) || !validTodoIds.has(todoId) || seenDone.has(todoId)) continue;
+    seenDone.add(todoId);
+    todoDone.push({
+      todo_id: todoId,
+      reason: typeof d?.reason === 'string' && d.reason.trim() ? d.reason.trim() : null,
+    });
+  }
+
+  // 补充已有知识卡：必须指向真实卡片，且至少要带上一条本轮碎片，否则这条建议没有意义
+  const validCardIds = new Set(context.cardIds ?? []);
+  const cardUpdate: CardUpdateSuggestion[] = [];
+  const seenCard = new Set<number>();
+  for (const item of Array.isArray(obj.card_update) ? obj.card_update : []) {
+    const c = item as Record<string, unknown>;
+    const cardId = Number(c?.card_id);
+    if (!Number.isFinite(cardId) || !validCardIds.has(cardId) || seenCard.has(cardId)) continue;
+    const addIds = Array.from(
+      new Set(
+        (Array.isArray(c?.add_source_ids) ? c.add_source_ids : [])
+          .map(Number)
+          .filter((n) => Number.isFinite(n) && valid.has(n)),
+      ),
+    );
+    if (!addIds.length) continue;
+    seenCard.add(cardId);
+    cardUpdate.push({
+      card_id: cardId,
+      add_source_ids: addIds,
+      title: typeof c?.title === 'string' && c.title.trim() ? c.title.trim().slice(0, 60) : null,
+      gist: typeof c?.gist === 'string' && c.gist.trim() ? c.gist.trim() : null,
+      reason: typeof c?.reason === 'string' && c.reason.trim() ? c.reason.trim() : null,
+    });
+  }
+
+  return {
+    tags: Array.from(tagMap.values()),
+    todos,
+    summary,
+    merge: merges,
+    knowledge,
+    todo_done: todoDone,
+    card_update: cardUpdate,
+  };
 }
 
 function mapHttpError(status: number, detail: string): AiError {
@@ -153,12 +218,33 @@ export interface OrganizeOptions {
   config: AiConfig;
   /** 已有主题列表，传进去让模型优先复用，避免长出一堆同义主题 */
   topics?: string[];
+  /** 已有知识卡，用于「把新碎片补进老卡」 */
+  cards?: KnowledgeCard[];
+  /** 已有待办，用于「标记已完成」；内部只取未完成的 */
+  todos?: Todo[];
+  /** 上一轮模型的原始输出。多轮追问时原样回传，模型才知道自己上次说了什么 */
+  previousRaw?: string;
+  /** 这一轮用户的追问。为空表示首轮 */
+  instruction?: string;
 }
 
-export async function organize(options: OrganizeOptions): Promise<OrganizeResult> {
-  const { fragments, config, topics = [] } = options;
+export interface OrganizeOutcome {
+  result: OrganizeResult;
+  /** 模型原始输出，留着给下一轮追问回传 */
+  raw: string;
+}
+
+export async function organize(options: OrganizeOptions): Promise<OrganizeOutcome> {
+  const { fragments, config, topics = [], cards = [], todos = [], previousRaw, instruction } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!fragments.length) throw new AiError('format', '没有待整理的碎片');
+
+  const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'user', content: buildUserContent({ fragments, topics, cards, todos }) },
+  ];
+  if (previousRaw) messages.push({ role: 'assistant', content: previousRaw });
+  if (instruction) messages.push({ role: 'user', content: buildRefineContent(instruction) });
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -173,13 +259,10 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeResult
       },
       body: JSON.stringify({
         model: config.model || 'deepseek-chat',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: buildUserContent(fragments, topics) },
-        ],
+        messages,
         response_format: { type: 'json_object' },
         temperature: 0.2,
-        max_tokens: 3000,
+        max_tokens: 4000,
         stream: false,
       }),
       signal: controller.signal,
@@ -206,7 +289,11 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeResult
   const content: string = payload?.choices?.[0]?.message?.content ?? '';
   if (!content) throw new AiError('format', '模型没有返回内容');
 
-  return normalizeResult(parseJsonLoose(content), fragments);
+  const result = normalizeResult(parseJsonLoose(content), fragments, {
+    todoIds: todos.filter((t) => !t.done).map((t) => t.id),
+    cardIds: cards.map((c) => c.id),
+  });
+  return { result, raw: content };
 }
 
 /** 设置页的连通性测试：拉模型列表，比真实对话便宜得多 */

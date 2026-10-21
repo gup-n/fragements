@@ -1,16 +1,18 @@
-import type { Fragment } from '../types';
+import type { Fragment, KnowledgeCard, Todo } from '../types';
 import { dayKey, formatTime, todayISO, weekdayCN } from '../util/date';
 
-export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成五项工作。
+export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成七项工作。
 
 【输出格式】
 只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块。结构如下：
 {
-  "tags":      [{"id": 1, "labels": ["工作"], "project": "报销单"}],
-  "todos":     [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
-  "summary":   {"body_md": "……"},
-  "merge":     [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
-  "knowledge": [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}]
+  "tags":        [{"id": 1, "labels": ["工作"], "project": "报销单"}],
+  "todos":       [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
+  "summary":     {"body_md": "……"},
+  "merge":       [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
+  "knowledge":   [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
+  "todo_done":   [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
+  "card_update": [{"card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "同属 RAID 换盘"}]
 }
 
 【tags】为每条碎片给 1-3 个中文标签。标签要短，2-4 个字，优先复用常见类别（工作、生活、设备、财务、健康、学习、人际、想法）。project 填这条碎片所属的具体事项名（如"报销""NAS 维护"），看不出明确事项就填 null。每条碎片都必须出现在 tags 里。
@@ -19,7 +21,7 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 
 【summary】写一段 80-200 字的自然语言小结，分两层：先说这段时间你主动推进了什么，再说发生了哪些事（包括琐事和被打断的事）。要像人写的日记小结，不要罗列，不要用 markdown 标题。
 
-【merge】只标记"确实是同一件事、可以合并"的碎片。keep_id 选信息最全的那条，drop_ids 是其余几条。没有就返回空数组。宁可少标，也不要错标。
+【merge】只标记本轮碎片里"确实是同一件事、可以合并"的。keep_id 选信息最全的那条，drop_ids 是其余几条。没有就返回空数组。宁可少标，也不要错标。
 
 【knowledge】这是最重要的一项。判断碎片里有没有"下次还能用到"的东西：
 - 方法、步骤、操作技巧
@@ -28,19 +30,45 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 纯事件（"带 U 盘给小李"）、纯情绪、纯待办，一律不要出知识卡。宁可少出，不要凑数。没有就返回空数组。
 
 每张卡的字段要求：
-- topic：归属主题，2-6 个字，如"NAS 维护""装机""网络"。必须优先从下面【已有主题】里选，只有确实是全新领域才新建。
+- topic：归属主题，2-6 个字，如"NAS 维护""装机""网络"。必须优先从【已有主题】里选，只有确实是全新领域才新建。
 - title：一句话结论，8-15 字，要具体。反例："NAS 相关知识"（太泛）。正例："RAID5 换盘前先确认热备盘位"。
 - gist：2-4 条要点，每行以 "- " 开头，每行不超过 30 字。这是给人快速扫读的索引。
 - source_ids：来源碎片的 id 数组，必须来自用户给的列表。
 - 不要输出 body 字段，原文由系统直接从碎片里取。
 
+【todo_done】用来标记"用户已经做完"的已有待办。
+- 只有当本轮碎片明确写了某件事已经完成（"报销单交了""盘换好了"），且【未完成待办】里确实有对应那条时，才输出。
+- todo_id 必须来自【未完成待办】列表。
+- 拿不准就不要输出。误标完成会让用户真的漏掉这件事。
+
+【card_update】用来把本轮碎片补充进【已有知识卡】。
+- 只有当本轮碎片属于某张已有卡的主题、并且能补上它缺的信息时才输出。
+- card_id 必须来自【已有知识卡】；add_source_ids 只放真正要补进去的那几条。
+- title / gist：如果补进去之后原来的说法不够准了，给新的；否则填 null。宁可不改。
+- 如果更合适的是单独建一张新卡，就放 knowledge 里，不要硬塞 card_update。
+- 没有【已有知识卡】时返回空数组。
+
 【硬性约束】
 - 所有 id 必须来自用户给的列表，不许新造 id。
 - 不许编造用户没说过的事实、人名、数字。
 - 内容无意义的碎片（比如单个字符）可以不抽 todo，但仍然要给它 tag。
+- 标记了（已整理）的碎片是以前整理过的，重新整理它们时以现在的判断为准，不要因为"已经整理过"就放过明显的问题。
 - 全部字段都必须出现，没有内容就用空数组或 null。`;
 
-export function buildUserContent(fragments: Fragment[], existingTopics: string[] = []) {
+/** 交给模型的上下文。字段都可选，缺省时对应段落显示「暂无」 */
+export interface UserContentOptions {
+  fragments: Fragment[];
+  topics?: string[];
+  cards?: KnowledgeCard[];
+  todos?: Todo[];
+}
+
+/** 单次塞给模型的已有卡片/待办上限，避免上下文过长把碎片挤掉 */
+const CONTEXT_LIMIT = 30;
+
+export function buildUserContent(options: UserContentOptions) {
+  const { fragments, topics = [], cards = [], todos = [] } = options;
+
   const sorted = [...fragments].sort((a, b) => a.createdAt - b.createdAt);
   const out: string[] = [`今天是 ${todayISO()} ${weekdayCN(new Date())}。以下是待整理的碎片：`];
   let lastDay = '';
@@ -51,14 +79,52 @@ export function buildUserContent(fragments: Fragment[], existingTopics: string[]
       lastDay = key;
     }
     const text = f.content.replace(/\s+/g, ' ').trim();
-    out.push(`[${f.id}] ${formatTime(f.createdAt)} ${text}`);
+    const organized = f.status === 'inbox' ? '' : '（已整理）';
+    out.push(`[${f.id}] ${formatTime(f.createdAt)} ${text}${organized}`);
   }
 
   out.push('');
   out.push(
-    existingTopics.length
-      ? `【已有主题】${existingTopics.join('、')}`
+    topics.length
+      ? `【已有主题】${topics.join('、')}`
       : '【已有主题】暂无，可以新建',
   );
+
+  out.push('');
+  if (cards.length) {
+    out.push('【已有知识卡】（能补充它们就用 card_update，不要重复建同主题的卡）');
+    for (const c of cards.slice(0, CONTEXT_LIMIT)) {
+      out.push(`[${c.id}] ${c.topic} | ${c.title}`);
+    }
+  } else {
+    out.push('【已有知识卡】暂无');
+  }
+
+  out.push('');
+  const open = todos.filter((t) => !t.done);
+  if (open.length) {
+    out.push('【未完成待办】（本轮碎片表明某条已经做完，就用 todo_done）');
+    for (const t of open.slice(0, CONTEXT_LIMIT)) {
+      out.push(`[${t.id}] ${t.text}${t.dueAt ? ` · ${t.dueAt}` : ''}`);
+    }
+  } else {
+    out.push('【未完成待办】暂无');
+  }
+
   return out.join('\n');
+}
+
+/**
+ * 多轮的追问消息。
+ * 必须强调「输出完整结果」——否则模型容易只返回被改动的那几项，
+ * 上层的逐条确认界面就会丢掉用户还没确认的内容。
+ */
+export function buildRefineContent(instruction: string) {
+  return `【补充要求】${instruction}
+
+请按上面的要求修改整理结果，然后输出完整的新 JSON：
+
+- 输出的是**完整结果**，不是增量。没有要求改的部分必须原样保留，不要顺手删掉。
+- 仍然只输出 JSON 对象，不要任何解释文字。
+- id 仍然只能来自上面给过的列表。`;
 }

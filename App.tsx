@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { BackHandler, Platform, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Fragment } from './src/types';
@@ -39,6 +39,27 @@ export default function App() {
       }
     })();
   }, [reload]);
+
+  /**
+   * 安卓返回键：在任何子页面都先回主界面，只有已经在主界面时才退出 App。
+   *
+   * 之前缺这一层，用户在设置/知识库/整理页按返回会直接把 Activity 结束掉，
+   * 下次进来又回到上次那个页面（进程没被杀时会恢复），看起来像"退不出去也回不来"。
+   *
+   * 注意注册顺序：TimelineScreen 的覆盖层（长文输入）会在打开时才注册，
+   * 比这里晚，所以它的返回优先级更高 —— 开着覆盖层时先关覆盖层，符合直觉。
+   */
+  useEffect(() => {
+    if (isWeb) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route !== 'timeline') {
+        setRoute('timeline');
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [route]);
 
   const handleAdd = useCallback(
     async (text: string) => {

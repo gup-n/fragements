@@ -176,6 +176,7 @@ export const repo: Repo = {
     if (patch.body !== undefined) c.body = patch.body;
     if (patch.topic !== undefined) c.topic = patch.topic;
     if (patch.archived !== undefined) c.archived = patch.archived;
+    if (patch.sourceIds !== undefined) c.sourceIds = patch.sourceIds;
     persist();
   },
 

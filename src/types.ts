@@ -56,13 +56,41 @@ export interface KnowledgeCard {
   archived: boolean;
 }
 
-/** AI 一次调用返回的五类结果，字段顺序与契约一致 */
+/** AI 一次调用返回的结果，字段顺序与契约一致 */
 export interface OrganizeResult {
   tags: TagSuggestion[];
   todos: TodoSuggestion[];
   summary: { body_md: string } | null;
   merge: MergeSuggestion[];
   knowledge: KnowledgeSuggestion[];
+  /** 建议把已有待办标记为完成（碎片里说了「已经做了」） */
+  todo_done: TodoDoneSuggestion[];
+  /** 建议把本轮碎片补充进已有的知识卡，而不是新建一张同题的 */
+  card_update: CardUpdateSuggestion[];
+}
+
+/**
+ * 标记已有待办为完成。
+ * 这是一条**破坏性较弱但仍需确认**的建议：误标会让用户漏掉事情，
+ * 所以只在碎片明确写了「已经做完」时才允许出现。
+ */
+export interface TodoDoneSuggestion {
+  todo_id: number;
+  reason: string | null;
+}
+
+/**
+ * 把本轮碎片并入已有知识卡。
+ * 只做追加：原文按顺序接在后面，绝不覆盖卡片已有的正文。
+ */
+export interface CardUpdateSuggestion {
+  card_id: number;
+  add_source_ids: number[];
+  /** 补进去之后更贴切的标题，null 表示沿用原标题 */
+  title: string | null;
+  /** 补进去之后更新的要点，null 表示沿用原要点 */
+  gist: string | null;
+  reason: string | null;
 }
 
 export interface KnowledgeSuggestion {
