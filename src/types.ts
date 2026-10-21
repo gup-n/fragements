@@ -67,6 +67,10 @@ export interface OrganizeResult {
   todo_done: TodoDoneSuggestion[];
   /** 建议把本轮碎片补充进已有的知识卡，而不是新建一张同题的 */
   card_update: CardUpdateSuggestion[];
+  /** 建议归档的已有知识卡 —— 归档可恢复，不是删除 */
+  archive_cards: ArchiveCardSuggestion[];
+  /** 建议删掉的已有待办（过时、重复、不该存在） */
+  drop_todos: DropTodoSuggestion[];
 }
 
 /**
@@ -90,6 +94,25 @@ export interface CardUpdateSuggestion {
   title: string | null;
   /** 补进去之后更新的要点，null 表示沿用原要点 */
   gist: string | null;
+  reason: string | null;
+}
+
+/**
+ * 建议归档的已有知识卡。
+ * 归档 ≠ 删除：卡片只是从知识库里折叠起来，随时可以恢复。
+ * 重构场景下，被新卡完整取代的旧卡走这条。
+ */
+export interface ArchiveCardSuggestion {
+  card_id: number;
+  reason: string | null;
+}
+
+/**
+ * 建议删掉的已有待办：过时了、重复了、或者本来就是随手记的不是真事。
+ * 这是真删除，所以界面上默认不勾选。
+ */
+export interface DropTodoSuggestion {
+  todo_id: number;
   reason: string | null;
 }
 

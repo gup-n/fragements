@@ -243,6 +243,13 @@ export const repo: Repo = {
     return rows.map(toCard);
   },
 
+  async listArchivedKnowledgeCards() {
+    const rows = db().getAllSync<CardRow>(
+      'SELECT * FROM knowledge_cards WHERE archived = 1 ORDER BY created_at DESC',
+    );
+    return rows.map(toCard);
+  },
+
   async listKnowledgeTopics() {
     const rows = db().getAllSync<{ topic: string; n: number }>(
       'SELECT topic, COUNT(*) AS n FROM knowledge_cards WHERE archived = 0 GROUP BY topic ORDER BY n DESC, topic ASC',

@@ -156,6 +156,12 @@ export const repo: Repo = {
     return cards.sort((a, b) => a.topic.localeCompare(b.topic) || b.createdAt - a.createdAt);
   },
 
+  async listArchivedKnowledgeCards() {
+    return load()
+      .knowledgeCards.filter((c) => c.archived)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+
   async listKnowledgeTopics() {
     const map = new Map<string, number>();
     for (const c of load().knowledgeCards) {

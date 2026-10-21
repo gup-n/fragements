@@ -1,6 +1,8 @@
 import type {
   AiConfig,
+  ArchiveCardSuggestion,
   CardUpdateSuggestion,
+  DropTodoSuggestion,
   Fragment,
   KnowledgeCard,
   KnowledgeSuggestion,
@@ -194,6 +196,38 @@ export function normalizeResult(
     });
   }
 
+  // 建议归档的旧卡：必须真实存在，且不能和「补充到这张卡」自相矛盾
+  const archiveCards: ArchiveCardSuggestion[] = [];
+  const seenArchive = new Set<number>();
+  for (const item of Array.isArray(obj.archive_cards) ? obj.archive_cards : []) {
+    const a = item as Record<string, unknown>;
+    const cardId = Number(a?.card_id);
+    if (!Number.isFinite(cardId) || !validCardIds.has(cardId) || seenArchive.has(cardId)) continue;
+    // 同一张卡又要补充又要归档，说明模型自己没想清楚，这条归档建议丢掉
+    if (seenCard.has(cardId)) continue;
+    seenArchive.add(cardId);
+    archiveCards.push({
+      card_id: cardId,
+      reason: typeof a?.reason === 'string' && a.reason.trim() ? a.reason.trim() : null,
+    });
+  }
+
+  // 建议删掉的待办
+  const dropTodos: DropTodoSuggestion[] = [];
+  const seenDrop = new Set<number>();
+  for (const item of Array.isArray(obj.drop_todos) ? obj.drop_todos : []) {
+    const d = item as Record<string, unknown>;
+    const todoId = Number(d?.todo_id);
+    if (!Number.isFinite(todoId) || !validTodoIds.has(todoId) || seenDrop.has(todoId)) continue;
+    // 又要标完成又要删，同一条待办不能既生又死
+    if (seenDone.has(todoId)) continue;
+    seenDrop.add(todoId);
+    dropTodos.push({
+      todo_id: todoId,
+      reason: typeof d?.reason === 'string' && d.reason.trim() ? d.reason.trim() : null,
+    });
+  }
+
   return {
     tags: Array.from(tagMap.values()),
     todos,
@@ -202,6 +236,8 @@ export function normalizeResult(
     knowledge,
     todo_done: todoDone,
     card_update: cardUpdate,
+    archive_cards: archiveCards,
+    drop_todos: dropTodos,
   };
 }
 
@@ -226,6 +262,8 @@ export interface OrganizeOptions {
   previousRaw?: string;
   /** 这一轮用户的追问。为空表示首轮 */
   instruction?: string;
+  /** organize = 整理未读；refactor = 把已整理过的重新过一遍并和旧结果对照 */
+  mode?: 'organize' | 'refactor';
 }
 
 export interface OrganizeOutcome {
@@ -235,13 +273,22 @@ export interface OrganizeOutcome {
 }
 
 export async function organize(options: OrganizeOptions): Promise<OrganizeOutcome> {
-  const { fragments, config, topics = [], cards = [], todos = [], previousRaw, instruction } = options;
+  const {
+    fragments,
+    config,
+    topics = [],
+    cards = [],
+    todos = [],
+    previousRaw,
+    instruction,
+    mode = 'organize',
+  } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!fragments.length) throw new AiError('format', '没有待整理的碎片');
 
   const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: buildUserContent({ fragments, topics, cards, todos }) },
+    { role: 'user', content: buildUserContent({ fragments, topics, cards, todos, mode }) },
   ];
   if (previousRaw) messages.push({ role: 'assistant', content: previousRaw });
   if (instruction) messages.push({ role: 'user', content: buildRefineContent(instruction) });

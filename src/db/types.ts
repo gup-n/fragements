@@ -25,6 +25,8 @@ export interface Repo {
     sourceIds: number[];
   }): Promise<number>;
   listKnowledgeCards(topic?: string): Promise<KnowledgeCard[]>;
+  /** 已归档的卡片；归档必须可逆，所以界面上要能看到并恢复 */
+  listArchivedKnowledgeCards(): Promise<KnowledgeCard[]>;
   listKnowledgeTopics(): Promise<{ topic: string; count: number }[]>;
   updateKnowledgeCard(
     id: number,

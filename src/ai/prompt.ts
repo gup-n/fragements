@@ -1,18 +1,20 @@
 import type { Fragment, KnowledgeCard, Todo } from '../types';
 import { dayKey, formatTime, todayISO, weekdayCN } from '../util/date';
 
-export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成七项工作。
+export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成九项工作。
 
 【输出格式】
 只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块。结构如下：
 {
-  "tags":        [{"id": 1, "labels": ["工作"], "project": "报销单"}],
-  "todos":       [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
-  "summary":     {"body_md": "……"},
-  "merge":       [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
-  "knowledge":   [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
-  "todo_done":   [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
-  "card_update": [{"card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "同属 RAID 换盘"}]
+  "tags":          [{"id": 1, "labels": ["工作"], "project": "报销单"}],
+  "todos":         [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
+  "summary":       {"body_md": "……"},
+  "merge":         [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
+  "knowledge":     [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
+  "todo_done":     [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
+  "card_update":   [{"card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "同属 RAID 换盘"}],
+  "archive_cards": [{"card_id": 7, "reason": "内容已被新卡完整覆盖"}],
+  "drop_todos":    [{"todo_id": 6, "reason": "和另一条重复"}]
 }
 
 【tags】为每条碎片给 1-3 个中文标签。标签要短，2-4 个字，优先复用常见类别（工作、生活、设备、财务、健康、学习、人际、想法）。project 填这条碎片所属的具体事项名（如"报销""NAS 维护"），看不出明确事项就填 null。每条碎片都必须出现在 tags 里。
@@ -46,7 +48,18 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 - card_id 必须来自【已有知识卡】；add_source_ids 只放真正要补进去的那几条。
 - title / gist：如果补进去之后原来的说法不够准了，给新的；否则填 null。宁可不改。
 - 如果更合适的是单独建一张新卡，就放 knowledge 里，不要硬塞 card_update。
-- 没有【已有知识卡】时返回空数组。
+
+【archive_cards】用来归档已经过时的【已有知识卡】。
+- 典型场景：一张旧卡讲的和另一张重复、或者被新增的卡完整覆盖了。
+- card_id 必须来自【已有知识卡】。归档是可恢复的，但仍然要想清楚：**只有确认这张卡的信息已经被别处完整承接，才建议归档**。
+- 信息有独特性、只是你觉得标题不好，不要归档 —— 那种情况应该用 card_update 去改它。
+- 没有就返回空数组。
+
+【drop_todos】用来删掉不该存在的【未完成待办】。
+- 只针对三种情况：明显重复、说的不是真事（当初从纯感想里误抽的）、已经被别的事实质取代。
+- **已经做完的事不要用 drop_todos**，那要用 todo_done —— 两者含义不同。
+- 这是真删除，不能撤销。拿不准就保留。
+- 没有就返回空数组。
 
 【硬性约束】
 - 所有 id 必须来自用户给的列表，不许新造 id。
@@ -61,16 +74,29 @@ export interface UserContentOptions {
   topics?: string[];
   cards?: KnowledgeCard[];
   todos?: Todo[];
+  /**
+   * organize = 整理未读碎片；refactor = 把已整理过的碎片重新过一遍，
+   * 结果是和旧标签/旧知识卡做对照，而不是当全新内容处理。
+   */
+  mode?: 'organize' | 'refactor';
 }
 
 /** 单次塞给模型的已有卡片/待办上限，避免上下文过长把碎片挤掉 */
 const CONTEXT_LIMIT = 30;
 
 export function buildUserContent(options: UserContentOptions) {
-  const { fragments, topics = [], cards = [], todos = [] } = options;
+  const { fragments, topics = [], cards = [], todos = [], mode = 'organize' } = options;
+  const refactor = mode === 'refactor';
 
   const sorted = [...fragments].sort((a, b) => a.createdAt - b.createdAt);
   const out: string[] = [`今天是 ${todayISO()} ${weekdayCN(new Date())}。以下是待整理的碎片：`];
+
+  if (refactor) {
+    out.push(
+      '（这是一次**重构**：这些碎片以前整理过，现在重新判断一遍。请独立判断，不要因为标签已经存在就照抄。）',
+    );
+  }
+
   let lastDay = '';
   for (const f of sorted) {
     const key = dayKey(f.createdAt);
@@ -79,8 +105,22 @@ export function buildUserContent(options: UserContentOptions) {
       lastDay = key;
     }
     const text = f.content.replace(/\s+/g, ' ').trim();
-    const organized = f.status === 'inbox' ? '' : '（已整理）';
-    out.push(`[${f.id}] ${formatTime(f.createdAt)} ${text}${organized}`);
+    // 重构时把旧标签一并给模型看，它才知道「哪里变了」
+    let suffix = '';
+    if (f.status !== 'inbox') {
+      if (refactor) {
+        const old = [
+          f.tags.length ? `标签：${f.tags.join('、')}` : '无标签',
+          f.project ? `项目：${f.project}` : null,
+        ]
+          .filter(Boolean)
+          .join('｜');
+        suffix = `（已整理｜${old}）`;
+      } else {
+        suffix = '（已整理）';
+      }
+    }
+    out.push(`[${f.id}] ${formatTime(f.createdAt)} ${text}${suffix}`);
   }
 
   out.push('');

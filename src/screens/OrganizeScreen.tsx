@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -27,13 +27,18 @@ interface Props {
 
 type Phase = 'idle' | 'running' | 'error' | 'result' | 'applying' | 'done';
 
-/** 整理范围：只处理未读，或连已整理的一起重看 */
-type Scope = 'inbox' | 'all';
+/**
+ * organize = 处理未读碎片
+ * refactor = 把已整理过的碎片重新过一遍，结果与旧标签、旧知识卡逐项对照
+ */
+type Mode = 'organize' | 'refactor';
+
+/** 重构范围：最近整理过的，或某个主题下的全部碎片 */
+type RefactorScope = 'recent' | 'topic';
 
 const INBOX_LIMIT = 60;
-/** 混着整理时：未读优先，剩下的额度留给最近整理过的 */
-const MIXED_INBOX_LIMIT = 40;
-const MIXED_ORGANIZED_LIMIT = 60;
+/** 重构单次上限。原文比未读碎片长得多，多了 token 会爆 */
+const REFACTOR_LIMIT = 40;
 
 /**
  * 确认项的稳定 key。
@@ -49,12 +54,24 @@ const K = {
   merge: (keepId: number, dropIds: number[]) => `merge|${keepId}|${dropIds.join(',')}`,
   done: (todoId: number) => `done|${todoId}`,
   card: (cardId: number) => `card|${cardId}`,
+  archive: (cardId: number) => `archive|${cardId}`,
+  drop: (todoId: number) => `drop|${todoId}`,
   summary: 'summary',
 };
 
+/** 两组标签是否等价（集合比较，模型重排顺序不算变化） */
+function sameLabels(a: string[], b: string[]) {
+  if (a.length !== b.length) return false;
+  const sa = [...a].sort().join('\u0001');
+  const sb = [...b].sort().join('\u0001');
+  return sa === sb;
+}
+
 export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
-  const [scope, setScope] = useState<Scope>('inbox');
+  const [mode, setMode] = useState<Mode>('organize');
+  const [refactorScope, setRefactorScope] = useState<RefactorScope>('recent');
+  const [refactorTopic, setRefactorTopic] = useState<string | null>(null);
   const [result, setResult] = useState<OrganizeResult | null>(null);
   /** 模型原始输出，追问时原样回传 */
   const [raw, setRaw] = useState('');
@@ -72,24 +89,50 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   const [topics, setTopics] = useState<string[]>([]);
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
+  /** 重构 idle 面板要按主题挑范围，得先知道有哪些主题 */
+  const [idleTopics, setIdleTopics] = useState<{ topic: string; count: number }[]>([]);
 
   const keyboardHeight = useKeyboardHeight();
 
   const inbox = useMemo(() => fragments.filter((f) => f.status === 'inbox'), [fragments]);
   const organized = useMemo(() => fragments.filter((f) => f.status === 'tagged'), [fragments]);
 
-  const batch = useMemo(() => {
-    if (scope === 'inbox') return inbox.slice(0, INBOX_LIMIT);
-    const picked = [...inbox.slice(0, MIXED_INBOX_LIMIT), ...organized.slice(0, MIXED_ORGANIZED_LIMIT)];
-    const seen = new Set<number>();
-    return picked.filter((f) => {
-      if (seen.has(f.id)) return false;
-      seen.add(f.id);
-      return true;
-    });
-  }, [scope, inbox, organized]);
+  // 进页面或切换模式时刷新一次已有卡片/主题，空闲面板要用
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const [c, t] = await Promise.all([repo.listKnowledgeCards(), repo.listKnowledgeTopics()]);
+        if (!alive) return;
+        setCards(c);
+        setIdleTopics(t);
+      } catch {
+        /* 读不到就空着，不影响整理 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [mode]);
 
-  const available = inbox.length + (scope === 'all' ? organized.length : 0);
+  const organizeBatch = useMemo(() => inbox.slice(0, INBOX_LIMIT), [inbox]);
+
+  const refactorPool = useMemo(() => {
+    if (refactorScope === 'topic') {
+      if (!refactorTopic) return [];
+      const ids = new Set<number>();
+      for (const c of cards) {
+        if (c.topic === refactorTopic) c.sourceIds.forEach((id) => ids.add(id));
+      }
+      return fragments.filter((f) => ids.has(f.id));
+    }
+    return organized;
+  }, [refactorScope, refactorTopic, cards, fragments, organized]);
+
+  const refactorBatch = useMemo(() => refactorPool.slice(0, REFACTOR_LIMIT), [refactorPool]);
+
+  const batch = mode === 'refactor' ? refactorBatch : organizeBatch;
+  const available = mode === 'refactor' ? refactorPool.length : inbox.length;
   const overflow = available - batch.length;
 
   const byId = useMemo(() => new Map(fragments.map((f) => [f.id, f])), [fragments]);
@@ -103,6 +146,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
     result.knowledge.forEach((k) => keys.push(K.knowledge(k.topic, k.title)));
     result.todo_done.forEach((d) => keys.push(K.done(d.todo_id)));
     result.card_update.forEach((c) => keys.push(K.card(c.card_id)));
+    result.archive_cards.forEach((a) => keys.push(K.archive(a.card_id)));
+    result.drop_todos.forEach((d) => keys.push(K.drop(d.todo_id)));
     result.tags.forEach((t) => keys.push(K.tag(t.id)));
     result.merge.forEach((m) => keys.push(K.merge(m.keep_id, m.drop_ids)));
     if (result.summary) keys.push(K.summary);
@@ -122,23 +167,76 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   }
 
   /**
-   * 「标记待办完成」是本页唯一会**减少**用户可见内容的操作：
-   * 误标之后待办从列表里消失，用户很难注意到自己少了一件事。
-   * 所以这一类默认不勾选，必须由用户主动点一下。
-   * 追问时只把「这一轮新冒出来的」置为不勾，用户已表过态的保持原样。
+   * 有三类建议是**默认不勾选**的，因为它们会减少用户能看到的内容：
+   * 「标记待办完成」「归档知识卡」「删除待办」。
+   * 误操作之后内容就从列表里消失了，用户很难注意到，必须主动点一下。
+   *
+   * 追问时只把「这一轮新冒出来的」置为不勾，用户已经表过态的保持原样。
    */
-  function withFreshDone(
-    prev: Set<string>,
-    fresh: OrganizeResult,
-    previous: OrganizeResult | null,
-  ) {
-    const known = new Set((previous?.todo_done ?? []).map((d) => K.done(d.todo_id)));
+  function withFreshOff(prev: Set<string>, fresh: OrganizeResult, previous: OrganizeResult | null) {
     const next = new Set(prev);
-    for (const d of fresh.todo_done) {
-      const key = K.done(d.todo_id);
-      if (!known.has(key)) next.add(key);
-    }
+    const addNew = (now: string[], before: string[]) => {
+      const known = new Set(before);
+      for (const key of now) if (!known.has(key)) next.add(key);
+    };
+    addNew(
+      fresh.todo_done.map((d) => K.done(d.todo_id)),
+      (previous?.todo_done ?? []).map((d) => K.done(d.todo_id)),
+    );
+    addNew(
+      fresh.archive_cards.map((a) => K.archive(a.card_id)),
+      (previous?.archive_cards ?? []).map((a) => K.archive(a.card_id)),
+    );
+    addNew(
+      fresh.drop_todos.map((d) => K.drop(d.todo_id)),
+      (previous?.drop_todos ?? []).map((d) => K.drop(d.todo_id)),
+    );
     return next;
+  }
+
+  /**
+   * 新卡和某张旧卡的来源碎片重叠 ≥ 50%，就认为这张新卡是旧卡的「替代版本」。
+   * 重建构场景：同一段原文重新提炼，标题措辞变了，但讲的还是同一件事。
+   */
+  function replacementOf(sourceIds: number[]): KnowledgeCard | null {
+    if (!sourceIds.length) return null;
+    const incoming = new Set(sourceIds);
+    let best: KnowledgeCard | null = null;
+    let bestScore = 0;
+    for (const c of cards) {
+      if (!c.sourceIds.length) continue;
+      const hit = c.sourceIds.filter((id) => incoming.has(id)).length;
+      const score = hit / Math.min(c.sourceIds.length, sourceIds.length);
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    return bestScore >= 0.5 ? best : null;
+  }
+
+  /**
+   * 重构模式要做的两件降噪，不能寄希望于模型自己收敛：
+   *
+   * 1. **不再重复抽待办**。这些碎片上次整理时已经抽过一遍了，模型重看一遍
+   *    会再抽出来一批同样的 —— 每重构一次待办列表就多一份重复。判据两条：
+   *    文案（去掉标点空白后）相同，或者这条碎片本来就派生出过待办。
+   * 2. **不再生成今日小结**。重构的碎片本来就整理过了，那时候小结已经写过。
+   *    再写一条同一天的小结纯属重复。
+   *
+   * 标签、知识卡、归档、删待办这些才是重构真正要产出的东西，原样保留。
+   */
+  function pruneRefactorResult(res: OrganizeResult, existing: Todo[]): OrganizeResult {
+    if (mode !== 'refactor') return res;
+    const norm = (s: string) => s.replace(/[\s，。、,.!！?？~～;；:：'"“”‘’()（）\[\]【】\-—_/]/g, '');
+    const seenText = new Set(existing.map((t) => norm(t.text)));
+    const seenSource = new Set(
+      existing.map((t) => t.sourceFragmentId).filter((n): n is number => n !== null),
+    );
+    const todos = res.todos.filter(
+      (t) => !seenText.has(norm(t.text)) && !(t.id !== null && seenSource.has(t.id)),
+    );
+    return { ...res, todos, summary: null };
   }
 
   async function start() {
@@ -163,7 +261,9 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         topics: topicList,
         cards: cardList,
         todos: todoList,
+        mode,
       });
+      const cleaned = pruneRefactorResult(outcome.result, todoList);
 
       const id = await repo.saveRun({
         startedAt,
@@ -178,8 +278,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
       setCards(cardList);
       setTodos(todoList);
       setRaw(outcome.raw);
-      setResult(outcome.result);
-      setDeselected(withFreshDone(new Set(), outcome.result, null));
+      setResult(cleaned);
+      setDeselected(withFreshOff(new Set(), cleaned, null));
       setRound(1);
       setPhase('result');
     } catch (e) {
@@ -205,10 +305,12 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         todos,
         previousRaw: raw,
         instruction,
+        mode,
       });
+      const cleaned = pruneRefactorResult(outcome.result, todos);
       setRaw(outcome.raw);
-      setResult(outcome.result);
-      setDeselected((prev) => withFreshDone(prev, outcome.result, result));
+      setResult(cleaned);
+      setDeselected((prev) => withFreshOff(prev, cleaned, result));
       setRefineText('');
       setRound((r) => r + 1);
       // 其余项保留 deselected：内容没变的那几条，用户取消过就还是取消
@@ -223,6 +325,15 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   async function apply() {
     if (!result) return;
     setPhase('applying');
+    // 同一张旧卡可能被多张新卡判定为替代，只归档一次
+    const archivedByReplacement = new Set<number>();
+    /**
+     * 用户明确取消勾选的「归档这张卡」，替代逻辑也不能偷偷把它归档掉。
+     * 「操作要用户授权」这条得由代码保证，不能只在界面上提示一句。
+     */
+    const declinedArchive = new Set(
+      result.archive_cards.filter((a) => !isOn(K.archive(a.card_id))).map((a) => a.card_id),
+    );
     try {
       const tagItems = result.tags.filter((t) => isOn(K.tag(t.id)));
       for (const t of tagItems) {
@@ -248,6 +359,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
 
       for (const k of result.knowledge) {
         if (!isOn(K.knowledge(k.topic, k.title))) continue;
+        // 和旧卡高度重叠 = 这张新卡就是旧卡的替代版本，旧卡归档而不是留着两份
+        const replaced = replacementOf(k.source_ids);
         await repo.insertKnowledgeCard({
           topic: k.topic,
           title: k.title,
@@ -256,6 +369,22 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
           sourceIds: k.source_ids,
         });
         if (k.source_ids.length) await repo.setFragmentNature(k.source_ids, 'knowledge');
+        if (replaced && !declinedArchive.has(replaced.id) && !archivedByReplacement.has(replaced.id)) {
+          await repo.updateKnowledgeCard(replaced.id, { archived: true });
+          archivedByReplacement.add(replaced.id);
+        }
+      }
+
+      // AI 主动建议归档的旧卡
+      for (const a of result.archive_cards) {
+        if (!isOn(K.archive(a.card_id))) continue;
+        await repo.updateKnowledgeCard(a.card_id, { archived: true });
+      }
+
+      // AI 主动建议删掉的待办（真删除，界面上默认不勾选）
+      for (const d of result.drop_todos) {
+        if (!isOn(K.drop(d.todo_id))) continue;
+        await repo.deleteTodo(d.todo_id);
       }
 
       // 补充已有卡：原文只追加不覆盖，卡片已有的正文一个字都不动
@@ -307,7 +436,20 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
     }
   }
 
-  const headerTitle = round > 1 ? `整理 · 第 ${round} 版` : '整理';
+  const word = mode === 'refactor' ? '重构' : '整理';
+  const headerTitle = round > 1 ? `${word} · 第 ${round} 版` : word;
+
+  function switchMode(next: Mode) {
+    if (next === mode) return;
+    setMode(next);
+    setErrorMsg('');
+  }
+
+  /** 切到按主题时自动选中第一个，否则池子是空的，用户会以为没东西可重构 */
+  function pickTopicScope() {
+    setRefactorScope('topic');
+    if (!refactorTopic && idleTopics.length) setRefactorTopic(idleTopics[0].topic);
+  }
 
   return (
     <View style={styles.root}>
@@ -326,23 +468,64 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
       >
         {phase === 'idle' && (
           <View>
-            <View style={styles.heroCard}>
-              <Text style={styles.heroNum}>{inbox.length}</Text>
-              <Text style={styles.heroLabel}>条未整理的碎片</Text>
-
-              <Pressable style={styles.scopeRow} onPress={() => setScope(scope === 'inbox' ? 'all' : 'inbox')}>
-                <View style={[styles.scopeBox, scope === 'all' && styles.scopeBoxOn]}>
-                  {scope === 'all' && <Ionicons name="checkmark" size={11} color="#FFFFFF" />}
-                </View>
-                <View style={styles.scopeBody}>
-                  <Text style={styles.scopeTitle}>连同已整理的一起重看</Text>
-                  <Text style={styles.scopeSub}>
-                    {scope === 'all'
-                      ? `会带上最近 ${Math.min(organized.length, MIXED_ORGANIZED_LIMIT)} 条已整理的碎片，AI 可以重新归类、合并它们`
-                      : '只看未读。已有知识卡和未完成待办始终作为参考，用来补充卡片、标记完成'}
-                  </Text>
-                </View>
+            <View style={styles.segment}>
+              <Pressable
+                style={[styles.segmentItem, mode === 'organize' && styles.segmentItemOn]}
+                onPress={() => switchMode('organize')}
+              >
+                <Text style={[styles.segmentText, mode === 'organize' && styles.segmentTextOn]}>
+                  整理未读
+                </Text>
               </Pressable>
+              <Pressable
+                style={[styles.segmentItem, mode === 'refactor' && styles.segmentItemOn]}
+                onPress={() => switchMode('refactor')}
+              >
+                <Text style={[styles.segmentText, mode === 'refactor' && styles.segmentTextOn]}>
+                  重构已整理
+                </Text>
+              </Pressable>
+            </View>
+
+            <View style={styles.heroCard}>
+              <Text style={styles.heroNum}>{available}</Text>
+              <Text style={styles.heroLabel}>
+                {mode === 'refactor'
+                  ? refactorScope === 'topic' && refactorTopic
+                    ? `「${refactorTopic}」下的碎片`
+                    : '条已整理的碎片'
+                  : '条未整理的碎片'}
+              </Text>
+
+              {mode === 'refactor' && (
+                <View style={styles.scopeBlock}>
+                  <Text style={styles.scopeLabel}>重构范围</Text>
+                  <View style={styles.chipRow}>
+                    <Chip
+                      label="最近整理过"
+                      on={refactorScope === 'recent'}
+                      onPress={() => setRefactorScope('recent')}
+                    />
+                    <Chip label="按主题" on={refactorScope === 'topic'} onPress={pickTopicScope} />
+                  </View>
+                  {refactorScope === 'topic' && (
+                    <View style={styles.chipRow}>
+                      {idleTopics.length ? (
+                        idleTopics.map((t) => (
+                          <Chip
+                            key={t.topic}
+                            label={`${t.topic} · ${t.count}`}
+                            on={refactorTopic === t.topic}
+                            onPress={() => setRefactorTopic(t.topic)}
+                          />
+                        ))
+                      ) : (
+                        <Text style={styles.scopeSub}>还没有知识卡，先用「整理未读」跑一轮。</Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+              )}
 
               <Pressable
                 style={[styles.primaryBtn, !batch.length && styles.primaryBtnDisabled]}
@@ -350,19 +533,37 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
                 disabled={!batch.length}
               >
                 <Text style={styles.primaryBtnText}>
-                  {batch.length ? `开始整理 ${batch.length} 条` : '没有可整理的碎片'}
+                  {batch.length
+                    ? `${mode === 'refactor' ? '开始重构' : '开始整理'} ${batch.length} 条`
+                    : '没有可处理的碎片'}
                 </Text>
               </Pressable>
 
               {overflow > 0 && (
                 <Text style={styles.overflowText}>
-                  还有 {overflow} 条这次没带上，处理完再整理一轮即可。
+                  还有 {overflow} 条这次没带上，处理完再来一轮即可。
                 </Text>
               )}
               {!!errorMsg && <Text style={styles.errText}>{errorMsg}</Text>}
             </View>
 
-            {errorMsg.includes('API Key') && (
+            {mode === 'refactor' && (
+              <View style={styles.explainCard}>
+                <Text style={styles.explainTitle}>重构做什么</Text>
+                <Text style={styles.explainText}>
+                  把这些碎片重新过一遍：重新判标签、重新沉淀知识卡。结果会跟原来的整理逐条对照，
+                  被新卡取代的旧卡只会建议归档 —— 归档可恢复，原文一个字都不动。
+                </Text>
+                <Text style={styles.explainText}>
+                  会减少内容的三类操作（归档卡、标完成待办、删待办）默认全部不勾选，得你自己点。
+                </Text>
+                <Text style={styles.explainText}>
+                  不会重复抽待办、也不会重复写今日小结 —— 那些上一轮已经有了。
+                </Text>
+              </View>
+            )}
+
+            {mode === 'organize' && errorMsg.includes('API Key') && (
               <Pressable style={styles.linkRow} onPress={onOpenSettings}>
                 <Text style={styles.linkText}>去设置里填 API Key</Text>
                 <Ionicons name="chevron-forward" size={13} color={C.accent} />
@@ -375,7 +576,7 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
           <View style={styles.centerBox}>
             <ActivityIndicator color={C.accent} />
             <Text style={styles.centerText}>
-              {refining ? `正在按第 ${round} 版的要求重写…` : `正在整理 ${batch.length} 条碎片…`}
+              {refining ? `正在按第 ${round} 版的要求重写…` : `${word} ${batch.length} 条碎片…`}
             </Text>
             <Text style={styles.centerSub}>通常需要 5–15 秒</Text>
           </View>
@@ -459,6 +660,14 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
                 {result.knowledge.map((k) => {
                   const key = K.knowledge(k.topic, k.title);
                   const on = isOn(key);
+                  // 重构时提前算一下这张新卡会不会顶掉某张旧卡，让用户看得见
+                  const replaced = mode === 'refactor' ? replacementOf(k.source_ids) : null;
+                  // 旧卡那边被用户取消了归档，这里就得如实说保留
+                  const keptOld =
+                    !!replaced &&
+                    result.archive_cards.some(
+                      (a) => a.card_id === replaced.id && !isOn(K.archive(a.card_id)),
+                    );
                   return (
                     <CheckRow key={key} on={on} onPress={() => toggle(key)}>
                       <View style={styles.kHead}>
@@ -471,6 +680,13 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
                       </View>
                       {k.gist ? (
                         <Text style={[styles.gistText, !on && styles.rowTextOff]}>{k.gist}</Text>
+                      ) : null}
+                      {replaced ? (
+                        <Text style={styles.reasonText}>
+                          {keptOld
+                            ? `旧卡「${replaced.title}」保留，不归档`
+                            : `会归档被它取代的旧卡：${replaced.title}`}
+                        </Text>
                       ) : null}
                     </CheckRow>
                   );
@@ -513,6 +729,55 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
               </Section>
             )}
 
+            {result.archive_cards.length > 0 && (
+              <Section
+                title="建议归档的知识卡"
+                count={result.archive_cards.length}
+                hint="归档后卡片会从知识库折叠进「已归档」，随时能恢复，原文不会丢。默认不勾选。"
+              >
+                {result.archive_cards.map((a) => {
+                  const key = K.archive(a.card_id);
+                  const on = isOn(key);
+                  const card = cardById.get(a.card_id);
+                  return (
+                    <CheckRow key={key} on={on} onPress={() => toggle(key)}>
+                      <View style={styles.kHead}>
+                        <Text style={[styles.rowText, styles.kTitle, !on && styles.rowTextOff]}>
+                          {card?.title ?? `#${a.card_id}`}
+                        </Text>
+                        <View style={styles.topicPill}>
+                          <Text style={styles.topicPillText}>{card?.topic ?? '未知主题'}</Text>
+                        </View>
+                      </View>
+                      {card?.gist ? <Text style={styles.gistText}>{card.gist}</Text> : null}
+                      {a.reason ? <Text style={styles.reasonText}>{a.reason}</Text> : null}
+                    </CheckRow>
+                  );
+                })}
+              </Section>
+            )}
+
+            {result.drop_todos.length > 0 && (
+              <Section
+                title="建议删掉的待办"
+                count={result.drop_todos.length}
+                hint="真删除，不能撤销。待办删了不影响原碎片，原文还在时间轴上。默认不勾选。"
+              >
+                {result.drop_todos.map((d) => {
+                  const key = K.drop(d.todo_id);
+                  const on = isOn(key);
+                  return (
+                    <CheckRow key={key} on={on} onPress={() => toggle(key)}>
+                      <Text style={[styles.rowText, !on && styles.rowTextOff]}>
+                        {todoById.get(d.todo_id)?.text ?? `#${d.todo_id}`}
+                      </Text>
+                      {d.reason ? <Text style={styles.reasonText}>{d.reason}</Text> : null}
+                    </CheckRow>
+                  );
+                })}
+              </Section>
+            )}
+
             {result.summary && (
               <Section title="今日小结" count={1}>
                 <CheckRow on={isOn(K.summary)} onPress={() => toggle(K.summary)}>
@@ -524,11 +789,21 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
             )}
 
             {result.tags.length > 0 && (
-              <Section title="分类打标" count={result.tags.length}>
+              <Section
+                title="分类打标"
+                count={result.tags.length}
+                hint={
+                  mode === 'refactor'
+                    ? '重构会覆盖旧标签。下面标出「原标签」的条目是这次真正改了的，其余没变。'
+                    : undefined
+                }
+              >
                 {result.tags.map((t) => {
                   const key = K.tag(t.id);
                   const on = isOn(key);
                   const f = byId.get(t.id);
+                  const labelsChanged = !!f && !sameLabels(f.tags, t.labels);
+                  const projectChanged = !!f && (f.project ?? null) !== (t.project ?? null);
                   return (
                     <CheckRow key={key} on={on} onPress={() => toggle(key)}>
                       <Text style={[styles.rowText, !on && styles.rowTextOff]} numberOfLines={2}>
@@ -545,6 +820,16 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
                         })}
                         {t.project ? <Text style={styles.projectText}>{t.project}</Text> : null}
                       </View>
+                      {mode === 'refactor' && labelsChanged ? (
+                        <Text style={styles.reasonText}>
+                          原标签：{f.tags.length ? f.tags.join('、') : '无'}
+                        </Text>
+                      ) : null}
+                      {mode === 'refactor' && projectChanged ? (
+                        <Text style={styles.reasonText}>
+                          原项目：{f.project ?? '无'}
+                        </Text>
+                      ) : null}
                     </CheckRow>
                   );
                 })}
@@ -579,6 +864,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
               !result.knowledge.length &&
               !result.todo_done.length &&
               !result.card_update.length &&
+              !result.archive_cards.length &&
+              !result.drop_todos.length &&
               !result.summary &&
               !result.tags.length &&
               !result.merge.length && (
@@ -657,6 +944,14 @@ function Section({
   );
 }
 
+function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress}>
+      <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function CheckRow({
   on,
   onPress,
@@ -691,6 +986,18 @@ const styles = StyleSheet.create({
 
   content: { paddingHorizontal: 16, paddingBottom: 24 },
 
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: C.hairSoft,
+    borderRadius: R.btn,
+    padding: 3,
+    marginBottom: 14,
+  },
+  segmentItem: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: R.btn - 2 },
+  segmentItemOn: { backgroundColor: C.card },
+  segmentText: { fontSize: 13, color: C.text2 },
+  segmentTextOn: { color: C.text, fontWeight: '500' },
+
   heroCard: {
     backgroundColor: C.card,
     borderRadius: R.card,
@@ -702,30 +1009,37 @@ const styles = StyleSheet.create({
   heroNum: { fontSize: 40, color: C.text, fontWeight: '500', lineHeight: 46 },
   heroLabel: { fontSize: 13, color: C.text2, marginTop: 2 },
 
-  scopeRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 9,
+  scopeBlock: {
     alignSelf: 'stretch',
     marginTop: 18,
     paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: C.hair,
   },
-  scopeBox: {
-    width: 16,
-    height: 16,
-    borderRadius: 4,
-    borderWidth: 1,
+  scopeLabel: { fontSize: 12, color: C.text2, marginBottom: 9 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  chip: {
+    borderRadius: R.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderWidth: 0.5,
     borderColor: C.hair,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
   },
-  scopeBoxOn: { backgroundColor: C.accent, borderColor: C.accent },
-  scopeBody: { flex: 1 },
-  scopeTitle: { fontSize: 13, color: C.text, fontWeight: '500' },
-  scopeSub: { fontSize: 11, color: C.text3, lineHeight: 17, marginTop: 3 },
+  chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
+  chipText: { fontSize: 12, color: C.text2, lineHeight: 17 },
+  chipTextOn: { color: C.accentText },
+  scopeSub: { fontSize: 11, color: C.text3, lineHeight: 17 },
+
+  explainCard: {
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderRadius: R.card,
+    backgroundColor: C.hairSoft,
+    gap: 8,
+  },
+  explainTitle: { fontSize: 12, color: C.text, fontWeight: '500' },
+  explainText: { fontSize: 11, color: C.text2, lineHeight: 18 },
 
   overflowText: { fontSize: 11, color: C.text3, marginTop: 10, textAlign: 'center', lineHeight: 17 },
 
