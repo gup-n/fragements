@@ -79,8 +79,10 @@ src/
   components/TagPill.tsx     标签胶囊
   export/markdown.ts         Markdown 导出
   util/date.ts               日期分组与格式化
+  util/keyboard.ts           键盘高度 hook（Android 上替代 KeyboardAvoidingView）
 plugins/
   withBuildOptimizations.js  构建优化 config plugin（prebuild 时写入 gradle.properties）
+  withNoSplashAnimation.js   启动窗改纯色、去掉图标动画
 scripts/build_single_file.py 把 Web 产物打成自包含单文件（仅作预览用）
 ```
 
@@ -118,6 +120,19 @@ cd android && ./gradlew assembleRelease
 **这一步有三个必看的坑**（JDK 17 路径、Windows 260 字符路径限制、prebuild 会重置 android 配置），详细说明见 [SPEC.md 第 12 节](./SPEC.md#12-本地打包-apk)。改 JS 的增量构建约 2 分钟，首次全量约 45 分钟。
 
 体积对照：76 MB（v0.1.1，4 ABI）→ 22 MB（v0.2.0），减少 **71%**。
+
+## Android 平台约束（改 UI 前先看）
+
+`targetSdk 36` 让 RN 强制开启 edge-to-edge，`windowSoftInputMode="adjustResize"` 因此失效，输入法只是盖在窗口上。三条硬规则：
+
+| 规则 | 原因 |
+|---|---|
+| 键盘遮挡用 `useKeyboardHeight()` 加 `paddingBottom` | `KeyboardAvoidingView` 在 RN 0.88 + edge-to-edge 下算出的位移恒为 0，等于没生效 |
+| 全屏页/弹层用 `position:absolute` 覆盖层，不用 `Modal` | Modal 是独立 Dialog 窗口，带 `FLAG_LAYOUT_NO_LIMITS` 会画到状态栏下，且收不到键盘事件 |
+| 覆盖层自己接 `BackHandler` | 没有 Modal 的 `onRequestClose` 兜底，返回键会直接退出 App |
+| 启动窗、`AppTheme.windowBackground`、页面底色三者同色 | 任意两段不同色就会看见一次闪白 |
+
+细节与踩坑过程见 [SPEC.md 8.1 节](./SPEC.md#81-android-适配红线v021-真机踩过后定下)。
 
 ## 数据安全
 

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  KeyboardAvoidingView,
-  Modal,
+  BackHandler,
   Platform,
   Pressable,
   SectionList,
@@ -15,6 +14,7 @@ import type { Fragment } from '../types';
 import { C, R } from '../theme';
 import { TagPill } from '../components/TagPill';
 import { dayKey, dayLabel, daySubLabel, formatTime } from '../util/date';
+import { useKeyboardHeight } from '../util/keyboard';
 
 type Section = { title: string; sub: string; data: Fragment[] };
 
@@ -57,7 +57,9 @@ export function TimelineScreen({
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [fullEdit, setFullEdit] = useState(false);
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
+  const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const listRef = useRef<SectionList<Fragment, Section>>(null);
+  const keyboardHeight = useKeyboardHeight();
 
   // 冷启动即聚焦：记录工具打开就该能打字，不该先点一下输入框
   useEffect(() => {
@@ -66,6 +68,25 @@ export function TimelineScreen({
     const timer = setTimeout(() => inputRef.current?.focus(), 380);
     return () => clearTimeout(timer);
   }, []);
+
+  // 长文编辑是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App
+  useEffect(() => {
+    if (!editing && !fullEdit) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (editing) setEditing(null);
+      if (fullEdit) setFullEdit(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [editing, fullEdit]);
+
+  // 覆盖层里的输入框不会因为 autoFocus 稳定抢到焦点（下面那个输入框还聚焦着），
+  // 挂载后主动聚焦一次更确定
+  useEffect(() => {
+    if (!fullEdit) return;
+    const timer = setTimeout(() => fullInputRef.current?.focus(), 60);
+    return () => clearTimeout(timer);
+  }, [fullEdit]);
 
   const sections = useMemo(() => {
     const map = new Map<string, { title: string; sub: string; data: Fragment[] }>();
@@ -122,6 +143,7 @@ export function TimelineScreen({
   }
 
   function openEdit(item: Fragment) {
+    inputRef.current?.blur();
     setEditing(item);
     setEditText(item.content);
     setArmedDelete(false);
@@ -182,10 +204,7 @@ export function TimelineScreen({
         </View>
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <View style={styles.flex}>
         {fragments.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>还没有碎片</Text>
@@ -282,7 +301,7 @@ export function TimelineScreen({
           />
         )}
 
-        <View style={styles.composerWrap}>
+        <View style={[styles.composerWrap, { paddingBottom: 10 + keyboardHeight }]}>
           <View style={styles.composer}>
             <TextInput
               ref={inputRef}
@@ -310,16 +329,18 @@ export function TimelineScreen({
             </Pressable>
           </View>
         </View>
-      </KeyboardAvoidingView>
+      </View>
 
-      <Modal
-        visible={!!editing}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setEditing(null)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setEditing(null)}>
-          <Pressable style={styles.sheet} onPress={() => {}}>
+      {/*
+        编辑面板与长文输入都用覆盖层，不再用 Modal。
+        Modal 在 Android 上是一个独立窗口：拿到的是窗口级 inset，长文页顶部会直接顶到
+        状态栏底下和通知栏重合；键盘事件也不会从 Activity 根视图冒上来，躲不开输入法。
+        覆盖层留在同一棵 React 树里，安全区已经由外层 SafeAreaView 让出来了。
+      */}
+      {editing ? (
+        <View style={[styles.overlay, styles.sheetOverlay, { paddingBottom: keyboardHeight }]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditing(null)} />
+          <View style={styles.sheet}>
             <Text style={styles.sheetTitle}>编辑碎片</Text>
             <TextInput
               value={editText}
@@ -341,16 +362,12 @@ export function TimelineScreen({
                 <Text style={styles.primary}>保存</Text>
               </Pressable>
             </View>
-          </Pressable>
-        </Pressable>
-      </Modal>
+          </View>
+        </View>
+      ) : null}
 
-      <Modal
-        visible={fullEdit}
-        animationType="slide"
-        onRequestClose={() => setFullEdit(false)}
-      >
-        <View style={styles.fullRoot}>
+      {fullEdit ? (
+        <View style={[styles.overlay, styles.fullOverlay, { paddingBottom: keyboardHeight }]}>
           <View style={styles.fullHeader}>
             <Pressable onPress={() => setFullEdit(false)} hitSlop={10}>
               <Text style={styles.muted}>取消</Text>
@@ -368,18 +385,18 @@ export function TimelineScreen({
             </Pressable>
           </View>
           <TextInput
+            ref={fullInputRef}
             value={draft}
             onChangeText={setDraft}
             style={styles.fullInput}
             multiline
-            autoFocus
             placeholder="想写多少写多少。长一点也没关系，整理时 AI 会单独提炼要点。"
             placeholderTextColor={C.text3}
             maxLength={20000}
           />
           <Text style={styles.fullCount}>{draft.length} 字</Text>
         </View>
-      </Modal>
+      ) : null}
     </View>
   );
 }
@@ -497,7 +514,6 @@ const styles = StyleSheet.create({
   sendActive: { backgroundColor: C.accent },
   expandIcon: { paddingBottom: 7, paddingHorizontal: 1 },
 
-  fullRoot: { flex: 1, backgroundColor: C.page, paddingTop: 12 },
   fullHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -520,12 +536,21 @@ const styles = StyleSheet.create({
   },
   fullCount: { fontSize: 11, color: C.text3, textAlign: 'right', paddingHorizontal: 18, paddingBottom: 16 },
 
-  backdrop: {
-    flex: 1,
+  /** 覆盖整个内容区；安全区由外层 SafeAreaView 负责，这里只管层叠 */
+  overlay: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: C.page,
+  },
+  sheetOverlay: {
     backgroundColor: 'rgba(27,27,25,0.32)',
     justifyContent: 'center',
     paddingHorizontal: 20,
   },
+  fullOverlay: { paddingTop: 12 },
   sheet: {
     backgroundColor: C.card,
     borderRadius: R.card,

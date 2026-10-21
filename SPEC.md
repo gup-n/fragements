@@ -265,6 +265,38 @@ System prompt 约定角色与输出格式；User 消息传紧凑的碎片列表�
 └─────────────────────────┘
 ```
 
+### 8.1 Android 适配红线（v0.2.1 真机踩过后定下）
+
+**① edge-to-edge 是强制的，不能当它不存在**
+
+app 的 `targetSdk` 是 36，RN 0.88 的 `updateEdgeToEdgeFeatureFlag()` 对 targetSdk ≥ 35 的应用
+无条件走 `Window.Companion.enableEdgeToEdge()` → `setDecorFitsSystemWindows(false)`。
+`AndroidManifest` 里的 `windowSoftInputMode="adjustResize"` 因此**不再缩放窗口**，
+输入法只是盖在窗口上面。由此推出两条硬规则：
+
+- **不要用 `KeyboardAvoidingView` 处理键盘。** 它按 `frame.y + frame.height - keyboardY` 算位移，
+  而 `keyboardY` 取的是「可视区域底边」（edge-to-edge 下即屏幕底），算出来恒为负、被
+  `Math.max(..., 0)` 夹成 0，在 Android 上完全不生效 —— 这正是 v0.2.0 输入栏被键盘整个盖住的原因。
+- **要抬多少，直接用 `useKeyboardHeight()`**（`src/util/keyboard.ts`）。它读
+  `Keyboard` 的 `endCoordinates.height`，RN 的 Android 实现是
+  `imeInsets.bottom - barInsets.bottom`，即「扣掉导航栏的纯键盘高度」。
+  因为 `SafeAreaView` 已经把底部安全区让出来了，这个值**就是**还要额外抬升的距离，不用再减 inset。
+
+**② 全屏页面不要用 `Modal`**
+
+RN 的 Modal 在 Android 上是独立 Dialog 窗口，且会加 `FLAG_LAYOUT_NO_LIMITS`，
+于是窗口内容直接画到状态栏底下 —— 这就是「长记录」页顶部和通知栏重合的原因；
+Dialog 窗口也拿不到 Activity 根视图的键盘事件，躲不开输入法。
+**全屏页/弹层一律用 `position:absolute` 的覆盖层**，留在同一棵 React 树里，
+安全区由外层 `SafeAreaView` 负责。代价是要自己接 `BackHandler` 处理返回键。
+
+**③ 启动窗要和页面同色**
+
+启动过程有三段底色：系统启动窗（Android 12+，带图标动画）→ `AppTheme.windowBackground`
+→ RN 挂载后的 `C.page`。任意两段不同色就会看见一次闪白。
+`plugins/withNoSplashAnimation.js` 把三段统一成 `#FBFBF9` 并把启动窗图标换成透明 drawable，
+做到「点开就是底色，界面直接画出来」。
+
 ## 9. 目录结构
 
 ```
@@ -276,7 +308,8 @@ fragments/
 │   ├── theme.ts             颜色/字号/圆角常量
 │   ├── types.ts             领域类型
 │   ├── util/
-│   │   └── date.ts          日期分组、时间格式化
+│   │   ├── date.ts          日期分组、时间格式化
+│   │   └── keyboard.ts      键盘高度 hook（替代失效的 KeyboardAvoidingView）
 │   ├── db/
 │   │   ├── types.ts         Repo 接口
 │   │   ├── repo.native.ts   SQLite 实现
@@ -298,7 +331,8 @@ fragments/
 │       ├── KnowledgeScreen.tsx
 │       └── SettingsScreen.tsx
 ├── plugins/
-│   └── withBuildOptimizations.js  构建优化 config plugin
+│   ├── withBuildOptimizations.js  构建优化 config plugin
+│   └── withNoSplashAnimation.js   启动窗改纯色、去图标动画
 ```
 
 **平台分流说明**：`import { repo } from '../db/repo'` 在打包时由 Metro 按平台扩展名解析，Android 拿到 `repo.native.ts`（SQLite），Web 拿到 `repo.web.ts`（localStorage）。`repo.ts` 只用于 tsc 类型解析，运行时不会命中。
@@ -317,8 +351,22 @@ fragments/
 - [x] 体验优化 v0.1.1：冷启动自动聚焦输入框、记完自动滚回顶部、长文折叠阈值 60→100 字
 - [x] 回顾页 v0.2.0：待办 + 小结合并一页（tab 切换），补齐 `listTodos` / `listNotes` 的界面出口
 - [x] 体积与构建优化 v0.2.0：APK 75.4→21.9 MB，单 ABI + 字体按需导入 + 关 GIF/WebP + Gradle 调优
+- [x] 真机问题修复 v0.2.1：启动动画去掉、输入栏被键盘遮挡、长记录页与状态栏重合、长文输入同样被遮挡
 - [ ] 通知栏常驻入口
-- [ ] 真机联调（vivo Y78 / V2278A）
+- [ ] 真机联调（vivo Y78 / V2278A）—— 部分已开始，v0.2.1 就是首轮真机反馈驱动的
+
+### 真机问题修复记录（v0.2.1）
+
+首轮真机反馈四条，全部是 Android 特有行为，不是写错代码：
+
+| 现象 | 根因 | 处理 |
+|---|---|---|
+| 启动有动画/闪一下 | 启动窗图标带动画；启动窗白色与页面 `#FBFBF9` 有色差 | `plugins/withNoSplashAnimation.js`：三段底色统一 + 透明图标 |
+| 输入栏被输入法整个盖住 | edge-to-edge 下 `adjustResize` 失效，而 `KeyboardAvoidingView` 在 RN 0.88 里计算结果恒为 0 | 新增 `useKeyboardHeight()`，直接给输入区加 `paddingBottom` |
+| 长记录页顶部与通知栏重合 | 用了 `Modal`，Dialog 窗口带 `FLAG_LAYOUT_NO_LIMITS`，画到了状态栏下 | 改为同树内的 `position:absolute` 覆盖层 |
+| 长文输入同样被遮挡 | 同上，Modal 窗口收不到 Activity 根视图的键盘事件 | 覆盖层 + 同一个 `useKeyboardHeight()` |
+
+顺带修掉：覆盖层需要自己接 `BackHandler`，否则安卓返回键会直接退出 App（Modal 时代由 `onRequestClose` 兜住）。
 
 ### 体验优化记录（v0.1.1）
 
@@ -394,10 +442,24 @@ cp "$NT/ninja.exe" "$NT/ninja.exe.1.10.2.bak"
 cp ninja.exe "$NT/ninja.exe"
 ```
 
-**坑 3：`expo prebuild` 会重置 `android/`（已自动化）**
+**坑 3：`expo prebuild` 会重置 `android/`（已自动化，但要加 `--no-clean`）**
 `/android` 在 `.gitignore` 里，是 prebuild 生成的产物。重跑 prebuild 会重新生成整个目录，手改的 `gradle.properties` 全部冲掉 —— 单 ABI、shrinkResources、关 GIF/WebP 这些优化一旦丢失，APK 会无声反弹回 76MB。
 
-**现在这些属性写在 [`plugins/withBuildOptimizations.js`](./plugins/withBuildOptimizations.js)（config plugin）里，每次 prebuild 自动写回。** 要加新的 Gradle 属性改那个文件，不要再手改 `android/gradle.properties`。
+**现在这些属性写在 config plugin 里，每次 prebuild 自动写回**（`app.json` 的 `plugins` 数组末尾）：
+
+- [`plugins/withBuildOptimizations.js`](./plugins/withBuildOptimizations.js) —— 体积与构建优化
+- [`plugins/withNoSplashAnimation.js`](./plugins/withNoSplashAnimation.js) —— 启动窗纯色、去图标动画
+
+要加新的 Gradle 属性或改原生资源，改插件，不要再手改 `android/` 下的文件。
+
+**必须带 `--no-clean`**：不带这个参数时 Expo CLI 会把 `android/` 整个当作可丢弃的生成物去删除，
+本机的安全删除（`genie-trash`）会超时失败并把 prebuild 打断：
+
+```
+× Failed to delete android code: [safe-delete] ... ETIMEDOUT
+```
+
+而且它一旦真删成功，`android/app/.cxx` 的 CMake 缓存会一起没，下一次就是 45 分钟全量重编。
 
 验证插件是否生效（不生成文件、不动 android/）：
 
@@ -421,7 +483,9 @@ npx expo config --type introspect | grep -A2 reactNativeArchitectures
 
 ```bash
 cd F:\coding\python\project\Test\fragments
-npx expo prebuild --platform android --no-install   # 仅在改了 app.json / 新装原生依赖时需要
+# 仅改了 app.json / config plugin / 新装原生依赖时才需要；
+# --no-clean 不能省，否则会尝试删除整个 android/ 目录
+npx expo prebuild --platform android --no-install --no-clean
 cd android
 unset JAVA_HOME
 export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
