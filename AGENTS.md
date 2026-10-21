@@ -1,41 +1,64 @@
-This is an Expo/React Native mobile application. Prioritize mobile-first patterns, performance, and cross-platform compatibility.
+# 给 AI 助手的速查
 
-## Expo has changed — do not trust your training data
+**先读 [`HANDOFF.md`](./HANDOFF.md)** —— 那是完整的项目交接文档（状态、代码地图、踩过的坑、下一步）。
+本文件只放「读代码时立刻会踩的雷」。
 
-Expo ships breaking changes every SDK release. APIs you remember are likely renamed, moved, or removed. Before writing any code that touches an Expo, EAS, or React Native API:
+---
 
-1. Read the major version of the `expo` package in `package.json`.
-2. Fetch the matching versioned docs: `https://docs.expo.dev/versions/v<major>.0.0/`
-3. For anything else, fetch https://docs.expo.dev/llms.txt — an index of all Expo docs with corrections to common LLM misconceptions. Follow its links to the specific page you need; never answer from memory.
+## 这个项目不是标准的 Expo 模板
 
-## Commands
+模板自带的这份 AGENTS.md 让用 Expo Router，**本项目没有用**。页面栈是 `App.tsx` 里一个 `route` state：
 
-Use `bunx` instead of `npx` if the project uses bun (`bun.lock` present).
-
-```bash
-npx expo install <package>  # ALWAYS use instead of npm/yarn/pnpm/bun add — resolves SDK-compatible versions
-npx expo start              # start the dev server
-npx expo lint               # lint
-npx tsc --noEmit            # typecheck
-npx expo-doctor             # diagnose dependency and config issues
-npx expo install --fix      # fix incompatible package versions
+```ts
+type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 ```
 
-Run lint and typecheck before declaring any task done.
+没有 `src/app/`、没有 `_layout.tsx`、没有 `expo-router` 依赖。**不要引入。**
 
-## Navigation & Routing
+## 命令
 
-- Use **Expo Router** for all navigation. Routes live in `src/app/` — every file there is a screen, `_layout.tsx` files define navigators. Keep non-route code (components, hooks, utils) outside `src/app/`.
-- Import `Link`, `router`, and `useLocalSearchParams` from `expo-router`.
-- Docs: https://docs.expo.dev/router/introduction.md
+```bash
+npx tsc --noEmit                                  # 改完必跑，当前零错误
+npx expo export -p web --output-dir dist-check    # 验证不崩，约 11 秒
+npx expo install <pkg>                            # 装依赖用它，别用 npm install
 
-## Building with EAS
+npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
+cd android && ./gradlew assembleRelease
+```
 
-Use EAS to build, sign, and submit the app in the cloud (`eas build`, `eas submit`) and to ship over-the-air updates (`eas update`) — no local Xcode or Android Studio required. Run EAS CLI as `bunx eas-cli <command>` in Bun projects, or `npx eas-cli@latest <command>` otherwise; substitute that for bare `eas` in docs examples.
-Docs: https://docs.expo.dev/eas/index.md
+项目**零自动化测试**，`tsc` + `export` 是唯一的自动检查。
 
-## Rules
+## 六条硬规矩
 
-- If `ios/` and `android/` directories do not exist, they are generated (Continuous Native Generation). Never create or edit them by hand — configure native behavior in `app.json` and config plugins.
-- Expo Go only includes its bundled native modules. After adding a library with native code, the app needs a development build: `npx expo run:ios|android` locally, or `eas build --profile development`.
-- Prefer recommended Expo modules over third-party libraries, and check your available skills before adding dependencies. Docs: https://docs.expo.dev/versions/latest/index.md
+1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。
+2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
+3. **不要用 `KeyboardAvoidingView`**。RN 0.88 + edge-to-edge 下算出的位移恒为 0。用 `useKeyboardHeight()`（`src/util/keyboard.ts`）加 `paddingBottom`。
+4. **不要用 `Modal`**。它带 `FLAG_LAYOUT_NO_LIMITS`，会画到状态栏下且收不到键盘事件。用 `position:absolute` 覆盖层 + 自己的 `BackHandler`。
+5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 Web 预览会挂。
+6. **改功能先改 `SPEC.md`**。文档是唯一设计依据。
+
+## 最容易搞错的概念
+
+- **「重构」= 针对原文重新整理**（重新判标签、重新提炼知识卡），再与旧结果比对、由用户逐项授权。
+  **不是**「让 AI 重写知识卡正文」。
+- **`knowledge` 的 `body` 字段永远由代码从 `source_ids` 拼接原文**，不采信模型输出。
+- **三类破坏性操作（归档卡 / 标完成待办 / 删待办）默认不勾选**，且用户取消的授权代码层面也不能绕过。
+
+## Expo 会发破坏性变更，别信训练数据
+
+动 Expo / RN API 之前：
+
+1. 看 `package.json` 里 `expo` 的主版本（当前 **SDK 58**）
+2. 查对应版本文档：`https://docs.expo.dev/versions/v58.0.0/`
+3. 其他问题查 https://docs.expo.dev/llms.txt
+
+不要凭记忆回答 Expo API。
+
+## 文档地图
+
+| 文件 | 用途 |
+|---|---|
+| `HANDOFF.md` | **交接文档，先读这个** |
+| `SPEC.md` | 需求与设计唯一依据（数据模型、AI 契约、Android 红线、构建环境） |
+| `README.md` | 给人看的项目说明 |
+| `ROADMAP.md` | 分级开发计划与待决问题 |

@@ -58,6 +58,7 @@
 ```
 App.tsx                      应用入口、路由状态、数据加载
 index.ts                     RN 入口
+HANDOFF.md                   交接文档（换人/换模型接手先看这个）
 SPEC.md                      需求与设计说明书（改功能先看这里）
 ROADMAP.md                   开发计划
 src/
@@ -147,6 +148,7 @@ API Key 存在 Android Keystore 加密区，不进源码、不进仓库、不上
 
 | 文件 | 内容 |
 |---|---|
+| [HANDOFF.md](./HANDOFF.md) | **交接文档** —— 项目状态、本轮改动、代码地图、踩过的坑、下一步。换人接手先读这个 |
 | [SPEC.md](./SPEC.md) | 需求与设计说明书 —— 跨会话开发的唯一依据，含数据模型、AI 契约、界面规范、构建环境 |
 | [ROADMAP.md](./ROADMAP.md) | 开发计划、优先级与待决问题 |
-| [AGENTS.md](./AGENTS.md) | Expo 官方模板自带的 AI 编码指引（通用规则，与本项目实际路由方案有出入，以 SPEC 为准） |
+| [AGENTS.md](./AGENTS.md) | AI 助手速查（六条硬规矩 + 最容易搞错的概念）。已按本项目改写，不再沿用 Expo 模板内容 |
