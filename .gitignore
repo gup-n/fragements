@@ -39,3 +39,20 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# 安装包产物（发布走 GitHub Release，不入库）
+*.apk
+*.aab
+
+# 构建与预览产物
+/preview
+/preview2
+/.edge-tmp
+/.edge-tmp2
+/.edge3
+expo-qr.png
+碎片-界面预览.html
+
+# 本地日志与临时文件
+*.log
+err.txt
