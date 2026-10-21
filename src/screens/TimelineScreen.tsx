@@ -10,7 +10,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment } from '../types';
 import { C, R } from '../theme';
 import { TagPill } from '../components/TagPill';
@@ -33,6 +33,7 @@ interface Props {
   onOpenOrganize: () => void;
   onOpenSettings: () => void;
   onOpenKnowledge: () => void;
+  onOpenReview: () => void;
   onSeed?: () => Promise<void>;
 }
 
@@ -45,6 +46,7 @@ export function TimelineScreen({
   onOpenOrganize,
   onOpenSettings,
   onOpenKnowledge,
+  onOpenReview,
   onSeed,
 }: Props) {
   const [draft, setDraft] = useState('');
@@ -164,6 +166,9 @@ export function TimelineScreen({
         <View style={styles.headerActions}>
           <Pressable style={styles.iconBtn} onPress={onOpenKnowledge} hitSlop={10}>
             <Ionicons name="albums-outline" size={19} color={C.text2} />
+          </Pressable>
+          <Pressable style={styles.iconBtn} onPress={onOpenReview} hitSlop={10}>
+            <Ionicons name="list-outline" size={19} color={C.text2} />
           </Pressable>
           <Pressable style={styles.iconBtn} onPress={onOpenSettings} hitSlop={10}>
             <Ionicons name="settings-outline" size={19} color={C.text2} />

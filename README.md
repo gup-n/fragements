@@ -6,7 +6,7 @@
 
 - **应用名**：碎片
 - **包名**：`com.local.fragments`（固定，改包名等于换 App，旧数据不跟随）
-- **当前版本**：v0.1.1（versionCode 2）
+- **当前版本**：v0.2.0（versionCode 3）
 - **目标设备**：vivo Y78（V2278A）
 
 ## 两条设计红线
@@ -31,14 +31,12 @@
 - **极简输入**：底部单行输入框自动增高，可一键转全屏编辑（20000 字上限）
 - **编辑 / 删除**：点任意碎片修改；删除需两次点击确认
 - **AI 整理**：一次调用产出五类结果 —— 分类打标、提炼待办、沉淀知识卡、今日小结、疑似重复；每条独立开关
+- **回顾页**：待办与小结合在一个页面，tab 切换。待办支持点击勾选完成、显示截止日（过期标红）、已完成置灰划线；小结按日期倒序，可展开全文
 - **知识库**：按主题聚合，卡片显示 AI 要点，可展开原文，可整体移出
 - **Markdown 导出**：时间轴按天分节 + 知识库附录，走系统分享可直接存 NAS
 - **设置**：BaseURL / 模型 / API Key 配置与连接测试，数据统计
 
-**尚未实现（重要）**：
-
-- **待办与小结没有查看入口** —— AI 提炼的待办、今日小结会正常写入数据库，但界面上暂时没有任何地方能看到。整理页确认完就"石沉大海"了。这是当前最优先要补的缺口，见 [ROADMAP P0-1](./ROADMAP.md)
-- 通知栏常驻入口
+**尚未实现**：通知栏常驻入口（详见 [ROADMAP.md](./ROADMAP.md)）。
 
 ## 技术栈
 
@@ -75,11 +73,14 @@ src/
   screens/
     TimelineScreen.tsx       时间轴主界面
     OrganizeScreen.tsx       整理页（逐条确认）
+    ReviewScreen.tsx         回顾页（待办 / 小结，tab 切换）
     KnowledgeScreen.tsx      知识库
     SettingsScreen.tsx       设置与导出
   components/TagPill.tsx     标签胶囊
   export/markdown.ts         Markdown 导出
   util/date.ts               日期分组与格式化
+plugins/
+  withBuildOptimizations.js  构建优化 config plugin（prebuild 时写入 gradle.properties）
 scripts/build_single_file.py 把 Web 产物打成自包含单文件（仅作预览用）
 ```
 
@@ -100,9 +101,23 @@ npx expo prebuild --platform android --no-install   # 仅改 app.json 或加原�
 cd android && ./gradlew assembleRelease
 ```
 
-产物：`android/app/build/outputs/apk/release/app-release.apk`
+产物：`android/app/build/outputs/apk/release/app-release.apk`（当前约 **22 MB**）
 
-**这一步有两个必看的坑**（JDK 路径、Windows 260 字符路径限制），详细说明见 [SPEC.md 第 12 节](./SPEC.md#12-本地打包-apk)。改 JS 的增量构建约 1.5 分钟，首次全量约 45 分钟。
+体积与速度已做过针对性优化。**配置的源头是 [`plugins/withBuildOptimizations.js`](./plugins/withBuildOptimizations.js)**，它在每次 prebuild 时把属性写进 `android/gradle.properties`：
+
+> `/android` 在 `.gitignore` 里，是 prebuild 生成的产物。早期这些优化是手改 `gradle.properties` 的，重跑 prebuild 就会全部丢失、APK 悄悄弹回 76MB —— 所以搬进了 config plugin。
+
+| 配置 | 作用 |
+|---|---|
+| `reactNativeArchitectures=arm64-v8a` | 只打 64 位 ARM。原来打 4 种 ABI，APK 75MB、C++ 编译量翻 4 倍 |
+| `expo.gif.enabled=false` / `expo.webp.enabled=false` | 项目未使用 RN 的 `<Image>`，关掉可移除 Fresco 相关原生库 |
+| `android.enableShrinkResourcesInReleaseBuilds=true` | 移除未引用资源 |
+| `org.gradle.jvmargs=-Xmx4096m` + `caching` + `workers.max=8` | 本机 15.7G 内存 / 20 线程，加大堆并限制并行度避免 GC 抖动 |
+| 图标按需导入 | `import Ionicons from '@expo/vector-icons/Ionicons'`，避免把 19 套字体全打进包（字体 3.3MB → 0.38MB） |
+
+**这一步有三个必看的坑**（JDK 17 路径、Windows 260 字符路径限制、prebuild 会重置 android 配置），详细说明见 [SPEC.md 第 12 节](./SPEC.md#12-本地打包-apk)。改 JS 的增量构建约 2 分钟，首次全量约 45 分钟。
+
+体积对照：76 MB（v0.1.1，4 ABI）→ 22 MB（v0.2.0），减少 **71%**。
 
 ## 数据安全
 

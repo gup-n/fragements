@@ -9,8 +9,9 @@ import { TimelineScreen } from './src/screens/TimelineScreen';
 import { OrganizeScreen } from './src/screens/OrganizeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { KnowledgeScreen } from './src/screens/KnowledgeScreen';
+import { ReviewScreen } from './src/screens/ReviewScreen';
 
-type Route = 'timeline' | 'organize' | 'settings' | 'knowledge';
+type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 
 const isWeb = Platform.OS === 'web';
 
@@ -114,6 +115,7 @@ export default function App() {
                   onOpenOrganize={() => setRoute('organize')}
                   onOpenSettings={() => setRoute('settings')}
                   onOpenKnowledge={() => setRoute('knowledge')}
+                  onOpenReview={() => setRoute('review')}
                   onSeed={isWeb ? handleSeed : undefined}
                 />
               )}
@@ -131,6 +133,7 @@ export default function App() {
               {route === 'knowledge' && (
                 <KnowledgeScreen onClose={() => setRoute('timeline')} />
               )}
+              {route === 'review' && <ReviewScreen onClose={() => setRoute('timeline')} />}
             </SafeAreaView>
           ) : (
             <View style={styles.splash} />

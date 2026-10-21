@@ -1,6 +1,6 @@
 # 开发计划
 
-当前版本 **v0.1.1**（versionCode 2）· 更新于 2026-10-21
+当前版本 **v0.2.0**（versionCode 3）· 更新于 2026-10-21
 
 优先级定义：
 
@@ -12,21 +12,15 @@
 
 ## P0 — 影响正常使用
 
-### 1. 待办与小结没有查看入口（数据黑洞）
+### 1. 待办与小结的查看入口 — ✅ 已在 v0.2.0 解决
 
-**这是目前最严重的问题，比缺通知栏入口严重得多。**
+原问题：`insertTodo` / `insertNote` 只写不读，`listTodos` / `listNotes` 全项目无界面调用，用户确认后的待办和小结永久看不到。
 
-整理页确认待办时，`repo.insertTodo()` 确实把数据写进了 SQLite；确认小结时，`repo.insertNote()` 同样落库。但全项目 grep 下来，**没有任何地方调用 `listTodos()` 或 `listNotes()`** —— 界面上完全没有出口。
+解决方式：新增 `ReviewScreen`，待办与小结合在一个页面用 tab 切换，时间轴头部加入口图标。
 
-结果是：AI 花了 token 提炼，你逐条点确认，数据安静地躺在数据库里，然后**永远看不到**。等于白提炼。`setFragmentNature(..., 'todo')` 打了性质标记，但时间轴也没有区分展示。
-
-**解决思路**
-
-- 新增「待办」页：列出 todos，区分未完成 / 已完成，支持勾选完成、按截止时间排序
-- 新增「小结」页：按日期倒序列出 notes（日报），可翻阅历史
-- 时间轴顶部加一行入口提示（如「3 条待办未完成」），点击跳转
-
-**成本**：中等。数据层完全就绪（表结构、`listTodos` / `listNotes` / `updateTodo` 都在），纯粹缺界面。约 1~2 轮迭代。
+- 待办：点击勾选完成、显示截止日（过期标红）、已完成项置灰划线排在底部
+- 小结：按日期倒序，默认折叠 4 行，点击展开
+- 数据层方法（`listTodos` / `toggleTodo` / `deleteTodo` / `listNotes`）原本就齐备，纯粹补界面
 
 ### 2. 真机验证
 
@@ -95,11 +89,24 @@ ghfast.top / gh-proxy.com 200（备用加速）
 - **全文搜索**：对 `content` 做 LIKE 查询，本地 SQLite 足够快
 - **知识库内搜索**：卡片数量上来后同样需要
 
-### 6. APK 减重
+### 6. APK 减重与构建提速 — ✅ 已在 v0.2.0 完成
 
-当前 76MB，因为把 `arm64-v8a` / `armeabi-v7a` / `x86` / `x86_64` 四种 ABI 全打进去了。vivo Y78 是 arm64，只保留它可降到约 25MB。
+原来 75.4 MB，原因是：4 种 ABI 全打包（`armeabi-v7a` / `arm64-v8a` / `x86` / `x86_64`）、19 套图标字体全打包、GIF/WebP 原生库白带、Gradle 只给 2G 堆。
 
-在 `android/app/build.gradle` 加 `abiFilters`，重编约 2 分钟。
+优化后 **21.9 MB（-71%）**，纯 JS 增量构建 **约 2 分钟**：
+
+| 改动 | 收益 |
+|---|---|
+| `reactNativeArchitectures=arm64-v8a` | -51.5 MB，同时 C++ 编译量降到 1/4 |
+| 图标改 `import Ionicons from '@expo/vector-icons/Ionicons'` | 字体 3.3 MB → 0.38 MB |
+| 关 `expo.gif` / `expo.webp` | 移除 Fresco 相关原生库（代码从未用 `<Image>`） |
+| `enableShrinkResourcesInReleaseBuilds=true` | 移除未引用资源 |
+| `-Xmx4096m` + `org.gradle.caching` + `workers.max=8` | 匹配本机 15.7G / 20 线程，减少 GC 抖动 |
+| 配置搬进 `plugins/withBuildOptimizations.js` | 防止重跑 prebuild 把优化冲掉、APK 反弹回 76 MB |
+
+**仍存在的瓶颈**：`expo:generateInlineModules` 每次构建都会执行，连带 `expo-modules-core:buildCMakeRelWithDebInfo` 的 C++ 编译无法命中缓存，约占总耗时的一半。这是 Expo SDK 58 的行为，未找到安全的关闭方式，暂不处理。
+
+**已评估但放弃**：`libnative-imagetranscoder.so`（572 KB）与 `libnative-filters.so`（271 KB）来自 Fresco，而代码从未用 `<Image>`。理论上可排除 fresco 依赖省掉约 1 MB，但 expo 生态里有模块隐式依赖它，排除后崩在启动阶段的风险大于收益，不做。
 
 ### 7. 其他候选
 
@@ -136,3 +143,4 @@ ghfast.top / gh-proxy.com 200（备用加速）
 |---|---|
 | v0.1.0 | 核心闭环：时间轴、AI 整理五类输出、知识库、Markdown 导出、APK 首次构建成功 |
 | v0.1.1 | 体验优化：冷启动自动聚焦、记完滚回顶部、折叠阈值 60→100 字；文档补齐构建环境与踩坑记录 |
+| v0.2.0 | 新增回顾页（待办 + 小结，解决数据黑洞）；APK 76→22 MB；字体按需导入；Gradle 性能调优；构建配置搬进 config plugin；精简内部函数导出 |

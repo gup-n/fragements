@@ -7,7 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, OrganizeResult } from '../types';
 import { C, R, tagColor } from '../theme';
 import { TagPill } from '../components/TagPill';

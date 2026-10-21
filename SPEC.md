@@ -294,8 +294,11 @@ fragments/
 │   └── screens/
 │       ├── TimelineScreen.tsx
 │       ├── OrganizeScreen.tsx
+│       ├── ReviewScreen.tsx  待办 / 小结回顾
 │       ├── KnowledgeScreen.tsx
 │       └── SettingsScreen.tsx
+├── plugins/
+│   └── withBuildOptimizations.js  构建优化 config plugin
 ```
 
 **平台分流说明**：`import { repo } from '../db/repo'` 在打包时由 Metro 按平台扩展名解析，Android 拿到 `repo.native.ts`（SQLite），Web 拿到 `repo.web.ts`（localStorage）。`repo.ts` 只用于 tsc 类型解析，运行时不会命中。
@@ -312,7 +315,8 @@ fragments/
 - [x] Web 端预览构建通过
 - [x] 打包 APK（v0.1.0，`com.local.fragments`，debug 签名，4 个 ABI 共 76MB）
 - [x] 体验优化 v0.1.1：冷启动自动聚焦输入框、记完自动滚回顶部、长文折叠阈值 60→100 字
-- [ ] **待办页 / 小结页（P0：数据已入库但全项目无 `listTodos`/`listNotes` 调用，用户看不到）**
+- [x] 回顾页 v0.2.0：待办 + 小结合并一页（tab 切换），补齐 `listTodos` / `listNotes` 的界面出口
+- [x] 体积与构建优化 v0.2.0：APK 75.4→21.9 MB，单 ABI + 字体按需导入 + 关 GIF/WebP + Gradle 调优
 - [ ] 通知栏常驻入口
 - [ ] 真机联调（vivo Y78 / V2278A）
 
@@ -356,17 +360,19 @@ v1 折中方案：用 `expo-notifications` 发一条 **sticky** 常驻通知，�
 | Gradle | 9.4.1 | wrapper 走腾讯云镜像 |
 | adb | `%ANDROID_HOME%\platform-tools\adb.exe` | 未加 PATH |
 
-### 构建时两个必须处理的坑
+### 构建时三个必须处理的坑
 
 **坑 1：JDK 版本**
 Expo 插件要求 Java 17 toolchain，但系统 `JAVA_HOME` 指向的 `C:\Program Files\Java\jdk-21` 是**无效路径**（实际 JDK 21 在 `D:\Program Files\Java\jdk-21`）。
 
-处理方式：构建时 `unset JAVA_HOME`（靠 PATH 里的 java 跑 Gradle），并在 `android/gradle.properties` 里指定 17 的安装位置：
+处理方式：构建时 `unset JAVA_HOME`（靠 PATH 里的 java 跑 Gradle），并在 `plugins/withBuildOptimizations.js` 里指定 17 的安装位置（会写进 `android/gradle.properties`）：
 
 ```properties
 org.gradle.java.installations.paths=C:/Users/14428/.jdks/jdk-17.0.20.1+1
 org.gradle.java.installations.auto-download=false
 ```
+
+JDK 换了机器或换目录时，可用环境变量 `FRAGMENTS_JDK17` 覆盖，不必改代码。
 
 **坑 2：Windows MAX_PATH 260（致命，必看）**
 `ninja 1.10.2` 不声明 `longPathAware`，导致 CMake 编译 `react-native-safe-area-context` 时报：
@@ -388,8 +394,28 @@ cp "$NT/ninja.exe" "$NT/ninja.exe.1.10.2.bak"
 cp ninja.exe "$NT/ninja.exe"
 ```
 
-**坑 3：`expo prebuild` 会重置配置**
-重跑 prebuild 会重新生成 `android/`，把上面的 `gradle.properties` 两行冲掉。prebuild 之后必须补回。
+**坑 3：`expo prebuild` 会重置 `android/`（已自动化）**
+`/android` 在 `.gitignore` 里，是 prebuild 生成的产物。重跑 prebuild 会重新生成整个目录，手改的 `gradle.properties` 全部冲掉 —— 单 ABI、shrinkResources、关 GIF/WebP 这些优化一旦丢失，APK 会无声反弹回 76MB。
+
+**现在这些属性写在 [`plugins/withBuildOptimizations.js`](./plugins/withBuildOptimizations.js)（config plugin）里，每次 prebuild 自动写回。** 要加新的 Gradle 属性改那个文件，不要再手改 `android/gradle.properties`。
+
+验证插件是否生效（不生成文件、不动 android/）：
+
+```bash
+npx expo config --type introspect | grep -A2 reactNativeArchitectures
+```
+
+### 体积与速度实测
+
+| 阶段 | APK | 说明 |
+|---|---|---|
+| v0.1.1 初始 | 76 MB | 4 ABI（arm64-v8a / armeabi-v7a / x86 / x86_64） |
+| 单 ABI | 23.9 MB | 只留 arm64-v8a |
+| 字体按需 + 关 GIF/WebP + shrinkResources | **22 MB** | 累计 **-71%** |
+
+构建耗时：全量约 45 分钟（含 C++ 编译）；改 JS 后增量 **约 2 分钟**（`org.gradle.caching` + 321/332 任务命中 up-to-date）。
+
+> 仍未解决的：`expo:generateInlineModules` 每次构建都跑，连带 `expo-modules-core:buildCMakeRelWithDebInfo` 的 C++ 编译无法命中缓存，约占总耗时一半。暂未找到安全的关闭方式。
 
 ### 打包命令
 

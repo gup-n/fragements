@@ -1,6 +1,7 @@
 const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
-export function pad(n: number) {
+/** 内部补零，不对外暴露 */
+function pad(n: number) {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
@@ -19,7 +20,8 @@ export function dayKey(ts: number) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-export function startOfDay(ts: number) {
+/** 内部用：把时间戳归到当天零点，仅供 dayLabel 算天数差 */
+function startOfDay(ts: number) {
   const d = new Date(ts);
   d.setHours(0, 0, 0, 0);
   return d.getTime();

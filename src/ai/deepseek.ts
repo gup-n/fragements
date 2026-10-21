@@ -47,7 +47,8 @@ function parseJsonLoose(text: string): unknown {
   }
 }
 
-const ID_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** 日期格式 YYYY-MM-DD */
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
  * 把模型的自由输出收敛成可信结构：ID 必须存在于本次输入，
@@ -75,10 +76,13 @@ export function normalizeResult(raw: unknown, fragments: Fragment[]): OrganizeRe
   const todos: TodoSuggestion[] = [];
   for (const item of Array.isArray(obj.todos) ? obj.todos : []) {
     const t = item as Record<string, unknown>;
-    const text = typeof t?.text === 'string' ? t.text.trim() : '';
-    if (!text || text.length > 80 || seenTodo.has(text)) continue;
+    const rawText = typeof t?.text === 'string' ? t.text.trim() : '';
+    if (!rawText) continue;
+    // 超长不整条丢弃 —— 丢掉等于让 AI 的产出凭空消失，截断保留更有用
+    const text = rawText.length > 100 ? `${rawText.slice(0, 98)}…` : rawText;
+    if (seenTodo.has(text)) continue;
     seenTodo.add(text);
-    const due = typeof t?.due === 'string' && ID_RE.test(t.due.trim()) ? t.due.trim() : null;
+    const due = typeof t?.due === 'string' && DATE_RE.test(t.due.trim()) ? t.due.trim() : null;
     const rawId = Number(t?.id);
     const id = Number.isFinite(rawId) && valid.has(rawId) ? rawId : null;
     todos.push({ text, due, id });

@@ -32,7 +32,8 @@ function daySections(fragments: Fragment[]) {
  * 单文件、按天分节 + 知识库附录。
  * 刻意不写任何专有格式：换掉 App、丢进 Obsidian、直接 cat 都能读。
  */
-export function buildMarkdown(fragments: Fragment[], cards: KnowledgeCard[] = []): ExportFile {
+/** 纯拼接，只被 exportMarkdown 调用，不对外暴露 */
+function buildMarkdown(fragments: Fragment[], cards: KnowledgeCard[] = []): ExportFile {
   const sections = daySections(fragments);
   const stamp = dayKey(Date.now());
   const knowledgeCount = cards.length;
