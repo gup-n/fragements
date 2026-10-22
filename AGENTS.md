@@ -28,6 +28,20 @@ cd android && ./gradlew assembleRelease
 
 项目**零自动化测试**，`tsc` + `export` 是唯一的自动检查。
 
+## 改完必须自己打包
+
+用户要求（2026-10-22 明确交代：「每次自行打包给我」）：**每次改完代码，自己把 APK 打出来，不要把命令丢给用户自己跑。**
+
+```bash
+cd F:/coding/python/project/Test/fragments
+npx expo prebuild --platform android --no-install --no-clean   # app.json 改了才需要
+cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
+./gradlew assembleRelease --console=plain > build-vXXX.log 2>&1   # 别管道给 tail，会缓冲看不到进度
+```
+
+产物在 `android/app/build/outputs/apk/release/app-release.apk`，
+复制成 `fragments-v<版本>.apk` 放项目根目录，把大小和 MD5 一并报给用户。增量约 2–3 分钟。
+
 ## 六条硬规矩
 
 1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。

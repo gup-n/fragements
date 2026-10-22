@@ -22,7 +22,7 @@
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 2` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式 |
 | 规模 | 约 5300 行 TS/TSX，`OrganizeScreen.tsx` 一个文件 1430 行 |
-| 最新 APK | **v0.2.4 还没打包**。仓库里最新的仍是 `fragments-v0.2.3.apk`（22 MB），它用的是已停用的模型名，AI 功能跑不通 |
+| 最新 APK | `fragments-v0.2.4.apk`，22 MB，MD5 `c34e50ca2bf04a12b387e0d4f591c501`（`versionCode 7` / `versionName 0.2.4` 已用 aapt 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -59,6 +59,10 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 ```
 
 产物在 `android/app/build/outputs/apk/release/app-release.apk`。
+
+> **用户要求（2026-10-22）：「每次自行打包给我」。** 改完代码不要只给命令、不要让用户自己打，
+> 自己跑完 prebuild + gradlew，把 `fragments-v<版本>.apk` 放到根目录并报出大小与 MD5。
+> 只改 JS 时 prebuild 可省；改了 `app.json` 的 version/versionCode 就必须 prebuild 才同步进 `build.gradle`。
 
 ---
 
@@ -391,21 +395,20 @@ plugins/
 
 ## 9. 下一步建议（按优先级）
 
-### P0 — 先打包 v0.2.4，再谈验证
+### P0 — 装机，按顺序验证
 
-这一版是**纯 JS 改动**（没加任何原生依赖），但仍然必须重新打包：代码要进 bundle。
+`fragments-v0.2.4.apk` 已经打好放在项目根目录（22 MB，`versionCode 7`）。
 
 ```bash
-npx expo prebuild --platform android --no-install --no-clean   # app.json 的 0.2.4/7 要同步进 build.gradle
-cd android && ./gradlew assembleRelease
+adb install -r fragments-v0.2.4.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
-> 不 prebuild 也能打出来（JS 是新的），但 `build.gradle` 里还是 `versionName 0.2.3 / versionCode 6`，
-> 系统里显示的版本会和设置页「关于」对不上。要么 prebuild，要么接受这个不一致。
+> 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
+> **卸载会清掉所有本地数据，先「导出 Markdown」**。
 
 装完让用户按这个顺序验：
 
-1. **先点「测试连接」** —— 确认模型名是 `deepseek-flash`。这一步不过在，后面全是白费
+1. **先点「测试连接」** —— 确认返回的模型列表里有 `deepseek-flash`。这一步不过在，后面全是白费
 2. **整理几条碎片**，看思维链是不是真的在屏幕上滚
 3. 如果卡在「模型正在通读…」，说明收到响应头但没吐 token，看是不是 effort 太高
 
