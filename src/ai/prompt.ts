@@ -20,6 +20,7 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 【tags】为每条碎片给 1-3 个中文标签。标签要短，2-4 个字，优先复用常见类别（工作、生活、设备、财务、健康、学习、人际、想法）。project 填这条碎片所属的具体事项名（如"报销""NAS 维护"），看不出明确事项就填 null。每条碎片都必须出现在 tags 里。
 
 【todos】只抽取真正"需要去做的事"。纯感想、纯记录、已经做完的不要抽。text 用动词开头，不超过 20 字。due 根据上下文推断日期，格式 YYYY-MM-DD；推断不出来就填 null，绝对不要编造日期。
+- **先对照【已完成待办】**：一件事在那份清单里已经办完了，就不要再抽一条新的待办出来，哪怕是换个说法。
 
 【summary】写一段 80-200 字的自然语言小结，分两层：先说这段时间你主动推进了什么，再说发生了哪些事（包括琐事和被打断的事）。要像人写的日记小结，不要罗列，不要用 markdown 标题。
 
@@ -149,6 +150,19 @@ export function buildUserContent(options: UserContentOptions) {
     }
   } else {
     out.push('【未完成待办】暂无');
+  }
+
+  // 已完成的待办必须让模型看见。否则重构时它不知道这件事已经办完了，
+  // 会照着原文再抽一遍同样的待办，列表里就多出一条永远做不完的重复项。
+  out.push('');
+  const done = todos.filter((t) => t.done);
+  if (done.length) {
+    out.push('【已完成待办】（这些事已经办完了。**不要**再为它们抽新的待办，也不要重复建同主题的卡）');
+    for (const t of done.slice(0, CONTEXT_LIMIT)) {
+      out.push(`[${t.id}] ✓ ${t.text}`);
+    }
+  } else {
+    out.push('【已完成待办】暂无');
   }
 
   return out.join('\n');

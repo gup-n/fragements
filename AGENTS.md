@@ -56,7 +56,9 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **「重构」= 针对原文重新整理**（重新判标签、重新提炼知识卡），再与旧结果比对、由用户逐项授权。
   **不是**「让 AI 重写知识卡正文」。
 - **`knowledge` 的 `body` 字段永远由代码从 `source_ids` 拼接原文**，不采信模型输出。
-- **三类破坏性操作（归档卡 / 标完成待办 / 删待办）默认不勾选**，且用户取消的授权代码层面也不能绕过。
+- **「会让内容消失」的两类操作（归档卡 / 删待办）默认不勾选**，且用户取消的授权代码层面也不能绕过。
+  `todo_done`（标完成待办）从 v0.3.0 起**默认勾选** —— 用户要求「做完的自动标掉」，且标完成不丢内容。
+- **周期总结 ≠ 重构**。总结只写 `notes` 表、不动碎片；重构是重新整理原文并与旧结果对照。
 
 ## 流式与思考过程（v0.2.4）
 
@@ -67,6 +69,23 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **UI 更新要节流**（120ms），否则几百个 chunk 的 setState 会卡死。
 - **模型名**：只能用 `deepseek-flash` / `deepseek-v4-pro`。`deepseek-chat`、`deepseek-reasoner` **已于 2026-07-24 停用**，
   调不通。别在示例或文档里再写这两个旧名字。
+
+## 三个 AI 功能的分工（v0.3.0）
+
+请求层统一在 `src/ai/chat.ts`（`requestChat(config, messages, onProgress, options)`），
+四段超时、流式回退、错误映射都在那里。**新加 AI 功能不要自己写 fetch。**
+
+| 功能 | 文件 | 输出 | `json` 选项 |
+|---|---|---|---|
+| 整理 | `ai/deepseek.ts` | 九类 JSON | `true`（默认） |
+| 周期总结 | `ai/summarize.ts` | Markdown | **`false`** |
+| 知识库问答 | `ai/ask.ts` | Markdown | **`false`** |
+
+- **`json: false` 不能省**。开着 `response_format: json_object` 时模型会把整篇 Markdown 塞进 JSON 字符串，
+  换行变 `\n`，界面上糊成一行。
+- **取一段时间的碎片用 `repo.listFragmentsBetween(from, to)`**（半开区间），不要用 `listFragments(limit)` 再过滤 ——
+  超过 limit 会静默丢掉最早的记录。
+- 小结正文用 `<NoteBody>` 渲染（标题 / 列表 / 段落），不要直接把 `bodyMd` 丢进 `<Text>`。
 
 ## Expo 会发破坏性变更，别信训练数据
 

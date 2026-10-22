@@ -172,6 +172,14 @@ export const repo: Repo = {
     return rows.map(toFragment);
   },
 
+  async listFragmentsBetween(from, to) {
+    const rows = db().getAllSync<FragmentRow>(
+      'SELECT * FROM fragments WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC',
+      [from, to],
+    );
+    return rows.map(toFragment);
+  },
+
   async insertFragment(content, source, createdAt) {
     const res = db().runSync(
       'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
@@ -246,6 +254,22 @@ export const repo: Repo = {
   async listArchivedKnowledgeCards() {
     const rows = db().getAllSync<CardRow>(
       'SELECT * FROM knowledge_cards WHERE archived = 1 ORDER BY created_at DESC',
+    );
+    return rows.map(toCard);
+  },
+
+  async searchKnowledgeCards(keyword) {
+    const kw = keyword.trim();
+    if (!kw) return [];
+    // 转义 LIKE 的通配符，否则用户输个 % 就把整库捞出来了
+    const like = `%${kw.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+    const rows = db().getAllSync<CardRow>(
+      `SELECT * FROM knowledge_cards
+        WHERE archived = 0
+          AND (title LIKE ? ESCAPE '\\' OR gist LIKE ? ESCAPE '\\'
+               OR body LIKE ? ESCAPE '\\' OR topic LIKE ? ESCAPE '\\')
+        ORDER BY created_at DESC`,
+      [like, like, like, like],
     );
     return rows.map(toCard);
   },
@@ -328,6 +352,13 @@ export const repo: Repo = {
     db().runSync('DELETE FROM todos WHERE id = ?', [id]);
   },
 
+  async listDoneTodoSourceIds() {
+    const rows = db().getAllSync<{ source_fragment_id: number }>(
+      'SELECT DISTINCT source_fragment_id FROM todos WHERE done = 1 AND source_fragment_id IS NOT NULL',
+    );
+    return rows.map((r) => r.source_fragment_id);
+  },
+
   async insertNote(input) {
     const res = db().runSync(
       'INSERT INTO notes (type, title, body_md, period, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -355,8 +386,11 @@ export const repo: Repo = {
     }));
   },
 
-  async saveRun(input) {
-    const res = db().runSync(
+  async deleteNote(id) {
+    db().runSync('DELETE FROM notes WHERE id = ?', [id]);
+  },
+
+  async saveRun(input) {    const res = db().runSync(
       'INSERT INTO organize_runs (started_at, fragment_ids, model, result_json, applied) VALUES (?, ?, ?, ?, 0)',
       [input.startedAt, JSON.stringify(input.fragmentIds), input.model, input.resultJson],
     );

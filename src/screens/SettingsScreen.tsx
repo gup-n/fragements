@@ -14,7 +14,7 @@ import type { Fragment, ReasoningEffort } from '../types';
 import { C, R } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
-import { AiError, testConnection } from '../ai/deepseek';
+import { AiError, testConnection } from '../ai/chat';
 import { exportMarkdown } from '../export/markdown';
 import { APP_VERSION } from '../version';
 

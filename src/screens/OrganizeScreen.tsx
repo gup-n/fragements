@@ -15,7 +15,8 @@ import type { AiConfig, Fragment, KnowledgeCard, OrganizeResult, Todo } from '..
 import { C, R, tagColor } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
-import { AiError, organize } from '../ai/deepseek';
+import { AiError } from '../ai/chat';
+import { organize } from '../ai/deepseek';
 import type { OrganizeProgress } from '../ai/deepseek';
 import { todayISO } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -219,9 +220,11 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   }
 
   /**
-   * 有三类建议是**默认不勾选**的，因为它们会减少用户能看到的内容：
-   * 「标记待办完成」「归档知识卡」「删除待办」。
-   * 误操作之后内容就从列表里消失了，用户很难注意到，必须主动点一下。
+   * 「归档卡」和「删待办」默认不勾选：它们会让内容从列表里消失，
+   * 误操作很难被发现，必须由用户主动点一下。
+   *
+   * 「标记待办完成」不在此列 —— 用户明确要求「已经做完的自动标掉」。
+   * 而且标完成不会让内容消失：回顾页有独立的已完成区，时间轴上对应碎片带「已完成」标记。
    *
    * 追问时只把「这一轮新冒出来的」置为不勾，用户已经表过态的保持原样。
    */
@@ -231,10 +234,6 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
       const known = new Set(before);
       for (const key of now) if (!known.has(key)) next.add(key);
     };
-    addNew(
-      fresh.todo_done.map((d) => K.done(d.todo_id)),
-      (previous?.todo_done ?? []).map((d) => K.done(d.todo_id)),
-    );
     addNew(
       fresh.archive_cards.map((a) => K.archive(a.card_id)),
       (previous?.archive_cards ?? []).map((a) => K.archive(a.card_id)),
@@ -618,7 +617,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
                   被新卡取代的旧卡只会建议归档 —— 归档可恢复，原文一个字都不动。
                 </Text>
                 <Text style={styles.explainText}>
-                  会减少内容的三类操作（归档卡、标完成待办、删待办）默认全部不勾选，得你自己点。
+                  会减少内容的两类操作（归档卡、删待办）默认不勾选，得你自己点。已做完的待办会自动标掉，
+                  因为那不算删除，回顾页里还能看到、也能撤回。
                 </Text>
                 <Text style={styles.explainText}>
                   不会重复抽待办、也不会重复写今日小结 —— 那些上一轮已经有了。
@@ -718,7 +718,7 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
               <Section
                 title="这些待办好像做完了"
                 count={result.todo_done.length}
-                hint="默认不勾选。勾上才会标完成 —— 标错了待办会从列表里消失，不容易发现。"
+                hint="默认勾选 —— 碎片里写明已经做完的，自动标掉。标错了会在回顾页的已完成区，点一下就能撤回。"
               >
                 {result.todo_done.map((d) => {
                   const key = K.done(d.todo_id);

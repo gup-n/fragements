@@ -58,6 +58,12 @@ export const repo: Repo = {
     return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
   },
 
+  async listFragmentsBetween(from: number, to: number) {
+    return load()
+      .fragments.filter((f) => f.createdAt >= from && f.createdAt < to)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  },
+
   async insertFragment(content, source: FragmentSource, createdAt?: number) {
     const d = load();
     const id = nextId(d);
@@ -156,6 +162,18 @@ export const repo: Repo = {
     return cards.sort((a, b) => a.topic.localeCompare(b.topic) || b.createdAt - a.createdAt);
   },
 
+  async searchKnowledgeCards(keyword) {
+    const kw = keyword.trim().toLowerCase();
+    if (!kw) return [];
+    return load()
+      .knowledgeCards.filter(
+        (c) =>
+          !c.archived &&
+          [c.title, c.gist, c.body, c.topic].some((s) => s.toLowerCase().includes(kw)),
+      )
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+
   async listArchivedKnowledgeCards() {
     return load()
       .knowledgeCards.filter((c) => c.archived)
@@ -224,6 +242,13 @@ export const repo: Repo = {
     persist();
   },
 
+  async listDoneTodoSourceIds() {
+    const ids = load()
+      .todos.filter((t) => t.done && t.sourceFragmentId !== null)
+      .map((t) => t.sourceFragmentId as number);
+    return Array.from(new Set(ids));
+  },
+
   async insertNote(input) {
     const d = load();
     const id = nextId(d);
@@ -234,6 +259,12 @@ export const repo: Repo = {
 
   async listNotes(limit = 30) {
     return [...load().notes].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  },
+
+  async deleteNote(id) {
+    const d = load();
+    d.notes = d.notes.filter((x) => x.id !== id);
+    persist();
   },
 
   async saveRun(input) {

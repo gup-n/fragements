@@ -4,13 +4,24 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Note, Todo } from '../types';
 import { C, R } from '../theme';
 import { repo } from '../db/repo';
-import { dayKey } from '../util/date';
+import { dayKey, periodLabel } from '../util/date';
+import { NoteBody } from '../components/NoteBody';
+import { SummarySheet } from '../components/SummarySheet';
 
 interface Props {
   onClose: () => void;
+  /** 数据变了（新存了一条总结），通知上层刷新时间轴 */
+  onChanged?: () => void | Promise<void>;
 }
 
 type Tab = 'todo' | 'note';
+
+const NOTE_KIND: Record<Note['type'], string> = {
+  daily: '日小结',
+  weekly: '周总结',
+  monthly: '月总结',
+  theme: '主题总结',
+};
 
 /** 到期日只显示月-日；早于今天标红 */
 function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | null {
@@ -18,12 +29,13 @@ function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | nu
   return { text: dueAt.slice(5).replace('-', '/'), overdue: dueAt < dayKey(Date.now()) };
 }
 
-export function ReviewScreen({ onClose }: Props) {
+export function ReviewScreen({ onClose, onChanged }: Props) {
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [openNote, setOpenNote] = useState<number | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const reload = useCallback(async () => {
     const [t, n] = await Promise.all([repo.listTodos(), repo.listNotes(60)]);
@@ -141,11 +153,21 @@ export function ReviewScreen({ onClose }: Props) {
         </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
+          <Pressable
+            style={({ pressed }) => [styles.genBtn, pressed && { backgroundColor: C.accentBg }]}
+            onPress={() => setSheetOpen(true)}
+          >
+            <Ionicons name="sparkles-outline" size={16} color={C.accentText} />
+            <Text style={styles.genText}>生成总结</Text>
+            <Text style={styles.genHint}>日 / 周 / 月</Text>
+          </Pressable>
+
           {notes.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>还没有小结</Text>
               <Text style={styles.emptyBody}>
-                整理时勾选「今日小结」，{'\n'}AI 会把当天的事浓缩成一段存在这里。
+                点上面的「生成总结」，AI 会把一天／一周／一个月{'\n'}
+                记下的东西压成一段，存进时间轴对应的时间点。
               </Text>
             </View>
           ) : (
@@ -157,12 +179,17 @@ export function ReviewScreen({ onClose }: Props) {
                   onPress={() => setOpenNote(open ? null : note.id)}
                   style={styles.noteCard}
                 >
-                  <Text style={styles.noteDate}>
-                    {note.period ?? dayKey(note.createdAt)}
-                  </Text>
-                  <Text style={styles.noteBody} numberOfLines={open ? undefined : 4}>
-                    {note.bodyMd}
-                  </Text>
+                  <View style={styles.noteHead}>
+                    <Text style={styles.noteKind}>{NOTE_KIND[note.type] ?? '总结'}</Text>
+                    <Text style={styles.noteDate}>
+                      {periodLabel(note.period) || dayKey(note.createdAt)}
+                    </Text>
+                  </View>
+                  <NoteBody
+                    text={note.bodyMd}
+                    numberOfLines={open ? undefined : 5}
+                    style={styles.noteBody}
+                  />
                   <Text style={styles.noteToggle}>{open ? '收起' : '展开'}</Text>
                 </Pressable>
               );
@@ -170,6 +197,16 @@ export function ReviewScreen({ onClose }: Props) {
           )}
         </ScrollView>
       )}
+
+      {sheetOpen ? (
+        <SummarySheet
+          onClose={() => setSheetOpen(false)}
+          onSaved={async () => {
+            await reload();
+            await onChanged?.();
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -229,6 +266,19 @@ const styles = StyleSheet.create({
   due: { fontSize: 11, color: C.text3 },
   dueOverdue: { color: C.danger },
 
+  genBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: R.card,
+    backgroundColor: C.accentBg,
+    marginBottom: 12,
+  },
+  genText: { flex: 1, fontSize: 14, color: C.accentText, fontWeight: '500' },
+  genHint: { fontSize: 11, color: C.accentText, opacity: 0.7 },
+
   noteCard: {
     backgroundColor: C.card,
     borderRadius: R.card,
@@ -237,7 +287,9 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
   },
-  noteDate: { fontSize: 11, color: C.text3, marginBottom: 7, fontVariant: ['tabular-nums'] },
-  noteBody: { fontSize: 13, lineHeight: 21, color: C.text },
+  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  noteKind: { fontSize: 11, color: C.accentText, fontWeight: '500' },
+  noteDate: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
+  noteBody: { fontSize: 14, lineHeight: 23, color: C.text },
   noteToggle: { fontSize: 12, color: C.accent, marginTop: 9 },
 });

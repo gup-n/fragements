@@ -1,9 +1,9 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-22，对应版本 **v0.2.4（versionCode 7）**。
+> 写于 2026-10-22，对应版本 **v0.3.0（versionCode 8）**。
 > 上一轮上下文快满了，这份文档的目的是让你**不用重读历史对话**就能接着干。
 >
-> **阅读顺序**：本文件（10 分钟）→ `SPEC.md` 第 6 节（AI 契约 + 流式与思考过程）+ 第 8.1 节（Android UI 红线）→ `ROADMAP.md` 剩余项。
+> **阅读顺序**：本文件（10 分钟）→ `SPEC.md` 第 6 节（AI 契约 + 流式与思考过程 + 周期总结与知识库问答）+ 第 8.1 节（Android UI 红线）→ `ROADMAP.md` 剩余项。
 > `README.md` 是给人看的门面，`AGENTS.md` 是速查，细节都在 `SPEC.md`。
 
 ---
@@ -17,12 +17,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.2.4`，`versionCode 7`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.3.0`，`versionCode 8`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 2` |
-| AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式 |
-| 规模 | 约 5300 行 TS/TSX，`OrganizeScreen.tsx` 一个文件 1430 行 |
-| 最新 APK | `fragments-v0.2.4.apk`，22 MB，MD5 `c34e50ca2bf04a12b387e0d4f591c501`（`versionCode 7` / `versionName 0.2.4` 已用 aapt 核对） |
+| AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
+| 规模 | 约 7500 行 TS/TSX，`OrganizeScreen.tsx` 一个文件 1430 行、`SummarySheet.tsx` 496 行 |
+| 最新 APK | `fragments-v0.3.0.apk`，21.8 MiB（22,873,162 字节），MD5 `97373588f10cc36d74500654fa89ca86`（`versionCode 8` / `versionName 0.3.0` 已用 aapt 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -68,7 +68,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 3. 项目现在的状态
 
-### 已完成（v0.1.0 → v0.2.4）
+### 已完成（v0.1.0 → v0.3.0）
 
 | 版本 | 内容 |
 |---|---|
@@ -78,7 +78,8 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 | v0.2.1 | 首轮真机四条反馈全修（启动闪白、键盘遮挡 ×2、状态栏重叠） |
 | v0.2.2 | 多轮追问、新旧对齐（补充已有卡 / 标记待办完成）、返回键收口 |
 | v0.2.3 | 重构模式（重新整理已整理碎片并与旧结果对照）、归档旧卡、清理待办 |
-| **v0.2.4** | **思考过程可视化**（流式 + 思维链实时显示）、**模型名迁移到 `deepseek-flash`**、超时改分段、设置页可开关思考 |
+| v0.2.4 | **思考过程可视化**（流式 + 思维链实时显示）、**模型名迁移到 `deepseek-flash`**、超时改分段、设置页可开关思考 |
+| **v0.3.0** | **周期总结**（日/周/月，进时间轴）、**知识库检索**（关键字搜索 + 问模型）、知识库详情页与大字号、待办完成标记（`todo_done` 默认勾选 + 时间轴徽章） |
 
 ### 未完成的功能（只剩一个）
 
@@ -100,9 +101,72 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 4. 最近做了什么
 
-### 4.1 v0.2.4：思考过程（本轮）
+### 4.1 v0.3.0：四条待优化项（本轮）
 
-#### 4.1.1 先说那个更急的事：模型名已经死了
+用户一次提了四条，我先用选择题收敛了三个设计分歧，再动手：
+
+| 分歧 | 用户的选择 |
+|---|---|
+| 完成标记怎么做 | **碎片上显示「已完成」小标记**，不往 `tags` 里塞一个「已完成」标签 |
+| 周期整理要不要动碎片状态 | **只生成总结**，不改任何碎片 |
+| 问答范围 | **默认当前主题，可切全库** |
+
+四条落地方式：
+
+| 需求 | 落地 |
+|---|---|
+| 已完成的待办别再抽一遍 | `todo_done` 改**默认勾选**；prompt 里加【已完成待办】段；重构模式下先读这份清单 |
+| 知识库字小、想点开看 | 卡片字号 14→16、要点 12→14；点卡片进**独立详情页**（20px 标题 / 15px 原文），归档·恢复·删除都在里面 |
+| 知识库要能搜、能问 | 顶部关键字搜索（跨主题，主题页内自动收窄）+ 问模型（当前主题 / 全库） |
+| 日/周/月内容想整理到时间轴 | 回顾页「生成总结」→ 选周期 → 流式生成 → **预览后决定存不存** → 落在该周期末尾 |
+
+#### 4.1.1 三个必须记牢的实现点
+
+1. **`response_format: json_object` 必须能关**。开着它，模型会把整篇 Markdown 塞进一个 JSON 字符串，
+   换行全变 `\n`，落到时间轴上就是糊成一行。`chat.ts` 的 `RequestOptions.json` 默认开（整理要），
+   总结和问答显式传 `json: false`。
+2. **周期取数不能用 `listFragments(limit)`**。加了 `listFragmentsBetween(from, to)`，
+   区间**半开** `[from, to)`。用 limit 截断的话月总结会漏掉月初的记录，而且不会报错 —— 这种错最难发现。
+3. **引用反查靠标题字面命中**（`answer.includes(card.title)`），不让模型输出编号再解析。
+   模型换个编号习惯（`[1]` / `【1】` / `1.`）就得改一次解析器。
+
+#### 4.1.2 顺手做的一次重构
+
+`deepseek.ts` 从 570 行降到 270 行。传输层（超时守卫、流式/非流式、错误映射、`testConnection`）
+整体搬到新的 `ai/chat.ts`，因为总结和问答要一模一样的四段超时和错误提示，
+再复制一遍必然走形。现在三个功能各管自己的 prompt 和结果收敛，只共用请求层。
+
+> 改的时候注意：`AiError` 和 `testConnection` 现在从 `ai/chat` 导出，不再是 `ai/deepseek`。
+> `OrganizeScreen` / `SettingsScreen` 的 import 已同步。
+
+#### 4.1.3 材料预算：为什么是「前 70% + 后 30%」
+
+一个月的碎片可能上百条，全塞进去既贵又会把模型淹掉。第一版想的是「只取前 N 条」，
+但那样月末的结论（往往才是这个月真正的产出）会被整段丢掉。
+
+现在的做法：超预算时保留**前 70% + 后 30%**，中间插一句「…（中间省略 N 条）」。
+两头的语境都在，模型不会把「月初起的头」和「月末的结论」接错。单条碎片截 400 字，
+避免一条长笔记吃掉整个预算。
+
+#### 4.1.4 同周期重复生成
+
+日小结最容易被重新生成（晚上又记了几条）。保存前会查 `(type, period)` 是否已有 note，
+有就给一个**默认勾选的「替换原有小结」**，取消勾选就是另存一条。
+不做这一步的话，时间轴上会并排两条同日小结，用户还得手动删。
+
+#### 4.1.5 返回键的层级
+
+知识库原来是「按返回直接回时间轴」，无论你在第几层。这轮补了页内层级：
+搜索词 → 主题 → 回主界面，逐层退。实现上要注意 **RN 的 BackHandler 是后进先出**，
+而知识库这个 handler 没有依赖数组（每次渲染都重新注册），所以它会一直排在最前面 ——
+因此它里面必须显式判断 `if (detail || askOpen) return false;` 把事件让给覆盖层，
+否则详情页开着的时候按返回会直接跳回时间轴。
+
+---
+
+### 4.2 v0.2.4：思考过程（上一轮，仍在用）
+
+#### 4.2.1 先说那个更急的事：模型名已经死了
 
 用户提的需求是「整理时想看到模型的思考过程」，但查文档时发现了一个更要命的问题：
 
@@ -117,7 +181,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 代码里的迁移方式：`loadAiConfig` 读配置时用 `RETIRED_MODELS` 映射把旧名换掉（读取路径不写库，用户下次保存时自然落盘）。
 
-#### 4.1.2 三件事一起改，因为它们互相依赖
+#### 4.2.2 三件事一起改，因为它们互相依赖
 
 | 改动 | 为什么非改不可 |
 |---|---|
@@ -125,7 +189,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 | `stream: false` → 流式 SSE | **非流式必须等整轮跑完才拿得到 `reasoning_content`，那就不叫「过程」了** |
 | 新增 `thinking` / `reasoning_effort` | V4 默认开思考，但得让用户能关（更快更省） |
 
-#### 4.1.3 五个必须记牢的实现点
+#### 4.2.3 五个必须记牢的实现点
 
 1. **RN 自带的 `fetch` 没有 `response.body`**，`getReader()` 直接崩。
    SDK 58 的全局 fetch 虽然已经被 `expo/fetch` 接管，代码里仍**显式 `import { fetch } from 'expo/fetch'`**，
@@ -139,14 +203,14 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 5. **界面更新必须节流**（120ms）。一个思考过程能吐几百个 chunk，每块都 `setState` 会把 JS 线程占满。
    结束时再用最终值兜一次底，否则最后 120ms 的内容会看不见。
 
-#### 4.1.4 界面长什么样
+#### 4.2.4 界面长什么样
 
 - **整理中**：一张卡片，头部是转圈 + 标题 + 已用时，中间是滚动的思维链（自动贴底），底部两个数字「思考 N 字 / 结果 M 字」
 - **追问时**：同一张卡片顶在结果页上方，旧结果还在下面
 - **结果页**：一个默认收起的「模型思考过程 · N 字」，点开可看全文（内部滚动，限高 260）
 - **设置页**：「整理行为」分组，思考开关 + 轻/标准/深 三档
 
-#### 4.1.5 一个必须承认的取舍
+#### 4.2.5 一个必须承认的取舍
 
 **思考模式下 `temperature` 不生效**。原来那个用来压稳定性的 `temperature: 0.2` 在开思考时等于没设。
 官方文档写得很清楚（传了不报错，只是被忽略），没有替代手段。
@@ -154,7 +218,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 代码里 `buildBody` 只在「没有思考」时才传 `temperature`，免得看代码的人以为自己控制住了随机性。
 
-#### 4.1.6 为什么 thinking 参数要按模型名判断
+#### 4.2.6 为什么 thinking 参数要按模型名判断
 
 只有 DeepSeek 的 V4 系列认 `thinking` / `reasoning_effort`。
 用户如果把 Base URL 换成第三方 OpenAI 兼容服务，多传这两个字段**可能直接 400**。
@@ -162,9 +226,9 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 ---
 
-### 4.2 v0.2.3：重构模式（上一轮，但仍是核心设计）
+### 4.3 v0.2.3：重构模式（更早一轮，但仍是核心设计）
 
-#### 4.2.1 先纠正一个理解错误（这是最重要的背景）
+#### 4.3.1 先纠正一个理解错误（这是最重要的背景）
 
 v0.2.2 时我**主动砍掉了用户提的「重构」**，理由写进了文档：「让模型重写全部历史内容，误点就覆盖沉淀，与永不删除原文冲突」。
 
@@ -176,7 +240,7 @@ v0.2.2 时我**主动砍掉了用户提的「重构」**，理由写进了文档
 
 教训写在 `SPEC.md` 第 10 节：用户提一个功能名时，别用自己的技术直觉替换它的语义。有歧义先问，别急着下「不做」的结论。
 
-#### 4.2.2 设计：一个 `mode` 参数，九项输出
+#### 4.3.2 设计：一个 `mode` 参数，九项输出
 
 `organize` / `refactor` **共用同一套 prompt 和响应结构**，只靠 `mode` 切语义：
 
@@ -196,7 +260,7 @@ drop_todos:    { todo_id, reason }[]   // 真删除待办
 
 SYSTEM_PROMPT 也相应从七项改到九项。
 
-#### 4.2.3 四个「由代码保证」的点（别指望模型自觉）
+#### 4.3.3 四个「由代码保证」的点（别指望模型自觉）
 
 这是本轮的设计核心，改这块之前先想清楚为什么这么写：
 
@@ -216,7 +280,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
    已整理的碎片上次已经抽过待办、写过小结，再抽一遍就是纯重复数据。
    代码层按两条判据过滤待办（**文案去掉标点空白后相同** 或 **同一碎片本来就派生过待办**），并把 `summary` 置空。
 
-#### 4.2.4 补上一个数据黑洞
+#### 4.3.4 补上一个数据黑洞
 
 `knowledge_cards.archived` 字段一直存在，但 `listKnowledgeCards` 过滤了 `archived = 0`，**没有任何界面能看见归档的卡**。
 只做归档功能不补入口 = 再造一个数据黑洞（和 v0.2.0 修的待办/小结一个性质）。
@@ -225,7 +289,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
 
 **这条是项目的一个模式**：只要新增一个「让内容从列表消失」的字段/操作，就必须同时提供查看入口。历史上栽过两次。
 
-#### 4.2.5 界面改动
+#### 4.3.5 界面改动
 
 都在 `src/screens/OrganizeScreen.tsx`：
 
@@ -240,7 +304,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
 ## 5. 代码地图
 
 ```
-App.tsx                       186   路由 state + 全局 BackHandler + 数据加载
+App.tsx                       210   路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds）
 index.ts                        8   registerRootComponent
 src/
   types.ts                    178   Fragment / Todo / Note / KnowledgeCard / OrganizeResult（九类）+ AiConfig
@@ -249,24 +313,33 @@ src/
   ai/
     config.ts                  35   读 AI 配置（默认值 + repo.getSetting）+ 已停用模型名映射
     keyStore.ts                37   API Key 存 expo-secure-store（不进 DB、不进导出）
-    prompt.ts                 170   SYSTEM_PROMPT（九项）+ buildUserContent + buildRefineContent
-    deepseek.ts               570   ★ 流式请求 + 四段超时 + normalizeResult（全部校验都在这）+ organize()
+    prompt.ts                 184   SYSTEM_PROMPT（九项）+ buildUserContent（含【已完成待办】）+ buildRefineContent
+    chat.ts                   339   ★ 请求层：四段超时 / 流式 / 非流式 / 错误映射 / testConnection（三功能共用）
+    deepseek.ts               270   整理：prompt 组装 + normalizeResult（全部校验都在这）+ organize()
+    summarize.ts              222   ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗
+    ask.ts                    177   ★ 知识库问答：关键词打分选卡、预算装填、引用反查
     stream.ts                 114   ★ SSE 解析：把 reasoning_content 与 content 分开累积
   db/
-    types.ts                   71   Repo 接口（上下层唯一契约）
-    repo.native.ts            388   SQLite 实现 + MIGRATIONS 数组
-    repo.web.ts               274   localStorage 实现（仅供桌面预览，功能对齐即可）
+    types.ts                   84   Repo 接口（上下层唯一契约）
+    repo.native.ts            422   SQLite 实现 + MIGRATIONS 数组
+    repo.web.ts               305   localStorage 实现（仅供桌面预览，功能对齐即可）
     repo.ts                     7   类型转发壳，运行时不会命中
   screens/
-    TimelineScreen.tsx        579   时间轴 + 输入 + 长文折叠 + 全屏编辑覆盖层
+    TimelineScreen.tsx        749   时间轴 + 输入 + 长文折叠 + 全屏编辑 + 小结混排（已完成徽章）
     OrganizeScreen.tsx       1430   ★ 最复杂：两模式 / 九类确认 / 追问 / 思考过程面板 / 键盘抬升
-    KnowledgeScreen.tsx       305   主题聚合 + 卡片 + 已归档区
-    ReviewScreen.tsx          243   待办与小结算一页（tab）
+    KnowledgeScreen.tsx       429   主题聚合 + 搜索 + 问入口 + 已归档区 + 详情/问答覆盖层
+    ReviewScreen.tsx          295   待办与小结算一页（tab）+ 生成总结入口
     SettingsScreen.tsx        418   BaseURL / 模型 / Key / 思考开关与档位 / 连接测试 / 统计
   export/markdown.ts          140   Markdown 导出（时间轴 + 知识库附录）
-  util/date.ts                 46   日期格式化
+  util/date.ts                189   日期格式化 + 周期键（ISO 周）/ 区间 / 锚点
   util/keyboard.ts             39   ★ useKeyboardHeight()，见第 7 节
-  components/TagPill.tsx       35   标签胶囊
+  components/
+    TagPill.tsx                35   标签胶囊
+    NoteBody.tsx               79   ★ 小结正文的轻量 Markdown 渲染（标题/列表/段落，不引第三方）
+    ReasoningStream.tsx        85   ★ 流式实时面板：转圈 + 秒数 + 思维链滚动 + 字数
+    SummarySheet.tsx          496   ★ 周期总结：选周期 → 生成 → 预览 → 保存/替换
+    KnowledgeDetail.tsx       216   知识卡详情页（归档 / 恢复 / 删除，两次点击确认）
+    AskSheet.tsx              378   知识库问答面板（范围切换 + 输入 + 回答 + 引用卡片）
 scripts/
   build_single_file.py       ~100   把 web 产物打成单文件 HTML 预览（见第 2 节）
 plugins/
@@ -371,7 +444,18 @@ plugins/
 **已经验证过的**：`readChatStream` 在 1 字节一片的极端分片下仍能正确分离思维链与正文、正确拼回中文；
 没有 `body` 时会抛 `NoStreamError` 让上层回退到非流式。`expo/fetch` 在 web 打包里也能正常解析（`expo export -p web` 通过）。
 
-### 7.5 根目录的垃圾（可以删，都已 gitignore）
+### 7.5 v0.3.0 新踩的
+
+| 坑 | 真相 |
+|---|---|
+| 给 Markdown 输出留着 `json_object` | 模型会把整篇 Markdown 塞进一个 JSON 字符串，换行全变 `\n`，时间轴上糊成一行。纯文本功能必须 `json: false` |
+| 用 `listFragments(500)` 取一个月的碎片 | 静默丢数据：超过 500 条就只拿到最近的，月初的记录消失且**不报错**。必须用区间的 `listFragmentsBetween` |
+| 以为 `StyleSheet.absoluteFillObject` 还在 | 这个版本的 RN 类型里只有 `absoluteFill`。直接用 `position:'absolute'` + 四个 0，别跟类型较劲 |
+| `useRef<ScrollView>` 想调 `scrollToEnd` | 泛型参数要的是**实例类型**：`import type { ScrollViewInstance } from 'react-native'`，不是 `ScrollView` 组件本身 |
+| 知识库的 BackHandler 没有依赖数组 | 每次渲染都重新注册 → 永远排在监听器栈顶。所以它必须先判断「有没有覆盖层开着」并 `return false` 让位，否则详情页按返回直接跳回时间轴 |
+| 用一次 Edit 替换跨两个函数的整段代码 | 锚点范围没核对，把 `organize()` 的请求调用和残留代码一起切掉了，编译才发现。**大段替换前后各读一次文件**，别只看 new_string |
+
+### 7.6 根目录的垃圾（可以删，都已 gitignore）
 
 `preview/` `preview2/` `.edge-tmp*/` `碎片-界面预览.html` `devserver.log` `prebuild*.log` `err.txt` —— 早期预览和调试产物，没有任何代码依赖。
 
@@ -388,7 +472,9 @@ plugins/
 7. **改功能先改 `SPEC.md` 再改代码**。文档是这个项目唯一的设计依据，代码可以重写，文档不能落后。
 8. **思维链只用于展示，永远不参与解析**。`reasoning_content` 进的是 UI，`content` 进的是 `parseJsonLoose`；
    `raw` 只存正文，多轮追问回传的也只有它。
-9. **模型名只认 `deepseek-flash` 或 `deepseek-v4-pro`**。`deepseek-chat` / `deepseek-reasoner` 已停用，
+9. **总结与问答不动数据**。周期总结只写 `notes` 表，问答结果**不落库**。
+   这两个功能不像整理那样会改碎片状态，所以可以跑得比整理更「自动」——但也仅限这两个。
+10. **模型名只认 `deepseek-flash` 或 `deepseek-v4-pro`**。`deepseek-chat` / `deepseek-reasoner` 已停用，
    别在任何新代码、新文档、示例里再写这两个名字（`RETIRED_MODELS` 里那份迁移映射除外）。
 
 ---
@@ -397,10 +483,10 @@ plugins/
 
 ### P0 — 装机，按顺序验证
 
-`fragments-v0.2.4.apk` 已经打好放在项目根目录（22 MB，`versionCode 7`）。
+`fragments-v0.3.0.apk` 已经打好放在项目根目录（`versionCode 8`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.2.4.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.3.0.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
@@ -409,8 +495,14 @@ adb install -r fragments-v0.2.4.apk        # adb 在 %ANDROID_HOME%\platform-too
 装完让用户按这个顺序验：
 
 1. **先点「测试连接」** —— 确认返回的模型列表里有 `deepseek-flash`。这一步不过在，后面全是白费
-2. **整理几条碎片**，看思维链是不是真的在屏幕上滚
-3. 如果卡在「模型正在通读…」，说明收到响应头但没吐 token，看是不是 effort 太高
+2. **整理几条碎片**，看思维链是不是真的在屏幕上滚；写完「已经做完了」的事，看 `todo_done` 是不是默认勾上、时间轴上那条碎片有没有「已完成」徽章
+3. **回顾页 → 小结 → 生成总结**，选「昨天」生成一条，看流式面板走完后预览是否正常，保存后时间轴上是不是落在昨天末尾
+4. **知识库**：搜一个词看命中；点「问」问一句，看回答下面的「回答里提到的卡片」是否点得进详情
+5. 如果卡在「模型正在通读…」，说明收到响应头但没吐 token，看是不是 effort 太高
+
+> v0.3.0 的三条新链路（总结 / 搜索 / 问答）**都只有编译和 Web 构建验证，没有真机跑过**。
+> 最可能出问题的是总结里的 Markdown 渲染（`NoteBody` 的嵌套 Text 在长文本 + 折叠下的表现）
+> 和问答面板的键盘抬升。
 
 ### P0 — 然后才是 v0.2.2 / v0.2.3 遗留的三问
 
@@ -457,9 +549,11 @@ SPEC 唯一未完成功能项。做法与约束见 `SPEC.md` 第 10 节末尾和
 | 最初只想靠 prompt 让模型别自相矛盾 | 模型不可信的部分**必须用代码兜底**（互斥、去重、降噪），prompt 只是提高概率 |
 | 用数组下标做确认状态 key | 追问会重排条目，用户取消的勾选会落到别的内容上。**用内容做 key** |
 | `grep -c "key: 'xxx'"` 假 0 | 本环境 grep 带颜色，ANSI 插在中间。用不带引号的关键词 |
+| 一次 Edit 跨两个函数替换，锚点没核对 | 把 `organize()` 的请求调用连同残留代码一起切掉，编译才报错。**大段替换前后各读一次文件** |
+| 上一轮交付时文档滞后了 6 处 | 用户会对着代码读文档。**版本号、页面数、功能清单这类东西每次发版都要扫一遍全文**，别只改自己改过的那段 |
 
 ---
 
 ## 11. 一句话交接
 
-**能跑、能装、代码干净、文档齐全。功能上只差一个通知栏入口，但 v0.2.2 和 v0.2.3 的真实表现还没人验证过 —— 先等用户真机反馈，别急着加新东西。**
+**能跑、能装、代码干净、文档齐全。功能上只差一个通知栏入口；v0.2.2 之后的所有改动（追问、重构、思考过程、周期总结、知识库问答）都只有编译通过，没有真机验证过 —— 先等用户反馈，别急着加新东西。**

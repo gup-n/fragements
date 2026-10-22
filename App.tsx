@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Platform, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import type { Fragment } from './src/types';
+import type { Fragment, Note } from './src/types';
 import { C } from './src/theme';
 import { repo } from './src/db/repo';
 import { TimelineScreen } from './src/screens/TimelineScreen';
@@ -19,12 +19,23 @@ export default function App() {
   const [ready, setReady] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');
   const [fragments, setFragments] = useState<Fragment[]>([]);
+  /** 周期总结，时间轴按 period 把它们插回对应日期 */
+  const [notes, setNotes] = useState<Note[]>([]);
+  /** 已完成待办对应的碎片 id，用来打「已完成」标记 */
+  const [doneIds, setDoneIds] = useState<Set<number>>(new Set());
   const [inboxCount, setInboxCount] = useState(0);
 
   const reload = useCallback(async () => {
-    const list = await repo.listFragments();
+    const [list, inbox, noteList, done] = await Promise.all([
+      repo.listFragments(),
+      repo.countInbox(),
+      repo.listNotes(120),
+      repo.listDoneTodoSourceIds(),
+    ]);
     setFragments(list);
-    setInboxCount(await repo.countInbox());
+    setInboxCount(inbox);
+    setNotes(noteList);
+    setDoneIds(new Set(done));
   }, []);
 
   useEffect(() => {
@@ -93,6 +104,14 @@ export default function App() {
     [reload],
   );
 
+  const handleDeleteNote = useCallback(
+    async (id: number) => {
+      await repo.deleteNote(id);
+      await reload();
+    },
+    [reload],
+  );
+
   /** 仅浏览器预览使用：写入一批带历史时间的示例碎片，方便看真实排版 */
   const handleSeed = useCallback(async () => {
     const now = Date.now();
@@ -129,10 +148,13 @@ export default function App() {
               {route === 'timeline' && (
                 <TimelineScreen
                   fragments={fragments}
+                  notes={notes}
                   inboxCount={inboxCount}
+                  doneIds={doneIds}
                   onAdd={handleAdd}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
+                  onDeleteNote={handleDeleteNote}
                   onOpenOrganize={() => setRoute('organize')}
                   onOpenSettings={() => setRoute('settings')}
                   onOpenKnowledge={() => setRoute('knowledge')}
@@ -154,7 +176,9 @@ export default function App() {
               {route === 'knowledge' && (
                 <KnowledgeScreen onClose={() => setRoute('timeline')} />
               )}
-              {route === 'review' && <ReviewScreen onClose={() => setRoute('timeline')} />}
+              {route === 'review' && (
+                <ReviewScreen onClose={() => setRoute('timeline')} onChanged={reload} />
+              )}
             </SafeAreaView>
           ) : (
             <View style={styles.splash} />

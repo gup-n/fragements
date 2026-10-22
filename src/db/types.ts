@@ -8,6 +8,11 @@ export interface Repo {
   init(): Promise<void>;
 
   listFragments(limit?: number): Promise<Fragment[]>;
+  /**
+   * 取出 `[from, to)` 区间内的全部碎片，按时间升序。
+   * 周期总结必须拿到该周期的**完整**内容，用 limit 截断会漏掉月初的记录。
+   */
+  listFragmentsBetween(from: number, to: number): Promise<Fragment[]>;
   insertFragment(content: string, source: FragmentSource, createdAt?: number): Promise<number>;
   updateFragmentContent(id: number, content: string): Promise<void>;
   deleteFragment(id: number): Promise<void>;
@@ -25,6 +30,8 @@ export interface Repo {
     sourceIds: number[];
   }): Promise<number>;
   listKnowledgeCards(topic?: string): Promise<KnowledgeCard[]>;
+  /** 关键字检索：标题 / 要点 / 原文 / 主题四个字段都查 */
+  searchKnowledgeCards(keyword: string): Promise<KnowledgeCard[]>;
   /** 已归档的卡片；归档必须可逆，所以界面上要能看到并恢复 */
   listArchivedKnowledgeCards(): Promise<KnowledgeCard[]>;
   listKnowledgeTopics(): Promise<{ topic: string; count: number }[]>;
@@ -46,9 +53,15 @@ export interface Repo {
   listTodos(): Promise<Todo[]>;
   toggleTodo(id: number, done: boolean): Promise<void>;
   deleteTodo(id: number): Promise<void>;
+  /**
+   * 已完成待办所对应的来源碎片 id。
+   * 时间轴用它给碎片打「已完成」标记；整理时用它告诉模型哪些事已经做完了。
+   */
+  listDoneTodoSourceIds(): Promise<number[]>;
 
   insertNote(input: { type: Note['type']; title: string | null; bodyMd: string; period: string | null }): Promise<number>;
   listNotes(limit?: number): Promise<Note[]>;
+  deleteNote(id: number): Promise<void>;
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
   markRunApplied(id: number): Promise<void>;

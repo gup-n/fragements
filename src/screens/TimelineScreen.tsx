@@ -10,13 +10,22 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Fragment } from '../types';
+import type { Fragment, Note } from '../types';
 import { C, R } from '../theme';
 import { TagPill } from '../components/TagPill';
-import { dayKey, dayLabel, daySubLabel, formatTime } from '../util/date';
+import { NoteBody } from '../components/NoteBody';
+import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 
-type Section = { title: string; sub: string; data: Fragment[] };
+/**
+ * 时间轴上混着两种东西：碎片和周期总结。
+ * 用 kind 区分，渲染时分两套样式 —— 但共用同一条竖线，视觉上仍是一条连续的时间流。
+ */
+type TimelineItem =
+  | { kind: 'fragment'; id: number; at: number; fragment: Fragment }
+  | { kind: 'note'; id: number; at: number; note: Note };
+
+type Section = { title: string; sub: string; data: TimelineItem[] };
 
 /**
  * 冷启动只自动聚焦一次。放在模块作用域而不是 useRef，
@@ -24,12 +33,25 @@ type Section = { title: string; sub: string; data: Fragment[] };
  */
 let autoFocusedOnce = false;
 
+/** 时间轴上总结条目的类型标签 */
+const NOTE_KIND: Record<Note['type'], string> = {
+  daily: '今日小结',
+  weekly: '周总结',
+  monthly: '月总结',
+  theme: '主题总结',
+};
+
 interface Props {
   fragments: Fragment[];
+  /** 周期总结，按 period 落回时间轴对应日期 */
+  notes: Note[];
   inboxCount: number;
+  /** 已完成待办对应的碎片 id，用来在时间轴上打「已完成」标记 */
+  doneIds: Set<number>;
   onAdd: (text: string) => Promise<void>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  onDeleteNote: (id: number) => Promise<void>;
   onOpenOrganize: () => void;
   onOpenSettings: () => void;
   onOpenKnowledge: () => void;
@@ -39,10 +61,13 @@ interface Props {
 
 export function TimelineScreen({
   fragments,
+  notes,
   inboxCount,
+  doneIds,
   onAdd,
   onEdit,
   onDelete,
+  onDeleteNote,
   onOpenOrganize,
   onOpenSettings,
   onOpenKnowledge,
@@ -55,10 +80,12 @@ export function TimelineScreen({
   const [editText, setEditText] = useState('');
   const [armedDelete, setArmedDelete] = useState(false);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
+  const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
-  const listRef = useRef<SectionList<Fragment, Section>>(null);
+  const listRef = useRef<SectionList<TimelineItem, Section>>(null);
   const keyboardHeight = useKeyboardHeight();
 
   // 冷启动即聚焦：记录工具打开就该能打字，不该先点一下输入框
@@ -89,18 +116,42 @@ export function TimelineScreen({
   }, [fullEdit]);
 
   const sections = useMemo(() => {
-    const map = new Map<string, { title: string; sub: string; data: Fragment[] }>();
-    for (const f of fragments) {
-      const key = dayKey(f.createdAt);
+    const map = new Map<string, Section>();
+
+    const push = (at: number, item: TimelineItem) => {
+      const key = dayKey(at);
       let bucket = map.get(key);
       if (!bucket) {
-        bucket = { title: dayLabel(f.createdAt), sub: daySubLabel(f.createdAt), data: [] };
+        bucket = { title: dayLabel(at), sub: daySubLabel(at), data: [] };
         map.set(key, bucket);
       }
-      bucket.data.push(f);
+      bucket.data.push(item);
+    };
+
+    for (const f of fragments) {
+      push(f.createdAt, { kind: 'fragment', id: f.id, at: f.createdAt, fragment: f });
     }
-    return Array.from(map.values());
-  }, [fragments]);
+
+    // 周期总结按 period 落回它覆盖的那一天/周/月末，
+    // 而不是它被生成的那天 —— 否则上周的周报会跑到今天来
+    for (const n of notes) {
+      const at = periodAnchor(n.period) ?? n.createdAt;
+      push(at, { kind: 'note', id: n.id, at, note: n });
+    }
+
+    for (const bucket of map.values()) {
+      bucket.data.sort((a, b) => {
+        // 总结压在当天末尾：读完当天的事再看总结才顺
+        if (a.kind !== b.kind) return a.kind === 'fragment' ? -1 : 1;
+        return b.at - a.at;
+      });
+    }
+
+    // 日期键是 YYYY-MM-DD，字典序即时间序；时间轴是新在上
+    return Array.from(map.entries())
+      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
+      .map(([, bucket]) => bucket);
+  }, [fragments, notes]);
 
   const todayCount = useMemo(() => {
     const key = dayKey(Date.now());
@@ -147,6 +198,26 @@ export function TimelineScreen({
     setEditing(item);
     setEditText(item.content);
     setArmedDelete(false);
+  }
+
+  function toggleNote(id: number) {
+    setArmedNoteDelete(null);
+    setExpandedNotes((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  /** 删除总结要两次点击，和删碎片一致 —— 内容没了就真没了 */
+  async function removeNote(id: number) {
+    if (armedNoteDelete !== id) {
+      setArmedNoteDelete(id);
+      return;
+    }
+    setArmedNoteDelete(null);
+    await onDeleteNote(id);
   }
 
   function toggleExpand(id: number) {
@@ -205,7 +276,7 @@ export function TimelineScreen({
       </View>
 
       <View style={styles.flex}>
-        {fragments.length === 0 ? (
+        {sections.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>还没有碎片</Text>
             <Text style={styles.emptyBody}>
@@ -221,7 +292,7 @@ export function TimelineScreen({
           <SectionList
             ref={listRef}
             sections={sections}
-            keyExtractor={(item) => String(item.id)}
+            keyExtractor={(item) => `${item.kind}-${item.id}`}
             stickySectionHeadersEnabled
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
@@ -235,13 +306,59 @@ export function TimelineScreen({
             )}
             renderItem={({ item, index, section }) => {
               const isLast = index === section.data.length - 1;
-              const merged = item.mergedInto !== null;
+
+              if (item.kind === 'note') {
+                const note = item.note;
+                const open = expandedNotes.has(note.id);
+                return (
+                  <Pressable
+                    onPress={() => toggleNote(note.id)}
+                    style={({ pressed }) => [styles.noteRow, pressed && styles.rowPressed]}
+                  >
+                    <Text style={styles.time}>{formatTime(item.at)}</Text>
+                    <View style={styles.rail}>
+                      {!isLast && <View style={styles.railLine} />}
+                      <View style={styles.noteDot} />
+                    </View>
+                    <View style={styles.noteCard}>
+                      <View style={styles.noteHead}>
+                        <Ionicons name="sparkles" size={11} color={C.accent} />
+                        <Text style={styles.noteKind}>{NOTE_KIND[note.type] ?? '总结'}</Text>
+                        <Text style={styles.notePeriod}>{periodLabel(note.period)}</Text>
+                      </View>
+                      <NoteBody
+                        text={note.bodyMd}
+                        numberOfLines={open ? undefined : 5}
+                        style={styles.noteBody}
+                      />
+                      <View style={styles.noteFoot}>
+                        <Text style={styles.noteToggle}>{open ? '收起' : '展开全文'}</Text>
+                        {open && (
+                          <Pressable
+                            onPress={() => removeNote(note.id)}
+                            hitSlop={8}
+                            style={styles.noteDeleteHit}
+                          >
+                            <Text style={styles.noteDelete}>
+                              {armedNoteDelete === note.id ? '再点一次确认删除' : '删除这条总结'}
+                            </Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    </View>
+                  </Pressable>
+                );
+              }
+
+              const fragment = item.fragment;
+              const merged = fragment.mergedInto !== null;
+              const done = doneIds.has(fragment.id);
               return (
                 <Pressable
-                  onPress={() => openEdit(item)}
+                  onPress={() => openEdit(fragment)}
                   style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
                 >
-                  <Text style={styles.time}>{formatTime(item.createdAt)}</Text>
+                  <Text style={styles.time}>{formatTime(fragment.createdAt)}</Text>
                   <View style={styles.rail}>
                     {!isLast && <View style={styles.railLine} />}
                     <View style={[styles.dot, merged && styles.dotMuted]} />
@@ -249,43 +366,53 @@ export function TimelineScreen({
                   <View style={styles.rowBody}>
                     {(() => {
                       // 60 字大约才三行，随手记详细一点就被折了，放宽到 100
-                      const long = item.content.length > 100 || item.content.includes('\n');
-                      const open = expandedIds.has(item.id);
+                      const long = fragment.content.length > 100 || fragment.content.includes('\n');
+                      const open = expandedIds.has(fragment.id);
                       return (
                         <>
                           <Text
                             style={[styles.content, merged && styles.contentMuted]}
                             numberOfLines={long && !open ? 3 : undefined}
                           >
-                            {item.content}
+                            {fragment.content}
                           </Text>
                           {long ? (
                             <Pressable
-                              onPress={() => toggleExpand(item.id)}
+                              onPress={() => toggleExpand(fragment.id)}
                               hitSlop={8}
                               style={styles.expandBtn}
                             >
                               <Text style={styles.expandText}>
-                                {open ? '收起' : `展开全文 · ${item.content.length} 字`}
+                                {open ? '收起' : `展开全文 · ${fragment.content.length} 字`}
                               </Text>
                             </Pressable>
                           ) : null}
                         </>
                       );
                     })()}
-                    {(item.tags.length > 0 || item.project || item.source !== 'app') && (
+                    {(fragment.tags.length > 0 ||
+                      fragment.project ||
+                      fragment.source !== 'app' ||
+                      merged ||
+                      done) && (
                       <View style={styles.metaRow}>
-                        {item.tags.map((t) => (
+                        {done ? (
+                          <View style={styles.doneBadge}>
+                            <Ionicons name="checkmark" size={9} color={C.tealText} />
+                            <Text style={styles.doneBadgeText}>已完成</Text>
+                          </View>
+                        ) : null}
+                        {fragment.tags.map((t) => (
                           <TagPill key={t} label={t} small />
                         ))}
-                        {item.project ? (
+                        {fragment.project ? (
                           <Text style={styles.project} numberOfLines={1}>
-                            {item.project}
+                            {fragment.project}
                           </Text>
                         ) : null}
-                        {item.source !== 'app' ? (
+                        {fragment.source !== 'app' ? (
                           <Ionicons
-                            name={item.source === 'notif' ? 'notifications-outline' : 'share-outline'}
+                            name={fragment.source === 'notif' ? 'notifications-outline' : 'share-outline'}
                             size={11}
                             color={C.text3}
                           />
@@ -461,6 +588,49 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   project: { fontSize: 11, color: C.text3, maxWidth: 120 },
   mergedTag: { fontSize: 11, color: C.text3 },
+
+  // 已完成标记：浅青底小胶囊，比标签低调，不和用户自己的 tag 抢注意力
+  doneBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: C.tealBg,
+    borderRadius: R.pill,
+    paddingLeft: 4,
+    paddingRight: 7,
+    paddingVertical: 2,
+  },
+  doneBadgeText: { fontSize: 10, lineHeight: 14, color: C.tealText },
+
+  // 周期总结条目
+  noteRow: { flexDirection: 'row', paddingHorizontal: 20 },
+  noteDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    backgroundColor: C.accent,
+    marginTop: 5,
+    transform: [{ rotate: '45deg' }],
+  },
+  noteCard: {
+    flex: 1,
+    backgroundColor: C.card,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    marginBottom: 16,
+    marginLeft: 2,
+  },
+  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 7 },
+  noteKind: { fontSize: 11, color: C.accentText, fontWeight: '500' },
+  notePeriod: { flex: 1, fontSize: 11, color: C.text3 },
+  noteBody: { fontSize: 14, lineHeight: 22, color: C.text },
+  noteFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
+  noteToggle: { fontSize: 12, color: C.accent },
+  noteDeleteHit: { paddingVertical: 2 },
+  noteDelete: { fontSize: 11, color: C.danger },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
   emptyTitle: { fontSize: 15, color: C.text2, fontWeight: '500' },

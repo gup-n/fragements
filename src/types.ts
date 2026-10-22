@@ -30,12 +30,17 @@ export interface Todo {
 
 export interface Note {
   id: number;
-  type: 'daily' | 'weekly' | 'theme';
+  /** daily = 今日小结 / daily/weekly/monthly = 周期总结 / theme = 按主题 */
+  type: 'daily' | 'weekly' | 'monthly' | 'theme';
   title: string | null;
   bodyMd: string;
+  /** daily 存 2026-10-22；weekly 存 2026-W43；monthly 存 2026-10 */
   period: string | null;
   createdAt: number;
 }
+
+/** 周期总结的粒度 */
+export type DigestKind = 'daily' | 'weekly' | 'monthly';
 
 /**
  * 知识卡：从碎片里沉淀出的「可复用结论」。

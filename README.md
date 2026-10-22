@@ -6,7 +6,7 @@
 
 - **应用名**：碎片
 - **包名**：`com.local.fragments`（固定，改包名等于换 App，旧数据不跟随）
-- **当前版本**：v0.2.4（versionCode 7）
+- **当前版本**：v0.3.0（versionCode 8）
 - **目标设备**：vivo Y78（V2278A）
 
 ## 两条设计红线
@@ -34,9 +34,11 @@
 - **看得到思考过程**：整理时模型一边推理一边把思维链显示在屏幕上，不再对着一个转圈干等；结果页还留了一份折叠的「模型思考过程」，想追问时可以先看看它当初怎么想的。设置里可以关掉思考（更快更省）或调思考强度
 - **多轮追问**：结果页底部可以直接说「待办合并成一条」「知识卡太碎了」让 AI 改，改到满意再应用。没改动的条目，之前取消掉的勾选会保留
 - **新旧对齐**：已有知识卡和未完成待办始终作为上下文，AI 会主动建议「把这条补进那张卡」「这事已经做完了，标掉吧」
-- **重构模式**：把已整理过的碎片重新过一遍 —— 重新判标签、重新沉淀知识卡，结果与原来的整理逐条对照（标签行会写「原标签：…」，新卡会写明「会归档被它取代的旧卡」）。归档可恢复，删待办是真删除，三类破坏性操作一律默认不勾选
+- **重构模式**：把已整理过的碎片重新过一遍 —— 重新判标签、重新沉淀知识卡，结果与原来的整理逐条对照（标签行会写「原标签：…」，新卡会写明「会归档被它取代的旧卡」）。归档可恢复，删待办是真删除，这两类默认不勾选（标完成待办因为不丢内容，从 v0.3.0 起默认勾选）
 - **回顾页**：待办与小结合在一个页面，tab 切换。待办支持点击勾选完成、显示截止日（过期标红）、已完成置灰划线；小结按日期倒序，可展开全文
-- **知识库**：按主题聚合，卡片显示 AI 要点，可展开原文，可整体移出
+- **周期总结（日 / 周 / 月）**：回顾页点「生成总结」选一个周期，AI 把该周期的全部碎片读一遍写成一篇小结，**先预览再决定存不存**，存下后回到时间轴上对应的时间点（日落在当天末尾、周落在周日、月落在月末）。只生成总结，不动任何碎片状态
+- **已完成标记**：碎片里写明「已经做完了」的事，整理时会建议标掉对应待办（默认勾选），时间轴上那条碎片会带一个「已完成」小徽章
+- **知识库**：按主题聚合，卡片显示标题与要点，点开是独立的详情页（大字号读原文，可归档 / 恢复 / 删除）。顶部有**关键字搜索**（跨主题，四个字段全查）和**问模型**（默认当前主题，可切全库；回答只依据卡片内容，并列出它引用了哪几张卡）
 - **Markdown 导出**：时间轴按天分节 + 知识库附录，走系统分享可直接存 NAS
 - **设置**：BaseURL / 模型 / API Key 配置与连接测试，数据统计
 
@@ -50,7 +52,7 @@
 | 语言 | TypeScript 6.0 |
 | 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移） |
 | 密钥 | expo-secure-store（Android Keystore） |
-| AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议，流式 SSE + `response_format: json_object` |
+| AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，总结与问答走流式纯文本 |
 | 导航 | 自实现轻量路由状态（5 个页面），不引 react-navigation |
 | Web | react-native-web + localStorage，仅供桌面预览，非交付目标 |
 
@@ -70,7 +72,10 @@ src/
     config.ts                AI 配置读写（含思考开关与强度）
     keyStore.ts              API Key 安全存储
     prompt.ts                System Prompt 与请求内容构造
-    deepseek.ts              DeepSeek 客户端 + 多段超时 + 结果收敛（ID 校验、原文保真）
+    chat.ts                  请求层：多段超时、流式/非流式、错误映射（三个功能共用）
+    deepseek.ts              整理：prompt 组装 + 结果收敛（ID 校验、原文保真）
+    summarize.ts             周期总结：日/周/月的 prompt、材料裁剪、Markdown 输出
+    ask.ts                   知识库问答：关键词打分选卡 + 预算装填 + 引用反查
     stream.ts                SSE 解析：把思维链和正文分开累积
   db/
     types.ts                 Repo 接口定义
@@ -83,7 +88,13 @@ src/
     ReviewScreen.tsx         回顾页（待办 / 小结，tab 切换）
     KnowledgeScreen.tsx      知识库
     SettingsScreen.tsx       设置与导出
-  components/TagPill.tsx     标签胶囊
+  components/
+    TagPill.tsx              标签胶囊
+    NoteBody.tsx             小结正文的轻量 Markdown 渲染（标题 / 列表 / 段落）
+    ReasoningStream.tsx      流式生成时的实时面板（思维链 + 字数 + 计时）
+    SummarySheet.tsx         周期总结生成面板（选周期 → 生成 → 预览 → 保存）
+    KnowledgeDetail.tsx      知识卡详情页（归档 / 恢复 / 删除）
+    AskSheet.tsx             知识库问答面板
   export/markdown.ts         Markdown 导出
   util/date.ts               日期分组与格式化
   util/keyboard.ts           键盘高度 hook（Android 上替代 KeyboardAvoidingView）
