@@ -77,6 +77,11 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_cards_topic ON knowledge_cards(topic);
   `,
+  // v3：待办可以「合并」——被合并的那条留痕而不是删掉，合错了能撤回
+  `
+  ALTER TABLE todos ADD COLUMN merged_into INTEGER;
+  CREATE INDEX IF NOT EXISTS idx_todos_merged ON todos(merged_into);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -121,6 +126,20 @@ interface TodoRow {
   done: number;
   source_fragment_id: number | null;
   created_at: number;
+  merged_into: number | null;
+}
+
+/** 待办行 → 领域对象。三处查询都用它，免得字段映射各写一遍漏掉新字段 */
+function toTodo(r: TodoRow): Todo {
+  return {
+    id: r.id,
+    text: r.text,
+    dueAt: r.due_at,
+    done: r.done === 1,
+    sourceFragmentId: r.source_fragment_id,
+    createdAt: r.created_at,
+    mergedInto: r.merged_into,
+  };
 }
 
 interface CardRow {
@@ -153,6 +172,26 @@ function toCard(r: CardRow): KnowledgeCard {
     sourceIds: parseIds(r.source_ids),
     createdAt: r.created_at,
     archived: r.archived === 1,
+  };
+}
+
+interface NoteRow {
+  id: number;
+  type: string;
+  title: string | null;
+  body_md: string;
+  period: string | null;
+  created_at: number;
+}
+
+function toNote(r: NoteRow): Note {
+  return {
+    id: r.id,
+    type: (r.type as Note['type']) ?? 'daily',
+    title: r.title,
+    bodyMd: r.body_md,
+    period: r.period,
+    createdAt: r.created_at,
   };
 }
 
@@ -194,7 +233,12 @@ export const repo: Repo = {
 
   async deleteFragment(id) {
     db().runSync('DELETE FROM fragments WHERE id = ?', [id]);
-    db().runSync('UPDATE fragments SET merged_into = NULL WHERE merged_into = ?', [id]);
+    // 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
+    // 再加 status='merged'，它们就既不在时间轴上、也不会被重新整理，等于凭空消失
+    db().runSync(
+      "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
+      [id],
+    );
   },
 
   async applyTags(id, labels, project) {
@@ -333,15 +377,10 @@ export const repo: Repo = {
   },
 
   async listTodos() {
-    const rows = db().getAllSync<TodoRow>('SELECT * FROM todos ORDER BY done ASC, created_at DESC');
-    return rows.map<Todo>((r) => ({
-      id: r.id,
-      text: r.text,
-      dueAt: r.due_at,
-      done: r.done === 1,
-      sourceFragmentId: r.source_fragment_id,
-      createdAt: r.created_at,
-    }));
+    const rows = db().getAllSync<TodoRow>(
+      'SELECT * FROM todos WHERE merged_into IS NULL ORDER BY done ASC, created_at DESC',
+    );
+    return rows.map(toTodo);
   },
 
   async toggleTodo(id, done) {
@@ -350,6 +389,25 @@ export const repo: Repo = {
 
   async deleteTodo(id) {
     db().runSync('DELETE FROM todos WHERE id = ?', [id]);
+  },
+
+  async mergeTodos(keepId, dropIds, text) {
+    const drops = dropIds.filter((id) => id !== keepId);
+    if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, keepId]);
+    if (!drops.length) return;
+    const marks = drops.map(() => '?').join(',');
+    db().runSync(`UPDATE todos SET merged_into = ? WHERE id IN (${marks})`, [keepId, ...drops]);
+  },
+
+  async listMergedTodos() {
+    const rows = db().getAllSync<TodoRow>(
+      'SELECT * FROM todos WHERE merged_into IS NOT NULL ORDER BY created_at DESC',
+    );
+    return rows.map(toTodo);
+  },
+
+  async unmergeTodos(keepId) {
+    db().runSync('UPDATE todos SET merged_into = NULL WHERE merged_into = ?', [keepId]);
   },
 
   async listDoneTodoSourceIds() {
@@ -367,30 +425,51 @@ export const repo: Repo = {
     return Number(res.lastInsertRowId);
   },
 
+  async upsertNote(input) {
+    // period 为空的（主题总结之类）没有「同一周期」的概念，直接新增
+    if (input.period) {
+      const hit = db().getFirstSync<{ id: number }>(
+        'SELECT id FROM notes WHERE type = ? AND period = ? ORDER BY created_at DESC LIMIT 1',
+        [input.type, input.period],
+      );
+      if (hit) {
+        db().runSync('UPDATE notes SET title = ?, body_md = ?, created_at = ? WHERE id = ?', [
+          input.title,
+          input.bodyMd,
+          Date.now(),
+          hit.id,
+        ]);
+        return { id: hit.id, replaced: true };
+      }
+    }
+    const res = db().runSync(
+      'INSERT INTO notes (type, title, body_md, period, created_at) VALUES (?, ?, ?, ?, ?)',
+      [input.type, input.title, input.bodyMd, input.period, Date.now()],
+    );
+    return { id: Number(res.lastInsertRowId), replaced: false };
+  },
+
   async listNotes(limit = 30) {
-    const rows = db().getAllSync<{
-      id: number;
-      type: string;
-      title: string | null;
-      body_md: string;
-      period: string | null;
-      created_at: number;
-    }>('SELECT * FROM notes ORDER BY created_at DESC LIMIT ?', [limit]);
-    return rows.map<Note>((r) => ({
-      id: r.id,
-      type: (r.type as Note['type']) ?? 'daily',
-      title: r.title,
-      bodyMd: r.body_md,
-      period: r.period,
-      createdAt: r.created_at,
-    }));
+    const rows = db().getAllSync<NoteRow>('SELECT * FROM notes ORDER BY created_at DESC LIMIT ?', [
+      limit,
+    ]);
+    return rows.map(toNote);
+  },
+
+  async findNote(type, period) {
+    const row = db().getFirstSync<NoteRow>(
+      'SELECT * FROM notes WHERE type = ? AND period = ? ORDER BY created_at DESC LIMIT 1',
+      [type, period],
+    );
+    return row ? toNote(row) : null;
   },
 
   async deleteNote(id) {
     db().runSync('DELETE FROM notes WHERE id = ?', [id]);
   },
 
-  async saveRun(input) {    const res = db().runSync(
+  async saveRun(input) {
+    const res = db().runSync(
       'INSERT INTO organize_runs (started_at, fragment_ids, model, result_json, applied) VALUES (?, ?, ?, ?, 0)',
       [input.startedAt, JSON.stringify(input.fragmentIds), input.model, input.resultJson],
     );
@@ -415,8 +494,15 @@ export const repo: Repo = {
 
   async stats() {
     const total = db().getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments')?.n ?? 0;
-    const inbox = db().getFirstSync<{ n: number }>("SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'")?.n ?? 0;
-    const todoOpen = db().getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM todos WHERE done = 0')?.n ?? 0;
+    const inbox =
+      db().getFirstSync<{ n: number }>("SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'")
+        ?.n ?? 0;
+    // 被合并掉的待办还在表里（只是隐藏了），不能算进「未完成」，
+    // 否则合并越多、首页那个数字越虚高
+    const todoOpen =
+      db().getFirstSync<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM todos WHERE done = 0 AND merged_into IS NULL',
+      )?.n ?? 0;
     return { total, inbox, todoOpen };
   },
 };

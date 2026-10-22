@@ -141,8 +141,8 @@ export function TimelineScreen({
 
     for (const bucket of map.values()) {
       bucket.data.sort((a, b) => {
-        // 总结压在当天末尾：读完当天的事再看总结才顺
-        if (a.kind !== b.kind) return a.kind === 'fragment' ? -1 : 1;
+        // 小结排当天最前：它是这一天的一句话结论，先看结论再看零碎
+        if (a.kind !== b.kind) return a.kind === 'note' ? -1 : 1;
         return b.at - a.at;
       });
     }

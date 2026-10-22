@@ -27,6 +27,7 @@ import { periodLabel, periodRange, recentPeriods } from '../util/date';
 import { C, R } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
+import { ReasoningTrace } from './ReasoningTrace';
 
 const KINDS: { key: DigestKind; label: string; count: number; hint: string }[] = [
   { key: 'daily', label: '日', count: 14, hint: '把一天里记的东西压成一段' },
@@ -42,11 +43,18 @@ interface Props {
   onClose: () => void;
   /** 存进库之后通知上层刷新（时间轴才会立刻出现这条总结） */
   onSaved: () => void | Promise<void>;
+  /** 从「待补小结」点进来时预选粒度与周期 */
+  initialKind?: DigestKind;
+  initialPeriod?: string;
 }
 
-export function SummarySheet({ onClose, onSaved }: Props) {
-  const [kind, setKind] = useState<DigestKind>('daily');
-  const [period, setPeriod] = useState(() => recentPeriods('daily', 1)[0]);
+export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: Props) {
+  const [kind, setKind] = useState<DigestKind>(initialKind ?? 'daily');
+  const [period, setPeriod] = useState(
+    () => initialPeriod ?? recentPeriods(initialKind ?? 'daily', 1)[0],
+  );
+  /** 从待补列表进来时周期是外部指定的，切粒度不该把它重置掉 */
+  const [pinned, setPinned] = useState(!!initialPeriod);
   const [count, setCount] = useState<number | null>(null);
   /** 同周期已存在的小结 id —— 重复生成时默认替换，避免时间轴上堆两条同日的 */
   const [existingId, setExistingId] = useState<number | null>(null);
@@ -63,6 +71,8 @@ export function SummarySheet({ onClose, onSaved }: Props) {
   const [showTrace, setShowTrace] = useState(false);
 
   const startedAtRef = useRef(0);
+  /** 保存防重入锁（state 更新有延迟，光靠 saving 拦不住同一帧的两次点击） */
+  const savingRef = useRef(false);
   /** 流式回调很密，最多 120ms 上屏一次；结束再用最终值兜底 */
   const streamRef = useRef({ lastFlush: 0 });
 
@@ -76,9 +86,14 @@ export function SummarySheet({ onClose, onSaved }: Props) {
     return () => sub.remove();
   }, [phase, onClose]);
 
-  // 换粒度时把周期重置成该粒度的当前周期
+  // 换粒度时把周期重置成该粒度的当前周期；预选进来的那一次不重置
   useEffect(() => {
+    if (pinned) {
+      setPinned(false);
+      return;
+    }
     setPeriod(recentPeriods(kind, 1)[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kind]);
 
   // 选中周期就先把材料条数查出来，没内容时不让点「生成」
@@ -107,13 +122,13 @@ export function SummarySheet({ onClose, onSaved }: Props) {
     return () => clearInterval(timer);
   }, [phase]);
 
-  // 查这个周期是不是已经有小结了
+  // 查这个周期是不是已经有小结了。必须精确查 —— 拿 listNotes(200) 再筛，
+  // 笔记一多就会漏，于是同一天又插一条出来（这就是"生成两次小结"的来源）
   useEffect(() => {
     let alive = true;
     (async () => {
-      const all = await repo.listNotes(200);
+      const hit = await repo.findNote(kind, period);
       if (!alive) return;
-      const hit = all.find((n) => n.period === period && n.type === kind);
       setExistingId(hit ? hit.id : null);
       setReplaceExisting(true);
     })();
@@ -183,23 +198,40 @@ export function SummarySheet({ onClose, onSaved }: Props) {
   }
 
   async function save() {
-    if (!draft) return;
+    // 防重入：连点两下按钮会在同一帧里进两次，saving 的 state 还没更新过来
+    if (!draft || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     setError('');
     try {
-      if (existingId && replaceExisting) await repo.deleteNote(existingId);
-      await repo.insertNote({ type: kind, title: draft.title, bodyMd: draft.bodyMd, period });
-      await onSaved();
-      onClose();
+      if (existingId && !replaceExisting) {
+        // 用户明确要另存一条：绕开 upsert 的按周期覆盖，直接插一行
+        await repo.insertNote({ type: kind, title: draft.title, bodyMd: draft.bodyMd, period });
+      } else {
+        await repo.upsertNote({ type: kind, title: draft.title, bodyMd: draft.bodyMd, period });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存失败');
-    } finally {
+      savingRef.current = false;
       setSaving(false);
+      return;
     }
+
+    // 内容已经落库。刷新失败不该报成「保存失败」，否则用户会以为没存上又存一次
+    try {
+      await onSaved();
+    } catch {
+      /* 刷新交给下次进页面 */
+    }
+    savingRef.current = false;
+    setSaving(false);
+    onClose();
   }
 
   const kindMeta = KINDS.find((k) => k.key === kind) ?? KINDS[0];
-  const periods = recentPeriods(kind, kindMeta.count);
+  // 从待补列表进来时，选中的周期可能不在这批「最近 N 个」里，补到最前面
+  const recent = recentPeriods(kind, kindMeta.count);
+  const periods = recent.includes(period) ? recent : [period, ...recent];
   const canGenerate = count !== null && count > 0 && phase === 'pick';
 
   return (
@@ -239,24 +271,12 @@ export function SummarySheet({ onClose, onSaved }: Props) {
               <NoteBody text={draft.bodyMd} style={s.previewBody} />
             </View>
 
-            {draft.reasoning ? (
-              <View style={s.traceCard}>
-                <Pressable style={s.traceHead} onPress={() => setShowTrace((v) => !v)} hitSlop={4}>
-                  <Ionicons
-                    name={showTrace ? 'chevron-down' : 'chevron-forward'}
-                    size={13}
-                    color={C.text3}
-                  />
-                  <Text style={s.traceTitle}>模型思考过程</Text>
-                  <Text style={s.traceMeta}>{draft.reasoning.length} 字</Text>
-                </Pressable>
-                {showTrace ? (
-                  <ScrollView style={s.traceScroll} contentContainerStyle={s.traceBody} nestedScrollEnabled>
-                    <Text style={s.traceText}>{draft.reasoning}</Text>
-                  </ScrollView>
-                ) : null}
-              </View>
-            ) : null}
+            <ReasoningTrace
+              text={draft.reasoning}
+              expanded={showTrace}
+              onToggle={() => setShowTrace((v) => !v)}
+              height={220}
+            />
 
             {error ? <Text style={s.error}>{error}</Text> : null}
           </ScrollView>
@@ -447,22 +467,6 @@ const s = StyleSheet.create({
   },
   previewMeta: { fontSize: 11, color: C.text3, marginBottom: 10 },
   previewBody: { fontSize: 14, lineHeight: 24 },
-
-  traceCard: {
-    marginTop: 12,
-    backgroundColor: C.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
-    borderColor: C.hair,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  traceHead: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  traceTitle: { flex: 1, fontSize: 12, color: C.text2 },
-  traceMeta: { fontSize: 11, color: C.text3 },
-  traceScroll: { maxHeight: 220, marginTop: 8, backgroundColor: C.hairSoft, borderRadius: R.btn },
-  traceBody: { padding: 10 },
-  traceText: { fontSize: 12, lineHeight: 19, color: C.text2 },
 
   footer: {
     flexDirection: 'row',

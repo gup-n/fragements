@@ -33,14 +33,22 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
+  /** 被合并掉的待办。合并是隐藏不是删除，这里必须有入口，否则就是数据黑洞 */
+  const [merged, setMerged] = useState<Todo[]>([]);
+  const [showMerged, setShowMerged] = useState(false);
   const [loading, setLoading] = useState(true);
   const [openNote, setOpenNote] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const reload = useCallback(async () => {
-    const [t, n] = await Promise.all([repo.listTodos(), repo.listNotes(60)]);
+    const [t, n, m] = await Promise.all([
+      repo.listTodos(),
+      repo.listNotes(60),
+      repo.listMergedTodos(),
+    ]);
     setTodos(t);
     setNotes(n);
+    setMerged(m);
     setLoading(false);
   }, []);
 
@@ -50,6 +58,13 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 
   async function toggle(item: Todo) {
     await repo.toggleTodo(item.id, !item.done);
+    await reload();
+  }
+
+  /** 撤回一次合并：这批被并掉的条目全部放回列表 */
+  async function unmerge(item: Todo) {
+    if (item.mergedInto === null) return;
+    await repo.unmergeTodos(item.mergedInto);
     await reload();
   }
 
@@ -146,6 +161,35 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                       </Pressable>
                     ))}
                   </View>
+                </>
+              )}
+
+              {merged.length > 0 && (
+                <>
+                  <Pressable style={styles.mergedBar} onPress={() => setShowMerged((v) => !v)}>
+                    <Ionicons name="git-merge-outline" size={14} color={C.text3} />
+                    <Text style={styles.mergedLabel}>已合并 {merged.length} 条</Text>
+                    <Ionicons
+                      name={showMerged ? 'chevron-up' : 'chevron-down'}
+                      size={13}
+                      color={C.text3}
+                    />
+                  </Pressable>
+                  {showMerged && (
+                    <View style={styles.group}>
+                      {merged.map((item, i) => (
+                        <View
+                          key={item.id}
+                          style={[styles.row, i === merged.length - 1 && styles.rowLast]}
+                        >
+                          <Text style={styles.mergedText}>{item.text}</Text>
+                          <Pressable onPress={() => unmerge(item)} hitSlop={10}>
+                            <Text style={styles.mergedUndo}>恢复</Text>
+                          </Pressable>
+                        </View>
+                      ))}
+                    </View>
+                  )}
                 </>
               )}
             </>
@@ -264,6 +308,18 @@ const styles = StyleSheet.create({
   todoText: { flex: 1, fontSize: 14, lineHeight: 21, color: C.text },
   doneText: { color: C.text3, textDecorationLine: 'line-through' },
   due: { fontSize: 11, color: C.text3 },
+
+  mergedBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 20,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+  },
+  mergedLabel: { flex: 1, fontSize: 12, color: C.text3 },
+  mergedText: { flex: 1, fontSize: 13, lineHeight: 20, color: C.text3 },
+  mergedUndo: { fontSize: 12, color: C.accent },
   dueOverdue: { color: C.danger },
 
   genBtn: {

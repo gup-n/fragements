@@ -65,11 +65,12 @@
 - 长文本承载：输入框自动增高，可一键转全屏编辑；时间轴内超 3 行折叠，点开看全文
 - 时间轴流主界面（按日分组、时间戳、整行文本）
 - 碎片编辑 / 删除
-- AI 整理：分类打标、汇总成日报、提炼待办、关联去重、**沉淀知识卡**（一次调用产出九类，见第 6 节；首版为五类，后四类是 v0.2.2–v0.2.3 陆续加的）
+- AI 整理：分类打标、提炼待办、关联去重、沉淀知识卡、**操作已有待办（标完成 / 删除 / 合并）**（一次调用产出九类，见第 6 节；首版为五类，后四类是 v0.2.2–v0.3.1 陆续加的）
 - 整理结果的逐条接受 / 忽略
 - **知识库**：按主题聚合，卡片展示标题与要点，点开是独立详情页（大字号原文 + 归档 / 恢复 / 删除）
 - **知识库检索**（v0.3.0）：关键字搜索（标题 / 要点 / 原文 / 主题四字段，跨主题，在主题页内自动收窄）、问模型（默认当前主题，可切全库）
 - **周期总结**（v0.3.0）：按日 / 周 / 月把该周期全部碎片读一遍写成 Markdown 小结，预览后保存，落在时间轴对应时间点
+- **待补小结清单**（v0.3.1）：整理页列出哪些周期还没有小结，点一条进去生成。整理本身**不再产出小结**
 - 通知栏常驻入口
 - Markdown 导出（时间轴 + 知识库附录）
 - 设置页：API 配置、数据统计
@@ -121,10 +122,10 @@ CREATE TABLE organize_runs (
 -- AI 汇总产出的成稿
 CREATE TABLE notes (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  type       TEXT    NOT NULL,     -- daily | weekly | theme
+  type       TEXT    NOT NULL,     -- daily | weekly | monthly | theme
   title      TEXT,
   body_md    TEXT    NOT NULL,
-  period     TEXT,                 -- 如 2026-10-20
+  period     TEXT,                 -- 2026-10-20 / 2026-W43 / 2026-10；theme 为空
   created_at INTEGER NOT NULL
 );
 
@@ -135,7 +136,8 @@ CREATE TABLE todos (
   due_at             TEXT,        -- YYYY-MM-DD，可空
   done               INTEGER NOT NULL DEFAULT 0,
   source_fragment_id INTEGER,
-  created_at         INTEGER NOT NULL
+  created_at         INTEGER NOT NULL,
+  merged_into        INTEGER      -- v3：被合并到哪条。非空表示已隐藏（可撤回）
 );
 
 -- 键值配置
@@ -145,9 +147,12 @@ CREATE TABLE settings (
 );
 ```
 
-索引：`fragments(created_at DESC)`、`todos(done)`、`knowledge_cards(topic)`。
+索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、`knowledge_cards(topic)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。当前到 v2。
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。当前到 v3。
+
+`notes` 的 `(type, period)` 由应用层保证唯一（`upsertNote` 先查后写），没有数据库唯一约束 ——
+period 可空，SQLite 的 UNIQUE 对 NULL 不去重，加了也拦不住。
 
 ## 6. AI 接口契约
 
@@ -206,10 +211,15 @@ System prompt 约定角色与输出格式；User 消息传紧凑的碎片列表�
 [7] 21:30 换完盘重建跑完了（已整理｜标签：设备、NAS｜项目：NAS 维护）
 ```
 
-并在开头明确要求它独立判断（`不要因为标签已经存在就照抄`）。重构范围两种：
+并在开头明确要求它独立判断（`不要因为标签已经存在就照抄`）。重构范围三种（v0.3.1 新增「全部碎片」）：
 
-- **最近整理过**：取最新的 40 条已整理碎片（`REFACTOR_LIMIT`）
+- **全部碎片**（默认）：`mergedInto === null` 的全部碎片，未整理的和已整理的一起过一遍。
+  v0.3.0 之前只能重构已整理的，等于每次想修正历史都得先跑一轮整理，白花一次调用。
+- **只重构已整理**：只取 `status = tagged` 的
 - **按主题**：取某主题下全部知识卡的 `source_ids` 反查出来的碎片
+
+单次上限 `REFACTOR_LIMIT = 40` —— 重构的碎片原文比未读碎片长得多，多了 token 会爆。
+超出部分在界面上明说「还有 N 条这次没带上」，不做静默截断。
 
 ### 响应（严格 JSON）
 
@@ -217,7 +227,6 @@ System prompt 约定角色与输出格式；User 消息传紧凑的碎片列表�
 {
   "tags":          [{ "id": 1, "labels": ["工作", "财务"], "project": "报销" }],
   "todos":         [{ "text": "提交报销单", "due": "2026-10-21", "id": 1 }],
-  "summary":       { "body_md": "今天 7 条，主要围绕…" },
   "merge":         [{ "keep_id": 3, "drop_ids": [5, 9], "reason": "同一件事" }],
   "knowledge":     [
     {
@@ -230,14 +239,19 @@ System prompt 约定角色与输出格式；User 消息传紧凑的碎片列表�
   "todo_done":     [{ "todo_id": 5, "reason": "碎片里写了已经交了" }],
   "card_update":   [{ "card_id": 3, "add_source_ids": [7], "title": null, "gist": null, "reason": "同属 RAID 换盘" }],
   "archive_cards": [{ "card_id": 9, "reason": "内容已被新卡完整覆盖" }],
-  "drop_todos":    [{ "todo_id": 11, "reason": "和另一条重复" }]
+  "drop_todos":    [{ "todo_id": 11, "reason": "和另一条重复" }],
+  "merge_todos":   [{ "keep_id": 11, "drop_ids": [12, 15], "text": "把报销单交了", "reason": "三条说的是同一件事" }]
 }
 ```
 
 注意 `knowledge` 里**没有 body 字段**——原文由代码直接从 `source_ids` 对应的碎片拼接，不经过模型。
 
-后四类（`todo_done` / `card_update` / `archive_cards` / `drop_todos`）是 v0.2.2–0.2.3 陆续加的，
-共同点是把「旧数据」也纳入一次整理：以前只看新碎片，现在能补老卡、标老待办、清旧卡。
+**没有 `summary`**（v0.3.1 移除）。整理只看 60 条碎片，可能只是某个周期的一小部分，
+在这里顺手写小结必然写残；更要紧的是它每次都会插一条「今日小结」，
+一天整理两次就有两条，这正是用户报的那个「生成了两次小结」。小结只剩一个入口：周期总结面板。
+
+后五类（`todo_done` / `card_update` / `archive_cards` / `drop_todos` / `merge_todos`）是 v0.2.2–v0.3.1 陆续加的，
+共同点是把「旧数据」也纳入一次整理：以前只看新碎片，现在能补老卡、标老待办、清旧卡、并重复待办。
 
 ### 流式输出与思考过程（v0.2.4）
 
@@ -298,10 +312,12 @@ user:      buildRefineContent("待办合并成一条")
 补充几条后续版本新增的约束：
 
 5. **`card_update` 只追加不覆盖**。新原文接在旧 body 后面，卡片已有的正文一个字都不动；已在 `source_ids` 里的碎片不重复追加。
-6. **会让内容消失的两类操作默认不勾选**：`archive_cards`（归档卡）、`drop_todos`（真删待办）。
+6. **会让内容消失的三类操作默认不勾选**：`archive_cards`（归档卡）、`drop_todos`（真删待办）、
+   `merge_todos`（合并待办，被并的那几条会隐藏）。
    它们的共同点是「一勾就看不见了」，用户很难察觉误操作，必须由用户主动点一下。
    `todo_done` 从 v0.3.0 起改成**默认勾选** —— 用户明确要求「已经做完的自动标掉」，
    而且标完成只是让待办进回顾页的已完成区，内容没丢，点一下就能撤回。
+   这三类的清单集中登记在 `src/util/resultItems.ts` 的 `GROUPS` 表里，不在渲染代码里散着写。
 7. **归档必须可恢复且有入口**。`archive_cards` 只写 `archived = 1`，知识库页有「已归档」区可以恢复或彻底删除。
    **没有查看入口的归档 = 数据黑洞**，这条在做归档功能时被单独检查过一遍。
 8. **互斥保护由代码做**。同一张卡不能既 `card_update` 又 `archive_cards`，同一条待办不能既 `todo_done` 又 `drop_todos`——
@@ -309,9 +325,10 @@ user:      buildRefineContent("待办合并成一条")
 9. **用户取消的授权不能被代码绕过**。重构模式下新卡会按「来源碎片重叠 ≥ 50%」自动顶掉旧卡，
    但如果用户明确取消了那张卡的归档建议，替代逻辑也必须跳过它（`declinedArchive`）。
    「操作要用户授权」得由代码保证，不能只在界面上提示一句。
-10. **重构不重复抽待办、不重复写小结**。重构的碎片上次整理时已经抽过待办、写过当日小结，
-    再抽一遍就是纯重复。`pruneRefactorResult` 在代码层按「文案相同」或「同一碎片已派生过待办」两条判据过滤掉，
-    并把 `summary` 置空。
+10. **重构不重复抽待办**。重构的碎片上次整理时已经抽过待办，再抽一遍就是纯重复。
+    `pruneRefactorResult` 在代码层按「文案相同」或「同一碎片已派生过待办」两条判据过滤掉。
+11. **合并是隐藏不是删除**。`merge_todos` 只写 `todos.merged_into`，被并掉的条目仍然留在表里，
+    回顾页有「已合并」入口可以逐条恢复。`stats().todoOpen` 必须排除它们，否则合并越多首页数字越虚高。
 
 ### 周期总结与知识库问答（v0.3.0）
 
@@ -340,8 +357,26 @@ user:      buildRefineContent("待办合并成一条")
 - 时间轴落位靠 `periodAnchor(period)`：日 = 当天 23:59、周 = 周日 23:59、月 = 月末 23:59。
   这样总结排在周期末尾，而不是「生成它的那天」
 - 同周期重复生成：检测到已有 `(type, period)` 的 note 时，保存前给一个默认勾选的「替换原有小结」，
-  避免时间轴上并排两条同日小结
+  避免时间轴上并排两条同日小结。检测走 `repo.findNote(type, period)` 精确查，
+  **不能拿 `listNotes(200)` 再自己筛** —— 笔记一多就会漏掉更早的那条，于是同一天又插一条出来
+- 保存一律走 `repo.upsertNote`，按 `(type, period)` 覆盖
 - **只生成总结，不动碎片状态**（不改 `status` / 不标待办 / 不归档卡），这是这个功能敢默认放开的理由
+
+#### 待补小结清单（v0.3.1）
+
+整理页的整理入口下方会列「N 个周期还没写小结」，点一条直接打开周期总结面板并预选好粒度与周期。
+判定逻辑在 `src/util/digest.ts` 的 `missingDigests()`：
+
+| 规则 | 说明 |
+|---|---|
+| 只看有碎片的周期 | 空周期没什么可总结的 |
+| 日小结**包含今天** | 今天的碎片已经攒了一些，想写就该能写。这类标 `running`，界面写「今天」并注明只统计到此刻 |
+| 周/月只算已结束的 | 本周/本月写了是半截，周期一结束就会重新出现，没必要先写一份残的 |
+| 已有小结的跳过 | 按 `type|period` 精确匹配 |
+| 按粒度配额排 | daily 6 / weekly 2 / monthly 2 先占名额，剩余按时间补，最后统一按时间倒序 |
+
+配额是为了解决一个具体问题：月/周的周期末端天然比日靠后，纯按时间倒序会让一个月总结把一堆日小结全挤掉，
+而日小结才是日常真正常用的那个。`total` 报真实缺口数，界面区分「共 N 个」和「列前 M 条」。
 
 #### 知识库问答
 
@@ -424,6 +459,10 @@ user:      buildRefineContent("待办合并成一条")
 └─────────────────────────┘
 ```
 
+**小结排当天最前**（v0.3.1 改）。时间轴同一个日期分组里，先把这一天的结论摆出来，再往下是零碎记录 ——
+反过来（小结压在当天末尾）的话，得先划过一整天的碎片才看得见结论，用户的原话是「查看时往下滑才能看到」。
+落位靠 `periodAnchor(period)`，日 = 当天 23:59、周 = 周日 23:59、月 = 月末 23:59，所以周/月总结会出现在它覆盖的最后一天。
+
 ### 8.1 Android 适配红线（v0.2.1 真机踩过后定下）
 
 **① edge-to-edge 是强制的，不能当它不存在**
@@ -476,11 +515,14 @@ fragments/
 │   ├── types.ts             领域类型
 │   ├── util/
 │   │   ├── date.ts          日期分组、时间格式化、周期键与区间
+│   │   ├── digest.ts        哪些周期还没写小结（待补清单口径）
+│   │   ├── resultItems.ts   整理结果的字段元数据表：确认 key、默认勾选、空结果判定
 │   │   └── keyboard.ts      键盘高度 hook（替代失效的 KeyboardAvoidingView）
 │   ├── db/
 │   │   ├── types.ts         Repo 接口
 │   │   ├── repo.native.ts   SQLite 实现
 │   │   ├── repo.web.ts      localStorage 实现（仅供桌面预览）
+│   │   ├── commit.ts        把用户确认过的整理结果写进库（不含任何 UI）
 │   │   └── repo.ts          类型回退，勿直接引用逻辑
 │   ├── ai/
 │   │   ├── prompt.ts        System prompt 与请求体构造
@@ -497,13 +539,16 @@ fragments/
 │   │   ├── TagPill.tsx          标签胶囊
 │   │   ├── NoteBody.tsx         小结正文的轻量 Markdown 渲染
 │   │   ├── ReasoningStream.tsx  流式生成的实时面板（思维链 + 字数 + 计时）
+│   │   ├── ReasoningTrace.tsx   生成结束后的「模型思考过程」折叠区
+│   │   ├── ResultSections.tsx   整理结果页的九类条目与逐条勾选
+│   │   ├── BacklogCard.tsx      整理页的「哪些周期还没写小结」卡片
 │   │   ├── SummarySheet.tsx     周期总结生成面板
 │   │   ├── KnowledgeDetail.tsx  知识卡详情页
 │   │   └── AskSheet.tsx         知识库问答面板
 │   └── screens/
 │       ├── TimelineScreen.tsx
-│       ├── OrganizeScreen.tsx
-│       ├── ReviewScreen.tsx  待办 / 小结回顾
+│       ├── OrganizeScreen.tsx  状态机与 idle 面板（结果渲染交给 ResultSections）
+│       ├── ReviewScreen.tsx    待办 / 小结回顾（含「已合并」撤回入口）
 │       ├── KnowledgeScreen.tsx
 │       └── SettingsScreen.tsx
 ├── plugins/
@@ -535,8 +580,27 @@ fragments/
 - [x] 周期总结 v0.3.0：日/周/月小结生成、预览后保存、落在时间轴对应时间点、同周期可替换
 - [x] 知识库阅读改造 v0.3.0：卡片字号放大，点击进独立详情页（归档 / 恢复 / 删除）
 - [x] 知识库检索 v0.3.0：关键字搜索 + 问模型（当前主题 / 全库）
+- [x] 真机反馈第一轮 v0.3.1：待办可合并、小结移到时间轴顶部、整理不再产出小结（改为待补清单）、重构支持全部碎片、代码结构重整
 - [ ] 通知栏常驻入口
 - [ ] 真机联调（vivo Y78 / V2278A）—— 部分已开始，v0.2.1 就是首轮真机反馈驱动的
+
+### 真机反馈修复记录（v0.3.1）
+
+用户提了五条，逐条对应到根因：
+
+| 反馈 | 根因 | 修法 |
+|---|---|---|
+| 模型无法对待办做操作，重复待办没被合并 | 「合并」这个能力根本不存在，只有 `deleteTodo`；prompt 也没要求模型主动扫已有待办清单 | 新增 `merge_todos`（软隐藏 + 回顾页可撤回）、prompt 里要求每轮主动扫一遍待办清单、上下文上限从 30 提到 60 |
+| 小结在时间轴底部，得下滑才看到 | 时间轴比较器把总结压到当天末尾（上一轮主动这么写的） | 改成小结排当天最前：先看这一天的结论，再看零碎 |
+| 生成了两次小结 | 整理结果页每次都插一条「今日小结」+ 周期总结面板也能存；且面板判断「是否已存在」用 `listNotes(200)` 自己筛，笔记一多就漏 | 整理**不再产出小结**（唯一入口只剩周期总结面板）；`upsertNote` 按周期覆盖；`findNote` 精确查；保存加防重入锁 |
+| 不要自动生成小结，改为列出哪天没整理 | 原流程在应用阶段直接写 `notes` | 整理页新增「N 个周期还没写小结」，点一条进面板预览后再决定存不存 |
+| 重构只能整理已整理的内容 | `refactorPool` 只取 `status === 'tagged'` | 默认改为「全部碎片」（未整理 + 已整理，过滤已合并的），原选项保留 |
+
+顺带修掉的两个口径问题：
+
+- `stats().todoOpen` 把已合并的待办也算进「未完成」，合并越多首页数字越虚高（native / web 两处都改）
+- 删除某条碎片后，原先并进它的碎片只剩 `merged_into = null` 但 `status` 还是 `merged`，
+  既不在时间轴显示也不进整理池 —— 等于凭空消失。改为同时落回 `inbox`
 
 ### 整理增强记录（v0.2.2 → v0.2.3）
 

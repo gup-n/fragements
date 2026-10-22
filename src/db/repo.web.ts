@@ -92,8 +92,12 @@ export const repo: Repo = {
   async deleteFragment(id) {
     const d = load();
     d.fragments = d.fragments.filter((x) => x.id !== id);
+    // 并进它的那几条落回未整理，否则会变成「指向不存在的 id + status=merged」的孤儿
     d.fragments.forEach((x) => {
-      if (x.mergedInto === id) x.mergedInto = null;
+      if (x.mergedInto === id) {
+        x.mergedInto = null;
+        x.status = 'inbox';
+      }
     });
     persist();
   },
@@ -220,13 +224,16 @@ export const repo: Repo = {
       done: false,
       sourceFragmentId: input.sourceFragmentId,
       createdAt: Date.now(),
+      mergedInto: null,
     });
     persist();
     return id;
   },
 
   async listTodos() {
-    return [...load().todos].sort((a, b) => Number(a.done) - Number(b.done) || b.createdAt - a.createdAt);
+    return load()
+      .todos.filter((t) => t.mergedInto === null)
+      .sort((a, b) => Number(a.done) - Number(b.done) || b.createdAt - a.createdAt);
   },
 
   async toggleTodo(id, done) {
@@ -239,6 +246,28 @@ export const repo: Repo = {
   async deleteTodo(id) {
     const d = load();
     d.todos = d.todos.filter((x) => x.id !== id);
+    persist();
+  },
+
+  async mergeTodos(keepId, dropIds, text) {
+    const d = load();
+    const keep = d.todos.find((t) => t.id === keepId);
+    if (keep && text) keep.text = text;
+    for (const t of d.todos) {
+      if (dropIds.includes(t.id) && t.id !== keepId) t.mergedInto = keepId;
+    }
+    persist();
+  },
+
+  async listMergedTodos() {
+    return load()
+      .todos.filter((t) => t.mergedInto !== null)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+
+  async unmergeTodos(keepId) {
+    const d = load();
+    for (const t of d.todos) if (t.mergedInto === keepId) t.mergedInto = null;
     persist();
   },
 
@@ -257,8 +286,30 @@ export const repo: Repo = {
     return id;
   },
 
+  async upsertNote(input) {
+    const d = load();
+    const hit = input.period
+      ? d.notes.find((n) => n.type === input.type && n.period === input.period)
+      : undefined;
+    if (hit) {
+      hit.title = input.title;
+      hit.bodyMd = input.bodyMd;
+      hit.createdAt = Date.now();
+      persist();
+      return { id: hit.id, replaced: true };
+    }
+    const id = nextId(d);
+    d.notes.push({ id, ...input, createdAt: Date.now() });
+    persist();
+    return { id, replaced: false };
+  },
+
   async listNotes(limit = 30) {
     return [...load().notes].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  },
+
+  async findNote(type, period) {
+    return load().notes.find((n) => n.type === type && n.period === period) ?? null;
   },
 
   async deleteNote(id) {
@@ -296,7 +347,8 @@ export const repo: Repo = {
     return {
       total: d.fragments.length,
       inbox: d.fragments.filter((f) => f.status === 'inbox').length,
-      todoOpen: d.todos.filter((t) => !t.done).length,
+      // 被合并掉的待办不算「未完成」，和 native 版口径保持一致
+      todoOpen: d.todos.filter((t) => !t.done && t.mergedInto === null).length,
     };
   },
 };

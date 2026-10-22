@@ -8,21 +8,19 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 {
   "tags":          [{"id": 1, "labels": ["工作"], "project": "报销单"}],
   "todos":         [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
-  "summary":       {"body_md": "……"},
   "merge":         [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
   "knowledge":     [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
   "todo_done":     [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
   "card_update":   [{"card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "同属 RAID 换盘"}],
   "archive_cards": [{"card_id": 7, "reason": "内容已被新卡完整覆盖"}],
-  "drop_todos":    [{"todo_id": 6, "reason": "和另一条重复"}]
+  "drop_todos":    [{"todo_id": 6, "reason": "和另一条重复"}],
+  "merge_todos":   [{"keep_id": 6, "drop_ids": [9, 14], "text": "把报销单交了", "reason": "三条说的是同一件事"}]
 }
 
 【tags】为每条碎片给 1-3 个中文标签。标签要短，2-4 个字，优先复用常见类别（工作、生活、设备、财务、健康、学习、人际、想法）。project 填这条碎片所属的具体事项名（如"报销""NAS 维护"），看不出明确事项就填 null。每条碎片都必须出现在 tags 里。
 
 【todos】只抽取真正"需要去做的事"。纯感想、纯记录、已经做完的不要抽。text 用动词开头，不超过 20 字。due 根据上下文推断日期，格式 YYYY-MM-DD；推断不出来就填 null，绝对不要编造日期。
 - **先对照【已完成待办】**：一件事在那份清单里已经办完了，就不要再抽一条新的待办出来，哪怕是换个说法。
-
-【summary】写一段 80-200 字的自然语言小结，分两层：先说这段时间你主动推进了什么，再说发生了哪些事（包括琐事和被打断的事）。要像人写的日记小结，不要罗列，不要用 markdown 标题。
 
 【merge】只标记本轮碎片里"确实是同一件事、可以合并"的。keep_id 选信息最全的那条，drop_ids 是其余几条。没有就返回空数组。宁可少标，也不要错标。
 
@@ -57,9 +55,18 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 - 没有就返回空数组。
 
 【drop_todos】用来删掉不该存在的【未完成待办】。
-- 只针对三种情况：明显重复、说的不是真事（当初从纯感想里误抽的）、已经被别的事实质取代。
+- **每次整理都要主动扫一遍【未完成待办】清单本身**，不只看本轮碎片。清单里攒久了必然有重复项和误抽项。
+- 只针对三种情况：说的不是真事（当初从纯感想里误抽的）、已经被别的事实质取代、**重复且没什么信息量的那条**。
+- 如果几条重复项各自都带了信息（比如一条说了时间、一条说了对象），不要用 drop_todos，用 merge_todos。
 - **已经做完的事不要用 drop_todos**，那要用 todo_done —— 两者含义不同。
 - 这是真删除，不能撤销。拿不准就保留。
+- 没有就返回空数组。
+
+【merge_todos】用来把几条说同一件事的【未完成待办】并成一条。
+- keep_id 选信息最全的那条；drop_ids 是被并进去的其余几条，至少一条。
+- 如果几条各说了半句、需要拼起来才完整，把拼好的完整文案填进 text（不超过 20 字）；只靠 keep 那条就够清楚时 text 填 null。
+- 被合并的条目只是隐藏，用户可以在回顾页撤回，所以不必过度保守 —— 但**只在真的是同一件事时才合并**。
+- 和 drop_todos 互斥：同一条待办不能既被删又被并。
 - 没有就返回空数组。
 
 【硬性约束】
@@ -82,8 +89,18 @@ export interface UserContentOptions {
   mode?: 'organize' | 'refactor';
 }
 
-/** 单次塞给模型的已有卡片/待办上限，避免上下文过长把碎片挤掉 */
-const CONTEXT_LIMIT = 30;
+/**
+ * 单次塞给模型的上下文上限。
+ *
+ * 卡片一行只是「主题 | 标题」，待办一行只是「文案 · 到期」，都很短；
+ * 而整理一次最多 60 条碎片、每条几十个字，真正吃 token 的是碎片本身。
+ * 所以这几份清单宁可多给：查重、合并、删除全都依赖模型**看得见**清单，
+ * 只给前 30 条时，攒到 50 条的重复待办它根本发现不了，
+ * 用户就会觉得「模型根本不管待办」。
+ */
+const CARD_LIMIT = 40;
+const OPEN_TODO_LIMIT = 60;
+const DONE_TODO_LIMIT = 40;
 
 export function buildUserContent(options: UserContentOptions) {
   const { fragments, topics = [], cards = [], todos = [], mode = 'organize' } = options;
@@ -93,8 +110,11 @@ export function buildUserContent(options: UserContentOptions) {
   const out: string[] = [`今天是 ${todayISO()} ${weekdayCN(new Date())}。以下是待整理的碎片：`];
 
   if (refactor) {
+    const hasInbox = fragments.some((f) => f.status === 'inbox');
     out.push(
-      '（这是一次**重构**：这些碎片以前整理过，现在重新判断一遍。请独立判断，不要因为标签已经存在就照抄。）',
+      hasInbox
+        ? '（这是一次**重构**：这批碎片里既有整理过的、也有还没整理的。整理过的那部分重新判断一遍（不要因为标签已存在就照抄），没整理的那部分按新内容处理。）'
+        : '（这是一次**重构**：这些碎片以前整理过，现在重新判断一遍。请独立判断，不要因为标签已经存在就照抄。）',
     );
   }
 
@@ -134,7 +154,7 @@ export function buildUserContent(options: UserContentOptions) {
   out.push('');
   if (cards.length) {
     out.push('【已有知识卡】（能补充它们就用 card_update，不要重复建同主题的卡）');
-    for (const c of cards.slice(0, CONTEXT_LIMIT)) {
+    for (const c of cards.slice(0, CARD_LIMIT)) {
       out.push(`[${c.id}] ${c.topic} | ${c.title}`);
     }
   } else {
@@ -144,8 +164,8 @@ export function buildUserContent(options: UserContentOptions) {
   out.push('');
   const open = todos.filter((t) => !t.done);
   if (open.length) {
-    out.push('【未完成待办】（本轮碎片表明某条已经做完，就用 todo_done）');
-    for (const t of open.slice(0, CONTEXT_LIMIT)) {
+    out.push('【未完成待办】（某条做完了用 todo_done；说重复的用 merge_todos / drop_todos）');
+    for (const t of open.slice(0, OPEN_TODO_LIMIT)) {
       out.push(`[${t.id}] ${t.text}${t.dueAt ? ` · ${t.dueAt}` : ''}`);
     }
   } else {
@@ -158,7 +178,7 @@ export function buildUserContent(options: UserContentOptions) {
   const done = todos.filter((t) => t.done);
   if (done.length) {
     out.push('【已完成待办】（这些事已经办完了。**不要**再为它们抽新的待办，也不要重复建同主题的卡）');
-    for (const t of done.slice(0, CONTEXT_LIMIT)) {
+    for (const t of done.slice(0, DONE_TODO_LIMIT)) {
       out.push(`[${t.id}] ✓ ${t.text}`);
     }
   } else {

@@ -26,6 +26,11 @@ export interface Todo {
   done: boolean;
   sourceFragmentId: number | null;
   createdAt: number;
+  /**
+   * 被合并到哪一条。为 null 表示这条还在用。
+   * 合并走「隐藏」而不是真删 —— 合错了能在回顾页的「已合并」里撤回。
+   */
+  mergedInto: number | null;
 }
 
 export interface Note {
@@ -41,6 +46,13 @@ export interface Note {
 
 /** 周期总结的粒度 */
 export type DigestKind = 'daily' | 'weekly' | 'monthly';
+
+/**
+ * 整理的两个入口：
+ * - organize = 处理还没整理过的碎片
+ * - refactor = 把碎片重新过一遍，结果与旧标签 / 旧知识卡逐项对照
+ */
+export type OrganizeMode = 'organize' | 'refactor';
 
 /**
  * 知识卡：从碎片里沉淀出的「可复用结论」。
@@ -61,11 +73,17 @@ export interface KnowledgeCard {
   archived: boolean;
 }
 
-/** AI 一次调用返回的结果，字段顺序与契约一致 */
+/**
+ * AI 一次调用返回的结果，字段顺序与契约一致。
+ *
+ * 这里**没有**小结 —— 整理只处理碎片本身。小结走独立的周期总结面板
+ * （`components/SummarySheet.tsx`），因为一条小结要覆盖整个周期，
+ * 而整理一次只看 60 条、可能只是这个周期的一部分，在这里顺手写必然写残。
+ * 整理页只负责列出「哪些周期还没有小结」。
+ */
 export interface OrganizeResult {
   tags: TagSuggestion[];
   todos: TodoSuggestion[];
-  summary: { body_md: string } | null;
   merge: MergeSuggestion[];
   knowledge: KnowledgeSuggestion[];
   /** 建议把已有待办标记为完成（碎片里说了「已经做了」） */
@@ -76,6 +94,21 @@ export interface OrganizeResult {
   archive_cards: ArchiveCardSuggestion[];
   /** 建议删掉的已有待办（过时、重复、不该存在） */
   drop_todos: DropTodoSuggestion[];
+  /** 建议把几条重复的已有待办并成一条（被合并的隐藏，可撤回） */
+  merge_todos: MergeTodoSuggestion[];
+}
+
+/**
+ * 合并重复待办。
+ * 保留 `keep_id`，其余被打上 merged_into 标记不再显示；
+ * `text` 有值时用合并后的文案替换保留那条 —— 两条各说了半句的情况很常见。
+ */
+export interface MergeTodoSuggestion {
+  keep_id: number;
+  drop_ids: number[];
+  /** 合并后更完整的文案，null 表示沿用保留那条的原文 */
+  text: string | null;
+  reason: string | null;
 }
 
 /**

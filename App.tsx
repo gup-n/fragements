@@ -165,6 +165,7 @@ export default function App() {
               {route === 'organize' && (
                 <OrganizeScreen
                   fragments={fragments}
+                  notes={notes}
                   onClose={() => setRoute('timeline')}
                   onApplied={reload}
                   onOpenSettings={() => setRoute('settings')}

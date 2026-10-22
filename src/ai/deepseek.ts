@@ -7,6 +7,7 @@ import type {
   KnowledgeCard,
   KnowledgeSuggestion,
   MergeSuggestion,
+  MergeTodoSuggestion,
   OrganizeResult,
   TagSuggestion,
   Todo,
@@ -84,10 +85,6 @@ export function normalizeResult(
       reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
     });
   }
-
-  const summaryRaw = obj.summary as Record<string, unknown> | undefined;
-  const bodyMd = typeof summaryRaw?.body_md === 'string' ? summaryRaw.body_md.trim() : '';
-  const summary = bodyMd ? { body_md: bodyMd } : null;
 
   const byId = new Map(fragments.map((f) => [f.id, f]));
   const knowledge: KnowledgeSuggestion[] = [];
@@ -191,16 +188,45 @@ export function normalizeResult(
     });
   }
 
+  // 建议合并的重复待办
+  const mergeTodos: MergeTodoSuggestion[] = [];
+  const mergedAway = new Set<number>();
+  for (const item of Array.isArray(obj.merge_todos) ? obj.merge_todos : []) {
+    const m = item as Record<string, unknown>;
+    const keepId = Number(m?.keep_id);
+    if (!Number.isFinite(keepId) || !validTodoIds.has(keepId)) continue;
+    if (seenDone.has(keepId) || seenDrop.has(keepId) || mergedAway.has(keepId)) continue;
+
+    const drops: number[] = [];
+    for (const raw of Array.isArray(m?.drop_ids) ? m.drop_ids : []) {
+      const id = Number(raw);
+      // 被合并的必须是真实存在、且没被别处用掉的待办；自己不能合并自己
+      if (!Number.isFinite(id) || id === keepId) continue;
+      if (!validTodoIds.has(id) || seenDone.has(id) || seenDrop.has(id) || mergedAway.has(id)) continue;
+      if (drops.includes(id)) continue;
+      drops.push(id);
+    }
+    if (!drops.length) continue;
+
+    drops.forEach((id) => mergedAway.add(id));
+    mergeTodos.push({
+      keep_id: keepId,
+      drop_ids: drops,
+      text: typeof m?.text === 'string' && m.text.trim() ? m.text.trim().slice(0, 60) : null,
+      reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
+    });
+  }
+
   return {
     tags: Array.from(tagMap.values()),
     todos,
-    summary,
     merge: merges,
     knowledge,
     todo_done: todoDone,
     card_update: cardUpdate,
     archive_cards: archiveCards,
     drop_todos: dropTodos,
+    merge_todos: mergeTodos,
   };
 }
 
