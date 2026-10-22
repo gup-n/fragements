@@ -2,7 +2,7 @@
   "expo": {
     "name": "碎片",
     "slug": "fragments",
-    "version": "0.3.1",
+    "version": "0.3.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -15,7 +15,7 @@
     },
     "android": {
       "package": "com.local.fragments",
-      "versionCode": 9,
+      "versionCode": 10,
       "adaptiveIcon": {
         "backgroundColor": "#FBFBF9",
         "foregroundImage": "./assets/android-icon-foreground.png",

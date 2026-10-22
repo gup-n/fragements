@@ -35,6 +35,7 @@ import { ResultSections } from '../components/ResultSections';
 import { BacklogCard } from '../components/BacklogCard';
 import { ReasoningStream } from '../components/ReasoningStream';
 import { ReasoningTrace } from '../components/ReasoningTrace';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
   fragments: Fragment[];
@@ -362,13 +363,11 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.back}>
-          <Ionicons name="chevron-back" size={20} color={C.text} />
-        </Pressable>
-        <Text style={styles.title}>{headerTitle}</Text>
-        <View style={{ width: 24 }} />
-      </View>
+      <ScreenHeader
+        title={headerTitle}
+        subtitle={mode === 'refactor' ? '把碎片重新过一遍，与旧结果对照' : '处理还没整理过的碎片'}
+        onBack={onClose}
+      />
 
       <ScrollView
         contentContainerStyle={styles.content}
@@ -382,6 +381,11 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                 style={[styles.segmentItem, mode === 'organize' && styles.segmentItemOn]}
                 onPress={() => switchMode('organize')}
               >
+                <Ionicons
+                  name="sparkles-outline"
+                  size={14}
+                  color={mode === 'organize' ? C.accentText : C.text3}
+                />
                 <Text style={[styles.segmentText, mode === 'organize' && styles.segmentTextOn]}>
                   整理未读
                 </Text>
@@ -390,6 +394,11 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                 style={[styles.segmentItem, mode === 'refactor' && styles.segmentItemOn]}
                 onPress={() => switchMode('refactor')}
               >
+                <Ionicons
+                  name="sync-outline"
+                  size={14}
+                  color={mode === 'refactor' ? C.accentText : C.text3}
+                />
                 <Text style={[styles.segmentText, mode === 'refactor' && styles.segmentTextOn]}>
                   重构已整理
                 </Text>
@@ -631,6 +640,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
   return (
     <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress}>
+      {on ? <Ionicons name="checkmark" size={12} color={C.accentText} /> : null}
       <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
     </Pressable>
   );
@@ -638,18 +648,8 @@ function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () 
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-  },
-  back: { width: 24 },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
 
-  content: { paddingHorizontal: 16, paddingBottom: 24 },
+  content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
 
   segment: {
     flexDirection: 'row',
@@ -658,7 +658,15 @@ const styles = StyleSheet.create({
     padding: 3,
     marginBottom: 14,
   },
-  segmentItem: { flex: 1, alignItems: 'center', paddingVertical: 7, borderRadius: R.btn - 2 },
+  segmentItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: R.btn - 2,
+  },
   segmentItemOn: { backgroundColor: C.card },
   segmentText: { fontSize: 13, color: C.text2 },
   segmentTextOn: { color: C.text, fontWeight: '500' },
@@ -684,6 +692,9 @@ const styles = StyleSheet.create({
   scopeLabel: { fontSize: 12, color: C.text2, marginBottom: 9 },
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
   chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     borderRadius: R.pill,
     paddingHorizontal: 12,
     paddingVertical: 5,

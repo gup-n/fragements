@@ -28,6 +28,7 @@ import { C, R } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
 import { ReasoningTrace } from './ReasoningTrace';
+import { ScreenHeader } from './ScreenHeader';
 
 const KINDS: { key: DigestKind; label: string; count: number; hint: string }[] = [
   { key: 'daily', label: '日', count: 14, hint: '把一天里记的东西压成一段' },
@@ -236,13 +237,7 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
 
   return (
     <View style={s.root}>
-      <View style={s.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={s.headBtn}>
-          <Ionicons name="close" size={22} color={C.text} />
-        </Pressable>
-        <Text style={s.title}>{KIND_NAME[kind]}</Text>
-        <View style={s.headBtn} />
-      </View>
+      <ScreenHeader title={KIND_NAME[kind]} backIcon="close" onBack={onClose} />
 
       {phase === 'running' ? (
         <ScrollView contentContainerStyle={s.content}>
@@ -381,16 +376,6 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
 
 const s = StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 10,
-  },
-  headBtn: { width: 28, alignItems: 'flex-start' },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
 
   content: { paddingHorizontal: 16, paddingBottom: 24 },
 

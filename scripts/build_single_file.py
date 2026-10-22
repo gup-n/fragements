@@ -4,14 +4,26 @@
 1. 把 JS bundle 内联进 <script>，去掉对外部文件的依赖
 2. 把 Ionicons 字体转成 base64 data URI 内联进去（其余图标字体用不到，保持原样即可）
 3. 注入启动自诊断：白屏时把错误打到页面上，而不是让用户对着空白发呆
+
+用法：
+    python scripts/build_single_file.py [源目录] [输出文件]
+源目录默认 preview/，输出默认根目录的「碎片-界面预览.html」。
 """
 
 import base64
 import re
 import pathlib
+import sys
 
-ROOT = pathlib.Path(r"F:/coding/python/project/Test/fragments/preview")
-OUT = pathlib.Path(r"F:/coding/python/project/Test/fragments/碎片-界面预览.html")
+ROOT = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else r"F:/coding/python/project/Test/fragments/preview")
+OUT = pathlib.Path(
+    sys.argv[2]
+    if len(sys.argv) > 2
+    else r"F:/coding/python/project/Test/fragments/碎片-界面预览.html"
+)
+
+if not (ROOT / "index.html").exists():
+    raise SystemExit(f"{ROOT}/index.html 不存在，先跑 expo export")
 
 html = (ROOT / "index.html").read_text(encoding="utf-8")
 

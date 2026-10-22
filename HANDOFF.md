@@ -1,6 +1,6 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-22，对应版本 **v0.3.1（versionCode 9）**。
+> 写于 2026-10-22，对应版本 **v0.3.2（versionCode 10）**。
 > 上一轮上下文快满了，这份文档的目的是让你**不用重读历史对话**就能接着干。
 >
 > **阅读顺序**：本文件（10 分钟）→ `SPEC.md` 第 6 节（AI 契约 + 流式与思考过程 + 周期总结与知识库问答）+ 第 8.1 节（Android UI 红线）→ `ROADMAP.md` 剩余项。
@@ -17,12 +17,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.3.1`，`versionCode 9`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.3.2`，`versionCode 10`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 3` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 约 6300 行 TS/TSX，最大的屏 `OrganizeScreen.tsx` 813 行 |
-| 最新 APK | `fragments-v0.3.1.apk`，21.8 MiB（22,886,886 字节），MD5 `e949e09246656a935ab513eca8ad6168`（`versionCode 9` / `versionName 0.3.1` 已用 aapt2 核对） |
+| 规模 | 约 6500 行 TS/TSX，最大的屏 `OrganizeScreen.tsx` 830 行 |
+| 最新 APK | `fragments-v0.3.2.apk`，21.8 MiB（22,888,926 字节），MD5 `2444f721ddaf45d3eb84b911cf85a742`（`versionCode 10` / `versionName 0.3.2` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -68,7 +68,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 3. 项目现在的状态
 
-### 已完成（v0.1.0 → v0.3.1）
+### 已完成（v0.1.0 → v0.3.2）
 
 | 版本 | 内容 |
 |---|---|
@@ -81,6 +81,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 | v0.2.4 | **思考过程可视化**（流式 + 思维链实时显示）、**模型名迁移到 `deepseek-flash`**、超时改分段、设置页可开关思考 |
 | **v0.3.0** | **周期总结**（日/周/月，进时间轴）、**知识库检索**（关键字搜索 + 问模型）、知识库详情页与大字号、待办完成标记（`todo_done` 默认勾选 + 时间轴徽章） |
 | **v0.3.1** | **真机反馈五条全修**：待办可合并（软隐藏可撤回）、小结挪到时间轴顶部、整理不再产出小结（改为待补清单）、重构支持全部碎片、代码结构重整（`ResultSections` / `resultItems` / `commit`） |
+| **v0.3.2** | **界面美化**：`IconButton`（36px 圆触控区）+ `ScreenHeader`（统一页头）两个基础组件，图标尺寸整体上调一档、首页图标加圆底、整理入口按未读状态变实心；五处页头收成一处，知识库把「共 N 条」挪进副标题 |
 
 ### 未完成的功能（只剩一个）
 
@@ -104,7 +105,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 4. 最近做了什么
 
-### 4.1 v0.3.1：真机反馈第一轮（本轮）
+### 4.1 v0.3.1 → v0.3.2：真机反馈第一轮 + 界面美化
 
 用户拿 v0.3.0 装了机，提了五条，并且明确要求「先想清楚我的表述哪里不明确，再动手」。
 所以这轮先出了四个选择题把分歧收敛掉，再改代码：
@@ -176,6 +177,29 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 - **回顾页的待办没有手动合并/删除入口**。用户的原话是「模型无法对待办进行操作」，
   所以只补了 AI 侧的能力；手动操作的界面是另一个需求，等用户提
 - 通知栏入口仍然没做（SPEC 唯一未完成的功能项）
+
+#### 4.1.6 v0.3.2：界面与图标
+
+用户原话：「看一下 UI 能不能美化一下，让里面的图标更方便查看，界面布局更佳美观」。
+拆成两件事：**图标能不能看清/点中**，和**版式是否统一**。
+
+| 症状 | 改法 |
+|---|---|
+| 头部图标是「19px 细线图标 + `padding: 2`」，触控区只有 23px 左右，按偏就没反应 | 新增 `components/IconButton.tsx`：固定 36px 圆、`hitSlop` 4、按下透明度反馈，支持圆底（none/soft/accent）与数字角标 |
+| 三个导航图标分不清（`albums`/`list`/`settings` 都是细线） | 换成 `library`（书本）/ `checkmark-circle`（待办）/ `settings`，并给浅灰圆底，明确「这是按钮」 |
+| 「已完成」徽章里那个勾只有 9px，手机上基本看不见 | 徽章图标 9→11、文字 10→10.5；其他图标整体上调一档（页头 20→22，卡片头 11→13，来源图标 11→12.5） |
+| 整理入口是浅底小胶囊，和旁边三个图标一样重 | 有未读时变**实心蓝底白字**，没有时退回浅底 —— 一眼看出「现在该不该整理」 |
+| 四个子页面各写一遍页头，返回键大小/标题位置不一致 | 抽出 `components/ScreenHeader.tsx`：左返回圆钮 + 居中标题（可带副标题）+ 右侧动作区 + 底部 hairline。Organize / Review / Knowledge / Settings 和三个覆盖层（SummarySheet / KnowledgeDetail / AskSheet）全部换掉 |
+| 知识库顶部「共 12 条，分布在 3 个主题」占一行正文 | 挪进页头副标题，正文少一行噪音 |
+| 空状态只有两行字 | 加一个 64px 浅灰圆 + 图标，页面不至于空得像没加载出来 |
+| 输入栏两个小图标没有边界 | 展开键做成 30px 圆钮，发送键 30→32 |
+
+设计上仍然遵守 SPEC 的两条红线：**无渐变、无阴影**。层次一律靠留白、hairline 和底色深浅做。
+配色没动（`theme.ts` 一个值都没改），所以不会出现「美化之后不像原来那个 App」。
+
+> 这里踩了一下：批量改样式时用正则删 `headerTitle: { font…` 收尾，结果它一路匹配到了下一个
+> **多行**样式的结束括号，把 `content` / `topicRow` / `topic` / `title` 四段一起删了，tsc 才报出来。
+> **删样式块别用「从某个 key 开始贪到第一个 `},`」这种写法**，单行和多行样式混在一起时它一定吃多。
 
 ---
 
@@ -416,6 +440,8 @@ src/
     resultItems.ts            104   ★ 九类输出的字段元数据表 + 确认 key + 默认勾选策略
     keyboard.ts                39   ★ useKeyboardHeight()，见第 7 节
   components/
+    IconButton.tsx             95   ★ 圆形图标按钮：36px 触控区、圆底、数字角标
+    ScreenHeader.tsx           80   ★ 子页面统一页头：返回圆钮 + 居中标题/副标题 + 右侧动作
     TagPill.tsx                35   标签胶囊
     NoteBody.tsx               79   ★ 小结正文的轻量 Markdown 渲染（标题/列表/段落，不引第三方）
     ReasoningStream.tsx        85   ★ 流式实时面板：转圈 + 秒数 + 思维链滚动 + 字数
@@ -591,10 +617,10 @@ plugins/
 
 ### P0 — 装机，按顺序验证
 
-`fragments-v0.3.1.apk` 已经打好放在项目根目录（`versionCode 9`，大小与 MD5 见第 1 节速览）。
+`fragments-v0.3.2.apk` 已经打好放在项目根目录（`versionCode 10`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.3.1.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.3.2.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——

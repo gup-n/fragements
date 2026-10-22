@@ -6,7 +6,7 @@
 
 - **应用名**：碎片
 - **包名**：`com.local.fragments`（固定，改包名等于换 App，旧数据不跟随）
-- **当前版本**：v0.3.1（versionCode 9）
+- **当前版本**：v0.3.2（versionCode 10）
 - **目标设备**：vivo Y78（V2278A）
 
 ## 两条设计红线
@@ -91,6 +91,8 @@ src/
     KnowledgeScreen.tsx      知识库
     SettingsScreen.tsx       设置与导出
   components/
+    IconButton.tsx           圆形图标按钮（36px 触控区 / 圆底 / 数字角标）
+    ScreenHeader.tsx         子页面统一页头（返回圆钮 + 居中标题 + 右侧动作）
     TagPill.tsx              标签胶囊
     NoteBody.tsx             小结正文的轻量 Markdown 渲染（标题 / 列表 / 段落）
     ReasoningStream.tsx      流式生成时的实时面板（思维链 + 字数 + 计时）

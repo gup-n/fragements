@@ -25,6 +25,7 @@ import { C, R } from '../theme';
 import { useKeyboardHeight } from '../util/keyboard';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
+import { ScreenHeader } from './ScreenHeader';
 
 type Phase = 'ask' | 'running' | 'answer';
 
@@ -143,13 +144,7 @@ export function AskSheet({ topic, onClose, onOpenCard }: Props) {
 
   return (
     <View style={[s.root, { paddingBottom: keyboardHeight }]}>
-      <View style={s.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={s.headBtn}>
-          <Ionicons name="close" size={22} color={C.text} />
-        </Pressable>
-        <Text style={s.title}>问知识库</Text>
-        <View style={s.headBtn} />
-      </View>
+      <ScreenHeader title="问知识库" backIcon="close" onBack={onClose} />
 
       <View style={s.scopeRow}>
         {topic ? (
@@ -271,16 +266,6 @@ export function AskSheet({ topic, onClose, onOpenCard }: Props) {
 
 const s = StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 8,
-  },
-  headBtn: { width: 28, alignItems: 'flex-start' },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
 
   scopeRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 10 },
   chip: {

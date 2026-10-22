@@ -7,6 +7,7 @@ import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NoteBody } from '../components/NoteBody';
 import { SummarySheet } from '../components/SummarySheet';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
   onClose: () => void;
@@ -73,13 +74,13 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.back}>
-          <Ionicons name="chevron-back" size={20} color={C.text} />
-        </Pressable>
-        <Text style={styles.title}>回顾</Text>
-        <View style={{ width: 24 }} />
-      </View>
+      <ScreenHeader
+        title="回顾"
+        subtitle={
+          pending.length > 0 ? `${pending.length} 项待办没做完` : '待办已经清空了'
+        }
+        onBack={onClose}
+      />
 
       <View style={styles.tabs}>
         {([
@@ -126,7 +127,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                         ]}
                       >
                         <View style={styles.check}>
-                          <Ionicons name="ellipse-outline" size={19} color={C.text3} />
+                          <Ionicons name="ellipse-outline" size={20} color={C.text3} />
                         </View>
                         <Text style={styles.todoText}>{item.text}</Text>
                         {due && (
@@ -155,7 +156,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                         ]}
                       >
                         <View style={styles.check}>
-                          <Ionicons name="checkmark-circle" size={19} color={C.accent} />
+                          <Ionicons name="checkmark-circle" size={20} color={C.accent} />
                         </View>
                         <Text style={[styles.todoText, styles.doneText]}>{item.text}</Text>
                       </Pressable>
@@ -167,7 +168,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
               {merged.length > 0 && (
                 <>
                   <Pressable style={styles.mergedBar} onPress={() => setShowMerged((v) => !v)}>
-                    <Ionicons name="git-merge-outline" size={14} color={C.text3} />
+                    <Ionicons name="git-merge-outline" size={16} color={C.text3} />
                     <Text style={styles.mergedLabel}>已合并 {merged.length} 条</Text>
                     <Ionicons
                       name={showMerged ? 'chevron-up' : 'chevron-down'}
@@ -201,7 +202,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
             style={({ pressed }) => [styles.genBtn, pressed && { backgroundColor: C.accentBg }]}
             onPress={() => setSheetOpen(true)}
           >
-            <Ionicons name="sparkles-outline" size={16} color={C.accentText} />
+            <Ionicons name="sparkles-outline" size={17} color={C.accentText} />
             <Text style={styles.genText}>生成总结</Text>
             <Text style={styles.genHint}>日 / 周 / 月</Text>
           </Pressable>
@@ -257,28 +258,18 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-  },
-  back: { width: 24 },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingBottom: 12 },
+  tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
   tab: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
     borderRadius: R.pill,
     backgroundColor: C.hairSoft,
   },
   tabActive: { backgroundColor: C.accentBg },
-  tabText: { fontSize: 13, color: C.text2 },
-  tabTextActive: { color: C.accentText, fontWeight: '500' },
+  tabText: { fontSize: 13.5, color: C.text2 },
+  tabTextActive: { color: C.accentText, fontWeight: '600' },
 
   content: { paddingHorizontal: 16, paddingBottom: 28 },
   hint: { fontSize: 12, color: C.text3, marginTop: 18, marginBottom: 8 },
@@ -299,7 +290,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 14,
-    paddingVertical: 13,
+    paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },

@@ -25,6 +25,7 @@ import { repo } from '../db/repo';
 import { dayKey } from '../util/date';
 import { AskSheet } from '../components/AskSheet';
 import { KnowledgeDetail } from '../components/KnowledgeDetail';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
   onClose: () => void;
@@ -134,13 +135,19 @@ export function KnowledgeScreen({ onClose }: Props) {
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable onPress={goBack} hitSlop={12} style={styles.back}>
-          <Ionicons name="chevron-back" size={20} color={C.text} />
-        </Pressable>
-        <Text style={styles.title}>{title}</Text>
-        <View style={{ width: 24 }} />
-      </View>
+      <ScreenHeader
+        title={title}
+        subtitle={
+          showArchived
+            ? `共 ${archivedCount} 张已归档`
+            : active
+              ? `${cards.length} 张卡`
+              : topics.length
+                ? `${topics.length} 个主题 · ${total} 张卡`
+                : undefined
+        }
+        onBack={goBack}
+      />
 
       {loading ? (
         <View style={styles.center}>
@@ -151,7 +158,7 @@ export function KnowledgeScreen({ onClose }: Props) {
           {!showArchived && (
             <View style={styles.toolRow}>
               <View style={styles.searchBox}>
-                <Ionicons name="search" size={15} color={C.text3} />
+                <Ionicons name="search" size={16} color={C.text3} />
                 <TextInput
                   style={styles.searchInput}
                   value={keyword}
@@ -163,7 +170,7 @@ export function KnowledgeScreen({ onClose }: Props) {
                 />
                 {searching ? (
                   <Pressable onPress={() => setKeyword('')} hitSlop={10}>
-                    <Ionicons name="close-circle" size={16} color={C.text3} />
+                    <Ionicons name="close-circle" size={17} color={C.text3} />
                   </Pressable>
                 ) : null}
               </View>
@@ -171,7 +178,7 @@ export function KnowledgeScreen({ onClose }: Props) {
                 style={({ pressed }) => [styles.askBtn, pressed && { backgroundColor: C.accentBg }]}
                 onPress={() => setAskOpen(true)}
               >
-                <Ionicons name="sparkles-outline" size={14} color={C.accentText} />
+                <Ionicons name="sparkles-outline" size={15} color={C.accentText} />
                 <Text style={styles.askText}>问</Text>
               </Pressable>
             </View>
@@ -254,9 +261,6 @@ export function KnowledgeScreen({ onClose }: Props) {
                 </View>
               ) : (
                 <>
-                  <Text style={styles.hint}>
-                    共 {total} 条，分布在 {topics.length} 个主题
-                  </Text>
                   <View style={styles.topicList}>
                     {topics.map((t, i) => (
                       <Pressable
@@ -271,7 +275,7 @@ export function KnowledgeScreen({ onClose }: Props) {
                         <Text style={styles.topicName}>{t.topic}</Text>
                         <View style={styles.topicRight}>
                           <Text style={styles.topicCount}>{t.count}</Text>
-                          <Ionicons name="chevron-forward" size={14} color={C.text3} />
+                          <Ionicons name="chevron-forward" size={16} color={C.text3} />
                         </View>
                       </Pressable>
                     ))}
@@ -288,12 +292,12 @@ export function KnowledgeScreen({ onClose }: Props) {
                   onPress={() => setShowArchived(true)}
                 >
                   <View style={styles.archiveLeft}>
-                    <Ionicons name="archive-outline" size={14} color={C.text3} />
+                    <Ionicons name="archive-outline" size={16} color={C.text3} />
                     <Text style={styles.archiveLabel}>已归档</Text>
                   </View>
                   <View style={styles.topicRight}>
                     <Text style={styles.topicCount}>{archivedCount}</Text>
-                    <Ionicons name="chevron-forward" size={14} color={C.text3} />
+                    <Ionicons name="chevron-forward" size={16} color={C.text3} />
                   </View>
                 </Pressable>
               )}
@@ -332,44 +336,41 @@ export function KnowledgeScreen({ onClose }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-  },
-  back: { width: 24 },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 40 },
 
-  toolRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 12 },
+  toolRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
+  },
   searchBox: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
     paddingHorizontal: 11,
-    height: 38,
+    height: 40,
     backgroundColor: C.card,
     borderRadius: R.btn,
     borderWidth: 0.5,
     borderColor: C.hair,
   },
-  searchInput: { flex: 1, fontSize: 13, color: C.text, paddingVertical: 0 },
+  searchInput: { flex: 1, fontSize: 13.5, color: C.text, paddingVertical: 0 },
   askBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 13,
-    height: 38,
+    height: 40,
     borderRadius: R.btn,
     backgroundColor: C.accentBg,
   },
-  askText: { fontSize: 13, color: C.accentText, fontWeight: '500' },
+  askText: { fontSize: 13.5, color: C.accentText, fontWeight: '600' },
 
-  content: { paddingHorizontal: 16, paddingBottom: 28 },
+  content: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 28 },
   hint: { fontSize: 12, color: C.text3, marginBottom: 10, marginTop: 2, lineHeight: 19 },
 
   empty: { alignItems: 'center', paddingTop: 90 },
@@ -387,14 +388,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 15,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },
-  topicName: { fontSize: 15, color: C.text },
+  topicName: { fontSize: 15.5, color: C.text, fontWeight: '500' },
   topicRight: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  topicCount: { fontSize: 12, color: C.text3 },
+  topicCount: {
+    fontSize: 11.5,
+    color: C.text2,
+    backgroundColor: C.hairSoft,
+    borderRadius: R.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    minWidth: 26,
+    textAlign: 'center',
+    overflow: 'hidden',
+    fontVariant: ['tabular-nums'],
+  },
 
   card: {
     backgroundColor: C.card,
@@ -404,8 +416,8 @@ const styles = StyleSheet.create({
     padding: 16,
     marginBottom: 10,
   },
-  cardTopic: { fontSize: 11, color: C.accentText, fontWeight: '500', marginBottom: 5 },
-  cardTitle: { fontSize: 16, lineHeight: 24, color: C.text, fontWeight: '500' },
+  cardTopic: { fontSize: 11, color: C.accentText, fontWeight: '600', marginBottom: 6, letterSpacing: 0.3 },
+  cardTitle: { fontSize: 16, lineHeight: 24, color: C.text, fontWeight: '600' },
   gist: { fontSize: 14, lineHeight: 23, color: C.text2, marginTop: 8 },
   cardMeta: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 11 },
   date: { fontSize: 11, color: C.text3, marginTop: 10 },

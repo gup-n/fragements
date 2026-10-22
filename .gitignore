@@ -48,7 +48,9 @@ yarn-error.*
 
 # 构建与预览产物
 /preview
-/preview2
+/preview[0-9]*
+/dist[0-9]*
+/dist-v[0-9]*
 /.edge-tmp
 /.edge-tmp2
 /.edge3

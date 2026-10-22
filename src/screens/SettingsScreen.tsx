@@ -17,6 +17,7 @@ import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/chat';
 import { exportMarkdown } from '../export/markdown';
 import { APP_VERSION } from '../version';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
   fragments: Fragment[];
@@ -102,13 +103,7 @@ export function SettingsScreen({ fragments, onClose }: Props) {
 
   return (
     <View style={styles.root}>
-      <View style={styles.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={styles.back}>
-          <Ionicons name="chevron-back" size={20} color={C.text} />
-        </Pressable>
-        <Text style={styles.title}>设置</Text>
-        <View style={{ width: 24 }} />
-      </View>
+      <ScreenHeader title="设置" subtitle={'v' + APP_VERSION} onBack={onClose} />
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.groupTitle}>AI 接口</Text>
@@ -297,22 +292,14 @@ function Stat({ num, label }: { num: number; label: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 12,
-  },
-  back: { width: 24 },
-  title: { fontSize: 16, color: C.text, fontWeight: '500' },
 
   content: { paddingHorizontal: 16, paddingBottom: 40 },
   groupTitle: {
-    fontSize: 12,
-    color: C.text3,
-    marginTop: 18,
+    fontSize: 11.5,
+    color: C.text2,
+    fontWeight: '600',
+    letterSpacing: 0.6,
+    marginTop: 20,
     marginBottom: 8,
     marginLeft: 4,
   },
@@ -328,9 +315,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },
-  fieldLabel: { fontSize: 11, color: C.text3, marginBottom: 4 },
+  fieldLabel: { fontSize: 11, color: C.text3, marginBottom: 5 },
   input: {
-    fontSize: 14,
+    fontSize: 14.5,
     color: C.text,
     paddingVertical: 2,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
@@ -402,9 +389,15 @@ const styles = StyleSheet.create({
   fieldHint: { fontSize: 11, color: C.text3, marginTop: 7, lineHeight: 16 },
 
   statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
-  stat: { flex: 1, backgroundColor: C.page, borderRadius: R.btn, paddingVertical: 10, alignItems: 'center' },
-  statNum: { fontSize: 19, color: C.text, fontWeight: '500' },
-  statLabel: { fontSize: 11, color: C.text3, marginTop: 2 },
+  stat: {
+    flex: 1,
+    backgroundColor: C.hairSoft,
+    borderRadius: R.btn,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  statNum: { fontSize: 20, color: C.text, fontWeight: '600' },
+  statLabel: { fontSize: 11, color: C.text3, marginTop: 3 },
 
   aboutRow: {
     flexDirection: 'row',
@@ -413,6 +406,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },
-  aboutKey: { fontSize: 13, color: C.text2 },
-  aboutVal: { fontSize: 13, color: C.text3 },
+  aboutKey: { fontSize: 13.5, color: C.text2 },
+  aboutVal: { fontSize: 13.5, color: C.text3, fontVariant: ['tabular-nums'] },
 });

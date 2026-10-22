@@ -21,6 +21,7 @@ import type { KnowledgeCard } from '../types';
 import { repo } from '../db/repo';
 import { C, R } from '../theme';
 import { dayKey } from '../util/date';
+import { ScreenHeader } from './ScreenHeader';
 
 interface Props {
   card: KnowledgeCard;
@@ -67,13 +68,7 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
 
   return (
     <View style={s.root}>
-      <View style={s.header}>
-        <Pressable onPress={onClose} hitSlop={12} style={s.headBtn}>
-          <Ionicons name="close" size={22} color={C.text} />
-        </Pressable>
-        <Text style={s.headerTitle}>知识卡</Text>
-        <View style={s.headBtn} />
-      </View>
+      <ScreenHeader title="知识卡" backIcon="close" onBack={onClose} />
 
       <ScrollView contentContainerStyle={s.content}>
         <View style={s.topicRow}>
@@ -138,20 +133,10 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
 
 const s = StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 10,
-  },
-  headBtn: { width: 28, alignItems: 'flex-start' },
-  headerTitle: { fontSize: 14, color: C.text2 },
 
   content: { paddingHorizontal: 18, paddingBottom: 28 },
   topicRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  topic: { fontSize: 12, color: C.accentText, fontWeight: '500' },
+  topic: { fontSize: 12, color: C.accentText, fontWeight: '600' },
   title: {
     fontSize: 20,
     lineHeight: 29,

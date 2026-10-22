@@ -14,6 +14,7 @@ import type { Fragment, Note } from '../types';
 import { C, R } from '../theme';
 import { TagPill } from '../components/TagPill';
 import { NoteBody } from '../components/NoteBody';
+import { IconButton } from '../components/IconButton';
 import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 
@@ -250,25 +251,58 @@ export function TimelineScreen({
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.brand}>碎片</Text>
-          <Text style={styles.brandSub}>
+        <View style={styles.headerLeft}>
+          <Text style={styles.brand} numberOfLines={1}>
+            碎片
+          </Text>
+          <Text style={styles.brandSub} numberOfLines={1}>
             {todayCount > 0 ? `今天记了 ${todayCount} 条` : '今天还没记东西'}
           </Text>
         </View>
+
         <View style={styles.headerActions}>
-          <Pressable style={styles.iconBtn} onPress={onOpenKnowledge} hitSlop={10}>
-            <Ionicons name="albums-outline" size={19} color={C.text2} />
-          </Pressable>
-          <Pressable style={styles.iconBtn} onPress={onOpenReview} hitSlop={10}>
-            <Ionicons name="list-outline" size={19} color={C.text2} />
-          </Pressable>
-          <Pressable style={styles.iconBtn} onPress={onOpenSettings} hitSlop={10}>
-            <Ionicons name="settings-outline" size={19} color={C.text2} />
-          </Pressable>
-          <Pressable style={styles.organizeBtn} onPress={onOpenOrganize}>
-            <Ionicons name="sparkles-outline" size={12} color={C.accentText} />
-            <Text style={styles.organizeText}>
+          <IconButton
+            name="library-outline"
+            size={20}
+            tone="soft"
+            color={C.text2}
+            diameter={34}
+            onPress={onOpenKnowledge}
+            accessibilityLabel="知识库"
+          />
+          <IconButton
+            name="checkmark-circle-outline"
+            size={20}
+            tone="soft"
+            color={C.text2}
+            diameter={34}
+            onPress={onOpenReview}
+            accessibilityLabel="回顾待办与小结"
+          />
+          <IconButton
+            name="settings-outline"
+            size={20}
+            tone="soft"
+            color={C.text2}
+            diameter={34}
+            onPress={onOpenSettings}
+            accessibilityLabel="设置"
+          />
+          {/* 主入口：有未读时实心蓝底，没有的时候退成描边，一眼看出「现在该不该整理」 */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.organizeBtn,
+              inboxCount > 0 && styles.organizeBtnOn,
+              pressed && { opacity: 0.7 },
+            ]}
+            onPress={onOpenOrganize}
+          >
+            <Ionicons
+              name="sparkles"
+              size={14}
+              color={inboxCount > 0 ? '#FFFFFF' : C.accentText}
+            />
+            <Text style={[styles.organizeText, inboxCount > 0 && styles.organizeTextOn]}>
               整理{inboxCount > 0 ? ` ${inboxCount > 99 ? '99+' : inboxCount}` : ''}
             </Text>
           </Pressable>
@@ -278,6 +312,9 @@ export function TimelineScreen({
       <View style={styles.flex}>
         {sections.length === 0 ? (
           <View style={styles.empty}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="create-outline" size={26} color={C.text3} />
+            </View>
             <Text style={styles.emptyTitle}>还没有碎片</Text>
             <Text style={styles.emptyBody}>
               想到什么就在下面写一句，{'\n'}不用管分类，AI 会在你点「整理」时帮你归置。
@@ -322,7 +359,7 @@ export function TimelineScreen({
                     </View>
                     <View style={styles.noteCard}>
                       <View style={styles.noteHead}>
-                        <Ionicons name="sparkles" size={11} color={C.accent} />
+                        <Ionicons name="sparkles" size={13} color={C.accent} />
                         <Text style={styles.noteKind}>{NOTE_KIND[note.type] ?? '总结'}</Text>
                         <Text style={styles.notePeriod}>{periodLabel(note.period)}</Text>
                       </View>
@@ -398,7 +435,7 @@ export function TimelineScreen({
                       <View style={styles.metaRow}>
                         {done ? (
                           <View style={styles.doneBadge}>
-                            <Ionicons name="checkmark" size={9} color={C.tealText} />
+                            <Ionicons name="checkmark" size={11} color={C.tealText} />
                             <Text style={styles.doneBadgeText}>已完成</Text>
                           </View>
                         ) : null}
@@ -413,7 +450,7 @@ export function TimelineScreen({
                         {fragment.source !== 'app' ? (
                           <Ionicons
                             name={fragment.source === 'notif' ? 'notifications-outline' : 'share-outline'}
-                            size={11}
+                            size={12.5}
                             color={C.text3}
                           />
                         ) : null}
@@ -444,7 +481,7 @@ export function TimelineScreen({
               returnKeyType="default"
             />
             <Pressable onPress={() => setFullEdit(true)} hitSlop={8} style={styles.expandIcon}>
-              <Ionicons name="expand-outline" size={16} color={C.text3} />
+              <Ionicons name="expand-outline" size={17} color={C.text2} />
             </Pressable>
             <Pressable
               onPress={submit}
@@ -452,7 +489,7 @@ export function TimelineScreen({
               style={[styles.send, canSend && styles.sendActive]}
               hitSlop={6}
             >
-              <Ionicons name="arrow-up" size={17} color={canSend ? '#FFFFFF' : C.text3} />
+              <Ionicons name="arrow-up" size={18} color={canSend ? '#FFFFFF' : C.text3} />
             </Pressable>
           </View>
         </View>
@@ -535,24 +572,31 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 14,
+    gap: 8,
+    paddingLeft: 20,
+    paddingRight: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.hair,
   },
-  brand: { fontSize: 22, color: C.text, fontWeight: '500', letterSpacing: 0.5 },
-  brandSub: { fontSize: 12, color: C.text3, marginTop: 3 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconBtn: { padding: 2 },
+  headerLeft: { flexShrink: 1 },
+  brand: { fontSize: 22, color: C.text, fontWeight: '600', letterSpacing: 0.8 },
+  brandSub: { fontSize: 12, color: C.text3, marginTop: 2 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   organizeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    marginLeft: 6,
     backgroundColor: C.accentBg,
-    paddingHorizontal: 11,
+    paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: R.pill,
   },
-  organizeText: { fontSize: 13, color: C.accentText, fontWeight: '500' },
+  organizeBtnOn: { backgroundColor: C.accent },
+  organizeText: { fontSize: 13, color: C.accentText, fontWeight: '600' },
+  organizeTextOn: { color: '#FFFFFF' },
 
   listContent: { paddingBottom: 8 },
   sectionHeader: {
@@ -560,32 +604,38 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 8,
+    paddingTop: 16,
+    paddingBottom: 9,
     backgroundColor: C.page,
   },
-  sectionTitle: { fontSize: 13, color: C.text, fontWeight: '500' },
-  sectionSub: { fontSize: 11, color: C.text3 },
+  sectionTitle: { fontSize: 13.5, color: C.text, fontWeight: '600', letterSpacing: 0.3 },
+  sectionSub: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
 
   row: { flexDirection: 'row', paddingHorizontal: 20 },
   rowPressed: { backgroundColor: C.hairSoft },
-  time: { width: 42, fontSize: 12, color: C.text3, paddingTop: 3, fontVariant: ['tabular-nums'] },
+  time: {
+    width: 44,
+    fontSize: 11.5,
+    color: C.text3,
+    paddingTop: 3,
+    fontVariant: ['tabular-nums'],
+  },
   rail: { width: 16, alignItems: 'center' },
-  railLine: { position: 'absolute', top: 16, bottom: -6, width: 1, backgroundColor: C.hair },
+  railLine: { position: 'absolute', top: 17, bottom: -8, width: 1, backgroundColor: C.hair },
   dot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+    width: 7,
+    height: 7,
+    borderRadius: 4,
     backgroundColor: C.text3,
-    marginTop: 6,
+    marginTop: 7,
   },
   dotMuted: { backgroundColor: C.hair },
-  rowBody: { flex: 1, paddingBottom: 16, paddingLeft: 2 },
-  content: { fontSize: 15, lineHeight: 22, color: C.text },
+  rowBody: { flex: 1, paddingBottom: 18, paddingLeft: 2 },
+  content: { fontSize: 15, lineHeight: 23, color: C.text },
   contentMuted: { color: C.text3 },
-  expandBtn: { marginTop: 5, alignSelf: 'flex-start' },
-  expandText: { fontSize: 12, color: C.accent },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  expandBtn: { marginTop: 6, alignSelf: 'flex-start' },
+  expandText: { fontSize: 12.5, color: C.accent },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
   project: { fontSize: 11, color: C.text3, maxWidth: 120 },
   mergedTag: { fontSize: 11, color: C.text3 },
 
@@ -593,20 +643,20 @@ const styles = StyleSheet.create({
   doneBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
+    gap: 3,
     backgroundColor: C.tealBg,
     borderRadius: R.pill,
-    paddingLeft: 4,
-    paddingRight: 7,
+    paddingLeft: 5,
+    paddingRight: 8,
     paddingVertical: 2,
   },
-  doneBadgeText: { fontSize: 10, lineHeight: 14, color: C.tealText },
+  doneBadgeText: { fontSize: 10.5, lineHeight: 15, color: C.tealText },
 
   // 周期总结条目
   noteRow: { flexDirection: 'row', paddingHorizontal: 20 },
   noteDot: {
-    width: 8,
-    height: 8,
+    width: 9,
+    height: 9,
     borderRadius: 2,
     backgroundColor: C.accent,
     marginTop: 5,
@@ -618,22 +668,36 @@ const styles = StyleSheet.create({
     borderRadius: R.card,
     borderWidth: 0.5,
     borderColor: C.hair,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     marginBottom: 16,
     marginLeft: 2,
   },
-  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 7 },
-  noteKind: { fontSize: 11, color: C.accentText, fontWeight: '500' },
+  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  noteKind: { fontSize: 11.5, color: C.accentText, fontWeight: '600' },
   notePeriod: { flex: 1, fontSize: 11, color: C.text3 },
-  noteBody: { fontSize: 14, lineHeight: 22, color: C.text },
-  noteFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 8 },
-  noteToggle: { fontSize: 12, color: C.accent },
+  noteBody: { fontSize: 14.5, lineHeight: 23, color: C.text },
+  noteFoot: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
+  noteToggle: { fontSize: 12.5, color: C.accent },
   noteDeleteHit: { paddingVertical: 2 },
   noteDelete: { fontSize: 11, color: C.danger },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
-  emptyTitle: { fontSize: 15, color: C.text2, fontWeight: '500' },
+  emptyIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.hairSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 18,
+  },
+  emptyTitle: { fontSize: 15.5, color: C.text2, fontWeight: '500' },
   emptyBody: {
     fontSize: 13,
     color: C.text3,
@@ -646,7 +710,7 @@ const styles = StyleSheet.create({
 
   composerWrap: {
     paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingTop: 9,
     paddingBottom: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: C.hair,
@@ -655,12 +719,13 @@ const styles = StyleSheet.create({
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',
-    gap: 8,
+    gap: 6,
     backgroundColor: C.card,
-    borderRadius: R.card,
+    borderRadius: R.card + 2,
     borderWidth: 0.5,
     borderColor: C.hair,
-    paddingHorizontal: 14,
+    paddingLeft: 14,
+    paddingRight: 8,
     paddingVertical: 8,
   },
   input: {
@@ -674,15 +739,24 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
   send: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: C.hairSoft,
+  },
+  sendActive: { backgroundColor: C.accent },
+  expandIcon: {
     width: 30,
     height: 30,
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: C.hairSoft,
+    marginRight: 2,
+    marginBottom: 1,
   },
-  sendActive: { backgroundColor: C.accent },
-  expandIcon: { paddingBottom: 7, paddingHorizontal: 1 },
 
   fullHeader: {
     flexDirection: 'row',
