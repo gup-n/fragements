@@ -44,6 +44,16 @@ cd android && ./gradlew assembleRelease
 - **`knowledge` 的 `body` 字段永远由代码从 `source_ids` 拼接原文**，不采信模型输出。
 - **三类破坏性操作（归档卡 / 标完成待办 / 删待办）默认不勾选**，且用户取消的授权代码层面也不能绕过。
 
+## 流式与思考过程（v0.2.4）
+
+- **读流必须用 `import { fetch } from 'expo/fetch'`**。RN 自带的 fetch 没有 `response.body`。
+- **`TextDecoder` 必须 `{ stream: true }`**，否则跨分片的中文会解成乱码。
+- **`delta.reasoning_content`（思维链）只上屏，`delta.content`（JSON）才进解析**。两者绝不能拼进同一个缓冲区。
+- **超时是四段**（建连 90s / 首字 120s / 空闲 60s / 硬上限 6min），不要改回单一总时长。
+- **UI 更新要节流**（120ms），否则几百个 chunk 的 setState 会卡死。
+- **模型名**：只能用 `deepseek-flash` / `deepseek-v4-pro`。`deepseek-chat`、`deepseek-reasoner` **已于 2026-07-24 停用**，
+  调不通。别在示例或文档里再写这两个旧名字。
+
 ## Expo 会发破坏性变更，别信训练数据
 
 动 Expo / RN API 之前：

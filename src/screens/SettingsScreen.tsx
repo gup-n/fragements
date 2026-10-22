@@ -10,22 +10,37 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Fragment } from '../types';
+import type { Fragment, ReasoningEffort } from '../types';
 import { C, R } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/deepseek';
 import { exportMarkdown } from '../export/markdown';
+import { APP_VERSION } from '../version';
 
 interface Props {
   fragments: Fragment[];
   onClose: () => void;
 }
 
+const EFFORT_LABEL: Record<ReasoningEffort, string> = {
+  low: '轻',
+  high: '标准',
+  max: '深',
+};
+
+const EFFORT_HINT: Record<ReasoningEffort, string> = {
+  low: '想得快，适合碎片少、结构简单的时候',
+  high: '默认。绝大多数情况下够用',
+  max: '想得最细，慢一些、贵一些',
+};
+
 export function SettingsScreen({ fragments, onClose }: Props) {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [thinking, setThinking] = useState(true);
+  const [effort, setEffort] = useState<ReasoningEffort>('high');
   const [showKey, setShowKey] = useState(false);
   const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0 });
   const [knowledgeCount, setKnowledgeCount] = useState(0);
@@ -38,6 +53,8 @@ export function SettingsScreen({ fragments, onClose }: Props) {
       setBaseUrl(cfg.baseUrl);
       setModel(cfg.model);
       setApiKey(cfg.apiKey);
+      setThinking(cfg.thinking);
+      setEffort(cfg.effort);
       setStats(await repo.stats());
       setKnowledgeCount((await repo.listKnowledgeCards()).length);
     })();
@@ -47,7 +64,7 @@ export function SettingsScreen({ fragments, onClose }: Props) {
     setBusy('saving');
     setMsg(null);
     try {
-      await saveAiConfig({ baseUrl, model, apiKey });
+      await saveAiConfig({ baseUrl, model, apiKey, thinking, effort });
       setMsg({ kind: 'ok', text: '已保存' });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message });
@@ -60,7 +77,7 @@ export function SettingsScreen({ fragments, onClose }: Props) {
     setBusy('testing');
     setMsg(null);
     try {
-      const text = await testConnection({ baseUrl, model, apiKey });
+      const text = await testConnection({ baseUrl, model, apiKey, thinking, effort });
       setMsg({ kind: 'ok', text });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as AiError).message || '连接失败' });
@@ -113,7 +130,7 @@ export function SettingsScreen({ fragments, onClose }: Props) {
               onChangeText={setModel}
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder="deepseek-chat"
+              placeholder="deepseek-flash"
               placeholderTextColor={C.text3}
               style={styles.input}
             />
@@ -167,6 +184,50 @@ export function SettingsScreen({ fragments, onClose }: Props) {
           </Text>
         </View>
 
+        <Text style={styles.groupTitle}>整理行为</Text>
+        <View style={styles.card}>
+          <Field label="思考过程" last={!thinking}>
+            <View style={styles.toggleRow}>
+              <Pressable
+                style={[styles.toggle, thinking && styles.toggleOn]}
+                onPress={() => setThinking((v) => !v)}
+                hitSlop={6}
+              >
+                <View style={styles.toggleKnob} />
+              </Pressable>
+              <Text style={styles.toggleHint}>
+                {thinking
+                  ? '模型先推理再给结果，整理时能看到它在想什么'
+                  : '直接出结果，更快更省，但看不到过程'}
+              </Text>
+            </View>
+          </Field>
+
+          {thinking && (
+            <Field label="思考强度" last>
+              <View style={styles.chipRow}>
+                {(['low', 'high', 'max'] as const).map((e) => (
+                  <Pressable
+                    key={e}
+                    style={[styles.chip, effort === e && styles.chipOn]}
+                    onPress={() => setEffort(e)}
+                  >
+                    <Text style={[styles.chipText, effort === e && styles.chipTextOn]}>
+                      {EFFORT_LABEL[e]}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Text style={styles.fieldHint}>{EFFORT_HINT[effort]}</Text>
+            </Field>
+          )}
+
+          <Text style={styles.note}>
+            只有 DeepSeek 的 V4 系列（deepseek-flash / deepseek-v4-pro）认这两个设置。
+            换成别的兼容服务时不会发这些参数，免得对方直接报错。
+          </Text>
+        </View>
+
         <Text style={styles.groupTitle}>数据</Text>
         <View style={styles.card}>
           <View style={styles.statRow}>
@@ -192,7 +253,7 @@ export function SettingsScreen({ fragments, onClose }: Props) {
         <View style={styles.card}>
           <View style={styles.aboutRow}>
             <Text style={styles.aboutKey}>版本</Text>
-            <Text style={styles.aboutVal}>0.1.0</Text>
+            <Text style={styles.aboutVal}>{APP_VERSION}</Text>
           </View>
           <View style={styles.aboutRow}>
             <Text style={styles.aboutKey}>包名</Text>
@@ -312,6 +373,33 @@ const styles = StyleSheet.create({
   msgOk: { color: C.tealText },
   msgErr: { color: C.danger },
   note: { fontSize: 11, color: C.text3, lineHeight: 18, marginTop: 12 },
+
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  toggle: {
+    width: 38,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: C.hair,
+    padding: 2,
+    flexDirection: 'row',
+    justifyContent: 'flex-start',
+  },
+  toggleOn: { backgroundColor: C.accent, justifyContent: 'flex-end' },
+  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
+  toggleHint: { flex: 1, fontSize: 11, color: C.text3, lineHeight: 16 },
+
+  chipRow: { flexDirection: 'row', gap: 7 },
+  chip: {
+    borderRadius: R.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 5,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+  },
+  chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
+  chipText: { fontSize: 12, color: C.text2, lineHeight: 17 },
+  chipTextOn: { color: C.accentText },
+  fieldHint: { fontSize: 11, color: C.text3, marginTop: 7, lineHeight: 16 },
 
   statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
   stat: { flex: 1, backgroundColor: C.page, borderRadius: R.btn, paddingVertical: 10, alignItems: 'center' },

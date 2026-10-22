@@ -13,7 +13,10 @@ import type {
   TodoDoneSuggestion,
   TodoSuggestion,
 } from '../types';
+import { fetch as expoFetch } from 'expo/fetch';
+import { DEFAULT_AI_CONFIG } from '../types';
 import { SYSTEM_PROMPT, buildRefineContent, buildUserContent } from './prompt';
+import { NoStreamError, readChatStream } from './stream';
 
 export type AiErrorCode = 'nokey' | 'network' | 'auth' | 'quota' | 'rate' | 'server' | 'format';
 
@@ -26,7 +29,20 @@ export class AiError extends Error {
   }
 }
 
-const TIMEOUT_MS = 90_000;
+/**
+ * 超时分四段，**不能再用一个总时长**。
+ * 思考模式下模型先吐思维链，整轮时间远超原来的 90 秒，用总时长会把正常请求掐死。
+ */
+const CONNECT_TIMEOUT_MS = 90_000;
+/** 响应头已经回来、但还没吐第一个 token。思考阶段可能停一会儿，给足 */
+const FIRST_TOKEN_TIMEOUT_MS = 120_000;
+/** 数据流动中，两块之间允许的最长静默 */
+const IDLE_TIMEOUT_MS = 60_000;
+/** 兜底硬上限 */
+const HARD_LIMIT_MS = 6 * 60_000;
+/** 九类输出 + 追问可能很长，给足空间；思考链不计入这个额度 */
+const MAX_TOKENS = 8000;
+
 
 function endpoint(baseUrl: string) {
   return `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
@@ -249,6 +265,217 @@ function mapHttpError(status: number, detail: string): AiError {
   return new AiError('server', `请求失败 ${status}${detail ? `：${detail}` : ''}`);
 }
 
+async function errorDetail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    return body?.error?.message ?? '';
+  } catch {
+    return '';
+  }
+}
+
+type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+interface ChatOutcome {
+  /** 拼完的正文，随后交给 parseJsonLoose */
+  content: string;
+  /** 思维链全文，只用于展示 */
+  reasoning: string;
+}
+
+/**
+ * 多段超时守卫：每个阶段单独计时，谁先到谁 abort。
+ * 原来只有一个 90 秒总时长，开了思考模式之后正常请求都可能超过它。
+ */
+class TimeoutGuard {
+  private controller = new AbortController();
+  private timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private fired: string | null = null;
+
+  get signal() {
+    return this.controller.signal;
+  }
+
+  arm(key: string, ms: number) {
+    this.disarm(key);
+    this.timers.set(
+      key,
+      setTimeout(() => {
+        this.fired = key;
+        this.controller.abort();
+      }, ms),
+    );
+  }
+
+  disarm(key: string) {
+    const timer = this.timers.get(key);
+    if (timer) {
+      clearTimeout(timer);
+      this.timers.delete(key);
+    }
+  }
+
+  dispose() {
+    for (const timer of this.timers.values()) clearTimeout(timer);
+    this.timers.clear();
+  }
+
+  /** 把中止原因翻成给用户看的话 */
+  message(): string {
+    switch (this.fired) {
+      case 'connect':
+        return '连接超时（90 秒），检查网络或 Base URL';
+      case 'first':
+        return '模型两分钟还没开始输出，碎片多的话可以分两批';
+      case 'idle':
+        return '输出中途停住了（60 秒没有新内容），再试一次';
+      case 'hard':
+        return '这一轮超过 6 分钟还没结束，碎片多的话可以分两批';
+      default:
+        return '请求被中断了';
+    }
+  }
+}
+
+function toNetworkError(e: any, guard?: TimeoutGuard): AiError {
+  if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
+    return new AiError('network', guard?.message() ?? '请求被中断了');
+  }
+  return new AiError('network', '连不上 DeepSeek，检查手机网络或 Base URL 是否填对');
+}
+
+/**
+ * 只有 DeepSeek 的 V4 系列认 `thinking` 和 `reasoning_effort`。
+ * 用户把 Base URL 换成第三方 OpenAI 兼容服务时，多传这两个字段可能直接 400，
+ * 所以按模型名判断：认不出来就一个都不传。
+ *
+ * `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 停用，
+ * 配置里若还留着会在 loadAiConfig 里被映射成 `deepseek-flash`。
+ */
+function isDeepSeekV4(model: string) {
+  const name = model.toLowerCase();
+  return name.startsWith('deepseek-flash') || name.startsWith('deepseek-v4');
+}
+
+function buildBody(config: AiConfig, messages: ChatMessage[], stream: boolean) {
+  const model = config.model || DEFAULT_AI_CONFIG.model;
+  const native = isDeepSeekV4(model);
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+    response_format: { type: 'json_object' },
+    max_tokens: MAX_TOKENS,
+    stream,
+  };
+
+  if (native) {
+    body.thinking = { type: config.thinking ? 'enabled' : 'disabled' };
+    if (config.thinking) body.reasoning_effort = config.effort;
+  }
+
+  // 思考模式下 temperature 不生效（传了不报错，只是被忽略）。
+  // 只在「本来就没有思考」的时候设，免得看代码的人以为随机性被锁住了。
+  if (!native || !config.thinking) body.temperature = 0.2;
+
+  return body;
+}
+
+async function postChatStream(
+  config: AiConfig,
+  body: Record<string, unknown>,
+  onProgress?: (patch: OrganizeProgress) => void,
+): Promise<ChatOutcome> {
+  const guard = new TimeoutGuard();
+  guard.arm('hard', HARD_LIMIT_MS);
+  guard.arm('connect', CONNECT_TIMEOUT_MS);
+
+  try {
+    let res: Response;
+    try {
+      res = await expoFetch(endpoint(config.baseUrl), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${config.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: guard.signal,
+      });
+    } catch (e) {
+      throw toNetworkError(e, guard);
+    }
+
+    guard.disarm('connect');
+    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
+
+    // 响应头到手之后，只要还在吐字就不算超时
+    guard.arm('first', FIRST_TOKEN_TIMEOUT_MS);
+    let started = false;
+    const touch = () => {
+      if (!started) {
+        started = true;
+        guard.disarm('first');
+      }
+      guard.arm('idle', IDLE_TIMEOUT_MS);
+    };
+
+    return await readChatStream(res, {
+      onReasoning: (text) => {
+        touch();
+        onProgress?.({ reasoning: text });
+      },
+      onContent: (text) => {
+        touch();
+        onProgress?.({ content: text });
+      },
+    });
+  } catch (e) {
+    if (e instanceof AiError || e instanceof NoStreamError) throw e;
+    throw toNetworkError(e, guard);
+  } finally {
+    guard.dispose();
+  }
+}
+
+/** 平台不支持流式时的回退：一次性拿完整响应，代价是过程中看不到任何东西 */
+async function postChatOnce(config: AiConfig, body: Record<string, unknown>): Promise<ChatOutcome> {
+  const guard = new TimeoutGuard();
+  guard.arm('hard', HARD_LIMIT_MS);
+  guard.arm('connect', CONNECT_TIMEOUT_MS);
+
+  try {
+    const res = await expoFetch(endpoint(config.baseUrl), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({ ...body, stream: false }),
+      signal: guard.signal,
+    });
+    guard.disarm('connect');
+    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
+
+    const payload = await res.json();
+    const message = payload?.choices?.[0]?.message;
+    return {
+      content: typeof message?.content === 'string' ? message.content : '',
+      reasoning: typeof message?.reasoning_content === 'string' ? message.reasoning_content : '',
+    };
+  } catch (e) {
+    if (e instanceof AiError) throw e;
+    throw toNetworkError(e, guard);
+  } finally {
+    guard.dispose();
+  }
+}
+
+/** 流式过程中的增量回调，传的都是**累积全文**，UI 直接覆盖显示 */
+export interface OrganizeProgress {
+  reasoning?: string;
+  content?: string;
+}
+
 export interface OrganizeOptions {
   fragments: Fragment[];
   config: AiConfig;
@@ -264,12 +491,16 @@ export interface OrganizeOptions {
   instruction?: string;
   /** organize = 整理未读；refactor = 把已整理过的重新过一遍并和旧结果对照 */
   mode?: 'organize' | 'refactor';
+  /** 流式进度。只用于界面展示，不参与任何解析 */
+  onProgress?: (patch: OrganizeProgress) => void;
 }
 
 export interface OrganizeOutcome {
   result: OrganizeResult;
-  /** 模型原始输出，留着给下一轮追问回传 */
+  /** 模型原始输出（正文），留着给下一轮追问回传 */
   raw: string;
+  /** 思维链，仅用于展示。模型没开思考时为空串 */
+  reasoning: string;
 }
 
 export async function organize(options: OrganizeOptions): Promise<OrganizeOutcome> {
@@ -282,95 +513,58 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeOutcom
     previousRaw,
     instruction,
     mode = 'organize',
+    onProgress,
   } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!fragments.length) throw new AiError('format', '没有待整理的碎片');
 
-  const messages: { role: 'system' | 'user' | 'assistant'; content: string }[] = [
+  const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
     { role: 'user', content: buildUserContent({ fragments, topics, cards, todos, mode }) },
   ];
   if (previousRaw) messages.push({ role: 'assistant', content: previousRaw });
   if (instruction) messages.push({ role: 'user', content: buildRefineContent(instruction) });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  let res: any;
+  const body = buildBody(config, messages, true);
 
+  let outcome: ChatOutcome;
   try {
-    res = await fetch(endpoint(config.baseUrl), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model || 'deepseek-chat',
-        messages,
-        response_format: { type: 'json_object' },
-        temperature: 0.2,
-        max_tokens: 4000,
-        stream: false,
-      }),
-      signal: controller.signal,
-    });
-  } catch (e: any) {
-    if (e?.name === 'AbortError') throw new AiError('network', '请求超时（90 秒），检查网络或换个更快的网络');
-    throw new AiError('network', '连不上 DeepSeek，检查手机网络或 BaseURL 是否填对');
-  } finally {
-    clearTimeout(timer);
+    outcome = await postChatStream(config, body, onProgress);
+  } catch (e) {
+    // 只有「压根拿不到流」才回退。已经开始收数据再断的不能重试 —— 重试等于重复扣费
+    if (!(e instanceof NoStreamError)) throw e;
+    outcome = await postChatOnce(config, body);
   }
 
-  if (!res.ok) {
-    let detail = '';
-    try {
-      const body = await res.json();
-      detail = body?.error?.message ?? '';
-    } catch {
-      /* 忽略 */
-    }
-    throw mapHttpError(res.status, detail);
-  }
+  if (!outcome.content.trim()) throw new AiError('format', '模型没有返回内容');
 
-  const payload = await res.json();
-  const content: string = payload?.choices?.[0]?.message?.content ?? '';
-  if (!content) throw new AiError('format', '模型没有返回内容');
-
-  const result = normalizeResult(parseJsonLoose(content), fragments, {
+  const result = normalizeResult(parseJsonLoose(outcome.content), fragments, {
     todoIds: todos.filter((t) => !t.done).map((t) => t.id),
     cardIds: cards.map((c) => c.id),
   });
-  return { result, raw: content };
+  return { result, raw: outcome.content, reasoning: outcome.reasoning };
 }
 
 /** 设置页的连通性测试：拉模型列表，比真实对话便宜得多 */
 export async function testConnection(config: AiConfig): Promise<string> {
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  const guard = new TimeoutGuard();
+  guard.arm('connect', 20_000);
   try {
-    const res = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/models`, {
+    const res = await expoFetch(`${config.baseUrl.replace(/\/+$/, '')}/models`, {
       headers: { Authorization: `Bearer ${config.apiKey}` },
-      signal: controller.signal,
+      signal: guard.signal,
     });
-    if (!res.ok) {
-      let detail = '';
-      try {
-        const body = await res.json();
-        detail = body?.error?.message ?? '';
-      } catch {
-        /* 忽略 */
-      }
-      throw mapHttpError(res.status, detail);
-    }
+    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
     const body = await res.json();
     const models: string[] = Array.isArray(body?.data) ? body.data.map((m: any) => m?.id).filter(Boolean) : [];
     return models.length ? `连接正常，可用模型：${models.slice(0, 4).join('、')}` : '连接正常';
   } catch (e: any) {
     if (e instanceof AiError) throw e;
-    if (e?.name === 'AbortError') throw new AiError('network', '连接超时，检查 BaseURL 和网络');
-    throw new AiError('network', '连不上，检查 BaseURL 和网络');
+    if (e?.name === 'AbortError') throw new AiError('network', '连接超时，检查 Base URL 和网络');
+    throw new AiError('network', '连不上，检查 Base URL 和网络');
   } finally {
-    clearTimeout(timer);
+    guard.dispose();
   }
 }
+

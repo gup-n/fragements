@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -10,11 +10,13 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import type { ScrollViewInstance } from 'react-native';
 import type { AiConfig, Fragment, KnowledgeCard, OrganizeResult, Todo } from '../types';
 import { C, R, tagColor } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError, organize } from '../ai/deepseek';
+import type { OrganizeProgress } from '../ai/deepseek';
 import { todayISO } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 
@@ -92,6 +94,25 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   /** 重构 idle 面板要按主题挑范围，得先知道有哪些主题 */
   const [idleTopics, setIdleTopics] = useState<{ topic: string; count: number }[]>([]);
 
+  /** 模型的思维链（累积全文）。只用于展示，永远不参与解析 */
+  const [reasoning, setReasoning] = useState('');
+  /** 正文已经接收到多少字，给用户一个「确实在动」的信号 */
+  const [received, setReceived] = useState(0);
+  /** 这一轮已经跑了多少秒 */
+  const [elapsed, setElapsed] = useState(0);
+  /** 结果页里思考过程是否展开 */
+  const [showReasoning, setShowReasoning] = useState(false);
+  /** 本轮模型是否开着思考模式，用来区分「还没开始想」和「模型不支持」 */
+  const [thinkingOn, setThinkingOn] = useState(false);
+
+  const startedAtRef = useRef(0);
+  /**
+   * 流式回调的频率很高（一个思考过程可能几百个 chunk），
+   * 每来一块就 setState 会把 JS 线程占满、界面卡住。
+   * 这里用 ref 攒着，最多 120ms 上屏一次；结束时再用最终值兜一次底。
+   */
+  const streamRef = useRef({ lastFlush: 0 });
+
   const keyboardHeight = useKeyboardHeight();
 
   const inbox = useMemo(() => fragments.filter((f) => f.status === 'inbox'), [fragments]);
@@ -156,6 +177,37 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
 
   const isOn = (key: string) => !deselected.has(key);
   const acceptedCount = allKeys.filter(isOn).length;
+
+  // 运行中每 0.5 秒刷新一次计时，让人知道没卡住
+  useEffect(() => {
+    if (phase !== 'running' && !refining) return;
+    const timer = setInterval(() => {
+      setElapsed(Math.round((Date.now() - startedAtRef.current) / 1000));
+    }, 500);
+    return () => clearInterval(timer);
+  }, [phase, refining]);
+
+  /**
+   * 流式回调。传进来的都是累积全文，所以丢掉几次中间态不会导致内容缺失 ——
+   * 但最终值一定要在请求结束后再兜一次底，否则最后 120ms 里的内容会看不见。
+   */
+  function handleProgress(patch: OrganizeProgress) {
+    const now = Date.now();
+    if (now - streamRef.current.lastFlush < 120) return;
+    streamRef.current.lastFlush = now;
+    if (patch.reasoning !== undefined) setReasoning(patch.reasoning);
+    if (patch.content !== undefined) setReceived(patch.content.length);
+  }
+
+  /** 开始新一轮之前把流式相关的状态清干净 */
+  function beginRun() {
+    setReasoning('');
+    setReceived(0);
+    setElapsed(0);
+    setShowReasoning(false);
+    streamRef.current.lastFlush = 0;
+    startedAtRef.current = Date.now();
+  }
 
   function toggle(key: string) {
     setDeselected((prev) => {
@@ -243,6 +295,7 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
     setPhase('running');
     setErrorMsg('');
     setRefineError('');
+    beginRun();
     try {
       const cfg = await loadAiConfig();
       if (!cfg.apiKey) {
@@ -250,7 +303,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         setErrorMsg('还没配置 API Key，先去设置页填一个');
         return;
       }
-      const startedAt = Date.now();
+      setThinkingOn(cfg.thinking);
+      const startedAt = startedAtRef.current;
       const topicList = (await repo.listKnowledgeTopics()).map((t) => t.topic);
       const cardList = await repo.listKnowledgeCards();
       const todoList = await repo.listTodos();
@@ -262,6 +316,7 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         cards: cardList,
         todos: todoList,
         mode,
+        onProgress: handleProgress,
       });
       const cleaned = pruneRefactorResult(outcome.result, todoList);
 
@@ -278,6 +333,9 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
       setCards(cardList);
       setTodos(todoList);
       setRaw(outcome.raw);
+      // 以最终值为准，补上节流可能漏掉的尾巴
+      setReasoning(outcome.reasoning);
+      setReceived(outcome.raw.length);
       setResult(cleaned);
       setDeselected(withFreshOff(new Set(), cleaned, null));
       setRound(1);
@@ -296,6 +354,8 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
     setRefining(true);
     setRefineError('');
     setErrorMsg('');
+    beginRun();
+    setThinkingOn(config.thinking);
     try {
       const outcome = await organize({
         fragments: batch,
@@ -306,10 +366,13 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         previousRaw: raw,
         instruction,
         mode,
+        onProgress: handleProgress,
       });
       const cleaned = pruneRefactorResult(outcome.result, todos);
       setRaw(outcome.raw);
       setResult(cleaned);
+      setReasoning(outcome.reasoning);
+      setReceived(outcome.raw.length);
       setDeselected((prev) => withFreshOff(prev, cleaned, result));
       setRefineText('');
       setRound((r) => r + 1);
@@ -573,13 +636,13 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
         )}
 
         {phase === 'running' && (
-          <View style={styles.centerBox}>
-            <ActivityIndicator color={C.accent} />
-            <Text style={styles.centerText}>
-              {refining ? `正在按第 ${round} 版的要求重写…` : `${word} ${batch.length} 条碎片…`}
-            </Text>
-            <Text style={styles.centerSub}>通常需要 5–15 秒</Text>
-          </View>
+          <ReasoningPanel
+            title={`${word} ${batch.length} 条碎片…`}
+            text={reasoning}
+            received={received}
+            elapsed={elapsed}
+            thinking={thinkingOn}
+          />
         )}
 
         {phase === 'applying' && (
@@ -614,10 +677,27 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
 
         {phase === 'result' && result && (
           <View>
-            <Text style={styles.resultHint}>
-              逐条确认。关掉的项不会写入。
-              {round > 1 ? '追问后没改动的条目，你之前的勾选状态会保留。' : ''}
-            </Text>
+            {refining ? (
+              <ReasoningPanel
+                title={`按第 ${round} 版的要求重写…`}
+                text={reasoning}
+                received={received}
+                elapsed={elapsed}
+                thinking={thinkingOn}
+              />
+            ) : (
+              <>
+                <Text style={styles.resultHint}>
+                  逐条确认。关掉的项不会写入。
+                  {round > 1 ? '追问后没改动的条目，你之前的勾选状态会保留。' : ''}
+                </Text>
+                <ReasoningTrace
+                  text={reasoning}
+                  expanded={showReasoning}
+                  onToggle={() => setShowReasoning((v) => !v)}
+                />
+              </>
+            )}
 
             {result.todos.length > 0 && (
               <Section title="提炼待办" count={result.todos.length}>
@@ -921,6 +1001,95 @@ export function OrganizeScreen({ fragments, onClose, onApplied, onOpenSettings }
   );
 }
 
+/** 字数：过千就折成 1.2k，长思考过程动辄几千字，原样数字太占地方 */
+function fmtCount(n: number) {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/**
+ * 运行中的思考面板。思维链边生成边往下滚，底部给两个字数和秒数 ——
+ * 主要是让人确认「它在动」，而不是卡死了。
+ */
+function ReasoningPanel({
+  title,
+  text,
+  received,
+  elapsed,
+  thinking,
+}: {
+  title: string;
+  text: string;
+  received: number;
+  elapsed: number;
+  thinking: boolean;
+}) {
+  const scrollRef = useRef<ScrollViewInstance>(null);
+  return (
+    <View style={styles.liveCard}>
+      <View style={styles.liveHead}>
+        <ActivityIndicator size="small" color={C.accent} />
+        <Text style={styles.liveTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.liveClock}>{elapsed}s</Text>
+      </View>
+
+      {text ? (
+        <ScrollView
+          ref={scrollRef}
+          style={styles.liveScroll}
+          contentContainerStyle={styles.liveScrollBody}
+          nestedScrollEnabled
+          showsVerticalScrollIndicator={false}
+          // 只有最长的流式面板需要跟随，内容一长就贴底
+          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+        >
+          <Text style={styles.liveText}>{text}</Text>
+        </ScrollView>
+      ) : (
+        <Text style={styles.liveEmpty}>
+          {thinking ? '模型正在通读这批碎片，还没开始落笔…' : '当前没开思考模式，只能等结果出来'}
+        </Text>
+      )}
+
+      <View style={styles.liveFoot}>
+        <Text style={styles.liveMeta}>{text ? `思考 ${fmtCount(text.length)} 字` : '等待首字'}</Text>
+        <Text style={styles.liveMeta}>{received ? `结果 ${fmtCount(received)} 字` : '结果未开始'}</Text>
+      </View>
+    </View>
+  );
+}
+
+/**
+ * 结果页里的思考过程折叠区。
+ * 默认收起 —— 确认流程才是主任务，思考过程是「想追问时再翻」的参考。
+ */
+function ReasoningTrace({
+  text,
+  expanded,
+  onToggle,
+}: {
+  text: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  if (!text) return null;
+  return (
+    <View style={styles.traceCard}>
+      <Pressable style={styles.traceHead} onPress={onToggle} hitSlop={4}>
+        <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={13} color={C.text3} />
+        <Text style={styles.traceTitle}>模型思考过程</Text>
+        <Text style={styles.traceMeta}>{fmtCount(text.length)} 字</Text>
+      </Pressable>
+      {expanded && (
+        <ScrollView style={styles.traceScroll} contentContainerStyle={styles.traceScrollBody} nestedScrollEnabled>
+          <Text style={styles.traceText}>{text}</Text>
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
 function Section({
   title,
   count,
@@ -1084,6 +1253,52 @@ const styles = StyleSheet.create({
   errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
 
   resultHint: { fontSize: 12, color: C.text3, marginBottom: 14, marginTop: 4, lineHeight: 18 },
+
+  // 运行中的思考面板
+  liveCard: {
+    backgroundColor: C.card,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+    padding: 14,
+    marginTop: 4,
+  },
+  liveHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  liveTitle: { flex: 1, fontSize: 13, color: C.text, fontWeight: '500' },
+  liveClock: { fontSize: 12, color: C.text3 },
+  liveScroll: { maxHeight: 300, marginTop: 12 },
+  liveScrollBody: { paddingBottom: 2 },
+  liveText: { fontSize: 12, lineHeight: 20, color: C.text2 },
+  liveEmpty: { fontSize: 12, color: C.text3, lineHeight: 20, marginTop: 12 },
+  liveFoot: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.hair,
+  },
+  liveMeta: { fontSize: 11, color: C.text3 },
+
+  // 结果页的思考过程折叠区
+  traceCard: {
+    backgroundColor: C.hairSoft,
+    borderRadius: R.card,
+    marginBottom: 16,
+    overflow: 'hidden',
+  },
+  traceHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+  },
+  traceTitle: { flex: 1, fontSize: 12, color: C.text2 },
+  traceMeta: { fontSize: 11, color: C.text3 },
+  traceScroll: { maxHeight: 260 },
+  traceScrollBody: { paddingHorizontal: 12, paddingBottom: 12 },
+  traceText: { fontSize: 12, lineHeight: 20, color: C.text2 },
 
   section: { marginBottom: 20 },
   sectionHead: {

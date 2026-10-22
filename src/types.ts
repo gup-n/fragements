@@ -142,13 +142,39 @@ export interface MergeSuggestion {
   reason: string | null;
 }
 
+/**
+ * 思考强度。DeepSeek 会把请求值映射到实际强度：
+ * low→low、high→high、max→max，中间档（minimal/medium/xhigh）向上取。
+ */
+export type ReasoningEffort = 'low' | 'high' | 'max';
+
 export interface AiConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
+  /** 开启思考模式：模型先输出思维链再给答案。关掉更快更便宜，但看不到过程、质量略降 */
+  thinking: boolean;
+  /** 思考强度，仅在 thinking 为 true 时发送 */
+  effort: ReasoningEffort;
 }
 
+/**
+ * 默认模型是 `deepseek-flash`（DeepSeek-V4.1-Flash）。
+ *
+ * 曾经的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 15:59 UTC 永久停用，
+ * 调用直接报错、没有软跳转。两者当时都对应 V4-Flash 的非思考 / 思考模式，
+ * 所以迁到 `deepseek-flash` 价格不变。想要更强能力可手动换成 `deepseek-v4-pro`（约 3.1 倍价）。
+ */
 export const DEFAULT_AI_CONFIG = {
   baseUrl: 'https://api.deepseek.com/v1',
-  model: 'deepseek-chat',
+  model: 'deepseek-flash',
+  thinking: true,
+  effort: 'high' as ReasoningEffort,
 } as const;
+
+/** 已停用的模型名 → 新名字。用于把老配置自动迁移过来，避免用户升级后仍然调不通 */
+export const RETIRED_MODELS: Record<string, string> = {
+  'deepseek-chat': 'deepseek-flash',
+  'deepseek-reasoner': 'deepseek-flash',
+};
+

@@ -51,7 +51,7 @@
 | 存储 | expo-sqlite（本地 SQLite） | 结构化查询、索引、事务；导出方便 |
 | 密钥 | expo-secure-store（Android Keystore 加密） | API Key 不落明文 |
 | 文件导出 | expo-file-system + expo-sharing | 生成 md 后走系统分享，可直接存 NAS |
-| 导航 | 自实现轻量页面栈（3 个页面） | 不引入 react-navigation，减少依赖与配置成本 |
+| 导航 | 自实现轻量页面栈（5 个页面：时间轴 / 整理 / 知识库 / 回顾 / 设置） | 不引入 react-navigation，减少依赖与配置成本 |
 | Web | react-native-web + localStorage 驱动 | 便于桌面浏览器预览与调试，不作为交付目标 |
 
 **包名**：`com.local.fragments`（固定）
@@ -65,7 +65,7 @@
 - 长文本承载：输入框自动增高，可一键转全屏编辑；时间轴内超 3 行折叠，点开看全文
 - 时间轴流主界面（按日分组、时间戳、整行文本）
 - 碎片编辑 / 删除
-- AI 整理：分类打标、汇总成日报、提炼待办、关联去重、**沉淀知识卡**（**一次调用产出五类**）
+- AI 整理：分类打标、汇总成日报、提炼待办、关联去重、**沉淀知识卡**（一次调用产出九类，见第 6 节；首版为五类，后四类是 v0.2.2–v0.2.3 陆续加的）
 - 整理结果的逐条接受 / 忽略
 - **知识库**：按主题聚合，卡片展示 AI 要点，可展开原文，可移出
 - 通知栏常驻入口
@@ -152,8 +152,16 @@ CREATE TABLE settings (
 **服务商**：DeepSeek
 **协议**：OpenAI 兼容 `POST {baseUrl}/chat/completions`
 **默认 BaseURL**：`https://api.deepseek.com/v1`
-**默认模型**：`deepseek-chat`
+**默认模型**：`deepseek-flash`（DeepSeek-V4.1-Flash）
 **结构化输出**：`response_format: { type: "json_object" }`
+**思考模式**：默认开启（`thinking: { type: "enabled" }` + `reasoning_effort: "high"`）
+
+> **模型名变更（v0.2.4，必看）**：`deepseek-chat` 与 `deepseek-reasoner` 已于 **2026-07-24 15:59 UTC 永久停用**，
+> 调用直接报错，没有宽限期也没有软跳转。旧的两个别名本来都对应 V4-Flash 的非思考 / 思考模式，
+> 所以迁移到 `deepseek-flash` 是**价格不变**的。
+> 当前可选：`deepseek-flash`（便宜，思考/非思考都支持）、`deepseek-v4-pro`（约 3.1 倍价，能力更强）。
+> `deepseek-v4-flash` 作为旧名仍被接受，等价于 `deepseek-flash`。
+>
 
 ### 请求
 
@@ -228,6 +236,37 @@ System prompt 约定角色与输出格式；User 消息传紧凑的碎片列表�
 
 后四类（`todo_done` / `card_update` / `archive_cards` / `drop_todos`）是 v0.2.2–0.2.3 陆续加的，
 共同点是把「旧数据」也纳入一次整理：以前只看新碎片，现在能补老卡、标老待办、清旧卡。
+
+### 流式输出与思考过程（v0.2.4）
+
+**为什么改流式**：原来是 `stream: false`，整理一次只显示一个 spinner 加一句「通常需要 5–15 秒」。
+开启思考模式后这个时间会明显变长，用户完全看不到进展，既不知道是不是卡住了，也无从判断 AI 为什么这么归类。
+改成流式之后，思维链可以边生成边显示，「看到模型的思考过程」这个需求就落在这里。
+
+**传输格式**：SSE。每行 `data: <json>`，以 `data: [DONE]` 结束。两种 delta：
+
+| 字段 | 内容 | 用途 |
+|---|---|---|
+| `delta.reasoning_content` | 思维链，模型在给出答案前的推理 | **只显示**，不参与任何解析 |
+| `delta.content` | 最终答案，即第 6 节的九类 JSON | 拼完再 `parseJsonLoose` + `normalizeResult` |
+
+**四条硬规矩**：
+
+1. **reasoning 绝不参与 JSON 解析**。它是自然语言推理，混进 `content` 会直接毁掉解析。
+   两个缓冲区必须分开累积。
+2. **`reasoning_content` 不回传给下一轮**。官方文档明确：请求不带 `tools` 时它会被忽略、也不拼进上下文。
+   本项目不用 tool calls，所以多轮追问只回传 `content`（也就是现有的 `raw`）。
+3. **UI 更新必须节流**。一个思考过程能吐几百个 chunk，每来一块就 `setState` 会让 JS 线程卡死。
+   `OrganizeScreen` 里用 ref 累积 + 120ms 节流上屏，结束时强制 flush 一次。
+4. **超时分两段，不是总时长**。建连 90 秒；连上之后每收到一块数据就重置一次空闲计时器（45 秒），
+   再加一个 6 分钟的硬上限兜底。**不要沿用原来的 90 秒总时长**，思考模式下正常请求也可能超过它。
+
+**降级**：如果 `response.body` 为 null（该平台的 fetch 不支持流），自动用 `stream: false` 重试一次。
+已经开始接收数据之后才断的，不重试，直接报错 —— 重试等于重复扣费。
+
+**参数冲突**：thinking 模式下 `temperature` / `presence_penalty` / `frequency_penalty` 不生效
+（传了不报错，但被忽略）。所以代码只在 `thinking: disabled` 时才传 `temperature: 0.2`，
+免得看代码的人以为自己控制住了随机性。
 
 ### 多轮追问
 
@@ -438,6 +477,7 @@ fragments/
 - [x] 真机问题修复 v0.2.1：启动动画去掉、输入栏被键盘遮挡、长记录页与状态栏重合、长文输入同样被遮挡
 - [x] 整理增强 v0.2.2：多轮追问、补充已有知识卡、标记待办完成、返回键收口
 - [x] 重构模式 v0.2.3：重新整理已整理碎片并与旧结果对照、归档旧卡（可恢复）、清理重复待办
+- [x] 思考过程 v0.2.4：改流式输出，整理时实时显示模型思维链，结果页可回看；模型名迁移到 `deepseek-flash`（旧名已停用）
 - [ ] 通知栏常驻入口
 - [ ] 真机联调（vivo Y78 / V2278A）—— 部分已开始，v0.2.1 就是首轮真机反馈驱动的
 
@@ -470,7 +510,37 @@ fragments/
 旧卡走 `archived = 1` 而不是 `DELETE`，原文碎片一个字都不动，
 与「永不删除用户原文」这条底线不冲突。
 
+### 思考过程与流式改造记录（v0.2.4）
+
+起因：整理时只有一个 spinner 加「通常需要 5–15 秒」，用户既不知道有没有卡住，也看不到 AI 为什么这么归类。
+要「看到模型的思考过程」就绕不开流式 —— 非流式必须等整轮结束才拿得到 `reasoning_content`，那就不叫过程了。
+
+三件事绑在一起做，因为它们互相依赖：
+
+| 改动 | 原因 |
+|---|---|
+| 模型名 `deepseek-chat` → `deepseek-flash` | 旧名 2026-07-24 已永久停用，调不通。两个旧别名本来都指向 V4-Flash，迁过去价格不变 |
+| `stream: false` → 流式 + SSE 解析 | 思维链必须边生成边显示 |
+| 新增 `thinking` / `reasoning_effort` 配置 | V4 默认就开思考，但要让用户能关掉（更快更省） |
+
+**关键实现点**（踩过才知道）：
+
+1. **RN 自带的 `fetch` 没有 `response.body`**，`getReader()` 直接崩。
+   SDK 56 起 Android/iOS 的全局 fetch 已被 `expo/fetch` 接管，但代码里仍**显式 `import { fetch } from 'expo/fetch'`**，
+   不依赖「全局恰好是哪个实现」这种环境细节。
+2. **`TextDecoder` 必须用 `{ stream: true }`**，否则跨分片的半个中文字符会被解成乱码。
+   已用逐字节切片的极端用例验证过。
+3. **超时从一个总时长拆成四段**：建连 90s / 首字 120s / 空闲 60s / 硬上限 6 分钟。
+   原来那个 90 秒总时长会把正常的长思考直接掐死。
+4. **回退只在「拿不到流」时发生**。已经开始收数据再断的不重试 —— 重试等于重复扣一次费。
+5. **`reasoning_content` 不进 `raw`**。`raw` 仍是纯正文，追问回传的还是它；
+   官方文档明确请求不带 `tools` 时 `reasoning_content` 会被忽略，多传无益。
+
+**已知取舍**：思考模式下 `temperature` 不生效，所以原来用来压稳定性的 `temperature: 0.2` 在开思考时失效。
+没有替代手段，只能靠「降低 effort」或「关掉思考」来换速度。这一条写进代码注释，免得后来者以为自己控制住了。
+
 ### 真机问题修复记录（v0.2.1）
+
 
 首轮真机反馈四条，全部是 Android 特有行为，不是写错代码：
 

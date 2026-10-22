@@ -6,7 +6,7 @@
 
 - **应用名**：碎片
 - **包名**：`com.local.fragments`（固定，改包名等于换 App，旧数据不跟随）
-- **当前版本**：v0.2.2（versionCode 5）
+- **当前版本**：v0.2.4（versionCode 7）
 - **目标设备**：vivo Y78（V2278A）
 
 ## 两条设计红线
@@ -31,6 +31,7 @@
 - **极简输入**：底部单行输入框自动增高，可一键转全屏编辑（20000 字上限）
 - **编辑 / 删除**：点任意碎片修改；删除需两次点击确认
 - **AI 整理**：一次调用产出九类结果 —— 分类打标、提炼待办、沉淀知识卡、今日小结、疑似重复、标记待办完成、补充已有知识卡、归档旧卡、清理重复待办；每条独立开关
+- **看得到思考过程**：整理时模型一边推理一边把思维链显示在屏幕上，不再对着一个转圈干等；结果页还留了一份折叠的「模型思考过程」，想追问时可以先看看它当初怎么想的。设置里可以关掉思考（更快更省）或调思考强度
 - **多轮追问**：结果页底部可以直接说「待办合并成一条」「知识卡太碎了」让 AI 改，改到满意再应用。没改动的条目，之前取消掉的勾选会保留
 - **新旧对齐**：已有知识卡和未完成待办始终作为上下文，AI 会主动建议「把这条补进那张卡」「这事已经做完了，标掉吧」
 - **重构模式**：把已整理过的碎片重新过一遍 —— 重新判标签、重新沉淀知识卡，结果与原来的整理逐条对照（标签行会写「原标签：…」，新卡会写明「会归档被它取代的旧卡」）。归档可恢复，删待办是真删除，三类破坏性操作一律默认不勾选
@@ -49,8 +50,8 @@
 | 语言 | TypeScript 6.0 |
 | 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移） |
 | 密钥 | expo-secure-store（Android Keystore） |
-| AI | DeepSeek，OpenAI 兼容协议，`response_format: json_object` |
-| 导航 | 自实现轻量路由状态（4 个页面），不引 react-navigation |
+| AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议，流式 SSE + `response_format: json_object` |
+| 导航 | 自实现轻量路由状态（5 个页面），不引 react-navigation |
 | Web | react-native-web + localStorage，仅供桌面预览，非交付目标 |
 
 ## 目录结构
@@ -64,11 +65,13 @@ ROADMAP.md                   开发计划
 src/
   types.ts                   领域类型（Fragment / KnowledgeCard / OrganizeResult）
   theme.ts                   颜色、圆角、标签哈希取色
+  version.ts                 版本号常量（与 app.json 手工同步）
   ai/
-    config.ts                AI 配置读写
+    config.ts                AI 配置读写（含思考开关与强度）
     keyStore.ts              API Key 安全存储
     prompt.ts                System Prompt 与请求内容构造
-    deepseek.ts              DeepSeek 客户端 + 结果收敛（ID 校验、原文保真）
+    deepseek.ts              DeepSeek 客户端 + 多段超时 + 结果收敛（ID 校验、原文保真）
+    stream.ts                SSE 解析：把思维链和正文分开累积
   db/
     types.ts                 Repo 接口定义
     repo.native.ts           SQLite 实现（Android 实际使用）
