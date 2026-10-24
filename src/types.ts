@@ -225,6 +225,68 @@ export interface AiConfig {
 }
 
 /**
+ * 联网搜索命中的一条。字段取自 DeepSeek `/v1/tools/search`，
+ * 只留问答用得到的三个：标题、链接、摘要。
+ *
+ * 摘要官方说是 600–800 字、本来就是给模型读的，所以直接塞进上下文，
+ * 不用再 Fetch 一次正文（Fetch 另计费，且很多站点取不到）。
+ */
+export interface WebHit {
+  title: string;
+  url: string;
+  summary: string;
+  /** 相关度分。官方说明 ≥1.5 算优质；服务端没给就是 0 */
+  score: number;
+}
+
+/**
+ * 一条问答记录。
+ *
+ * 单独存表，**不混进知识卡**：问答是「提问的痕迹」，卡片是「沉淀的结论」，
+ * 混在一起会让知识库的卡片数虚高，也会让检索捞出一堆一次性对话。
+ * 想让它进上下文，只能由用户手动勾选。
+ */
+export interface AskLog {
+  id: number;
+  /** 'all' 或主题名。用来取「同一主题最近的几轮」 */
+  scope: string;
+  question: string;
+  answer: string;
+  /** 思维链原文。只用于回看，永远不进上下文 */
+  reasoning: string;
+  /** 回答引用到的卡片 id */
+  citedIds: number[];
+  /** 这一轮搜到的网络资料，翻旧记录时还能看见来源 */
+  web: WebHit[];
+  createdAt: number;
+}
+
+/**
+ * 问答里模型提出的「操作提案」。
+ *
+ * 模型只出建议，界面逐条勾选后才写库 —— 和整理页同一套授权原则。
+ * 这里没有 delete_card：知识卡只能归档，归档可恢复，删了就真没了。
+ */
+export type AskAction =
+  | { kind: 'merge_topics'; from: string[]; to: string; reason: string | null }
+  | { kind: 'rename_topic'; from: string; to: string; reason: string | null }
+  | { kind: 'archive_cards'; ids: number[]; reason: string | null }
+  | {
+      kind: 'update_card';
+      id: number;
+      /**
+       * 只填要改的字段，缺省 = 不动。
+       * `subtopic` 显式给 null 表示「清掉小方向」—— 这一点和「不传」必须能区分开，
+       * 否则模型永远没法把一张卡从小方向里拿出来。
+       */
+      topic?: string;
+      subtopic?: string | null;
+      title?: string;
+      gist?: string;
+      reason: string | null;
+    };
+
+/**
  * 默认模型是 `deepseek-flash`（DeepSeek-V4.1-Flash）。
  *
  * 曾经的 `deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 15:59 UTC 永久停用，

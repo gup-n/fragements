@@ -384,7 +384,12 @@ export function KnowledgeScreen({ onClose }: Props) {
         />
       ) : null}
       {askOpen ? (
-        <AskSheet topic={active} onClose={() => setAskOpen(false)} onOpenCard={(c) => setDetail(c)} />
+        <AskSheet
+          topic={active}
+          onClose={() => setAskOpen(false)}
+          onOpenCard={(c) => setDetail(c)}
+          onChanged={refreshAll}
+        />
       ) : null}
       {detail ? (
         <KnowledgeDetail card={detail} onClose={() => setDetail(null)} onChanged={refreshAll} />

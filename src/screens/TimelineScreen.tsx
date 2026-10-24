@@ -98,8 +98,12 @@ export function TimelineScreen({
    * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
    */
   const [collapsedDays, setCollapsedDays] = useState<Set<string> | null>(null);
-  /** 详情页。存序列快照而不是只存 id —— 用户滑到第 5 条时列表可能重排了 */
-  const [detail, setDetail] = useState<{ items: Fragment[]; index: number } | null>(null);
+  /**
+   * 详情页。只存 id 序列 + 起点，不存碎片快照 ——
+   * 存快照的话编辑保存后这里还是旧内容，详情页看起来「没变」，得关掉重开才刷新。
+   * 用 id 序列而不是直接读 flat：id 顺序固定，翻到第几条不会因为列表重排而错位。
+   */
+  const [detail, setDetail] = useState<{ ids: number[]; index: number } | null>(null);
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const listRef = useRef<SectionList<TimelineItem, DisplaySection>>(null);
@@ -233,6 +237,22 @@ export function TimelineScreen({
     return out;
   }, [sections]);
 
+  /**
+   * 详情页真正拿到的碎片：按进入时的 id 顺序，从当前 props 里实时取。
+   * 编辑保存会触发 reload，这里自动拿到新内容，详情页不用关掉重开。
+   */
+  const detailItems = useMemo(() => {
+    if (!detail) return [];
+    const byId = new Map<number, Fragment>();
+    for (const f of fragments) byId.set(f.id, f);
+    const out: Fragment[] = [];
+    for (const id of detail.ids) {
+      const f = byId.get(id);
+      if (f) out.push(f);
+    }
+    return out;
+  }, [detail, fragments]);
+
   const todayCount = useMemo(() => {
     const key = dayKey(Date.now());
     return fragments.filter((f) => dayKey(f.createdAt) === key).length;
@@ -300,7 +320,7 @@ export function TimelineScreen({
   function openDetail(f: Fragment) {
     inputRef.current?.blur();
     const i = flat.findIndex((x) => x.id === f.id);
-    setDetail({ items: flat, index: i < 0 ? 0 : i });
+    setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i });
   }
 
   /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
@@ -668,14 +688,16 @@ export function TimelineScreen({
         详情页必须排在编辑面板之前渲染 —— 两者都是 absolute 全屏覆盖层，
         JSX 顺序就是层叠顺序。存活的详情页留在下面，编辑完关掉能回到原来那一条。
       */}
-      {detail ? (
+      {detail && detailItems.length > 0 ? (
         <FragmentDetail
-          key={detail.items[detail.index]?.id ?? 0}
-          items={detail.items}
-          initialIndex={detail.index}
+          key={detail.ids[detail.index] ?? 0}
+          items={detailItems}
+          initialIndex={Math.min(detail.index, detailItems.length - 1)}
           doneIds={doneIds}
+          notes={notes}
           onClose={() => setDetail(null)}
-          onEdit={openEdit}
+          onSave={onEdit}
+          onDelete={onDelete}
         />
       ) : null}
 

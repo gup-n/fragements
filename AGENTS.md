@@ -91,7 +91,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 
 | 功能 | 文件 | 输出 | `json` 选项 |
 |---|---|---|---|
-| 整理 | `ai/deepseek.ts` | 九类 JSON | `true`（默认） |
+| 整理 | `ai/deepseek.ts` | 十类 JSON | `true`（默认） |
 | 周期总结 | `ai/summarize.ts` | Markdown | **`false`** |
 | 知识库问答 | `ai/ask.ts` | Markdown | **`false`** |
 
@@ -100,6 +100,25 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **取一段时间的碎片用 `repo.listFragmentsBetween(from, to)`**（半开区间），不要用 `listFragments(limit)` 再过滤 ——
   超过 limit 会静默丢掉最早的记录。
 - 小结正文用 `<NoteBody>` 渲染（标题 / 列表 / 段落），不要直接把 `bodyMd` 丢进 `<Text>`。
+
+## 问答的操作提案与联网（v0.5.0）
+
+- **提案靠 `:::action` 围栏**，不能开 `json_object`（整篇 Markdown 会被压成一坨字符串）。
+  解析在 `util/askActions.ts`，执行在 `db/askCommit.ts`。
+- **解析必须用字符类写围栏正则**，「冒号或反引号 ×3」用 `[:` `` ` `` `]{3}` 这种字符类：
+
+  ```
+  /^\s*[:`]{3}\s*action\b/i      // 开块
+  /^\s*[:`]{3}\s*$/              // 收块
+  ```
+
+  **不要写成 `(?:::{3})`** —— `(?:` 是非捕获组括号，会吃掉一个冒号，结果只认 `::action`。
+  失败时完全没有报错，表现只是「模型给了提案但界面一条都不显示」。
+- **提案必须校验**（主题名逐字存在于 `listKnowledgeTopics()`、卡片 id 存在于全库），
+  否则 `retopicCards` 改 0 张还报成功，`update_card` 会改到另一张卡上。
+- **联网只能用 `/v1/tools/search`**（`ai/search.ts`）。Responses API 的内置 `web_search`
+  **只在 `deepseek-v4-pro` 生效**，`deepseek-flash` 下静默忽略 —— 不报错、只是没搜，然后模型凭记忆编。
+- **问答记录独立成表 `ask_logs`**，不混进 `knowledge_cards`；也不提供「把问答当卡片检索」的方法。
 
 ## Expo 会发破坏性变更，别信训练数据
 

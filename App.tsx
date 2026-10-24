@@ -10,6 +10,7 @@ import { OrganizeScreen } from './src/screens/OrganizeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { KnowledgeScreen } from './src/screens/KnowledgeScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
+import { dayKey } from './src/util/date';
 
 type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 
@@ -185,6 +186,32 @@ export default function App() {
     for (const c of seedCards) {
       await repo.insertKnowledgeCard({ ...c, sourceIds: [] });
     }
+
+    // 一条当天小结：否则详情页底部「当天小结」那块在预览里永远是空的
+    await repo.upsertNote({
+      type: 'daily',
+      title: null,
+      period: dayKey(now),
+      bodyMd: [
+        '## 今天主要花在三件事上',
+        '',
+        '- NAS 换盘：确认了 RAID5 降级后先看存储池状态，别急着拔盘',
+        '- 一批启动盘还欠着行政，得排个时间',
+        '- 报销单明天上午补完',
+      ].join('\n'),
+    });
+
+    // 一条问答记录：预览里「问答记录」那个扁平和区才有东西可看
+    await repo.insertAskLog({
+      scope: 'NAS 维护',
+      question: '群晖换盘之后还要做什么？',
+      answer:
+        '换完新盘先别急着结束：先在存储池页面确认重建已经跑起来，重建期间别动其他盘位。重建完成后跑一次数据一致性检查，再确认 SMART 没有新增告警。',
+      reasoning: '',
+      citedIds: [],
+      web: [],
+    });
+
     await reload();
   }, [reload]);
 

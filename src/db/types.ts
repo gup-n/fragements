@@ -1,4 +1,4 @@
-import type { Fragment, FragmentNature, Note, Todo, FragmentSource, FragmentStatus, KnowledgeCard } from '../types';
+import type { AskLog, Fragment, FragmentNature, Note, Todo, FragmentSource, FragmentStatus, KnowledgeCard, WebHit } from '../types';
 
 /**
  * 存储层契约。native 走 SQLite，web 走 localStorage（仅供桌面预览）。
@@ -104,6 +104,26 @@ export interface Repo {
    */
   findNote(type: Note['type'], period: string): Promise<Note | null>;
   deleteNote(id: number): Promise<void>;
+
+  /**
+   * 问答记录。`scope` 是 'all' 或主题名。
+   *
+   * 刻意**不提供**「把问答当卡片检索」的方法：问答和卡片是两种东西，
+   * 混在一起会让卡片数虚高、检索捞出一堆一次性对话。
+   */
+  insertAskLog(input: {
+    scope: string;
+    question: string;
+    answer: string;
+    reasoning: string;
+    citedIds: number[];
+    web: WebHit[];
+  }): Promise<number>;
+  /** scope 传 null 表示全部主题，按时间倒序 */
+  listAskLogs(scope: string | null, limit?: number): Promise<AskLog[]>;
+  /** 只改提问原文。回答是当时的产物，改了就成了伪造记录 */
+  updateAskLogQuestion(id: number, question: string): Promise<void>;
+  deleteAskLog(id: number): Promise<void>;
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
   markRunApplied(id: number): Promise<void>;

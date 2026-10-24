@@ -1,7 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import type { Repo } from './types';
 import { parseTags } from './types';
-import type { Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo } from '../types';
+import type { AskLog, Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo, WebHit } from '../types';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -87,6 +87,21 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE knowledge_cards ADD COLUMN subtopic TEXT;
   CREATE INDEX IF NOT EXISTS idx_cards_subtopic ON knowledge_cards(topic, subtopic);
+  `,
+  // v5：问答记录独立成表。它不是知识卡 —— 混进 knowledge_cards 会让卡片数虚高、
+  // 检索捞出一堆一次性对话，而且「删掉这条问答」和「删掉一张沉淀下来的结论」完全是两回事
+  `
+  CREATE TABLE IF NOT EXISTS ask_logs (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope      TEXT    NOT NULL,
+    question   TEXT    NOT NULL,
+    answer     TEXT    NOT NULL,
+    reasoning  TEXT    NOT NULL DEFAULT '',
+    cited_ids  TEXT    NOT NULL DEFAULT '[]',
+    web_json   TEXT    NOT NULL DEFAULT '[]',
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ask_scope ON ask_logs(scope, created_at DESC);
   `,
 ];
 
@@ -199,6 +214,37 @@ function toNote(r: NoteRow): Note {
     title: r.title,
     bodyMd: r.body_md,
     period: r.period,
+    createdAt: r.created_at,
+  };
+}
+
+interface AskRow {
+  id: number;
+  scope: string;
+  question: string;
+  answer: string;
+  reasoning: string;
+  cited_ids: string;
+  web_json: string;
+  created_at: number;
+}
+
+function toAskLog(r: AskRow): AskLog {
+  let web: WebHit[] = [];
+  try {
+    const v = JSON.parse(r.web_json);
+    if (Array.isArray(v)) web = v;
+  } catch {
+    /* 脏数据当没有，不能因为一条记录解析失败就让整个列表空白 */
+  }
+  return {
+    id: r.id,
+    scope: r.scope,
+    question: r.question,
+    answer: r.answer,
+    reasoning: r.reasoning ?? '',
+    citedIds: parseIds(r.cited_ids),
+    web,
     createdAt: r.created_at,
   };
 }
@@ -531,6 +577,40 @@ export const repo: Repo = {
 
   async deleteNote(id) {
     db().runSync('DELETE FROM notes WHERE id = ?', [id]);
+  },
+
+  async insertAskLog(input) {
+    const res = db().runSync(
+      'INSERT INTO ask_logs (scope, question, answer, reasoning, cited_ids, web_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [
+        input.scope,
+        input.question,
+        input.answer,
+        input.reasoning,
+        JSON.stringify(input.citedIds),
+        JSON.stringify(input.web),
+        Date.now(),
+      ],
+    );
+    return Number(res.lastInsertRowId);
+  },
+
+  async listAskLogs(scope, limit = 60) {
+    const rows = scope
+      ? db().getAllSync<AskRow>(
+          'SELECT * FROM ask_logs WHERE scope = ? ORDER BY created_at DESC LIMIT ?',
+          [scope, limit],
+        )
+      : db().getAllSync<AskRow>('SELECT * FROM ask_logs ORDER BY created_at DESC LIMIT ?', [limit]);
+    return rows.map(toAskLog);
+  },
+
+  async updateAskLogQuestion(id, question) {
+    db().runSync('UPDATE ask_logs SET question = ? WHERE id = ?', [question.trim(), id]);
+  },
+
+  async deleteAskLog(id) {
+    db().runSync('DELETE FROM ask_logs WHERE id = ?', [id]);
   },
 
   async saveRun(input) {

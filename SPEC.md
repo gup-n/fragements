@@ -66,13 +66,17 @@
 - 时间轴流主界面（按日分组、时间戳、整行文本）
 - **按日折叠**（v0.4.0）：默认只展开今天，其余日期收起成「日期 + 条数 + 第一条前一行」。搜索时强制全展开
 - **首页搜索**（v0.4.0）：查碎片原文 / 标签 / 事项，在内存里过滤，并报「其中 N 条还没整理」
-- **碎片详情页**（v0.4.0）：点一条进全屏只读页，左右滑动看上一条 / 下一条。长按列表项可直接进编辑
+- **碎片详情页**（v0.4.0 / v0.4.2）：点一条进全屏阅读页，左右滑动看上一条 / 下一条。右上角「编辑」**原地整屏改**，保存后当场刷新；正文下方接这一天的当天小结。长按列表项可直接进编辑
 - 碎片编辑 / 删除
 - AI 整理：分类打标、提炼待办、关联去重、沉淀知识卡、**操作已有待办（标完成 / 删除 / 合并）**、**归并相近主题**（一次调用产出十类，见第 6 节；首版为五类，后五类是 v0.2.2–v0.4.1 陆续加的）
 - 整理结果的逐条接受 / 忽略
 - **知识库**：按主题聚合，主题内可再按「二级方向」分组；卡片展示标题与要点，点开是独立详情页（大字号原文 + 归档 / 恢复 / 删除）
 - **主题整理**（v0.4.1）：知识库页头进入，勾选多个主题合并成一个，或给单个主题改名。只改主题名，卡片一张都不会少
 - **知识库检索**（v0.3.0）：关键字搜索（标题 / 要点 / 原文 / 主题四字段，跨主题，在主题页内自动收窄）、问模型（默认当前主题，可切全库）
+- **问答可动手**（v0.5.0）：模型只能提「操作提案」（合并主题 / 主题改名 / 归档旧卡 / 重构单卡），用户勾选后才写库，默认一条不勾
+- **联网搜索**（v0.5.0）：卡片里没有时**手动**点「联网再查一次」，走 DeepSeek 官方 `/v1/tools/search`；网络资料与知识库卡片在回答里明确区分
+- **问答记录**（v0.5.0）：独立扁平和区，Q-A 成对、可改问题 / 删除 / 带入本轮；默认不参与检索也不进上下文
+- **思考折叠**（v0.5.0）：问答回答落地后，思维链收成一行「深度思考 N 秒 ›」
 - **周期总结**（v0.3.0）：按日 / 周 / 月把该周期全部碎片读一遍写成 Markdown 小结，预览后保存，落在时间轴对应时间点
 - **待补小结清单**（v0.3.1）：整理页列出哪些周期还没有小结，点一条进去生成。整理本身**不再产出小结**
 - 通知栏常驻入口
@@ -150,11 +154,24 @@ CREATE TABLE settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- 问答记录（v5）。刻意独立于 knowledge_cards：
+-- 问答是「提问的痕迹」，卡片是「沉淀的结论」，混在一起会让卡片数虚高、检索捞出一堆一次性对话
+CREATE TABLE ask_logs (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope      TEXT    NOT NULL,   -- 'all' 或主题名
+  question   TEXT    NOT NULL,
+  answer     TEXT    NOT NULL,
+  reasoning  TEXT    NOT NULL DEFAULT '',  -- 思维链，只用于回看，永不进上下文
+  cited_ids  TEXT    NOT NULL DEFAULT '[]',-- JSON 数组，引用到的卡片 id
+  web_json   TEXT    NOT NULL DEFAULT '[]',-- JSON 数组，这一轮搜到的网络资料
+  created_at INTEGER NOT NULL
+);
 ```
 
-索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、`knowledge_cards(topic)`、`knowledge_cards(topic, subtopic)`。
+索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、`knowledge_cards(topic)`、`knowledge_cards(topic, subtopic)`、`ask_logs(scope, created_at DESC)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。当前到 v4。
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。当前到 v5。
 
 **主题不是实体**，只是卡片上的一个字符串（`GROUP BY topic` 出来的）。这是刻意的：
 十一二张卡的量级不值得建 `topics` 表和外键。代价是不能改名、不能合并 ——
@@ -428,7 +445,50 @@ user:      buildRefineContent("待办合并成一条")
   卡片互相矛盾时把矛盾摆出来不替用户裁决
 - **引用反查靠标题字面命中**（`answer.includes(card.title)`），比让模型输出编号再解析稳得多，
   也不受模型改编号习惯的影响
-- 范围默认「当前主题」，可一键切「全库」；回答**不落库**，它只是查询而不是内容
+- 范围默认「当前主题」，可一键切「全库」
+- **回答本身不是知识库内容**。v0.5.0 起会写进 `ask_logs`（问答记录），但那张表**独立于 `knowledge_cards`**，
+  不参与卡片计数、也不参与关键词打分 —— 否则「全库 N 张卡」会虚高，检索还会捞出一堆一次性对话
+
+##### 操作提案（v0.5.0）
+
+模型只有建议权。用户明确要求动知识库时，回答末尾追加：
+
+```
+:::action
+{"kind":"merge_topics","from":["工具","资讯"],"to":"AI 与工具","reason":"都在讲 AI"}
+:::
+```
+
+| kind | 载荷 | 说明 |
+|---|---|---|
+| `merge_topics` | `from`（≥2 个已存在主题）/ `to` | 合并主题 |
+| `rename_topic` | `from`（已存在）/ `to` | 主题改名 |
+| `archive_cards` | `ids`（已存在卡片） | 只归档，可恢复；**没有 delete_card** |
+| `update_card` | `id` + 任意 `topic` / `subtopic` / `title` / `gist` | 重构单卡，只改给出的字段 |
+
+- `subtopic` 三态：不传 = 不动、`null` = 清掉小方向、字符串 = 设成它
+- 开 `json_object` 会把整篇 Markdown 压成一坨字符串，所以正文照常写、提案单独围栏
+- **校验是真的做**（`util/askActions.ts`）：主题名必须逐字存在于 `listKnowledgeTopics()`，
+  卡片 id 必须存在于**全库**。放过去的后果一个是「改 0 张却报成功」，一个是「改到另一张卡上」
+- 界面默认**一条都不勾**（`AskActions.tsx`），勾了才执行；每条独立事务，一条失败不回滚其他
+
+##### 联网搜索（v0.5.0）
+
+- 走 DeepSeek 官方 `POST {baseUrl}/tools/search`，**不用 Responses API 的内置 `web_search`** ——
+  后者只在 `deepseek-v4-pro` 生效，`deepseek-flash` 下静默忽略（不报错、只是没搜），是最危险的失败方式
+- 参数：`need_content: false`（只要 `summary`，官方说 600–800 字本就是给模型读的）、
+  `count: 8`（按成功请求计费，count 不影响价格）、`rerank_score ≥ 1.0` 过滤
+- `408 / 429 / 5xx` 退避重试三次（官方不给 Retry-After）；返回空数组是**正常结果**，与「搜索失败」要分开
+- **手动触发**：答案出来后才有「联网再查一次」。自动搜会花掉用户没注意的额度，
+  而且把「我记过的」和「网上抄的」混在一起，边界必须由用户自己划
+- 网络资料在 prompt 里单独成段，并明确要求回答里写「网上资料显示…」+ `[W1]` 编号，不能冒充知识库结论
+
+##### 问答记录与上下文（v0.5.0）
+
+- 表 `ask_logs`：`scope` 是 `'all'` 或主题名，存完整 Q-A + 思维链 + 引用卡片 id + 联网结果快照
+- 界面是**扁平列表**（不按主题分会话气泡），每条自带时间与主题；列表只显示精简，点开看全文
+- **默认不参与检索，也不自动带进上下文**。要带就点「带入本轮」，或「带入最近 3 轮」
+- 只允许改**问题**（回答是当时的产物，改了就是伪造记录），可删除
 
 ## 7. 导出格式
 
@@ -574,19 +634,22 @@ fragments/
 │   │   ├── date.ts          日期分组、时间格式化、周期键与区间
 │   │   ├── digest.ts        哪些周期还没写小结（待补清单口径）
 │   │   ├── resultItems.ts   整理结果的字段元数据表：确认 key、默认勾选、空结果判定
+│   │   ├── askActions.ts    :::action 解析 / 校验（真实主题名与卡片 id）/ 描述
 │   │   └── keyboard.ts      键盘高度 hook（替代失效的 KeyboardAvoidingView）
 │   ├── db/
 │   │   ├── types.ts         Repo 接口
 │   │   ├── repo.native.ts   SQLite 实现
 │   │   ├── repo.web.ts      localStorage 实现（仅供桌面预览）
 │   │   ├── commit.ts        把用户确认过的整理结果写进库（不含任何 UI）
+│   │   ├── askCommit.ts     执行问答里的操作提案（逐条独立事务）
 │   │   └── repo.ts          类型回退，勿直接引用逻辑
 │   ├── ai/
 │   │   ├── prompt.ts        System prompt 与请求体构造
 │   │   ├── chat.ts          请求层：四段超时、流式/非流式、错误映射（三个功能共用）
 │   │   ├── deepseek.ts      整理：prompt 组装 + 结果收敛
 │   │   ├── summarize.ts     周期总结：日/周/月 prompt、材料裁剪、Markdown 输出
-│   │   ├── ask.ts           知识库问答：关键词打分选卡 + 预算装填 + 引用反查
+│   │   ├── ask.ts           知识库问答：关键词打分选卡 + 预算装填 + 引用反查 + 提案解析
+│   │   ├── search.ts        DeepSeek 官方 /v1/tools/search（退避重试 + 结果收敛）
 │   │   ├── stream.ts        SSE 解析，思维链与正文分开累积
 │   │   ├── config.ts        读写 AI 配置
 │   │   └── keyStore.ts      API Key 安全存储
@@ -597,12 +660,18 @@ fragments/
 │   │   ├── NoteBody.tsx         小结正文的轻量 Markdown 渲染
 │   │   ├── ReasoningStream.tsx  流式生成的实时面板（思维链 + 字数 + 计时）
 │   │   ├── ReasoningTrace.tsx   生成结束后的「模型思考过程」折叠区
+│   │   ├── ReasoningCollapse.tsx 答案落地后的「深度思考 N 秒」折叠行
+│   │   ├── FragmentDetail.tsx    碎片详情页（阅读 + 左右翻页 + 整屏编辑 + 当天小结）
+│   │   ├── IconButton.tsx        圆形图标按钮（36px 触控区）
+│   │   ├── ScreenHeader.tsx      子页面统一页头
 │   │   ├── ResultSections.tsx   整理结果页的十类条目与逐条勾选
 │   │   ├── BacklogCard.tsx      整理页的「哪些周期还没写小结」卡片
 │   │   ├── SummarySheet.tsx     周期总结生成面板
 │   │   ├── KnowledgeDetail.tsx  知识卡详情页
 │   │   ├── TopicSheet.tsx       主题整理面板（合并 / 改名）
-│   │   └── AskSheet.tsx         知识库问答面板
+│   │   ├── AskSheet.tsx         知识库问答面板（回答 / 联网 / 提案 / 记录）
+│   │   ├── AskActions.tsx       改动建议清单（默认不勾，勾了才写库）
+│   │   └── AskHistory.tsx       问答记录（扁平 Q-A 列表，可改可删）
 │   └── screens/
 │       ├── TimelineScreen.tsx
 │       ├── OrganizeScreen.tsx  状态机与 idle 面板（结果渲染交给 ResultSections）
@@ -642,6 +711,8 @@ fragments/
 - [x] 界面美化 v0.3.2：统一图标按钮（36px 触控区）与共用页头，图标尺寸整体上调一档，版式细节重排
 - [x] 时间轴三件 v0.4.0：按日折叠（默认只展开今天）、首页搜索、碎片详情页 + 左右滑动
 - [x] 主题两级与整理 v0.4.1：卡片支持 `subtopic`、主题页按小方向分组、`merge_topics` AI 归并建议、知识库页头手动合并 / 改名
+- [x] 详情页修复 v0.4.2：编辑改为整屏内联（不再弹中间小窗）、保存后详情页即时刷新（`detail` 改存 id 序列）、正文下方接当天小结
+- [x] 问答权限与记录 v0.5.0：`:::action` 操作提案（勾选执行）、官方 `/v1/tools/search` 手动联网、思考折叠成一行、`ask_logs` 独立记录表（migration v5，可改 / 可删 / 可带入）
 - [ ] 通知栏常驻入口
 - [ ] 真机联调（vivo Y78 / V2278A）—— 部分已开始，v0.2.1 就是首轮真机反馈驱动的
 

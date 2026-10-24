@@ -1,6 +1,6 @@
 import type { Repo } from './types';
 import { parseTags } from './types';
-import type { Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo } from '../types';
+import type { AskLog, Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo } from '../types';
 
 /**
  * 浏览器预览用的存储实现，数据落在 localStorage。
@@ -18,10 +18,11 @@ interface WebDb {
   runs: { id: number; startedAt: number; fragmentIds: number[]; model: string; resultJson: string; applied: number }[];
   settings: Record<string, string>;
   knowledgeCards: KnowledgeCard[];
+  askLogs: AskLog[];
 }
 
 function empty(): WebDb {
-  return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, knowledgeCards: [] };
+  return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, knowledgeCards: [], askLogs: [] };
 }
 
 let cache: WebDb | null = null;
@@ -37,6 +38,8 @@ function load(): WebDb {
       ...c,
       subtopic: c.subtopic ?? null,
     }));
+    // v0.5.0 之前没有问答记录这张表
+    cache!.askLogs = cache!.askLogs ?? [];
   } catch {
     cache = empty();
   }
@@ -363,6 +366,35 @@ export const repo: Repo = {
   async deleteNote(id) {
     const d = load();
     d.notes = d.notes.filter((x) => x.id !== id);
+    persist();
+  },
+
+  async insertAskLog(input) {
+    const d = load();
+    const id = nextId(d);
+    d.askLogs.push({ id, ...input, createdAt: Date.now() });
+    persist();
+    return id;
+  },
+
+  async listAskLogs(scope, limit = 60) {
+    const all = load().askLogs ?? [];
+    return [...(scope ? all.filter((x) => x.scope === scope) : all)]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
+  },
+
+  async updateAskLogQuestion(id, question) {
+    const hit = load().askLogs.find((x) => x.id === id);
+    if (hit) {
+      hit.question = question.trim();
+      persist();
+    }
+  },
+
+  async deleteAskLog(id) {
+    const d = load();
+    d.askLogs = (d.askLogs ?? []).filter((x) => x.id !== id);
     persist();
   },
 
