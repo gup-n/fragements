@@ -5,4 +5,4 @@
  * 所以这里用常量。**发版时和 app.json 的 expo.version 一起改**，
  * 忘了改的后果只是关于页显示旧版本号，不影响功能。
  */
-export const APP_VERSION = '0.3.2';
+export const APP_VERSION = '0.4.0';

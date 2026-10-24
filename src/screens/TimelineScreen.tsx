@@ -15,6 +15,7 @@ import { C, R } from '../theme';
 import { TagPill } from '../components/TagPill';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
+import { FragmentDetail } from '../components/FragmentDetail';
 import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 
@@ -26,7 +27,14 @@ type TimelineItem =
   | { kind: 'fragment'; id: number; at: number; fragment: Fragment }
   | { kind: 'note'; id: number; at: number; note: Note };
 
-type Section = { title: string; sub: string; data: TimelineItem[] };
+/** key 是 YYYY-MM-DD，折叠状态按它记；标题只用于显示，不能拿来当键 */
+type Section = { key: string; title: string; sub: string; data: TimelineItem[] };
+
+/**
+ * 交给 SectionList 的版本：折叠时 data 清空（header 仍然渲染），
+ * 所以条数和预览必须提前算好带上，不能等渲染时再读 data。
+ */
+type DisplaySection = Section & { total: number; preview: string };
 
 /**
  * 冷启动只自动聚焦一次。放在模块作用域而不是 useRef，
@@ -84,9 +92,17 @@ export function TimelineScreen({
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
+  const [query, setQuery] = useState('');
+  /**
+   * 折叠过的日期。null 表示「还没手动动过」—— 这时用默认规则（只展开今天）。
+   * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
+   */
+  const [collapsedDays, setCollapsedDays] = useState<Set<string> | null>(null);
+  /** 详情页。存序列快照而不是只存 id —— 用户滑到第 5 条时列表可能重排了 */
+  const [detail, setDetail] = useState<{ items: Fragment[]; index: number } | null>(null);
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
-  const listRef = useRef<SectionList<TimelineItem, Section>>(null);
+  const listRef = useRef<SectionList<TimelineItem, DisplaySection>>(null);
   const keyboardHeight = useKeyboardHeight();
 
   // 冷启动即聚焦：记录工具打开就该能打字，不该先点一下输入框
@@ -116,6 +132,24 @@ export function TimelineScreen({
     return () => clearTimeout(timer);
   }, [fullEdit]);
 
+  const searching = query.trim().length > 0;
+  const todayKey = dayKey(Date.now());
+
+  /**
+   * 搜索直接在内存里过滤，不走 SQLite：碎片本来就全量躺在 props 里，
+   * 再压一个查询接口下去，反而拿不到 tags / project 这几个内存字段的匹配。
+   */
+  const visibleFragments = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return fragments;
+    return fragments.filter(
+      (f) =>
+        f.content.toLowerCase().includes(q) ||
+        (f.project ?? '').toLowerCase().includes(q) ||
+        f.tags.some((t) => t.toLowerCase().includes(q)),
+    );
+  }, [fragments, query]);
+
   const sections = useMemo(() => {
     const map = new Map<string, Section>();
 
@@ -123,21 +157,25 @@ export function TimelineScreen({
       const key = dayKey(at);
       let bucket = map.get(key);
       if (!bucket) {
-        bucket = { title: dayLabel(at), sub: daySubLabel(at), data: [] };
+        bucket = { key, title: dayLabel(at), sub: daySubLabel(at), data: [] };
         map.set(key, bucket);
       }
       bucket.data.push(item);
     };
 
-    for (const f of fragments) {
+    for (const f of visibleFragments) {
       push(f.createdAt, { kind: 'fragment', id: f.id, at: f.createdAt, fragment: f });
     }
 
-    // 周期总结按 period 落回它覆盖的那一天/周/月末，
-    // 而不是它被生成的那天 —— 否则上周的周报会跑到今天来
-    for (const n of notes) {
-      const at = periodAnchor(n.period) ?? n.createdAt;
-      push(at, { kind: 'note', id: n.id, at, note: n });
+    // 搜索时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条，
+    // 反而看不清到底哪条碎片命中了。要翻小结请直接看时间轴。
+    if (!searching) {
+      // 周期总结按 period 落回它覆盖的那一天/周/月末，
+      // 而不是它被生成的那天 —— 否则上周的周报会跑到今天来
+      for (const n of notes) {
+        const at = periodAnchor(n.period) ?? n.createdAt;
+        push(at, { kind: 'note', id: n.id, at, note: n });
+      }
     }
 
     for (const bucket of map.values()) {
@@ -152,12 +190,61 @@ export function TimelineScreen({
     return Array.from(map.entries())
       .sort((a, b) => (a[0] < b[0] ? 1 : -1))
       .map(([, bucket]) => bucket);
-  }, [fragments, notes]);
+  }, [visibleFragments, notes, searching]);
+
+  /**
+   * 当前生效的折叠集合。默认只展开今天，其余全部收起 —— 记录攒了几天以后，
+   * 一屏全是前几天的内容会盖住今天刚记的东西。
+   * 搜索时强制全展开，否则命中的条目藏在折叠里等于没搜到。
+   */
+  const collapsedKeys = useMemo(() => {
+    if (searching) return new Set<string>();
+    if (collapsedDays) return collapsedDays;
+    return new Set(sections.filter((s) => s.key !== todayKey).map((s) => s.key));
+  }, [sections, collapsedDays, searching, todayKey]);
+
+  const displaySections = useMemo<DisplaySection[]>(
+    () =>
+      sections.map((sec) => {
+        const first = sec.data[0];
+        const preview =
+          first?.kind === 'fragment'
+            ? first.fragment.content.replace(/\s+/g, ' ')
+            : first?.kind === 'note'
+              ? first.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim()
+              : '';
+        const collapsed = collapsedKeys.has(sec.key);
+        return {
+          ...sec,
+          data: collapsed ? [] : sec.data,
+          total: sec.data.length,
+          preview: collapsed ? preview : '',
+        };
+      }),
+    [sections, collapsedKeys],
+  );
+
+  /** 详情页的翻页序列：与当前列表顺序一致，搜索时就是搜索结果 */
+  const flat = useMemo(() => {
+    const out: Fragment[] = [];
+    for (const sec of sections) {
+      for (const it of sec.data) if (it.kind === 'fragment') out.push(it.fragment);
+    }
+    return out;
+  }, [sections]);
 
   const todayCount = useMemo(() => {
     const key = dayKey(Date.now());
     return fragments.filter((f) => dayKey(f.createdAt) === key).length;
   }, [fragments]);
+
+  const searchStat = useMemo(() => {
+    if (!searching) return null;
+    return {
+      total: visibleFragments.length,
+      inbox: visibleFragments.filter((f) => f.status === 'inbox').length,
+    };
+  }, [searching, visibleFragments]);
 
   const canSend = draft.trim().length > 0 && !sending;
 
@@ -168,6 +255,14 @@ export function TimelineScreen({
     try {
       await onAdd(text);
       setDraft('');
+      // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
+      // 折叠一个「刚往里写了东西的日期」没有任何意义。
+      setCollapsedDays((prev) => {
+        if (!prev || !prev.has(todayKey)) return prev;
+        const next = new Set(prev);
+        next.delete(todayKey);
+        return next;
+      });
       inputRef.current?.focus();
       scrollToTopSoon();
     } finally {
@@ -199,6 +294,23 @@ export function TimelineScreen({
     setEditing(item);
     setEditText(item.content);
     setArmedDelete(false);
+  }
+
+  /** 点一条碎片先读，不直接进编辑 —— 想通读长文时不该先得到一个光标 */
+  function openDetail(f: Fragment) {
+    inputRef.current?.blur();
+    const i = flat.findIndex((x) => x.id === f.id);
+    setDetail({ items: flat, index: i < 0 ? 0 : i });
+  }
+
+  /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
+  function toggleDay(key: string) {
+    setCollapsedDays((prev) => {
+      const next = new Set(prev ?? collapsedKeys);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   function toggleNote(id: number) {
@@ -309,6 +421,34 @@ export function TimelineScreen({
         </View>
       </View>
 
+      <View style={styles.searchWrap}>
+        <View style={styles.searchBox}>
+          <Ionicons name="search" size={16} color={C.text3} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="搜索碎片原文、标签、事项"
+            placeholderTextColor={C.text3}
+            style={styles.searchInput}
+            returnKeyType="search"
+            autoCorrect={false}
+            autoCapitalize="none"
+          />
+          {searching ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityLabel="清除搜索">
+              <Ionicons name="close-circle" size={17} color={C.text3} />
+            </Pressable>
+          ) : null}
+        </View>
+        {searchStat ? (
+          <Text style={styles.searchStat}>
+            {searchStat.total === 0
+              ? '没有匹配的碎片'
+              : `找到 ${searchStat.total} 条${searchStat.inbox > 0 ? ` · ${searchStat.inbox} 条还没整理` : ''}`}
+          </Text>
+        ) : null}
+      </View>
+
       <View style={styles.flex}>
         {sections.length === 0 ? (
           <View style={styles.empty}>
@@ -328,19 +468,45 @@ export function TimelineScreen({
         ) : (
           <SectionList
             ref={listRef}
-            sections={sections}
+            sections={displaySections}
             keyExtractor={(item) => `${item.kind}-${item.id}`}
             stickySectionHeadersEnabled
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
-            renderSectionHeader={({ section }) => (
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionTitle}>{section.title}</Text>
-                <Text style={styles.sectionSub}>
-                  {section.sub} · {section.data.length} 条
-                </Text>
-              </View>
-            )}
+            renderSectionHeader={({ section }) => {
+              const closed = collapsedKeys.has(section.key);
+              return (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.sectionHeader,
+                    pressed && !searching && styles.sectionHeaderPressed,
+                  ]}
+                  onPress={() => {
+                    if (!searching) toggleDay(section.key);
+                  }}
+                  disabled={searching}
+                >
+                  <View style={styles.sectionHeaderRow}>
+                    <Text style={styles.sectionTitle}>{section.title}</Text>
+                    <Text style={styles.sectionSub}>
+                      {section.sub} · {section.total} 条
+                    </Text>
+                    {searching ? null : (
+                      <Ionicons
+                        name={closed ? 'chevron-forward' : 'chevron-down'}
+                        size={15}
+                        color={C.text3}
+                      />
+                    )}
+                  </View>
+                  {section.preview ? (
+                    <Text style={styles.sectionPreview} numberOfLines={1}>
+                      {section.preview}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            }}
             renderItem={({ item, index, section }) => {
               const isLast = index === section.data.length - 1;
 
@@ -392,7 +558,10 @@ export function TimelineScreen({
               const done = doneIds.has(fragment.id);
               return (
                 <Pressable
-                  onPress={() => openEdit(fragment)}
+                  onPress={() => openDetail(fragment)}
+                  // 长按直接进编辑：看是主路径，改是熟练用户的捷径，不用每次先进详情页
+                  onLongPress={() => openEdit(fragment)}
+                  delayLongPress={400}
                   style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
                 >
                   <Text style={styles.time}>{formatTime(fragment.createdAt)}</Text>
@@ -496,6 +665,21 @@ export function TimelineScreen({
       </View>
 
       {/*
+        详情页必须排在编辑面板之前渲染 —— 两者都是 absolute 全屏覆盖层，
+        JSX 顺序就是层叠顺序。存活的详情页留在下面，编辑完关掉能回到原来那一条。
+      */}
+      {detail ? (
+        <FragmentDetail
+          key={detail.items[detail.index]?.id ?? 0}
+          items={detail.items}
+          initialIndex={detail.index}
+          doneIds={doneIds}
+          onClose={() => setDetail(null)}
+          onEdit={openEdit}
+        />
+      ) : null}
+
+      {/*
         编辑面板与长文输入都用覆盖层，不再用 Modal。
         Modal 在 Android 上是一个独立窗口：拿到的是窗口级 inset，长文页顶部会直接顶到
         状态栏底下和通知栏重合；键盘事件也不会从 Activity 根视图冒上来，躲不开输入法。
@@ -577,8 +761,6 @@ const styles = StyleSheet.create({
     paddingRight: 14,
     paddingTop: 6,
     paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
   },
   headerLeft: { flexShrink: 1 },
   brand: { fontSize: 22, color: C.text, fontWeight: '600', letterSpacing: 0.8 },
@@ -598,18 +780,49 @@ const styles = StyleSheet.create({
   organizeText: { fontSize: 13, color: C.accentText, fontWeight: '600' },
   organizeTextOn: { color: '#FFFFFF' },
 
-  listContent: { paddingBottom: 8 },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
+  // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
+  searchWrap: {
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingBottom: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: C.hair,
+  },
+  searchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    height: 38,
+    backgroundColor: C.hairSoft,
+    borderRadius: R.btn + 2,
+    paddingHorizontal: 12,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: C.text,
+    paddingVertical: 0,
+    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
+  },
+  searchStat: { fontSize: 11.5, color: C.text3, marginTop: 7, paddingLeft: 2 },
+
+  listContent: { paddingBottom: 8 },
+  // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
+  sectionHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 15,
     paddingBottom: 9,
     backgroundColor: C.page,
   },
+  sectionHeaderPressed: { backgroundColor: C.hairSoft },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontSize: 13.5, color: C.text, fontWeight: '600', letterSpacing: 0.3 },
-  sectionSub: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
+  sectionSub: {
+    flex: 1,
+    fontSize: 11,
+    color: C.text3,
+    fontVariant: ['tabular-nums'],
+  },
+  sectionPreview: { fontSize: 12, lineHeight: 17, color: C.text3, marginTop: 5 },
 
   row: { flexDirection: 'row', paddingHorizontal: 20 },
   rowPressed: { backgroundColor: C.hairSoft },
