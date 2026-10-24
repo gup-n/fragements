@@ -66,6 +66,8 @@ export function rankCards(question: string, cards: KnowledgeCard[]): KnowledgeCa
   const scored = cards.map((card) => {
     const title = card.title.toLowerCase();
     const topic = card.topic.toLowerCase();
+    // 二级方向也算「主题级」的关键词：问「换盘」时，「NAS 维护 · 换盘」该排前面
+    const subtopic = (card.subtopic ?? '').toLowerCase();
     const gist = card.gist.toLowerCase();
     const body = card.body.toLowerCase();
 
@@ -73,6 +75,7 @@ export function rankCards(question: string, cards: KnowledgeCard[]): KnowledgeCa
     for (const w of words) {
       score += count(title, w) * 8;
       score += count(topic, w) * 4;
+      score += count(subtopic, w) * 4;
       score += count(gist, w) * 3;
       score += count(body, w) * 1;
     }
@@ -87,7 +90,7 @@ function cardBlock(card: KnowledgeCard) {
   const body =
     card.body.length > PER_CARD_CLIP ? `${card.body.slice(0, PER_CARD_CLIP)}…` : card.body;
   return [
-    `【${card.topic}｜${card.title}】`,
+    `【${card.topic}${card.subtopic ? ` · ${card.subtopic}` : ''}｜${card.title}】`,
     card.gist ? `要点：${card.gist.replace(/\n/g, ' ')}` : '',
     `原文：${body.replace(/\n{2,}/g, ' ')}`,
   ]

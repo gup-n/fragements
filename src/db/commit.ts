@@ -105,6 +105,7 @@ export async function commitResult({
     const replaced = replacementOf(cards, k.source_ids);
     await repo.insertKnowledgeCard({
       topic: k.topic,
+      subtopic: k.subtopic,
       title: k.title,
       gist: k.gist,
       body: k.body,
@@ -141,6 +142,14 @@ export async function commitResult({
     if (!accepted(K.archive(a.card_id))) continue;
     await repo.updateKnowledgeCard(a.card_id, { archived: true });
     applied++;
+  }
+
+  // ── 主题归并（只改 topic 字段，一张卡都不会少）─────────
+  // 放在新卡写入之后：本轮新建的卡如果落在被并掉的主题里，也一起搬过去
+  for (const m of result.merge_topics) {
+    if (!accepted(K.mergeTopic(m.to, m.from))) continue;
+    const { moved } = await repo.retopicCards(m.from, m.to);
+    if (moved > 0) applied++;
   }
 
   // ── 碎片去重（软合并，原文保留）──────────────────────

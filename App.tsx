@@ -135,6 +135,56 @@ export default function App() {
     for (const [offset, text] of samples) {
       await repo.insertFragment(text, 'app', now - offset);
     }
+
+    // 顺带造几张知识卡：预览里 otherwise 知识库永远是空的，
+    // 「主题 → 小方向」两级和主题整理入口就没东西可看
+    const seedCards: { topic: string; subtopic: string | null; title: string; gist: string; body: string }[] = [
+      {
+        topic: 'NAS 维护',
+        subtopic: '换盘',
+        title: 'RAID5 降级后先确认故障盘再拔',
+        gist: '- 先看存储池状态确认降级位置\n- 热备会自动顶上重建，拔错盘直接报废\n- 新盘先跑 SMART 长检再插',
+        body: 'RAID5 降级后先别急着拔盘，得先确认哪一块是热备、哪一块是真正故障的。热备会自动顶上开始重建，这时候拔错盘直接阵列报废。',
+      },
+      {
+        topic: 'NAS 维护',
+        subtopic: '备份',
+        title: '配置备份要脚本化定时跑',
+        gist: '- 群晖配置备份不能靠手点\n- 计划任务每周跑一次，存到独立卷',
+        body: '群晖的配置备份一直没做，得写个脚本定时跑。',
+      },
+      {
+        topic: 'NAS 维护',
+        subtopic: null,
+        title: 'SHR 比 RAID5 更适合混插盘位',
+        gist: '- SHR 允许不同容量混插\n- RAID5 按最小盘算，大盘浪费',
+        body: '整理旧笔记时发现：同容量盘才用 RAID5，混插一律 SHR。',
+      },
+      {
+        topic: '装机',
+        subtopic: null,
+        title: 'Ventoy 升级后要重新校验启动',
+        gist: '- 升级 Ventoy 会重写引导区\n- 老机器上要再验一次 UEFI 启动',
+        body: 'Ventoy 更新了，回头升级 U 盘。',
+      },
+      {
+        topic: '工具',
+        subtopic: null,
+        title: '批量做启动盘可以脚本化',
+        gist: '- 用 diskpart + imagex 组合\n- 一次做十张，别一张张点',
+        body: '想起上周答应给行政做一批 U 盘启动盘。',
+      },
+      {
+        topic: '资讯',
+        subtopic: null,
+        title: '长文档问答的关键是切片粒度',
+        gist: '- 切太碎丢上下文，切太大挤爆窗口\n- 按语义段落切比按字数切稳',
+        body: '看了一篇讲 RAG 的文章，说切片粒度比模型选型更影响效果。',
+      },
+    ];
+    for (const c of seedCards) {
+      await repo.insertKnowledgeCard({ ...c, sourceIds: [] });
+    }
     await reload();
   }, [reload]);
 

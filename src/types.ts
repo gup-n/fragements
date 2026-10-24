@@ -62,6 +62,13 @@ export interface KnowledgeCard {
   id: number;
   /** 归类主题，如「NAS 维护」。AI 应优先复用已有主题 */
   topic: string;
+  /**
+   * 二级方向，如「NAS 维护」下的「换盘」。
+   *
+   * 主题不是独立实体，只是卡片上的字符串；所以两级都靠字段而不是外键。
+   * 这一列刻意可空 —— 大多数主题下只有两三张卡，硬分小方向反而更碎。
+   */
+  subtopic: string | null;
   /** 一句话结论，8-15 字 */
   title: string;
   /** AI 提炼的 2-4 条要点，每行以 - 开头 */
@@ -96,6 +103,25 @@ export interface OrganizeResult {
   drop_todos: DropTodoSuggestion[];
   /** 建议把几条重复的已有待办并成一条（被合并的隐藏，可撤回） */
   merge_todos: MergeTodoSuggestion[];
+  /** 建议把几个方向相近的已有主题并成一个 */
+  merge_topics: MergeTopicSuggestion[];
+}
+
+/**
+ * 合并方向相近的主题。
+ *
+ * 这是「越整理越碎」的治本项：主题只是卡片上的字符串，
+ * 模型新建一个主题的成本为零，于是「工具」「资讯」各占一个，
+ * 而它们其实都是「AI」。这条建议把这类碎片收回去。
+ *
+ * 不设「改名」—— 改名是纯用户意图，由知识库的主题管理入口直接做。
+ */
+export interface MergeTopicSuggestion {
+  /** 被并掉的主题名，至少两个 */
+  from: string[];
+  /** 合并后的主题名。可以是 from 之一，也可以是新名字 */
+  to: string;
+  reason: string | null;
 }
 
 /**
@@ -156,6 +182,8 @@ export interface DropTodoSuggestion {
 
 export interface KnowledgeSuggestion {
   topic: string;
+  /** 二级方向，可空。只在同一个主题下确实有多种细分时才填 */
+  subtopic: string | null;
   title: string;
   gist: string;
   body: string;

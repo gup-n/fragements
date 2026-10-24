@@ -1,7 +1,7 @@
 import type { Fragment, KnowledgeCard, Todo } from '../types';
 import { dayKey, formatTime, todayISO, weekdayCN } from '../util/date';
 
-export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成九项工作。
+export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用户会把随手记下的碎片按时间顺序给你，你要一次性完成十项工作。
 
 【输出格式】
 只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块。结构如下：
@@ -9,12 +9,13 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
   "tags":          [{"id": 1, "labels": ["工作"], "project": "报销单"}],
   "todos":         [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
   "merge":         [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
-  "knowledge":     [{"topic": "NAS 维护", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
+  "knowledge":     [{"topic": "NAS 维护", "subtopic": "换盘", "title": "换盘前先确认热备盘位", "gist": "- 先看存储池状态确认降级盘位\\n- 热备盘会自动顶上，别急着拔", "source_ids": [3]}],
   "todo_done":     [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
   "card_update":   [{"card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "同属 RAID 换盘"}],
   "archive_cards": [{"card_id": 7, "reason": "内容已被新卡完整覆盖"}],
   "drop_todos":    [{"todo_id": 6, "reason": "和另一条重复"}],
-  "merge_todos":   [{"keep_id": 6, "drop_ids": [9, 14], "text": "把报销单交了", "reason": "三条说的是同一件事"}]
+  "merge_todos":   [{"keep_id": 6, "drop_ids": [9, 14], "text": "把报销单交了", "reason": "三条说的是同一件事"}],
+  "merge_topics":  [{"from": ["工具", "资讯"], "to": "AI", "reason": "两个主题下都是 AI 相关的结论"}]
 }
 
 【tags】为每条碎片给 1-3 个中文标签。标签要短，2-4 个字，优先复用常见类别（工作、生活、设备、财务、健康、学习、人际、想法）。project 填这条碎片所属的具体事项名（如"报销""NAS 维护"），看不出明确事项就填 null。每条碎片都必须出现在 tags 里。
@@ -31,7 +32,8 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 纯事件（"带 U 盘给小李"）、纯情绪、纯待办，一律不要出知识卡。宁可少出，不要凑数。没有就返回空数组。
 
 每张卡的字段要求：
-- topic：归属主题，2-6 个字，如"NAS 维护""装机""网络"。必须优先从【已有主题】里选，只有确实是全新领域才新建。
+- topic：归属主题，2-6 个字，如"NAS 维护""装机""网络"。必须优先从【已有主题】里选，只有确实是全新领域才新建。**判断标准是「大方向」而不是「这张卡提到了什么词」** —— 出现一个新名词就开一个新主题，知识库会碎成一地。
+- subtopic：可选的二级方向，2-6 个字。只在同一个主题下已经有好几张卡、且确实存在明显不同的细分时才填（比如"NAS 维护"下的"换盘""备份"）；其余情况填 null。**宁可留空，不要为了分类而分类。**
 - title：一句话结论，8-15 字，要具体。反例："NAS 相关知识"（太泛）。正例："RAID5 换盘前先确认热备盘位"。
 - gist：2-4 条要点，每行以 "- " 开头，每行不超过 30 字。这是给人快速扫读的索引。
 - source_ids：来源碎片的 id 数组，必须来自用户给的列表。
@@ -69,6 +71,16 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 - 和 drop_todos 互斥：同一条待办不能既被删又被并。
 - 没有就返回空数组。
 
+【merge_topics】用来把方向相近的【已有主题】并成一个。
+- 判据是「讲的是同一类事」，不是「字数接近」：「工具」和「资讯」下面都是 AI 相关的结论，就该并成「AI」；而「NAS 维护」和「装机」是两回事，不要并。
+- 判断依据是【已有主题】里每个主题后面列的卡片标题 —— 先看那些标题，再看主题名。
+- from 至少两个主题名，必须**原样**来自【已有主题】，不要改写。
+- to 优先从 from 里挑一个说得最准的；都不够贴切时才起新名字（2-6 字）。
+- 合并只是把卡片换到新主题名下，一条内容都不会丢，用户也能手动拆回去 —— 所以看到明显同类的不要放过。
+- 但**不要把上下位关系当成同类**：「网络」并进「NAS 维护」属于压低颗粒度，反而更难找。
+- 同一个主题不能出现在两条建议里。
+- 没有就返回空数组。
+
 【硬性约束】
 - 所有 id 必须来自用户给的列表，不许新造 id。
 - 不许编造用户没说过的事实、人名、数字。
@@ -101,6 +113,8 @@ export interface UserContentOptions {
 const CARD_LIMIT = 40;
 const OPEN_TODO_LIMIT = 60;
 const DONE_TODO_LIMIT = 40;
+/** 每个主题后面最多列几张卡片的标题，只用来判断「这两个主题是不是一回事」 */
+const TOPIC_SAMPLE = 4;
 
 export function buildUserContent(options: UserContentOptions) {
   const { fragments, topics = [], cards = [], todos = [], mode = 'organize' } = options;
@@ -145,11 +159,19 @@ export function buildUserContent(options: UserContentOptions) {
   }
 
   out.push('');
-  out.push(
-    topics.length
-      ? `【已有主题】${topics.join('、')}`
-      : '【已有主题】暂无，可以新建',
-  );
+  if (topics.length) {
+    // 只给主题名，模型没法判断「工具」和「资讯」其实是同一类；
+    // 把每个主题下的卡片标题挂上，merge_topics 才有依据
+    out.push('【已有主题】（大方向一致的应当合并；不要为一张卡单开一个主题）');
+    for (const t of topics) {
+      const own = cards.filter((c) => c.topic === t);
+      const shown = own.slice(0, TOPIC_SAMPLE).map((c) => c.title);
+      const more = own.length > shown.length ? ` 等 ${own.length} 张` : '';
+      out.push(shown.length ? `- ${t}（${shown.join(' / ')}${more}）` : `- ${t}`);
+    }
+  } else {
+    out.push('【已有主题】暂无，可以新建');
+  }
 
   out.push('');
   if (cards.length) {

@@ -31,6 +31,12 @@ function load(): WebDb {
   try {
     const raw = globalThis.localStorage?.getItem(KEY);
     cache = raw ? { ...empty(), ...JSON.parse(raw) } : empty();
+    // v0.4.1 之前的卡片没有 subtopic 字段，补成 null，
+    // 否则下游拿到 undefined，`subtopic === null` 的分组判断会漏掉这批卡
+    cache!.knowledgeCards = (cache!.knowledgeCards ?? []).map((c) => ({
+      ...c,
+      subtopic: c.subtopic ?? null,
+    }));
   } catch {
     cache = empty();
   }
@@ -150,6 +156,7 @@ export const repo: Repo = {
     d.knowledgeCards.push({
       id,
       topic: input.topic,
+      subtopic: input.subtopic ?? null,
       title: input.title,
       gist: input.gist,
       body: input.body,
@@ -195,6 +202,45 @@ export const repo: Repo = {
       .sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic));
   },
 
+  async listKnowledgeSubtopics(topic) {
+    const map = new Map<string | null, number>();
+    for (const c of load().knowledgeCards) {
+      if (c.archived || c.topic !== topic) continue;
+      const key = c.subtopic ?? null;
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return Array.from(map.entries())
+      .map(([subtopic, count]) => ({ subtopic, count }))
+      .sort((a, b) => b.count - a.count || (a.subtopic ?? '').localeCompare(b.subtopic ?? ''));
+  },
+
+  async retopicCards(from, to) {
+    const list = new Set(from.filter((t) => !!t && t !== to));
+    if (!list.size) return { moved: 0 };
+    let moved = 0;
+    // 归档的一起改，否则恢复后会多出一个只含归档卡的主题
+    for (const c of load().knowledgeCards) {
+      if (!list.has(c.topic)) continue;
+      c.topic = to;
+      moved++;
+    }
+    if (moved) persist();
+    return { moved };
+  },
+
+  async resubtopicCards(topic, from, to) {
+    const list = from.filter((s) => s !== to);
+    if (!list.length) return { moved: 0 };
+    let moved = 0;
+    for (const c of load().knowledgeCards) {
+      if (c.topic !== topic || !list.includes(c.subtopic ?? null)) continue;
+      c.subtopic = to;
+      moved++;
+    }
+    if (moved) persist();
+    return { moved };
+  },
+
   async updateKnowledgeCard(id, patch) {
     const d = load();
     const c = d.knowledgeCards.find((x) => x.id === id);
@@ -203,6 +249,8 @@ export const repo: Repo = {
     if (patch.gist !== undefined) c.gist = patch.gist;
     if (patch.body !== undefined) c.body = patch.body;
     if (patch.topic !== undefined) c.topic = patch.topic;
+    // 传 null 是「清掉二级方向」，不能用 || 判断
+    if (patch.subtopic !== undefined) c.subtopic = patch.subtopic;
     if (patch.archived !== undefined) c.archived = patch.archived;
     if (patch.sourceIds !== undefined) c.sourceIds = patch.sourceIds;
     persist();

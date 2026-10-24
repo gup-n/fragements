@@ -74,6 +74,12 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
         <View style={s.topicRow}>
           <Ionicons name="pricetag-outline" size={12} color={C.accentText} />
           <Text style={s.topic}>{card.topic}</Text>
+          {card.subtopic ? (
+            <>
+              <Ionicons name="chevron-forward" size={10} color={C.text3} />
+              <Text style={s.subtopic}>{card.subtopic}</Text>
+            </>
+          ) : null}
         </View>
 
         <Text style={s.title}>{card.title}</Text>
@@ -137,6 +143,7 @@ const s = StyleSheet.create({
   content: { paddingHorizontal: 18, paddingBottom: 28 },
   topicRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   topic: { fontSize: 12, color: C.accentText, fontWeight: '600' },
+  subtopic: { fontSize: 12, color: C.text3 },
   title: {
     fontSize: 20,
     lineHeight: 29,

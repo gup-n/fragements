@@ -50,7 +50,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 产物在 `android/app/build/outputs/apk/release/app-release.apk`，
 复制成 `fragments-v<版本>.apk` 放项目根目录，把大小和 MD5 一并报给用户。增量约 2–3 分钟。
 
-## 六条硬规矩
+## 七条硬规矩
 
 1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。
 2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
@@ -58,6 +58,9 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 4. **不要用 `Modal`**。它带 `FLAG_LAYOUT_NO_LIMITS`，会画到状态栏下且收不到键盘事件。用 `position:absolute` 覆盖层 + 自己的 `BackHandler`。
 5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 Web 预览会挂。
 6. **改功能先改 `SPEC.md`**。文档是唯一设计依据。
+7. **主题不是实体**，只是 `knowledge_cards.topic` 上的一个字符串。改主题名要批量 `UPDATE`（`repo.retopicCards`），
+   别去找 `topics` 表 —— 没有那张表。二级方向同理，是 `subtopic` 列而不是外键。
+   因为新建主题的成本为零，prompt 里必须把「大方向一致就复用已有主题」写死，否则模型会给每张卡开一个新主题。
 
 ## 最容易搞错的概念
 

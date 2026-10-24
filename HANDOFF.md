@@ -1,6 +1,6 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，对应版本 **v0.4.0（versionCode 11）**。
+> 写于 2026-10-24，对应版本 **v0.4.1（versionCode 12）**。
 > 上一轮上下文快满了，这份文档的目的是让你**不用重读历史对话**就能接着干。
 >
 > **阅读顺序**：本文件（10 分钟）→ `SPEC.md` 第 6 节（AI 契约 + 流式与思考过程 + 周期总结与知识库问答）+ 第 8.1 节（Android UI 红线）→ `ROADMAP.md` 剩余项。
@@ -17,12 +17,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.4.0`，`versionCode 11`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.4.1`，`versionCode 12`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 3` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 约 6900 行 TS/TSX，最大的屏 `OrganizeScreen.tsx` 830 行 |
-| 最新 APK | `fragments-v0.4.0.apk`，21.8 MiB（22,898,474 字节），MD5 `0a8b628c2d49c65f7656a542e41c9ea4`（`versionCode 11` / `versionName 0.4.0` 已用 aapt2 核对） |
+| 规模 | 约 9700 行 TS/TSX，最大的屏 `OrganizeScreen.tsx` 827 行 |
+| 最新 APK | `fragments-v0.4.1.apk`，21.9 MiB（22,914,634 字节），MD5 `de552157de6b03e43fe5e02e7789aaee`（`versionCode 12` / `versionName 0.4.1` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -72,7 +72,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 3. 项目现在的状态
 
-### 已完成（v0.1.0 → v0.4.0）
+### 已完成（v0.1.0 → v0.4.1）
 
 | 版本 | 内容 |
 |---|---|
@@ -85,8 +85,9 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 | v0.2.4 | **思考过程可视化**（流式 + 思维链实时显示）、**模型名迁移到 `deepseek-flash`**、超时改分段、设置页可开关思考 |
 | **v0.3.0** | **周期总结**（日/周/月，进时间轴）、**知识库检索**（关键字搜索 + 问模型）、知识库详情页与大字号、待办完成标记（`todo_done` 默认勾选 + 时间轴徽章） |
 | **v0.3.1** | **真机反馈五条全修**：待办可合并（软隐藏可撤回）、小结挪到时间轴顶部、整理不再产出小结（改为待补清单）、重构支持全部碎片、代码结构重整（`ResultSections` / `resultItems` / `commit`） |
-| **v0.4.0** | **时间轴三件**：按日折叠（默认只展开今天）、首页搜索（内存过滤 + 未整理计数）、碎片详情页（只读 + 左右滑 + 长按编辑） |
 | **v0.3.2** | **界面美化**：`IconButton`（36px 圆触控区）+ `ScreenHeader`（统一页头）两个基础组件，图标尺寸整体上调一档、首页图标加圆底、整理入口按未读状态变实心；五处页头收成一处，知识库把「共 N 条」挪进副标题 |
+| **v0.4.0** | **时间轴三件**：按日折叠（默认只展开今天）、首页搜索（内存过滤 + 未整理计数）、碎片详情页（只读 + 左右滑 + 长按编辑） |
+| **v0.4.1** | **主题治理**：卡片加 `subtopic` 二级方向、主题页按小方向分组、`merge_topics` AI 归并建议、知识库页头手动合并 / 改名 |
 
 ### 未完成的功能（只剩一个）
 
@@ -110,17 +111,68 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ## 4. 最近做了什么
 
-### 4.1 v0.4.0：时间轴三件（第一批，已完成）
+### 4.1 v0.4.1：知识库主题治理（第二批）
+
+用户提的五条需求拆成三批，这是第二批。要解决的核心问题：**主题只是卡片上的一个字符串**，
+模型新建一个的成本是零，于是「工具」「资讯」各占一个，而它们其实是同一类。
+
+三个动作一起做，因为互相依赖：
+
+1. **卡片加 `subtopic`**（migration v4）—— 主题页可以按小方向分组
+2. **AI 加第十类输出 `merge_topics`** —— 整理时主动提归并建议
+3. **知识库加主题整理面板**（`components/TopicSheet.tsx`）—— 用户手动合并 / 改名
+
+#### 4.1.1 主题清单必须带卡片标题
+
+原来 prompt 里只给 `【已有主题】NAS 维护、装机`。模型没法判断「工具」和「资讯」是同一类，
+所以它从来不会建议合并 —— 不是它不听话，是**它没有依据**。
+
+改成每个主题后面挂最多 4 个卡片标题、超出标「等 N 张」（`TOPIC_SAMPLE = 4`）。
+只给个主题名就要它做归并，等于让它猜谜。
+
+#### 4.1.2 合并和改名是同一个动作
+
+底层只有 `repo.retopicCards(from[], to)` —— 批量 `UPDATE knowledge_cards SET topic = ?`。
+`TopicSheet` 也只有一个输入框：**勾一个就是改名，勾多个就是合并**。
+
+已归档的卡片也一起改，否则恢复之后会凭空多出一个只含归档卡的主题。
+
+#### 4.1.3 为什么 `merge_topics` 默认不勾选
+
+和归档卡、删待办同属「需要用户主动点一下」的一类。虽然一张卡都不会丢，
+但它改的是**用户自己的组织结构**，而且合并之后回不到原来的主题名（只能手动重拆）。
+
+`resultItems.ts` 的 `destructive` 字段字面意思是「会让内容从列表里消失」，
+这一类不完全是 —— 代码注释里写明了「这里指的是需要主动确认，不是内容会丢」，
+别看到字段名就以为标错了。
+
+#### 4.1.4 `subtopic` 刻意可空
+
+大多数主题下只有两三张卡，硬分小方向反而更碎。所以：
+
+- AI 只在「同一主题下已经有好几张卡、且确实有明显不同的细分」时才填
+- 界面只在**分组数 > 1** 时显示分组头，否则平铺
+- 「未分方向」那组永远排最后
+
+将来真要升级成 `topics` 实体表，`subtopic` 就是现成的 `parent_id` 迁移路径。
+
+#### 4.1.5 第二批之后的第三批（还没做）
+
+问答加权限（操作提案）+ DeepSeek 官方 Search + 追问记录。相关情报在第 7 节。
+
+---
+
+### 4.2 v0.4.0：时间轴三件（第一批，已完成）
 
 用户提了五条需求，并要求先出方案、确认后动手。方案定完拆成三批：
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
 | 1 | 按日折叠 + 首页搜索 + 碎片详情页（左右滑） | **已完成（v0.4.0）** |
-| 2 | 主题两级结构（`subtopic`）+ 主题管理 + 整理时 AI 归并建议 | 未开始 |
+| 2 | 主题两级结构（`subtopic`）+ 主题管理 + 整理时 AI 归并建议 | **已完成（v0.4.1）** |
 | 3 | 问答加权限（操作提案）+ DeepSeek 官方搜索 + 追问记录 | 未开始 |
 
-#### 4.1.1 点碎片现在进的是「读」，不是「改」
+#### 4.2.1 点碎片现在进的是「读」，不是「改」
 
 之前点整行直接开编辑面板 —— 想通读一条长记录，先得到一个光标和键盘。
 现在点进 `components/FragmentDetail.tsx`（全屏只读、17px/30 行高、可选中复制），
@@ -137,7 +189,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 翻页本身用横向 `FlatList` + `windowSize={3}`，不要手写 `PanResponder` 或
 自己维护 `contentOffset`：窗口化、分页吸附、惯性、回弹都是系统原生的，安卓上尤其明显。
 
-#### 4.1.2 折叠：默认只展开今天，且不记忆
+#### 4.2.2 折叠：默认只展开今天，且不记忆
 
 `collapsedDays` 的初值是 **null**，含义是「还没手动动过」，这时走默认规则（只展开今天）。
 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上。
@@ -149,7 +201,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 3. **条数和预览必须提前算** —— 折叠时 `data` 被清空（SectionList 靠空数组才能只渲染 header），
    所以 `DisplaySection` 带上 `total` 和 `preview`，不能在 header 里读 `section.data[0]`
 
-#### 4.1.3 搜索：内存过滤，不走库
+#### 4.2.3 搜索：内存过滤，不走库
 
 碎片本来就全量在 props 里，压一个 SQL 查询下去反而拿不到 `tags` / `project` 的匹配。
 搜索时**不显示小结** —— 否则日期头下面孤零零挂一条小结，看不出到底哪条碎片命中了。
@@ -158,7 +210,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ---
 
-### 4.2 v0.3.1 → v0.3.2：真机反馈第一轮 + 界面美化
+### 4.3 v0.3.1 → v0.3.2：真机反馈第一轮 + 界面美化
 
 用户拿 v0.3.0 装了机，提了五条，并且明确要求「先想清楚我的表述哪里不明确，再动手」。
 所以这轮先出了四个选择题把分歧收敛掉，再改代码：
@@ -180,7 +232,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 | 不要自动生成小结，改为列出哪天没整理 | 原流程在整理应用的循环里直接写 `notes` | 整理页新增「N 个周期还没写小结」卡片，点一条进面板预览后再决定存不存 |
 | 重构只能整理已整理的内容 | `refactorPool` 只取 `status === 'tagged'`，想修正历史得先跑一轮整理 | 默认改为「全部碎片」（`mergedInto === null` 的未整理 + 已整理），原选项保留 |
 
-#### 4.2.1 小结为什么必须从整理流程里摘出去
+#### 4.3.1 小结为什么必须从整理流程里摘出去
 
 不只是「用户不想」。整理一次最多看 60 条碎片，可能只是某个周期的一小部分 ——
 模型拿着这批碎片写出来的「今日小结」本身就是残的。而周期总结面板会读该周期的**全部**碎片
@@ -191,7 +243,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 现在小结只有一个入口：**周期总结面板**。整理页只负责告诉用户「哪几个周期还空着」。
 
-#### 4.2.2 「待补小结」的口径（`src/util/digest.ts`）
+#### 4.3.2 「待补小结」的口径（`src/util/digest.ts`）
 
 | 规则 | 理由 |
 |---|---|
@@ -205,14 +257,14 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 因为月/周的**周期末端**天然比日靠后，一个月总结能把十几个日小结全挤掉，而日小结才是日常真用的那个。
 现在是「先按粒度占名额，剩余按时间补」。
 
-#### 4.2.3 顺手修的两个口径问题
+#### 4.3.3 顺手修的两个口径问题
 
 - `stats().todoOpen` 把已合并的待办也算成「未完成」，合并越多首页那个数字越虚高（native / web 两处都改）
 - 删除某条碎片后，原来并进它的碎片只把 `merged_into` 置空、`status` 还留着 `merged` ——
   既不在时间轴显示（时间轴看 `mergedInto`），也不进整理池（整理池看 `status`），**等于凭空消失**。
   改为同时落回 `inbox`
 
-#### 4.2.4 代码结构重整（用户明确要求「重头读代码，把混乱的逻辑优化掉」）
+#### 4.3.4 代码结构重整（用户明确要求「重头读代码，把混乱的逻辑优化掉」）
 
 | 问题 | 处理 |
 |---|---|
@@ -225,13 +277,13 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 `「已写入 N 项」` 现在报的是 **`commitResult` 实际写库条数**，不是「勾选了几项」——
 勾了但无事可做的条目（比如 `card_update` 要补的原文全在卡里了）不该算进去。
 
-#### 4.2.5 这轮没做的事
+#### 4.3.5 这轮没做的事
 
 - **回顾页的待办没有手动合并/删除入口**。用户的原话是「模型无法对待办进行操作」，
   所以只补了 AI 侧的能力；手动操作的界面是另一个需求，等用户提
 - 通知栏入口仍然没做（SPEC 唯一未完成的功能项）
 
-#### 4.2.6 v0.3.2：界面与图标
+#### 4.3.6 v0.3.2：界面与图标
 
 用户原话：「看一下 UI 能不能美化一下，让里面的图标更方便查看，界面布局更佳美观」。
 拆成两件事：**图标能不能看清/点中**，和**版式是否统一**。
@@ -256,7 +308,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ---
 
-### 4.3 v0.3.0：四条待优化项
+### 4.4 v0.3.0：四条待优化项
 
 用户一次提了四条，我先用选择题收敛了三个设计分歧，再动手：
 
@@ -275,7 +327,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 | 知识库要能搜、能问 | 顶部关键字搜索（跨主题，主题页内自动收窄）+ 问模型（当前主题 / 全库） |
 | 日/周/月内容想整理到时间轴 | 回顾页「生成总结」→ 选周期 → 流式生成 → **预览后决定存不存** → 落在该周期末尾 |
 
-#### 4.3.1 三个必须记牢的实现点
+#### 4.4.1 三个必须记牢的实现点
 
 1. **`response_format: json_object` 必须能关**。开着它，模型会把整篇 Markdown 塞进一个 JSON 字符串，
    换行全变 `\n`，落到时间轴上就是糊成一行。`chat.ts` 的 `RequestOptions.json` 默认开（整理要），
@@ -285,7 +337,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 3. **引用反查靠标题字面命中**（`answer.includes(card.title)`），不让模型输出编号再解析。
    模型换个编号习惯（`[1]` / `【1】` / `1.`）就得改一次解析器。
 
-#### 4.3.2 顺手做的一次重构
+#### 4.4.2 顺手做的一次重构
 
 `deepseek.ts` 从 570 行降到 270 行。传输层（超时守卫、流式/非流式、错误映射、`testConnection`）
 整体搬到新的 `ai/chat.ts`，因为总结和问答要一模一样的四段超时和错误提示，
@@ -294,7 +346,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 > 改的时候注意：`AiError` 和 `testConnection` 现在从 `ai/chat` 导出，不再是 `ai/deepseek`。
 > `OrganizeScreen` / `SettingsScreen` 的 import 已同步。
 
-#### 4.3.3 材料预算：为什么是「前 70% + 后 30%」
+#### 4.4.3 材料预算：为什么是「前 70% + 后 30%」
 
 一个月的碎片可能上百条，全塞进去既贵又会把模型淹掉。第一版想的是「只取前 N 条」，
 但那样月末的结论（往往才是这个月真正的产出）会被整段丢掉。
@@ -303,13 +355,13 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 两头的语境都在，模型不会把「月初起的头」和「月末的结论」接错。单条碎片截 400 字，
 避免一条长笔记吃掉整个预算。
 
-#### 4.3.4 同周期重复生成
+#### 4.4.4 同周期重复生成
 
 日小结最容易被重新生成（晚上又记了几条）。保存前会查 `(type, period)` 是否已有 note，
 有就给一个**默认勾选的「替换原有小结」**，取消勾选就是另存一条。
 不做这一步的话，时间轴上会并排两条同日小结，用户还得手动删。
 
-#### 4.3.5 返回键的层级
+#### 4.4.5 返回键的层级
 
 知识库原来是「按返回直接回时间轴」，无论你在第几层。这轮补了页内层级：
 搜索词 → 主题 → 回主界面，逐层退。实现上要注意 **RN 的 BackHandler 是后进先出**，
@@ -319,9 +371,9 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 ---
 
-### 4.4 v0.2.4：思考过程（上一轮，仍在用）
+### 4.5 v0.2.4：思考过程（上一轮，仍在用）
 
-#### 4.4.1 先说那个更急的事：模型名已经死了
+#### 4.5.1 先说那个更急的事：模型名已经死了
 
 用户提的需求是「整理时想看到模型的思考过程」，但查文档时发现了一个更要命的问题：
 
@@ -336,7 +388,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 代码里的迁移方式：`loadAiConfig` 读配置时用 `RETIRED_MODELS` 映射把旧名换掉（读取路径不写库，用户下次保存时自然落盘）。
 
-#### 4.4.2 三件事一起改，因为它们互相依赖
+#### 4.5.2 三件事一起改，因为它们互相依赖
 
 | 改动 | 为什么非改不可 |
 |---|---|
@@ -344,7 +396,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 | `stream: false` → 流式 SSE | **非流式必须等整轮跑完才拿得到 `reasoning_content`，那就不叫「过程」了** |
 | 新增 `thinking` / `reasoning_effort` | V4 默认开思考，但得让用户能关（更快更省） |
 
-#### 4.4.3 五个必须记牢的实现点
+#### 4.5.3 五个必须记牢的实现点
 
 1. **RN 自带的 `fetch` 没有 `response.body`**，`getReader()` 直接崩。
    SDK 58 的全局 fetch 虽然已经被 `expo/fetch` 接管，代码里仍**显式 `import { fetch } from 'expo/fetch'`**，
@@ -358,14 +410,14 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 5. **界面更新必须节流**（120ms）。一个思考过程能吐几百个 chunk，每块都 `setState` 会把 JS 线程占满。
    结束时再用最终值兜一次底，否则最后 120ms 的内容会看不见。
 
-#### 4.4.4 界面长什么样
+#### 4.5.4 界面长什么样
 
 - **整理中**：一张卡片，头部是转圈 + 标题 + 已用时，中间是滚动的思维链（自动贴底），底部两个数字「思考 N 字 / 结果 M 字」
 - **追问时**：同一张卡片顶在结果页上方，旧结果还在下面
 - **结果页**：一个默认收起的「模型思考过程 · N 字」，点开可看全文（内部滚动，限高 260）
 - **设置页**：「整理行为」分组，思考开关 + 轻/标准/深 三档
 
-#### 4.4.5 一个必须承认的取舍
+#### 4.5.5 一个必须承认的取舍
 
 **思考模式下 `temperature` 不生效**。原来那个用来压稳定性的 `temperature: 0.2` 在开思考时等于没设。
 官方文档写得很清楚（传了不报错，只是被忽略），没有替代手段。
@@ -373,7 +425,7 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 代码里 `buildBody` 只在「没有思考」时才传 `temperature`，免得看代码的人以为自己控制住了随机性。
 
-#### 4.4.6 为什么 thinking 参数要按模型名判断
+#### 4.5.6 为什么 thinking 参数要按模型名判断
 
 只有 DeepSeek 的 V4 系列认 `thinking` / `reasoning_effort`。
 用户如果把 Base URL 换成第三方 OpenAI 兼容服务，多传这两个字段**可能直接 400**。
@@ -381,9 +433,9 @@ V4 的思考模式默认开启，把模型名改对，`reasoning_content` 自然
 
 ---
 
-### 4.5 v0.2.3：重构模式（更早一轮，但仍是核心设计）
+### 4.6 v0.2.3：重构模式（更早一轮，但仍是核心设计）
 
-#### 4.5.1 先纠正一个理解错误（这是最重要的背景）
+#### 4.6.1 先纠正一个理解错误（这是最重要的背景）
 
 v0.2.2 时我**主动砍掉了用户提的「重构」**，理由写进了文档：「让模型重写全部历史内容，误点就覆盖沉淀，与永不删除原文冲突」。
 
@@ -395,7 +447,7 @@ v0.2.2 时我**主动砍掉了用户提的「重构」**，理由写进了文档
 
 教训写在 `SPEC.md` 第 10 节：用户提一个功能名时，别用自己的技术直觉替换它的语义。有歧义先问，别急着下「不做」的结论。
 
-#### 4.5.2 设计：一个 `mode` 参数，九项输出
+#### 4.6.2 设计：一个 `mode` 参数，九项输出
 
 `organize` / `refactor` **共用同一套 prompt 和响应结构**，只靠 `mode` 切语义：
 
@@ -415,7 +467,7 @@ drop_todos:    { todo_id, reason }[]   // 真删除待办
 
 SYSTEM_PROMPT 也相应从七项改到九项。
 
-#### 4.5.3 四个「由代码保证」的点（别指望模型自觉）
+#### 4.6.3 四个「由代码保证」的点（别指望模型自觉）
 
 这是本轮的设计核心，改这块之前先想清楚为什么这么写：
 
@@ -435,7 +487,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
    已整理的碎片上次已经抽过待办、写过小结，再抽一遍就是纯重复数据。
    代码层按两条判据过滤待办（**文案去掉标点空白后相同** 或 **同一碎片本来就派生过待办**），并把 `summary` 置空。
 
-#### 4.5.4 补上一个数据黑洞
+#### 4.6.4 补上一个数据黑洞
 
 `knowledge_cards.archived` 字段一直存在，但 `listKnowledgeCards` 过滤了 `archived = 0`，**没有任何界面能看见归档的卡**。
 只做归档功能不补入口 = 再造一个数据黑洞（和 v0.2.0 修的待办/小结一个性质）。
@@ -444,7 +496,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
 
 **这条是项目的一个模式**：只要新增一个「让内容从列表消失」的字段/操作，就必须同时提供查看入口。历史上栽过两次。
 
-#### 4.5.5 界面改动
+#### 4.6.5 界面改动
 
 都在 `src/screens/OrganizeScreen.tsx`：
 
@@ -462,7 +514,7 @@ SYSTEM_PROMPT 也相应从七项改到九项。
 App.tsx                       211   路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds）
 index.ts                        8   registerRootComponent
 src/
-  types.ts                    181   Fragment / Todo / Note / KnowledgeCard / OrganizeResult（九类，**无 summary**）+ AiConfig
+  types.ts                    181   Fragment / Todo / Note / KnowledgeCard / OrganizeResult（十类，**无 summary**）+ AiConfig
   theme.ts                     52   颜色常量 C、圆角 R、tagColor() 稳定配色
   version.ts                   10   版本号常量（RN 读不到 app.json，发版时和它手工对齐）
   ai/
@@ -490,7 +542,7 @@ src/
   util/
     date.ts                   189   日期格式化 + 周期键（ISO 周）/ 区间 / 锚点
     digest.ts                  97   ★ 哪些周期还没写小结（按粒度配额排序）
-    resultItems.ts            104   ★ 九类输出的字段元数据表 + 确认 key + 默认勾选策略
+    resultItems.ts            104   ★ 十类输出的字段元数据表 + 确认 key + 默认勾选策略
     keyboard.ts                39   ★ useKeyboardHeight()，见第 7 节
   components/
     FragmentDetail.tsx        190   ★ 碎片详情页：全屏只读 + 左右翻页（宽度靠 onLayout 实测）
@@ -500,10 +552,11 @@ src/
     NoteBody.tsx               79   ★ 小结正文的轻量 Markdown 渲染（标题/列表/段落，不引第三方）
     ReasoningStream.tsx        85   ★ 流式实时面板：转圈 + 秒数 + 思维链滚动 + 字数
     ReasoningTrace.tsx         66   ★ 生成结束后的「模型思考过程」折叠区
-    ResultSections.tsx        439   ★ 结果页九类条目 + 逐条勾选
+    ResultSections.tsx        439   ★ 结果页十类条目 + 逐条勾选
     BacklogCard.tsx            86   ★ 「N 个周期还没写小结」卡片
     SummarySheet.tsx          495   ★ 周期总结：选周期 → 生成 → 预览 → 保存/替换
     KnowledgeDetail.tsx       216   知识卡详情页（归档 / 恢复 / 删除，两次点击确认）
+    TopicSheet.tsx            281   ★ 主题整理：勾一个改名、勾多个合并
     AskSheet.tsx              378   知识库问答面板（范围切换 + 输入 + 回答 + 引用卡片）
 scripts/
   build_web.mjs               ~25   ★ 导出 Web 产物到固定的 web-preview/（先删后导）
@@ -529,7 +582,7 @@ plugins/
 | 表 | 关键字段 | 备注 |
 |---|---|---|
 | `fragments` | `content / created_at / source / status / tags(JSON) / project / merged_into / nature` | `nature` 是 v2 加的，AI 判定的内容性质 |
-| `knowledge_cards` | `topic / title / gist / body / source_ids(JSON) / archived` | **`body` 永远是碎片原文拼接，不采信模型** |
+| `knowledge_cards` | `topic / subtopic / title / gist / body / source_ids(JSON) / archived` | **`body` 永远是碎片原文拼接，不采信模型** |
 | `todos` | `text / due_at / done / source_fragment_id / merged_into` | `merged_into` 非空 = 被合并隐藏（v3 加的，可撤回）；`deleteTodo` 是**真 DELETE** |
 | `notes` | `type / title / body_md / period` | 小结。`(type, period)` 由 `upsertNote` 保证唯一 |
 | `organize_runs` | `fragment_ids(JSON) / result_json / applied` | 每次 AI 调用的原始输出，用于排错 |
@@ -538,19 +591,20 @@ plugins/
 迁移规则：**`MIGRATIONS` 数组只追加，永不修改已发布条目**，`PRAGMA user_version` 是游标。
 加字段就往数组末尾 push 一段，别动前面的。
 
-### 九类 AI 输出
+### 十类 AI 输出
 
 ```json
 {
   "tags":          [{ "id": 1, "labels": ["工作"], "project": "报销" }],
   "todos":         [{ "text": "提交报销单", "due": "2026-10-21", "id": 1 }],
   "merge":         [{ "keep_id": 3, "drop_ids": [5], "reason": "同一件事" }],
-  "knowledge":     [{ "topic": "NAS 维护", "title": "…", "gist": "- …", "source_ids": [4] }],
+  "knowledge":     [{ "topic": "NAS 维护", "subtopic": "换盘", "title": "…", "gist": "- …", "source_ids": [4] }],
   "todo_done":     [{ "todo_id": 2, "reason": "…" }],
   "card_update":   [{ "card_id": 4, "add_source_ids": [12], "title": null, "gist": null, "reason": "…" }],
   "archive_cards": [{ "card_id": 7, "reason": "…" }],
   "drop_todos":    [{ "todo_id": 6, "reason": "…" }],
-  "merge_todos":   [{ "keep_id": 6, "drop_ids": [9, 14], "text": "把报销单交了", "reason": "…" }]
+  "merge_todos":   [{ "keep_id": 6, "drop_ids": [9, 14], "text": "把报销单交了", "reason": "…" }],
+  "merge_topics":  [{ "from": ["工具", "资讯"], "to": "AI", "reason": "…" }]
 }
 ```
 
@@ -672,10 +726,10 @@ plugins/
 
 ### P0 — 装机，按顺序验证
 
-`fragments-v0.4.0.apk` 已经打好放在项目根目录（`versionCode 11`，大小与 MD5 见第 1 节速览）。
+`fragments-v0.4.1.apk` 已经打好放在项目根目录（`versionCode 12`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.4.0.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.4.1.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——

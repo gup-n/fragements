@@ -24,6 +24,7 @@ export interface Repo {
 
   insertKnowledgeCard(input: {
     topic: string;
+    subtopic?: string | null;
     title: string;
     gist: string;
     body: string;
@@ -35,6 +36,16 @@ export interface Repo {
   /** 已归档的卡片；归档必须可逆，所以界面上要能看到并恢复 */
   listArchivedKnowledgeCards(): Promise<KnowledgeCard[]>;
   listKnowledgeTopics(): Promise<{ topic: string; count: number }[]>;
+  /** 某个主题下的二级方向分布。`subtopic` 为 null 的那组是「没分小方向」的卡 */
+  listKnowledgeSubtopics(topic: string): Promise<{ subtopic: string | null; count: number }[]>;
+  /**
+   * 把一批主题下的卡片整体改到另一个主题名下。
+   * 合并多个主题和给单个主题改名是同一件事，所以只留一个方法。
+   * 返回真正搬动的卡片数。
+   */
+  retopicCards(from: string[], to: string): Promise<{ moved: number }>;
+  /** 把某主题下的一批二级方向改名 / 合并成另一个 */
+  resubtopicCards(topic: string, from: (string | null)[], to: string | null): Promise<{ moved: number }>;
   updateKnowledgeCard(
     id: number,
     patch: {
@@ -42,6 +53,8 @@ export interface Repo {
       gist?: string;
       body?: string;
       topic?: string;
+      /** 传 null 表示清掉二级方向 */
+      subtopic?: string | null;
       archived?: boolean;
       /** 合并进已有卡时必须同步更新来源 id，否则导出和后续合并都会错 */
       sourceIds?: number[];

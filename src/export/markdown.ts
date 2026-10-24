@@ -81,7 +81,10 @@ function buildMarkdown(fragments: Fragment[], cards: KnowledgeCard[] = []): Expo
                   .split(/\n{2,}/)
                   .map((para) => `> ${para.replace(/\r?\n/g, ' ').trim()}`)
                   .join('\n>\n');
-                return `#### ${c.title}\n\n${gist}\n\n原文：\n\n${quote}\n`;
+                // 二级方向跟在标题后面：不额外加一级标题（那会让层级过深），
+                // 但导出后仍能看出这张卡属于哪个小方向
+                const heading = c.subtopic ? `${c.title}（${c.subtopic}）` : c.title;
+                return `#### ${heading}\n\n${gist}\n\n原文：\n\n${quote}\n`;
               })
               .join('\n');
             return `### ${topic}\n\n${items}`;

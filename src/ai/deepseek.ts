@@ -8,6 +8,7 @@ import type {
   KnowledgeSuggestion,
   MergeSuggestion,
   MergeTodoSuggestion,
+  MergeTopicSuggestion,
   OrganizeResult,
   TagSuggestion,
   Todo,
@@ -26,6 +27,8 @@ export interface NormalizeContext {
   todoIds?: number[];
   /** 允许被补充内容的知识卡 id */
   cardIds?: number[];
+  /** 允许被合并的已有主题名 */
+  topicNames?: string[];
 }
 
 /**
@@ -94,6 +97,9 @@ export function normalizeResult(
     if (!title) continue;
     const topicRaw = typeof k?.topic === 'string' ? k.topic.trim() : '';
     const topic = (topicRaw || '未归类').slice(0, 20);
+    const subRaw = typeof k?.subtopic === 'string' ? k.subtopic.trim() : '';
+    // 和主题同名的小方向没有任何区分作用，当作没填
+    const subtopic = subRaw && subRaw !== topic ? subRaw.slice(0, 20) : null;
     const gist = typeof k?.gist === 'string' ? k.gist.trim() : '';
     const sourceIds = Array.from(
       new Set(
@@ -112,7 +118,7 @@ export function normalizeResult(
     const body = verbatim || (typeof k?.body === 'string' ? k.body.trim() : '');
     if (!body) continue;
 
-    knowledge.push({ topic, title: title.slice(0, 60), gist, body, source_ids: sourceIds });
+    knowledge.push({ topic, subtopic, title: title.slice(0, 60), gist, body, source_ids: sourceIds });
   }
 
   // 标记已有待办完成：只认「真实存在过的待办 id」，并且同一条只处理一次
@@ -217,6 +223,34 @@ export function normalizeResult(
     });
   }
 
+  // 建议合并的主题：from 必须真实存在、至少两个，且一个主题只能被一条建议吃掉
+  const validTopics = new Set(context.topicNames ?? []);
+  const mergeTopics: MergeTopicSuggestion[] = [];
+  const consumedTopics = new Set<string>();
+  for (const item of Array.isArray(obj.merge_topics) ? obj.merge_topics : []) {
+    const m = item as Record<string, unknown>;
+    const from = Array.from(
+      new Set(
+        (Array.isArray(m?.from) ? m.from : [])
+          .filter((x): x is string => typeof x === 'string')
+          .map((x) => x.trim())
+          .filter((x) => validTopics.has(x)),
+      ),
+    );
+    if (from.length < 2) continue;
+    // 两条建议抢同一个主题时，后面那条丢掉 —— 否则先并完再并，结果不可预测
+    if (from.some((t) => consumedTopics.has(t))) continue;
+    const toRaw = typeof m?.to === 'string' ? m.to.trim() : '';
+    if (!toRaw) continue;
+    const to = toRaw.slice(0, 20);
+    from.forEach((t) => consumedTopics.add(t));
+    mergeTopics.push({
+      from,
+      to,
+      reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
+    });
+  }
+
   return {
     tags: Array.from(tagMap.values()),
     todos,
@@ -227,6 +261,7 @@ export function normalizeResult(
     archive_cards: archiveCards,
     drop_todos: dropTodos,
     merge_todos: mergeTodos,
+    merge_topics: mergeTopics,
   };
 }
 
@@ -290,6 +325,7 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeOutcom
   const result = normalizeResult(parseJsonLoose(outcome.content), fragments, {
     todoIds: todos.filter((t) => !t.done).map((t) => t.id),
     cardIds: cards.map((c) => c.id),
+    topicNames: topics,
   });
   return { result, raw: outcome.content, reasoning: outcome.reasoning };
 }

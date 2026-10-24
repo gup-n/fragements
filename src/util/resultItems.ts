@@ -1,7 +1,7 @@
 /**
  * 「逐条确认」这一类界面逻辑的元数据表。
  *
- * 整理结果有九类输出，以前每加一类都要在四个地方同步改：
+ * 整理结果有十类输出，以前每加一类都要在四个地方同步改：
  * 确认项的 key 生成、`allKeys` 的汇总、`withFreshOff` 的默认勾选、
  * 「AI 认为不需要处理」的空结果判断。漏一个就是 bug，而且是很难发现的那种
  * （比如新加的类型默认被勾上了，用户点一下「应用」就把东西删了）。
@@ -29,6 +29,9 @@ export const K = {
   archive: (cardId: number) => `archive|${cardId}`,
   drop: (todoId: number) => `drop|${todoId}`,
   mergeTodo: (keepId: number) => `mergeTodo|${keepId}`,
+  // from 排序后 join：追问时模型可能换个顺序重列同一组主题，
+  // 排过序才能让「用户已经勾过这一条」的状态跟得住
+  mergeTopic: (to: string, from: string[]) => `mergeTopic|${to}|${[...from].sort().join(',')}`,
 };
 
 type ResultField = keyof OrganizeResult;
@@ -59,6 +62,9 @@ const GROUPS: GroupTable = {
   drop_todos: { key: (d) => K.drop(d.todo_id), destructive: true },
   // 合并是「隐藏」不是「删除」，回顾页能撤回，但仍然算消失。
   merge_todos: { key: (m) => K.mergeTodo(m.keep_id), destructive: true },
+  // 合并主题一张卡都不会丢，但它改的是**用户自己的组织结构**，
+  // 而且合并之后回不到原来的主题名（只能手动重拆）。所以归到需要主动确认的一类。
+  merge_topics: { key: (m) => K.mergeTopic(m.to, m.from), destructive: true },
 };
 
 export const RESULT_FIELDS = Object.keys(GROUPS) as ResultField[];

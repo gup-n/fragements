@@ -1,8 +1,8 @@
 /**
- * 整理结果页的九类条目。
+ * 整理结果页的十类条目。
  *
  * 单独拆出来有两个原因：
- * 1. `OrganizeScreen` 已经一千多行，再塞着九段几乎同构的渲染分支会没法读；
+ * 1. `OrganizeScreen` 已经一千多行，再塞着十段几乎同构的渲染分支会没法读；
  * 2. 这里的每一段都是「一类建议 + 逐条勾选」，改动频率低、波动小，
  *    和页面的状态机（idle / running / result / done）分开更安全。
  *
@@ -194,6 +194,31 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
                 </View>
                 {card?.gist ? <Text style={s.gistText}>{card.gist}</Text> : null}
                 {a.reason ? <Text style={s.reasonText}>{a.reason}</Text> : null}
+              </CheckRow>
+            );
+          })}
+        </Section>
+      )}
+
+      {result.merge_topics.length > 0 && (
+        <Section
+          title="合并相近主题"
+          count={result.merge_topics.length}
+          hint="只改主题名，卡片一张都不会少。合并后想拆回去，得去知识库手动改。默认不勾选。"
+        >
+          {result.merge_topics.map((m) => {
+            const key = K.mergeTopic(m.to, m.from);
+            const on = isOn(key);
+            return (
+              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
+                <View style={s.kHead}>
+                  <Text style={[s.rowText, s.kTitle, !on && s.rowTextOff]}>{m.to}</Text>
+                  <View style={s.topicPill}>
+                    <Text style={s.topicPillText}>{m.from.length} 个主题</Text>
+                  </View>
+                </View>
+                <Text style={s.mergeDrops}>并入：{m.from.join('、')}</Text>
+                {m.reason ? <Text style={s.reasonText}>{m.reason}</Text> : null}
               </CheckRow>
             );
           })}

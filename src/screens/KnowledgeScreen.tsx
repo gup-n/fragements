@@ -7,7 +7,7 @@
  *
  * 顶部两件查询工具：关键字搜索（跨主题，命中后仍可按主题过滤）、问模型（默认当前主题）。
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -26,6 +26,8 @@ import { dayKey } from '../util/date';
 import { AskSheet } from '../components/AskSheet';
 import { KnowledgeDetail } from '../components/KnowledgeDetail';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { IconButton } from '../components/IconButton';
+import { TopicSheet } from '../components/TopicSheet';
 
 interface Props {
   onClose: () => void;
@@ -47,6 +49,8 @@ export function KnowledgeScreen({ onClose }: Props) {
 
   const [detail, setDetail] = useState<KnowledgeCard | null>(null);
   const [askOpen, setAskOpen] = useState(false);
+  /** 主题整理面板：合并 / 改名。AI 的归并建议不可能每次都准，得有个人工入口 */
+  const [topicOpen, setTopicOpen] = useState(false);
 
   const reloadTopics = useCallback(async () => {
     setTopics(await repo.listKnowledgeTopics());
@@ -122,16 +126,56 @@ export function KnowledgeScreen({ onClose }: Props) {
   // 覆盖层自己会注册更晚的监听器，所以这里遇到覆盖层直接放行。
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (detail || askOpen) return false;
+      if (detail || askOpen || topicOpen) return false;
       goBack();
       return true;
     });
     return () => sub.remove();
   });
 
+  /** 主题内的卡片行。分组显示和单层平铺都用它，避免两份几乎一样的 JSX */
+  function renderCard(card: KnowledgeCard) {
+    return (
+      <Pressable
+        key={card.id}
+        style={({ pressed }) => [styles.card, pressed && { backgroundColor: C.hairSoft }]}
+        onPress={() => setDetail(card)}
+      >
+        <Text style={styles.cardTitle}>{card.title}</Text>
+        {!!card.gist && <Text style={styles.gist}>{card.gist}</Text>}
+        <View style={styles.cardMeta}>
+          <Text style={styles.date}>{dayKey(card.createdAt)}</Text>
+          <Text style={styles.openHint}>查看原文</Text>
+        </View>
+      </Pressable>
+    );
+  }
+
   const total = topics.reduce((n, t) => n + t.count, 0);
   const title = showArchived ? '已归档' : (active ?? '知识库');
   const searching = keyword.trim().length > 0;
+
+  /**
+   * 主题内按二级方向分组。
+   * 只有一个组时不显示分组头 —— 大多数主题下就那么两三张卡，
+   * 硬加一层「未分方向」的标题纯属噪音。
+   */
+  const groups = useMemo(() => {
+    const map = new Map<string | null, KnowledgeCard[]>();
+    for (const c of cards) {
+      const k = c.subtopic ?? null;
+      const list = map.get(k);
+      if (list) list.push(c);
+      else map.set(k, [c]);
+    }
+    return Array.from(map.entries()).sort((a, b) => {
+      const [sa, la] = a;
+      const [sb, lb] = b;
+      if (sa === null) return 1;
+      if (sb === null) return -1;
+      return lb.length - la.length || sa.localeCompare(sb);
+    });
+  }, [cards]);
 
   return (
     <View style={styles.root}>
@@ -147,6 +191,17 @@ export function KnowledgeScreen({ onClose }: Props) {
                 : undefined
         }
         onBack={goBack}
+        right={
+          !showArchived && !active && topics.length > 1 ? (
+            <IconButton
+              name="git-merge-outline"
+              size={20}
+              tone="soft"
+              onPress={() => setTopicOpen(true)}
+              accessibilityLabel="整理主题"
+            />
+          ) : undefined
+        }
       />
 
       {loading ? (
@@ -304,26 +359,30 @@ export function KnowledgeScreen({ onClose }: Props) {
             </ScrollView>
           ) : (
             <ScrollView contentContainerStyle={styles.content}>
-              {cards.map((card) => (
-                <Pressable
-                  key={card.id}
-                  style={({ pressed }) => [styles.card, pressed && { backgroundColor: C.hairSoft }]}
-                  onPress={() => setDetail(card)}
-                >
-                  <Text style={styles.cardTitle}>{card.title}</Text>
-                  {!!card.gist && <Text style={styles.gist}>{card.gist}</Text>}
-                  <View style={styles.cardMeta}>
-                    <Text style={styles.date}>{dayKey(card.createdAt)}</Text>
-                    <Text style={styles.openHint}>查看原文</Text>
-                  </View>
-                </Pressable>
-              ))}
+              {groups.length > 1
+                ? groups.map(([sub, list]) => (
+                    <View key={sub ?? '__none'}>
+                      <View style={styles.subHead}>
+                        <Text style={styles.subName}>{sub ?? '未分方向'}</Text>
+                        <Text style={styles.subCount}>{list.length}</Text>
+                      </View>
+                      {list.map(renderCard)}
+                    </View>
+                  ))
+                : cards.map(renderCard)}
               {cards.length === 0 && <Text style={styles.hint}>这个主题下还没有卡片。</Text>}
             </ScrollView>
           )}
         </>
       )}
 
+      {topicOpen ? (
+        <TopicSheet
+          topics={topics}
+          onClose={() => setTopicOpen(false)}
+          onChanged={refreshAll}
+        />
+      ) : null}
       {askOpen ? (
         <AskSheet topic={active} onClose={() => setAskOpen(false)} onOpenCard={(c) => setDetail(c)} />
       ) : null}
@@ -404,6 +463,27 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     minWidth: 26,
     textAlign: 'center',
+    overflow: 'hidden',
+    fontVariant: ['tabular-nums'],
+  },
+
+  // 主题内的二级方向小节头
+  subHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingTop: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 2,
+  },
+  subName: { fontSize: 12.5, color: C.text2, fontWeight: '600', letterSpacing: 0.2 },
+  subCount: {
+    fontSize: 10.5,
+    color: C.text3,
+    backgroundColor: C.hairSoft,
+    borderRadius: R.pill,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
     overflow: 'hidden',
     fontVariant: ['tabular-nums'],
   },

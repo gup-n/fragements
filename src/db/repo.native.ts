@@ -82,6 +82,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE todos ADD COLUMN merged_into INTEGER;
   CREATE INDEX IF NOT EXISTS idx_todos_merged ON todos(merged_into);
   `,
+  // v4：知识卡支持二级方向。主题仍然只是字符串（没有 topics 表），
+  // 这一列解决的是「大方向一致却各占一个主题」和「一个主题下挤了十几张卡」两件事
+  `
+  ALTER TABLE knowledge_cards ADD COLUMN subtopic TEXT;
+  CREATE INDEX IF NOT EXISTS idx_cards_subtopic ON knowledge_cards(topic, subtopic);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -145,6 +151,7 @@ function toTodo(r: TodoRow): Todo {
 interface CardRow {
   id: number;
   topic: string;
+  subtopic: string | null;
   title: string;
   gist: string;
   body: string;
@@ -166,6 +173,7 @@ function toCard(r: CardRow): KnowledgeCard {
   return {
     id: r.id,
     topic: r.topic,
+    subtopic: r.subtopic ?? null,
     title: r.title,
     gist: r.gist,
     body: r.body,
@@ -277,8 +285,16 @@ export const repo: Repo = {
 
   async insertKnowledgeCard(input) {
     const res = db().runSync(
-      'INSERT INTO knowledge_cards (topic, title, gist, body, source_ids, created_at, archived) VALUES (?, ?, ?, ?, ?, ?, 0)',
-      [input.topic, input.title, input.gist, input.body, JSON.stringify(input.sourceIds), Date.now()],
+      'INSERT INTO knowledge_cards (topic, subtopic, title, gist, body, source_ids, created_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
+      [
+        input.topic,
+        input.subtopic ?? null,
+        input.title,
+        input.gist,
+        input.body,
+        JSON.stringify(input.sourceIds),
+        Date.now(),
+      ],
     );
     return Number(res.lastInsertRowId);
   },
@@ -325,9 +341,53 @@ export const repo: Repo = {
     return rows.map((r) => ({ topic: r.topic, count: r.n }));
   },
 
+  async listKnowledgeSubtopics(topic) {
+    const rows = db().getAllSync<{ subtopic: string | null; n: number }>(
+      `SELECT subtopic, COUNT(*) AS n FROM knowledge_cards
+        WHERE archived = 0 AND topic = ?
+        GROUP BY subtopic
+        ORDER BY n DESC, subtopic ASC`,
+      [topic],
+    );
+    return rows.map((r) => ({ subtopic: r.subtopic ?? null, count: r.n }));
+  },
+
+  async retopicCards(from, to) {
+    // 改名到自己、或者空列表，都不做任何事（否则会白跑一趟 UPDATE）
+    const list = Array.from(new Set(from.filter((t) => !!t && t !== to)));
+    if (!list.length) return { moved: 0 };
+    const ph = list.map(() => '?').join(',');
+    // 归档的卡片一起改：否则恢复之后会凭空多出一个只含归档卡的主题
+    const res = db().runSync(`UPDATE knowledge_cards SET topic = ? WHERE topic IN (${ph})`, [
+      to,
+      ...list,
+    ]);
+    return { moved: res.changes };
+  },
+
+  async resubtopicCards(topic, from, to) {
+    const conds: string[] = [];
+    const params: (string | number | null)[] = [to, topic];
+    for (const s of from) {
+      if (s === to) continue;
+      if (s === null) {
+        conds.push('subtopic IS NULL');
+      } else {
+        conds.push('subtopic = ?');
+        params.push(s);
+      }
+    }
+    if (!conds.length) return { moved: 0 };
+    const res = db().runSync(
+      `UPDATE knowledge_cards SET subtopic = ? WHERE topic = ? AND (${conds.join(' OR ')})`,
+      params,
+    );
+    return { moved: res.changes };
+  },
+
   async updateKnowledgeCard(id, patch) {
     const sets: string[] = [];
-    const params: (string | number)[] = [];
+    const params: (string | number | null)[] = [];
     if (patch.title !== undefined) {
       sets.push('title = ?');
       params.push(patch.title);
@@ -343,6 +403,11 @@ export const repo: Repo = {
     if (patch.topic !== undefined) {
       sets.push('topic = ?');
       params.push(patch.topic);
+    }
+    // 显式传 null 是「清掉二级方向」，和「不传」含义不同，所以不能用 || 判断
+    if (patch.subtopic !== undefined) {
+      sets.push('subtopic = ?');
+      params.push(patch.subtopic);
     }
     if (patch.archived !== undefined) {
       sets.push('archived = ?');
