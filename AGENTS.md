@@ -19,7 +19,8 @@ type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 
 ```bash
 npx tsc --noEmit                                  # 改完必跑，当前零错误
-npx expo export -p web --output-dir dist-check    # 验证不崩，约 11 秒
+npm run build:web                                 # 导出到固定目录 web-preview/（先删后导）
+npm run preview                                   # 起本地静态服务 127.0.0.1:8731
 npx expo install <pkg>                            # 装依赖用它，别用 npm install
 
 npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
@@ -27,6 +28,13 @@ cd android && ./gradlew assembleRelease
 ```
 
 项目**零自动化测试**，`tsc` + `export` 是唯一的自动检查。
+
+## 给用户看界面
+
+**`present_files(["http://127.0.0.1:8731"])`** —— 内置浏览器面板会直接打开，用户可点可操作。
+服务只起一次，改完代码重跑 `npm run build:web`，浏览器刷新即可。
+
+> 不要再生成单文件 HTML（`build_single_file.py` 已删）。用户 2026-10-24 明确说过「我看不到」。
 
 ## 改完必须自己打包
 

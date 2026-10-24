@@ -113,7 +113,9 @@ src/
 plugins/
   withBuildOptimizations.js  构建优化 config plugin（prebuild 时写入 gradle.properties）
   withNoSplashAnimation.js   启动窗改纯色、去掉图标动画
-scripts/build_single_file.py 把 Web 产物打成自包含单文件（仅作预览用）
+scripts/
+  build_web.mjs              导出 Web 产物到固定目录 web-preview/（先删后导）
+  preview_server.mjs         本地静态服务，供内置浏览器预览面板访问
 ```
 
 ## 开发

@@ -46,16 +46,14 @@ yarn-error.*
 *.apk
 *.aab
 
-# 构建与预览产物
-/preview
-/preview[0-9]*
+# 构建与预览产物（npm run build:web 生成，固定目录名）
+/web-preview
 /dist[0-9]*
 /dist-v[0-9]*
 /.edge-tmp
 /.edge-tmp2
 /.edge3
 expo-qr.png
-碎片-界面预览.html
 
 # 本地日志与临时文件
 *.log

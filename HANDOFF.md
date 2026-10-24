@@ -43,13 +43,17 @@ npx expo export -p web --output-dir dist-check     # Web 预览构建，约 11 �
 ### 想给用户看界面但不想装 APK
 
 ```bash
-npx expo export -p web --output-dir preview        # 注意目录名必须是 preview
-python scripts/build_single_file.py                # 生成根目录的「碎片-界面预览.html」
+npm run build:web        # 清空并重新导出到固定的 web-preview/
+npm run preview          # 起本地静态服务（默认 8731，只绑 127.0.0.1）
 ```
 
-`scripts/build_single_file.py` 把 JS bundle 和 Ionicons 字体全部内联进一个 HTML，双击就能在浏览器里看。
-**注意它硬编码读 `preview/`，输出到根目录**，所以 `--output-dir` 必须写 `preview`。
-代价：Web 端走 `localStorage`，数据是空的；只能看界面结构，看不到真实数据。
+然后**用 `present_files` 传 `http://127.0.0.1:8731`**，WorkBuddy 会在内置浏览器预览面板里打开，
+用户点开就能操作 —— **不要再生成单文件 HTML**（用户看不到，v0.4.0 之后已废弃）。
+
+- 目录名固定为 `web-preview/`，所以服务只需起一次；改完代码重新 `npm run build:web`，浏览器刷新即可
+- `build_web.mjs` 会先 `rm -rf` 再导出 —— 目录已存在时 `expo export` 的覆盖行为会被安全策略拦截
+- `preview_server.mjs` 是纯 Node 实现（不依赖 python），带 SPA fallback、目录穿越防护、`Cache-Control: no-store`
+- 代价：Web 端走 `localStorage`，数据是空的；只能看界面结构，看不到真实数据
 
 打包 APK（**必须先看第 7 节的坑**）：
 
@@ -502,7 +506,8 @@ src/
     KnowledgeDetail.tsx       216   知识卡详情页（归档 / 恢复 / 删除，两次点击确认）
     AskSheet.tsx              378   知识库问答面板（范围切换 + 输入 + 回答 + 引用卡片）
 scripts/
-  build_single_file.py       ~100   把 web 产物打成单文件 HTML 预览（见第 2 节）
+  build_web.mjs               ~25   ★ 导出 Web 产物到固定的 web-preview/（先删后导）
+  preview_server.mjs          ~80   ★ 本地静态服务，配合 present_files 做内置预览
 plugins/
   withBuildOptimizations.js    65   ★ Gradle 优化写回（单 ABI / caching / shrinkResources / JDK）
   withNoSplashAnimation.js    117   ★ 启动窗改纯色、去图标动画
@@ -637,7 +642,7 @@ plugins/
 
 ### 7.7 根目录的垃圾（可以删，都已 gitignore）
 
-`preview/` `preview2/` `.edge-tmp*/` `碎片-界面预览.html` `devserver.log` `prebuild*.log` `err.txt` —— 早期预览和调试产物，没有任何代码依赖。
+`web-preview/` `.edge-tmp*/` `devserver.log` `prebuild*.log` `err.txt` —— 预览和调试产物，已全部 gitignore，没有任何代码依赖。
 
 ---
 
