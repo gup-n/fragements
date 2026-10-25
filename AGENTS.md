@@ -50,7 +50,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 产物在 `android/app/build/outputs/apk/release/app-release.apk`，
 复制成 `fragments-v<版本>.apk` 放项目根目录，把大小和 MD5 一并报给用户。增量约 2–3 分钟。
 
-## 七条硬规矩
+## 八条硬规矩
 
 1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。
 2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
@@ -61,6 +61,10 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 7. **主题不是实体**，只是 `knowledge_cards.topic` 上的一个字符串。改主题名要批量 `UPDATE`（`repo.retopicCards`），
    别去找 `topics` 表 —— 没有那张表。二级方向同理，是 `subtopic` 列而不是外键。
    因为新建主题的成本为零，prompt 里必须把「大方向一致就复用已有主题」写死，否则模型会给每张卡开一个新主题。
+8. **全屏详情的「正在看哪一个」只能存 id，不能存对象快照**。存对象的话上层刷新后它还是旧的，
+   页面看起来「没变」，得关掉重进。碎片详情页（v0.4.2）、知识卡详情页（v0.6.0）各栽过一次。
+   正确做法：存 `id` / `ids[]`，内容用 `useMemo` 从当前 props 里实时查，查不到才退回快照
+   （从问答里点开的卡可能不在当前列表范围内）。
 
 ## 最容易搞错的概念
 
@@ -105,7 +109,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 
 - **提案靠 `:::action` 围栏**，不能开 `json_object`（整篇 Markdown 会被压成一坨字符串）。
   解析在 `util/askActions.ts`，执行在 `db/askCommit.ts`。
-- **解析必须用字符类写围栏正则**，「冒号或反引号 ×3」用 `[:` `` ` `` `]{3}` 这种字符类：
+- **解析必须用字符类写围栏正则**（把「冒号」和「反引号」一起放进方括号，重复三次）：
 
   ```
   /^\s*[:`]{3}\s*action\b/i      // 开块
@@ -119,6 +123,20 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **联网只能用 `/v1/tools/search`**（`ai/search.ts`）。Responses API 的内置 `web_search`
   **只在 `deepseek-v4-pro` 生效**，`deepseek-flash` 下静默忽略 —— 不报错、只是没搜，然后模型凭记忆编。
 - **问答记录独立成表 `ask_logs`**，不混进 `knowledge_cards`；也不提供「把问答当卡片检索」的方法。
+
+## 二级方向的两种写法（v0.6.0）
+
+| 方法 | 按什么匹配 | 用在哪 |
+|---|---|---|
+| `repo.setCardSubtopic(ids, to)` | **卡片 id** | 手动分方向（详情页 / 主题页 / 点方向小节头） |
+| `repo.resubtopicCards(topic, from[], to)` | **方向组** | 按组改名 |
+
+两者不能互相替代：老卡片的 `subtopic` 全是 `null`，用组操作选不中任何一组，等于没有入口。
+这正是 v0.4.1 之后「按方向分组在已有数据上看不到效果」的原因 —— **不是功能没写，是没有入口**。
+
+另外：`KnowledgeScreen` 里返回键的订阅变量**不能叫 `sub`**。它和分方向面板的 `sub` state 重名时，
+闭包里永远拿到订阅对象（恒为真）→ 每次 `return false` → 安卓返回键彻底失效。
+**这类重名 tsc 不会报**，因为两者都是合法值。
 
 ## Expo 会发破坏性变更，别信训练数据
 

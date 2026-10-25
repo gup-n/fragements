@@ -381,10 +381,13 @@ export const repo: Repo = {
   },
 
   async listKnowledgeTopics() {
-    const rows = db().getAllSync<{ topic: string; n: number }>(
-      'SELECT topic, COUNT(*) AS n FROM knowledge_cards WHERE archived = 0 GROUP BY topic ORDER BY n DESC, topic ASC',
+    const rows = db().getAllSync<{ topic: string; n: number; d: number }>(
+      // COUNT(DISTINCT subtopic) 天然忽略 NULL，正好是「已分出去几个方向」
+      `SELECT topic, COUNT(*) AS n, COUNT(DISTINCT subtopic) AS d
+         FROM knowledge_cards WHERE archived = 0
+        GROUP BY topic ORDER BY n DESC, topic ASC`,
     );
-    return rows.map((r) => ({ topic: r.topic, count: r.n }));
+    return rows.map((r) => ({ topic: r.topic, count: r.n, dirs: r.d }));
   },
 
   async listKnowledgeSubtopics(topic) {
@@ -429,6 +432,17 @@ export const repo: Repo = {
       params,
     );
     return { moved: res.changes };
+  },
+
+  async setCardSubtopic(ids, subtopic) {
+    const list = Array.from(new Set(ids.filter((n) => Number.isFinite(n))));
+    if (!list.length) return { changed: 0 };
+    const ph = list.map(() => '?').join(',');
+    const res = db().runSync(`UPDATE knowledge_cards SET subtopic = ? WHERE id IN (${ph})`, [
+      subtopic,
+      ...list,
+    ]);
+    return { changed: res.changes };
   },
 
   async updateKnowledgeCard(id, patch) {

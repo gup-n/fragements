@@ -34,6 +34,7 @@ export const SYSTEM_PROMPT = `你是一个个人碎片笔记整理助手。用�
 每张卡的字段要求：
 - topic：归属主题，2-6 个字，如"NAS 维护""装机""网络"。必须优先从【已有主题】里选，只有确实是全新领域才新建。**判断标准是「大方向」而不是「这张卡提到了什么词」** —— 出现一个新名词就开一个新主题，知识库会碎成一地。
 - subtopic：可选的二级方向，2-6 个字。只在同一个主题下已经有好几张卡、且确实存在明显不同的细分时才填（比如"NAS 维护"下的"换盘""备份"）；其余情况填 null。**宁可留空，不要为了分类而分类。**
+  如果那个主题在【已有主题】里已经标了〔方向：…〕，**优先复用其中现成的说法**，不要为同一个意思再起一个近义词。
 - title：一句话结论，8-15 字，要具体。反例："NAS 相关知识"（太泛）。正例："RAID5 换盘前先确认热备盘位"。
 - gist：2-4 条要点，每行以 "- " 开头，每行不超过 30 字。这是给人快速扫读的索引。
 - source_ids：来源碎片的 id 数组，必须来自用户给的列表。
@@ -115,6 +116,8 @@ const OPEN_TODO_LIMIT = 60;
 const DONE_TODO_LIMIT = 40;
 /** 每个主题后面最多列几张卡片的标题，只用来判断「这两个主题是不是一回事」 */
 const TOPIC_SAMPLE = 4;
+/** 每个主题最多列几个已有二级方向 —— 太多了反而看不清重点 */
+const DIR_SAMPLE = 4;
 
 export function buildUserContent(options: UserContentOptions) {
   const { fragments, topics = [], cards = [], todos = [], mode = 'organize' } = options;
@@ -167,7 +170,15 @@ export function buildUserContent(options: UserContentOptions) {
       const own = cards.filter((c) => c.topic === t);
       const shown = own.slice(0, TOPIC_SAMPLE).map((c) => c.title);
       const more = own.length > shown.length ? ` 等 ${own.length} 张` : '';
-      out.push(shown.length ? `- ${t}（${shown.join(' / ')}${more}）` : `- ${t}`);
+      // 已有的二级方向也要给 —— 否则模型每轮都新起一个近义词
+      // （「换盘」和「硬盘更换」各建一个，分组反而更碎）
+      const dirs = Array.from(
+        new Set(own.map((c) => c.subtopic).filter((x): x is string => !!x)),
+      ).slice(0, DIR_SAMPLE);
+      const dirLine = dirs.length ? `〔方向：${dirs.join(' / ')}〕` : '';
+      out.push(
+        shown.length ? `- ${t}${dirLine}（${shown.join(' / ')}${more}）` : `- ${t}${dirLine}`,
+      );
     }
   } else {
     out.push('【已有主题】暂无，可以新建');

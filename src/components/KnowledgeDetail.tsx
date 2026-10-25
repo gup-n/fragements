@@ -5,8 +5,11 @@
  * 原来行内展开的做法在卡片正文变长之后会把列表撑得很乱。
  *
  * 归档、恢复、删除都在这里，而且删除要点两次 —— 归档可逆，删除不可逆。
+ *
+ * 二级方向也从这里改：卡片列表会按方向分组，但老卡片的 subtopic 全是空，
+ * 没有入口就永远分不了组。点主题那一行就能设。
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -22,11 +25,12 @@ import { repo } from '../db/repo';
 import { C, R } from '../theme';
 import { dayKey } from '../util/date';
 import { ScreenHeader } from './ScreenHeader';
+import { SubtopicSheet } from './SubtopicSheet';
 
 interface Props {
   card: KnowledgeCard;
   onClose: () => void;
-  /** 归档 / 恢复 / 删除之后，让上层刷新列表 */
+  /** 归档 / 恢复 / 删除 / 改方向之后，让上层刷新列表 */
   onChanged: () => void | Promise<void>;
 }
 
@@ -34,15 +38,22 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
   const [armedDelete, setArmedDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  /** 分方向面板：只针对这一张卡，所以预选就是它自己 */
+  const [subOpen, setSubOpen] = useState(false);
+  const preselect = useMemo(() => [card.id], [card.id]);
 
-  // 覆盖层自带返回键拦截，否则会一路回主界面
+  // 覆盖层自带返回键拦截，否则会一路回主界面。
+  // 子面板开着的时候要让位，否则返回键会连页面一起关掉。
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (subOpen) return false;
       onClose();
       return true;
     });
     return () => sub.remove();
-  }, [onClose]);
+  }, [onClose, subOpen]);
+
+  const closeSub = useCallback(() => setSubOpen(false), []);
 
   async function run(action: () => Promise<void>) {
     setBusy(true);
@@ -71,16 +82,21 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
       <ScreenHeader title="知识卡" backIcon="close" onBack={onClose} />
 
       <ScrollView contentContainerStyle={s.content}>
-        <View style={s.topicRow}>
-          <Ionicons name="pricetag-outline" size={12} color={C.accentText} />
+        <Pressable
+          style={({ pressed }) => [s.topicRow, pressed && { opacity: 0.6 }]}
+          onPress={() => setSubOpen(true)}
+          hitSlop={6}
+          accessibilityRole="button"
+          accessibilityLabel={`修改二级方向，当前${card.subtopic ?? '未分方向'}`}
+        >
+          <Ionicons name="pricetag-outline" size={13} color={C.accentText} />
           <Text style={s.topic}>{card.topic}</Text>
-          {card.subtopic ? (
-            <>
-              <Ionicons name="chevron-forward" size={10} color={C.text3} />
-              <Text style={s.subtopic}>{card.subtopic}</Text>
-            </>
-          ) : null}
-        </View>
+          <Ionicons name="chevron-forward" size={11} color={C.text3} />
+          <Text style={[s.subtopic, !card.subtopic && s.subtopicEmpty]}>
+            {card.subtopic ?? '未分方向'}
+          </Text>
+          <Ionicons name="create-outline" size={13} color={C.text3} />
+        </Pressable>
 
         <Text style={s.title}>{card.title}</Text>
 
@@ -133,6 +149,16 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
           )}
         </Pressable>
       </View>
+
+      {/* 分方向面板排在最后渲染：同为 absolute 覆盖层，JSX 顺序就是层叠顺序 */}
+      {subOpen ? (
+        <SubtopicSheet
+          topic={card.topic}
+          preselect={preselect}
+          onClose={closeSub}
+          onChanged={onChanged}
+        />
+      ) : null}
     </View>
   );
 }
@@ -141,9 +167,10 @@ const s = StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
 
   content: { paddingHorizontal: 18, paddingBottom: 28 },
-  topicRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  topicRow: { flexDirection: 'row', alignItems: 'center', gap: 5, alignSelf: 'flex-start' },
   topic: { fontSize: 12, color: C.accentText, fontWeight: '600' },
-  subtopic: { fontSize: 12, color: C.text3 },
+  subtopic: { fontSize: 12, color: C.text2 },
+  subtopicEmpty: { color: C.text3 },
   title: {
     fontSize: 20,
     lineHeight: 29,

@@ -35,7 +35,12 @@ export interface Repo {
   searchKnowledgeCards(keyword: string): Promise<KnowledgeCard[]>;
   /** 已归档的卡片；归档必须可逆，所以界面上要能看到并恢复 */
   listArchivedKnowledgeCards(): Promise<KnowledgeCard[]>;
-  listKnowledgeTopics(): Promise<{ topic: string; count: number }[]>;
+  /**
+   * 主题及其卡片数、已分出去的方向数。
+   * `dirs` 用来在主题列表上提示「这个主题已经分了几个方向」——
+   * 否则分组做了看不见，用户不知道功能生效了没有。
+   */
+  listKnowledgeTopics(): Promise<{ topic: string; count: number; dirs: number }[]>;
   /** 某个主题下的二级方向分布。`subtopic` 为 null 的那组是「没分小方向」的卡 */
   listKnowledgeSubtopics(topic: string): Promise<{ subtopic: string | null; count: number }[]>;
   /**
@@ -46,6 +51,14 @@ export interface Repo {
   retopicCards(from: string[], to: string): Promise<{ moved: number }>;
   /** 把某主题下的一批二级方向改名 / 合并成另一个 */
   resubtopicCards(topic: string, from: (string | null)[], to: string | null): Promise<{ moved: number }>;
+  /**
+   * 按卡片精确指定二级方向（传 null 表示清掉）。
+   *
+   * 和 `resubtopicCards` 的分工：那个是「把某一组方向整体改名」，
+   * 这个是「这几张卡归到某个方向下」—— 老卡片的 subtopic 全是空，
+   * 只能靠它一张张补，没法按组操作。
+   */
+  setCardSubtopic(ids: number[], subtopic: string | null): Promise<{ changed: number }>;
   updateKnowledgeCard(
     id: number,
     patch: {

@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**：§4 的 500 行变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.5.0（versionCode 14）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.6.0（versionCode 15）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 6 节（AI 契约 + 流式 + 总结与问答）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -19,12 +19,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.5.0`，`versionCode 14`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.6.0`，`versionCode 15`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 5` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 11,550 行 TS/TSX（47 个文件），最大的屏 `TimelineScreen.tsx` 1058 行 |
-| 最新 APK | `fragments-v0.5.0.apk`，21.9 MiB（22,960,914 字节），MD5 `225fe8180f60df816ada091440fb3316`（`versionCode 14` / `versionName 0.5.0` 已用 aapt2 核对） |
+| 规模 | 12,163 行 TS/TSX（48 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
+| 最新 APK | `fragments-v0.6.0.apk`，21.9 MiB（22,974,326 字节），MD5 `56374667c2e6e3c7957797e7b179866d`（`versionCode 15` / `versionName 0.6.0` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -79,10 +79,10 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 | 模块 | 现在能做什么 |
 |---|---|
-| 记录 | 时间轴流、按日折叠（默认只展开今天）、首页搜索、长文折叠、全屏编辑、碎片详情页（左右翻页 + 整屏内联编辑 + 内嵌当天小结） |
+| 记录 | 时间轴流、按日折叠（默认只展开今天）、首页搜索、**点标签 / 事项筛选**、长文折叠、全屏编辑、碎片详情页（左右翻页 + 整屏内联编辑 + 内嵌当天小结） |
 | 整理 | 十类输出、多轮追问、重构模式（重新整理原文并与旧结果对照）、流式思维链、破坏性操作默认不勾选 |
 | 小结 | 周期总结（日 / 周 / 月）、「N 个周期还没写小结」待补清单、排在时间轴当天最前、详情页里也能看到 |
-| 知识库 | 主题聚合 + 二级方向 `subtopic`、关键字搜索、问模型（含操作提案 / 手动联网 / 思考折叠 / 问答记录） |
+| 知识库 | 主题聚合 + 二级方向 `subtopic`（**可手动分方向 / 整组改名**）、关键字搜索、问模型（含操作提案 / 手动联网 / 思考折叠 / 问答记录） |
 | 待办 | 回顾页、勾选完成、截止日与过期标红、合并可撤回 |
 | 底座 | Markdown 导出、AI 配置与连接测试、SQLite 迁移到 v5、双平台存储分流 |
 
@@ -120,21 +120,25 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 | 版本 | 一句话 |
 |---|---|
+| **v0.6.0** | 补上两个「做了但用不上」：卡片的二级方向可以手动设了（详情页 / 主题页 / 点小节头三个入口），标签可以点了筛（还带事项）。prompt 里带上已有方向并要求复用 |
 | **v0.5.0** | 问答三件：`:::action` 操作提案（勾选才执行）、官方 `/v1/tools/search`（手动触发）、`ask_logs` 独立记录表（migration v5） |
 | **v0.4.2** | 详情页三处真机反馈：整屏内联编辑、保存后即时刷新（`detail` 改存 id 序列）、正文下接当天小结 |
-| **v0.4.1** | 主题治理：`subtopic` 二级方向（migration v4）、第十类输出 `merge_topics`、知识库页头手动合并 / 改名 |
 
-**接手时最该知道的两件事**（细节翻 CHANGELOG）：
+**接手时最该知道的三件事**（细节翻 CHANGELOG）：
 
 1. **主题不是实体**，只是 `knowledge_cards.topic` 上的字符串。新建成本为零，所以 AI 天然会给每张卡开新主题。
-   解法是 prompt 里带上「已有主题 + 每个主题最多 4 个卡片标题」，不是靠模型自觉。
-2. **`:::action` 围栏的正则必须用字符类**（`[:` + 反引号 + `]{3}`）。写成 `(?:::{3})` 会静默只认 `::action`，
+   解法是 prompt 里带上「已有主题 + 每个主题最多 4 个卡片标题 + 已有方向」，不是靠模型自觉。
+2. **`:::action` 围栏的正则必须用字符类**，不能写成非捕获组的 `(?:::{3})` ——
+   `(?:` 是非捕获组的括号，紧接冒号时会吃掉一个，结果只认 `::action`。
    表现是「模型给了提案但界面一条都不显示」，零报错。
+3. **详情页不能存对象快照**。v0.4.2 的碎片详情页、v0.6.0 的知识卡详情页栽的是同一件事：
+   存了进入时那个对象，上层 `reload()` 之后它还是旧的，页面看起来「没变」，得关掉重进。
+   一律存 id，内容实时派生，查不到才退回快照。
 
 ## 5. 代码地图
 
 ```
-App.tsx                         288  路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds / 示例数据）
+App.tsx                         304  路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds / 示例数据）
 index.ts                          8  registerRootComponent
 src/
   types.ts                      308  Fragment / Todo / Note / KnowledgeCard / WebHit / AskLog / AskAction / OrganizeResult（十类，**无 summary**）+ AiConfig
@@ -143,7 +147,7 @@ src/
   ai/
     config.ts                    35  读 AI 配置（默认值 + repo.getSetting）+ 已停用模型名映射
     keyStore.ts                  37  API Key 存 expo-secure-store（不进 DB、不进导出）
-    prompt.ts                   226  SYSTEM_PROMPT（九项）+ buildUserContent（含【已完成待办】）+ buildRefineContent
+    prompt.ts                   237  SYSTEM_PROMPT（九项）+ buildUserContent（含【已完成待办】）+ buildRefineContent
     chat.ts                     339  ★ 请求层：四段超时 / 流式 / 非流式 / 错误映射 / testConnection（三功能共用）
     deepseek.ts                 332  整理：prompt 组装 + normalizeResult（全部校验都在这）+ organize()
     summarize.ts                226  ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗
@@ -151,19 +155,19 @@ src/
     search.ts                   162  ★ DeepSeek 官方 `/v1/tools/search`：退避重试 + 结果收敛（**不要换成内置 web_search**）
     stream.ts                   114  ★ SSE 解析：把 reasoning_content 与 content 分开累积
   db/
-    types.ts                    146  Repo 接口（上下层唯一契约）
-    repo.native.ts              653  SQLite 实现 + MIGRATIONS 数组（到 v5）
-    repo.web.ts                 437  localStorage 实现（仅供桌面预览，功能对齐即可）
+    types.ts                    159  Repo 接口（上下层唯一契约）
+    repo.native.ts              667  SQLite 实现 + MIGRATIONS 数组（到 v5）
+    repo.web.ts                 453  localStorage 实现（仅供桌面预览，功能对齐即可）
     commit.ts                   172  ★ 把用户确认过的整理结果写进库：纯写入、无 UI、返回实际条数
     askCommit.ts                 48  ★ 执行问答里的操作提案（逐条独立事务，一条失败不回滚其他）
     repo.ts                       7  类型转发壳，运行时不会命中
   screens/
-    TimelineScreen.tsx         1058  时间轴 + 输入 + 长文折叠 + 全屏编辑 + 小结混排 + 按日折叠 + 搜索
+    TimelineScreen.tsx         1134  时间轴 + 输入 + 长文折叠 + 全屏编辑 + 小结混排 + 按日折叠 + 搜索
     OrganizeScreen.tsx          827  ★ 状态机 / 两模式 / 追问 / 空闲面板；结果渲染已交出去
-    KnowledgeScreen.tsx         526  主题聚合 + 搜索 + 问入口 + 已归档区 + 详情/问答覆盖层
+    KnowledgeScreen.tsx         594  主题聚合 + 搜索 + 问入口 + 已归档区 + 详情/问答覆盖层
     ReviewScreen.tsx            342  待办与小结算一页（tab）+ 生成总结入口 + 「已合并」撤回区
     SettingsScreen.tsx          411  BaseURL / 模型 / Key / 思考开关与档位 / 连接测试 / 统计
-  export/markdown.ts            140  Markdown 导出（时间轴 + 知识库附录）
+  export/markdown.ts            143  Markdown 导出（时间轴 + 知识库附录）
   util/
     date.ts                     189  日期格式化 + 周期键（ISO 周）/ 区间 / 锚点
     digest.ts                    97  ★ 哪些周期还没写小结（按粒度配额排序）
@@ -174,7 +178,7 @@ src/
     FragmentDetail.tsx          505  ★ 碎片详情页：全屏阅读 + 左右翻页 + **整屏内联编辑** + 当天小结（宽度靠 onLayout 实测）
     IconButton.tsx               95  ★ 圆形图标按钮：36px 触控区、圆底、数字角标
     ScreenHeader.tsx             80  ★ 子页面统一页头：返回圆钮 + 居中标题/副标题 + 右侧动作
-    TagPill.tsx                  35  标签胶囊
+    TagPill.tsx                  63  标签胶囊（传 onPress 时变成可点筛选）
     NoteBody.tsx                 79  ★ 小结正文的轻量 Markdown 渲染（标题/列表/段落，不引第三方）
     ReasoningStream.tsx          85  ★ 流式实时面板：转圈 + 秒数 + 思维链滚动 + 字数
     ReasoningCollapse.tsx        59  ★ 答案落地后的「深度思考 N 秒 ›」折叠行（问答用）
@@ -182,8 +186,9 @@ src/
     ResultSections.tsx          464  ★ 结果页十类条目 + 逐条勾选
     BacklogCard.tsx              86  ★ 「N 个周期还没写小结」卡片
     SummarySheet.tsx            488  ★ 周期总结：选周期 → 生成 → 预览 → 保存/替换
-    KnowledgeDetail.tsx         208  知识卡详情页（归档 / 恢复 / 删除，两次点击确认）
+    KnowledgeDetail.tsx         235  知识卡详情页（归档 / 恢复 / 删除，两次点击确认；顶部那行可改方向）
     TopicSheet.tsx              281  ★ 主题整理：勾一个改名、勾多个合并
+    SubtopicSheet.tsx           344  ★ 分方向：勾几张卡统一设方向，留空 = 清掉；点方向小节头进来就是整组改名
     AskSheet.tsx                639  ★ 知识库问答：范围切换 / 回答 / 引用 / 联网 / 提案 / 记录
     AskActions.tsx              220  ★ 改动建议清单：默认一条不勾，勾了才写库
     AskHistory.tsx              283  ★ 问答记录：扁平 Q-A 列表，可展开 / 改问题 / 删除 / 带入本轮
@@ -364,10 +369,10 @@ plugins/
 
 ### P0 — 装机，按顺序验证
 
-`fragments-v0.5.0.apk` 已经打好放在项目根目录（`versionCode 14`，大小与 MD5 见第 1 节速览）。
+`fragments-v0.6.0.apk` 已经打好放在项目根目录（`versionCode 15`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.5.0.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.6.0.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
@@ -383,7 +388,12 @@ adb install -r fragments-v0.5.0.apk        # adb 在 %ANDROID_HOME%\platform-too
 4. **联网**：问一个卡片里没有答案的问题 → 回答下方出现「联网再查一次」→ 点了才去搜，
    结果列成 `[W1]` 来源，并写明是「网上资料」
 5. **问答记录**：右上角时钟图标 → 扁平 Q-A 列表 → 能改问题、能删、能「带入本轮」
-6. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
+6. **手动分方向**：知识库 → 进一个主题 → 右上分层图标 → 勾两三张卡 → 填「换盘」→ 确定 →
+   **页面应该立刻分成「换盘」和「未分方向」两组**；返回主题列表，那个主题后面应该出现「1 个方向」
+7. **整组改名**：点「换盘」那个小节头 → 方向名已填好 → 改成别的 → 确定 → 组名跟着变
+8. **标签筛选**：时间轴上点一个标签胶囊 → 只剩同类，**原先折叠的日期自动展开** →
+   搜索框下面出现一个蓝底胶囊，点它取消；再点同一个标签也能取消
+9. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
 
 ### P0 — 然后才是 v0.2.2 / v0.2.3 遗留的三问
 
@@ -440,8 +450,8 @@ SPEC 唯一未完成功能项。做法与约束见 `SPEC.md` 第 10 节末尾和
 ## 11. 一句话交接
 
 **能跑、能装、代码干净、文档齐全。功能上只差通知栏入口。**
-v0.5.0 是第三个「大功能批次」的收尾（问答操作提案 / 官方搜索 / 问答记录），
-和 v0.2.2 之后的每一版一样，**只有 `tsc` + Web 构建验证，没有真机验证** ——
-第 3 节末尾那六条悬着的事，先等用户反馈，别急着加新东西。
+v0.6.0 补的是两处「做了但用不上」——手动分方向、标签筛选，都是纯本地改动，没有新的 AI 调用。
+但和 v0.2.2 之后的每版一样，**只有 `tsc` + Web 构建验证，没有真机验证** ——
+第 9 节那九条悬着的事，先等用户反馈，别急着加需要 AI 参与的新功能。
 
 历史为什么长这样，翻 [CHANGELOG.md](./CHANGELOG.md)。

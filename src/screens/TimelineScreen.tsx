@@ -94,6 +94,13 @@ export function TimelineScreen({
   const [fullEdit, setFullEdit] = useState(false);
   const [query, setQuery] = useState('');
   /**
+   * 标签 / 事项筛选。和搜索框是叠乘关系（先筛后搜）。
+   *
+   * 标签一直是「AI 打好了但只能看」的状态 —— 这个 state 让它变成可用：
+   * 点一下胶囊就只看同类。再点一次同一个标签取消。
+   */
+  const [filter, setFilter] = useState<{ kind: 'tag' | 'project'; value: string } | null>(null);
+  /**
    * 折叠过的日期。null 表示「还没手动动过」—— 这时用默认规则（只展开今天）。
    * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
    */
@@ -137,6 +144,8 @@ export function TimelineScreen({
   }, [fullEdit]);
 
   const searching = query.trim().length > 0;
+  /** 有筛选或有搜索 → 结果要全摊开，命中的东西藏在折叠里等于没筛到 */
+  const narrowed = searching || filter !== null;
   const todayKey = dayKey(Date.now());
 
   /**
@@ -144,15 +153,20 @@ export function TimelineScreen({
    * 再压一个查询接口下去，反而拿不到 tags / project 这几个内存字段的匹配。
    */
   const visibleFragments = useMemo(() => {
+    const base = filter
+      ? fragments.filter((f) =>
+          filter.kind === 'tag' ? f.tags.includes(filter.value) : f.project === filter.value,
+        )
+      : fragments;
     const q = query.trim().toLowerCase();
-    if (!q) return fragments;
-    return fragments.filter(
+    if (!q) return base;
+    return base.filter(
       (f) =>
         f.content.toLowerCase().includes(q) ||
         (f.project ?? '').toLowerCase().includes(q) ||
         f.tags.some((t) => t.toLowerCase().includes(q)),
     );
-  }, [fragments, query]);
+  }, [fragments, query, filter]);
 
   const sections = useMemo(() => {
     const map = new Map<string, Section>();
@@ -171,9 +185,9 @@ export function TimelineScreen({
       push(f.createdAt, { kind: 'fragment', id: f.id, at: f.createdAt, fragment: f });
     }
 
-    // 搜索时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条，
+    // 搜索 / 筛选时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条，
     // 反而看不清到底哪条碎片命中了。要翻小结请直接看时间轴。
-    if (!searching) {
+    if (!narrowed) {
       // 周期总结按 period 落回它覆盖的那一天/周/月末，
       // 而不是它被生成的那天 —— 否则上周的周报会跑到今天来
       for (const n of notes) {
@@ -194,18 +208,18 @@ export function TimelineScreen({
     return Array.from(map.entries())
       .sort((a, b) => (a[0] < b[0] ? 1 : -1))
       .map(([, bucket]) => bucket);
-  }, [visibleFragments, notes, searching]);
+  }, [visibleFragments, notes, narrowed]);
 
   /**
    * 当前生效的折叠集合。默认只展开今天，其余全部收起 —— 记录攒了几天以后，
    * 一屏全是前几天的内容会盖住今天刚记的东西。
-   * 搜索时强制全展开，否则命中的条目藏在折叠里等于没搜到。
+   * 搜索 / 筛选时强制全展开，否则命中的条目藏在折叠里等于没搜到。
    */
   const collapsedKeys = useMemo(() => {
-    if (searching) return new Set<string>();
+    if (narrowed) return new Set<string>();
     if (collapsedDays) return collapsedDays;
     return new Set(sections.filter((s) => s.key !== todayKey).map((s) => s.key));
-  }, [sections, collapsedDays, searching, todayKey]);
+  }, [sections, collapsedDays, narrowed, todayKey]);
 
   const displaySections = useMemo<DisplaySection[]>(
     () =>
@@ -259,12 +273,12 @@ export function TimelineScreen({
   }, [fragments]);
 
   const searchStat = useMemo(() => {
-    if (!searching) return null;
+    if (!narrowed) return null;
     return {
       total: visibleFragments.length,
       inbox: visibleFragments.filter((f) => f.status === 'inbox').length,
     };
-  }, [searching, visibleFragments]);
+  }, [narrowed, visibleFragments]);
 
   const canSend = draft.trim().length > 0 && !sending;
 
@@ -321,6 +335,13 @@ export function TimelineScreen({
     inputRef.current?.blur();
     const i = flat.findIndex((x) => x.id === f.id);
     setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i });
+  }
+
+  /** 再点同一个标签就取消 —— 否则筛选开了没法用同一个手势关掉 */
+  function toggleFilter(kind: 'tag' | 'project', value: string) {
+    setFilter((prev) =>
+      prev && prev.kind === kind && prev.value === value ? null : { kind, value },
+    );
   }
 
   /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
@@ -460,6 +481,26 @@ export function TimelineScreen({
             </Pressable>
           ) : null}
         </View>
+        {filter ? (
+          <View style={styles.filterRow}>
+            <Pressable
+              style={({ pressed }) => [styles.filterChip, pressed && { opacity: 0.6 }]}
+              onPress={() => setFilter(null)}
+              accessibilityRole="button"
+              accessibilityLabel="取消筛选"
+            >
+              <Ionicons
+                name={filter.kind === 'tag' ? 'pricetag' : 'folder-open'}
+                size={11}
+                color={C.accentText}
+              />
+              <Text style={styles.filterText} numberOfLines={1}>
+                {filter.value}
+              </Text>
+              <Ionicons name="close" size={12} color={C.accentText} />
+            </Pressable>
+          </View>
+        ) : null}
         {searchStat ? (
           <Text style={styles.searchStat}>
             {searchStat.total === 0
@@ -471,20 +512,32 @@ export function TimelineScreen({
 
       <View style={styles.flex}>
         {sections.length === 0 ? (
-          <View style={styles.empty}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="create-outline" size={26} color={C.text3} />
+          narrowed ? (
+            <View style={styles.empty}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="search-outline" size={26} color={C.text3} />
+              </View>
+              <Text style={styles.emptyTitle}>没有匹配的碎片</Text>
+              <Text style={styles.emptyBody}>
+                {filter ? '换个标签看看，或者点上面的胶囊清掉筛选' : '换个词试试，记的时候不用斟酌措辞'}
+              </Text>
             </View>
-            <Text style={styles.emptyTitle}>还没有碎片</Text>
-            <Text style={styles.emptyBody}>
-              想到什么就在下面写一句，{'\n'}不用管分类，AI 会在你点「整理」时帮你归置。
-            </Text>
-            {Platform.OS === 'web' && onSeed ? (
-              <Pressable onPress={onSeed} hitSlop={8} style={styles.seedBtn}>
-                <Text style={styles.seedText}>填入示例碎片看看效果</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          ) : (
+            <View style={styles.empty}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="create-outline" size={26} color={C.text3} />
+              </View>
+              <Text style={styles.emptyTitle}>还没有碎片</Text>
+              <Text style={styles.emptyBody}>
+                想到什么就在下面写一句，{'\n'}不用管分类，AI 会在你点「整理」时帮你归置。
+              </Text>
+              {Platform.OS === 'web' && onSeed ? (
+                <Pressable onPress={onSeed} hitSlop={8} style={styles.seedBtn}>
+                  <Text style={styles.seedText}>填入示例碎片看看效果</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          )
         ) : (
           <SectionList
             ref={listRef}
@@ -629,10 +682,21 @@ export function TimelineScreen({
                           </View>
                         ) : null}
                         {fragment.tags.map((t) => (
-                          <TagPill key={t} label={t} small />
+                          <TagPill
+                            key={t}
+                            label={t}
+                            small
+                            onPress={() => toggleFilter('tag', t)}
+                          />
                         ))}
                         {fragment.project ? (
-                          <Text style={styles.project} numberOfLines={1}>
+                          <Text
+                            style={styles.project}
+                            numberOfLines={1}
+                            onPress={() => toggleFilter('project', fragment.project as string)}
+                            accessibilityRole="button"
+                            accessibilityLabel={`按事项 ${fragment.project} 筛选`}
+                          >
                             {fragment.project}
                           </Text>
                         ) : null}
@@ -809,6 +873,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },
+  filterRow: { flexDirection: 'row', marginTop: 8 },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    maxWidth: '100%',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: R.pill,
+    backgroundColor: C.accentBg,
+  },
+  filterText: { fontSize: 12, color: C.accentText, fontWeight: '500', maxWidth: 220 },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -195,13 +195,16 @@ export const repo: Repo = {
   },
 
   async listKnowledgeTopics() {
-    const map = new Map<string, number>();
+    const map = new Map<string, { count: number; dirs: Set<string> }>();
     for (const c of load().knowledgeCards) {
       if (c.archived) continue;
-      map.set(c.topic, (map.get(c.topic) ?? 0) + 1);
+      const row = map.get(c.topic) ?? { count: 0, dirs: new Set<string>() };
+      row.count++;
+      if (c.subtopic) row.dirs.add(c.subtopic);
+      map.set(c.topic, row);
     }
     return Array.from(map.entries())
-      .map(([topic, count]) => ({ topic, count }))
+      .map(([topic, row]) => ({ topic, count: row.count, dirs: row.dirs.size }))
       .sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic));
   },
 
@@ -242,6 +245,19 @@ export const repo: Repo = {
     }
     if (moved) persist();
     return { moved };
+  },
+
+  async setCardSubtopic(ids, subtopic) {
+    const set = new Set(ids);
+    if (!set.size) return { changed: 0 };
+    let changed = 0;
+    for (const c of load().knowledgeCards) {
+      if (!set.has(c.id)) continue;
+      c.subtopic = subtopic;
+      changed++;
+    }
+    if (changed) persist();
+    return { changed };
   },
 
   async updateKnowledgeCard(id, patch) {

@@ -133,8 +133,24 @@ export default function App() {
       [52 * 60 * min + 30 * min, 'Ventoy 更新了，回头升级 U 盘'],
       [55 * 60 * min, '想给家里 NAS 加个远程访问，Tailscale 还是 RustDesk'],
     ];
+    const ids: number[] = [];
     for (const [offset, text] of samples) {
-      await repo.insertFragment(text, 'app', now - offset);
+      ids.push(await repo.insertFragment(text, 'app', now - offset));
+    }
+
+    // 给几条打上标签：真机上标签是整理时 AI 打的，但 Web 预览不会跑 AI，
+    // 不打标签的话「点标签筛选」这个功能在预览里根本没法试
+    const seedTags: [number, string[], string | null][] = [
+      [0, ['财务', '待办'], '报销'],
+      [1, ['设备', 'NAS'], 'NAS 维护'],
+      [4, ['NAS', '备份'], 'NAS 维护'],
+      [6, ['工具', '装机'], '装机'],
+      [7, ['坑', 'NAS'], 'NAS 维护'],
+      [9, ['工具', '装机'], '装机'],
+      [10, ['网络', '方案'], null],
+    ];
+    for (const [i, labels, project] of seedTags) {
+      if (ids[i] !== undefined) await repo.applyTags(ids[i], labels, project);
     }
 
     // 顺带造几张知识卡：预览里 otherwise 知识库永远是空的，

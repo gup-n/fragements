@@ -28,13 +28,14 @@ import { KnowledgeDetail } from '../components/KnowledgeDetail';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { IconButton } from '../components/IconButton';
 import { TopicSheet } from '../components/TopicSheet';
+import { SubtopicSheet } from '../components/SubtopicSheet';
 
 interface Props {
   onClose: () => void;
 }
 
 export function KnowledgeScreen({ onClose }: Props) {
-  const [topics, setTopics] = useState<{ topic: string; count: number }[]>([]);
+  const [topics, setTopics] = useState<{ topic: string; count: number; dirs: number }[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const [cards, setCards] = useState<KnowledgeCard[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,6 +52,11 @@ export function KnowledgeScreen({ onClose }: Props) {
   const [askOpen, setAskOpen] = useState(false);
   /** 主题整理面板：合并 / 改名。AI 的归并建议不可能每次都准，得有个人工入口 */
   const [topicOpen, setTopicOpen] = useState(false);
+  /**
+   * 分方向面板。`preset` 有值时是「给某一组改名」：点方向小节头进来，
+   * 那一组的卡片已经勾好、方向名也填好了；没有值时是主题级的批量勾选。
+   */
+  const [sub, setSub] = useState<{ preset: { ids: number[]; name: string } | null } | null>(null);
 
   const reloadTopics = useCallback(async () => {
     setTopics(await repo.listKnowledgeTopics());
@@ -124,13 +130,15 @@ export function KnowledgeScreen({ onClose }: Props) {
 
   // 安卓返回键：先按页内层级退，退到底才回主界面。
   // 覆盖层自己会注册更晚的监听器，所以这里遇到覆盖层直接放行。
+  // 注意订阅变量不能叫 sub —— 会和下面的 sub state 重名，
+  // 闭包里永远拿到订阅对象（恒为真），返回键就彻底失效了。
   useEffect(() => {
-    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (detail || askOpen || topicOpen) return false;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (detail || askOpen || topicOpen || sub) return false;
       goBack();
       return true;
     });
-    return () => sub.remove();
+    return () => subscription.remove();
   });
 
   /** 主题内的卡片行。分组显示和单层平铺都用它，避免两份几乎一样的 JSX */
@@ -177,6 +185,21 @@ export function KnowledgeScreen({ onClose }: Props) {
     });
   }, [cards]);
 
+  /** 已分出去的方向个数（不含「未分方向」那一组），用来写副标题 */
+  const dirCount = groups.filter(([k]) => k !== null).length;
+
+  /**
+   * 详情页展示的卡片必须实时派生，不能用点进来时那个对象 ——
+   * 在详情页里改完方向后上层会刷新列表，但对象还是旧的，页面看起来「没变」，
+   * 得关掉重进才生效（v0.4.2 在碎片详情页上踩过同一个坑）。
+   * 找不到时退回快照：从问答里点开的卡可能不在当前列表范围内。
+   */
+  const detailLive = useMemo(() => {
+    if (!detail) return null;
+    const pool = [...cards, ...(results ?? []), ...archived];
+    return pool.find((c) => c.id === detail.id) ?? detail;
+  }, [detail, cards, results, archived]);
+
   return (
     <View style={styles.root}>
       <ScreenHeader
@@ -185,14 +208,24 @@ export function KnowledgeScreen({ onClose }: Props) {
           showArchived
             ? `共 ${archivedCount} 张已归档`
             : active
-              ? `${cards.length} 张卡`
+              ? `${cards.length} 张卡${dirCount > 0 ? ` · ${dirCount} 个方向` : ''}`
               : topics.length
                 ? `${topics.length} 个主题 · ${total} 张卡`
                 : undefined
         }
         onBack={goBack}
         right={
-          !showArchived && !active && topics.length > 1 ? (
+          showArchived ? undefined : active ? (
+            cards.length > 0 ? (
+              <IconButton
+                name="layers-outline"
+                size={20}
+                tone="soft"
+                onPress={() => setSub({ preset: null })}
+                accessibilityLabel="分方向"
+              />
+            ) : undefined
+          ) : topics.length > 1 ? (
             <IconButton
               name="git-merge-outline"
               size={20}
@@ -327,7 +360,12 @@ export function KnowledgeScreen({ onClose }: Props) {
                           pressed && { backgroundColor: C.hairSoft },
                         ]}
                       >
-                        <Text style={styles.topicName}>{t.topic}</Text>
+                        <View style={styles.topicLeft}>
+                          <Text style={styles.topicName}>{t.topic}</Text>
+                          {t.dirs > 0 ? (
+                            <Text style={styles.topicDirs}>{t.dirs} 个方向</Text>
+                          ) : null}
+                        </View>
                         <View style={styles.topicRight}>
                           <Text style={styles.topicCount}>{t.count}</Text>
                           <Ionicons name="chevron-forward" size={16} color={C.text3} />
@@ -360,12 +398,26 @@ export function KnowledgeScreen({ onClose }: Props) {
           ) : (
             <ScrollView contentContainerStyle={styles.content}>
               {groups.length > 1
-                ? groups.map(([sub, list]) => (
-                    <View key={sub ?? '__none'}>
-                      <View style={styles.subHead}>
-                        <Text style={styles.subName}>{sub ?? '未分方向'}</Text>
+                ? groups.map(([dir, list]) => (
+                    <View key={dir ?? '__none'}>
+                      {/* 点这个表头就是给整组改名 / 并到别的方向去 */}
+                      <Pressable
+                        style={({ pressed }) => [styles.subHead, pressed && dir && { opacity: 0.55 }]}
+                        disabled={!dir}
+                        onPress={() =>
+                          dir
+                            ? setSub({
+                                preset: { ids: list.map((c) => c.id), name: dir },
+                              })
+                            : undefined
+                        }
+                        accessibilityRole={dir ? 'button' : undefined}
+                        accessibilityLabel={dir ? `修改方向「${dir}」` : undefined}
+                      >
+                        <Text style={styles.subName}>{dir ?? '未分方向'}</Text>
                         <Text style={styles.subCount}>{list.length}</Text>
-                      </View>
+                        {dir ? <Ionicons name="create-outline" size={12} color={C.text3} /> : null}
+                      </Pressable>
                       {list.map(renderCard)}
                     </View>
                   ))
@@ -376,6 +428,16 @@ export function KnowledgeScreen({ onClose }: Props) {
         </>
       )}
 
+      {sub && active ? (
+        <SubtopicSheet
+          key={sub.preset ? sub.preset.name : 'all'}
+          topic={active}
+          preselect={sub.preset?.ids}
+          initialName={sub.preset?.name}
+          onClose={() => setSub(null)}
+          onChanged={refreshAll}
+        />
+      ) : null}
       {topicOpen ? (
         <TopicSheet
           topics={topics}
@@ -391,8 +453,12 @@ export function KnowledgeScreen({ onClose }: Props) {
           onChanged={refreshAll}
         />
       ) : null}
-      {detail ? (
-        <KnowledgeDetail card={detail} onClose={() => setDetail(null)} onChanged={refreshAll} />
+      {detailLive ? (
+        <KnowledgeDetail
+          card={detailLive}
+          onClose={() => setDetail(null)}
+          onChanged={refreshAll}
+        />
       ) : null}
     </View>
   );
@@ -457,7 +523,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: C.hair,
   },
+  topicLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 7 },
   topicName: { fontSize: 15.5, color: C.text, fontWeight: '500' },
+  topicDirs: { fontSize: 11, color: C.text3 },
   topicRight: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   topicCount: {
     fontSize: 11.5,
