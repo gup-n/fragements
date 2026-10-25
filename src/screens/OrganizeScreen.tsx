@@ -56,9 +56,44 @@ type Phase = 'idle' | 'running' | 'error' | 'result' | 'applying' | 'done';
  */
 type RefactorScope = 'all' | 'recent' | 'topic';
 
-const INBOX_LIMIT = 60;
+/**
+ * 单次整理最多带多少条。
+ *
+ * 这里从 60 降到 30 不是拍脑袋：条数不是成本，**字数和输出量**才是。
+ * 60 条的一次整理，思考链 + 九类 JSON 很容易把输出推到三四万 token，
+ * 一轮要跑七八分钟 —— 中途被截断就等于全废。砍到 30 条之后单轮输出量减半，
+ * 思考链短了、失败代价也小了。剩下的用「继续整理」接着跑，
+ * 比在客户端里自动拆批简单得多，而且每一轮都还能正常追问。
+ */
+const INBOX_LIMIT = 30;
+/**
+ * 单次整理的字符预算。条数只是粗控 ——
+ * 一条三千字的长笔记和三十条随手记一样重，光按条数装箱会让它独占整批。
+ * 超预算就提前收手，把它留到下一轮（单独跑而不是被截断）。
+ */
+const BATCH_CHAR_BUDGET = 12_000;
 /** 重构单次上限。原文比未读碎片长得多，多了 token 会爆 */
-const REFACTOR_LIMIT = 40;
+const REFACTOR_LIMIT = 20;
+/** 重构的字数预算比整理宽一点：它要把旧标签一起发给模型，每条天然更长 */
+const REFACTOR_CHAR_BUDGET = 16_000;
+
+/**
+ * 按「条数 + 字数」双上限装箱。
+ *
+ * 至少收一条，否则一条超长碎片会让批次永远是空的，
+ * 那个用户就永远整理不了它 —— 宁可让一条独占一批。
+ */
+function packFragments(list: Fragment[], limit: number, budget: number): Fragment[] {
+  const out: Fragment[] = [];
+  let chars = 0;
+  for (const f of list) {
+    if (out.length >= limit) break;
+    if (out.length && chars + f.content.length > budget) break;
+    out.push(f);
+    chars += f.content.length;
+  }
+  return out;
+}
 /** 整理页「待补小结」最多列几条 */
 const BACKLOG_LIMIT = 10;
 
@@ -138,7 +173,10 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     };
   }, [mode]);
 
-  const organizeBatch = useMemo(() => inbox.slice(0, INBOX_LIMIT), [inbox]);
+  const organizeBatch = useMemo(
+    () => packFragments(inbox, INBOX_LIMIT, BATCH_CHAR_BUDGET),
+    [inbox],
+  );
 
   const refactorPool = useMemo(() => {
     if (refactorScope === 'topic') {
@@ -155,7 +193,10 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     return organized;
   }, [refactorScope, refactorTopic, cards, fragments, organized]);
 
-  const refactorBatch = useMemo(() => refactorPool.slice(0, REFACTOR_LIMIT), [refactorPool]);
+  const refactorBatch = useMemo(
+    () => packFragments(refactorPool, REFACTOR_LIMIT, REFACTOR_CHAR_BUDGET),
+    [refactorPool],
+  );
 
   const batch = mode === 'refactor' ? refactorBatch : organizeBatch;
   const available = mode === 'refactor' ? refactorPool.length : inbox.length;
@@ -332,21 +373,23 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
       });
       if (runId) await repo.markRunApplied(runId);
       setApplied(report.applied);
+      // 先刷新再进 done：done 页要显示「还剩几条待整理」，
+      // 用刷新前的 inbox 去算会把这一批已经整理完的又算一遍
+      try {
+        await onApplied();
+      } catch {
+        /* 刷新失败不该翻成「写入失败」—— 内容已经进库了，下次进页面会重读 */
+      }
       setPhase('done');
     } catch (e) {
       setErrorMsg((e as Error)?.message || '写入失败');
       setPhase('error');
-      return;
-    }
-    // 刷新失败不该翻成「写入失败」—— 内容已经进库了
-    try {
-      await onApplied();
-    } catch {
-      /* 下次进页面会重新读 */
     }
   }
 
   const word = mode === 'refactor' ? '重构' : '整理';
+  /** 当前模式的单批条数上限。文案里要用它，别再直接引常量 —— 重构那档是另一个数 */
+  const batchLimit = mode === 'refactor' ? REFACTOR_LIMIT : INBOX_LIMIT;
   const headerTitle = round > 1 ? `${word} · 第 ${round} 版` : word;
 
   function switchMode(next: OrganizeMode) {
@@ -471,7 +514,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
               {overflow > 0 && (
                 <Text style={styles.overflowText}>
-                  还有 {overflow} 条这次没带上，处理完再来一轮即可。
+                  一次只带 {batchLimit} 条，剩下 {overflow} 条下一轮。
                 </Text>
               )}
               {!!errorMsg && <Text style={styles.errText}>{errorMsg}</Text>}
@@ -538,9 +581,26 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
           <View style={styles.centerBox}>
             <Ionicons name="checkmark-circle-outline" size={36} color={C.accent} />
             <Text style={styles.centerText}>已写入 {applied} 项</Text>
-            <Pressable style={styles.primaryBtn} onPress={onClose}>
-              <Text style={styles.primaryBtnText}>回到时间轴</Text>
-            </Pressable>
+            {overflow > 0 ? (
+              <>
+                <Text style={styles.doneSub}>
+                  还剩 {overflow} 条没{word}。一次只带 {batchLimit} 条是为了让模型专心 ——
+                  一轮跑太多，输出容易撞上限，出错就得从头再来。
+                </Text>
+                <Pressable style={styles.primaryBtn} onPress={start}>
+                  <Text style={styles.primaryBtnText}>
+                    继续{word}剩下的 {Math.min(overflow, batchLimit)} 条
+                  </Text>
+                </Pressable>
+                <Pressable style={styles.secondaryBtn} onPress={onClose}>
+                  <Text style={styles.secondaryBtnText}>先回时间轴</Text>
+                </Pressable>
+              </>
+            ) : (
+              <Pressable style={styles.primaryBtn} onPress={onClose}>
+                <Text style={styles.primaryBtnText}>回到时间轴</Text>
+              </Pressable>
+            )}
           </View>
         )}
 
@@ -754,6 +814,14 @@ const styles = StyleSheet.create({
 
   centerBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 80, gap: 10 },
   centerText: { fontSize: 14, color: C.text2 },
+  doneSub: {
+    fontSize: 12,
+    color: C.text3,
+    lineHeight: 19,
+    textAlign: 'center',
+    maxWidth: 300,
+    marginBottom: 4,
+  },
 
   errTitle: { fontSize: 14, color: C.danger, fontWeight: '500', marginBottom: 8 },
   errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },

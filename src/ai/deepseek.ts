@@ -14,6 +14,7 @@ import type {
   Todo,
   TodoDoneSuggestion,
   TodoSuggestion,
+  ReasoningEffort,
 } from '../types';
 import { AiError, parseJsonLoose, requestChat, type ChatMessage, type ChatProgress } from './chat';
 import { SYSTEM_PROMPT, buildRefineContent, buildUserContent } from './prompt';
@@ -295,6 +296,34 @@ export interface OrganizeOutcome {
   reasoning: string;
 }
 
+/**
+ * 这一轮该用多强的思考。
+ *
+ * 官方 `high` 不只是「想久一点」——它在 prompt 最前面插了一段
+ * 「不许走捷径，穷举所有边界情况和对抗性场景，写出每个中间步骤和每个被否决的假设」。
+ * 对「给十几条笔记打标签、抽待办」这种机械抽取，判断标准已经全部写在 system prompt 里，
+ * 让模型再按「绝对最大努力」重推一遍纯属浪费：实测能把思考链从 3K 拉到 15K，
+ * 而额度是思考链和正文共用的，这正是当初「思考到一半就停住」的推手之一。
+ *
+ * 所以小额首轮降到 `low`。注意 `low` 不等于「不许思考」——
+ * 官方 low 的实现是**不加任何前缀**，模型按自己的节奏思考，只是不被人为加压。
+ *
+ * 三种情况仍然给 `high`：
+ * - **重构**：要和旧结果逐项比对，判断「哪里变了」，这是真判断任务
+ * - **追问**：用户在纠错，模型得先理解「上一轮为什么不对」
+ * - **碎片多**：跨条目归并（merge_topics / drop_todos）需要把整批放在一起看
+ */
+const SMALL_BATCH = 15;
+
+function pickEffort(
+  count: number,
+  mode: 'organize' | 'refactor',
+  refining: boolean,
+): ReasoningEffort {
+  if (refining || mode === 'refactor') return 'high';
+  return count <= SMALL_BATCH ? 'low' : 'high';
+}
+
 export async function organize(options: OrganizeOptions): Promise<OrganizeOutcome> {
   const {
     fragments,
@@ -318,7 +347,10 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeOutcom
   if (instruction) messages.push({ role: 'user', content: buildRefineContent(instruction) });
 
   // 九类结果的输出必须走 json_object，追问回传的 raw 也是 JSON，靠它保证格式稳定
-  const outcome = await requestChat(config, messages, onProgress, { json: true });
+  const outcome = await requestChat(config, messages, onProgress, {
+    json: true,
+    effort: pickEffort(fragments.length, mode, !!instruction),
+  });
 
   // 完全空的情况请求层已经按 finish_reason 报过了，这里只是兜底
   if (!outcome.content.trim()) throw new AiError('format', '模型没有返回内容');

@@ -7,7 +7,7 @@
  * v0.2.4 起从 deepseek.ts 抽出来，避免那个文件无限变大。
  */
 import { fetch as expoFetch } from 'expo/fetch';
-import type { AiConfig } from '../types';
+import type { AiConfig, ReasoningEffort } from '../types';
 import { DEFAULT_AI_CONFIG } from '../types';
 import { NoStreamError, readChatStream, type FinishReason } from './stream';
 
@@ -93,6 +93,15 @@ export interface ChatOutcome {
 export function describeFinish(reason: FinishReason | null, maxTokens: number): string {
   switch (reason) {
     case 'length':
+      // 第三方兼容服务被压到 8K，而且它们基本不接受 reasoning_effort ——
+      // 客户端压不下它的思考长度，只能建议换回官方地址。别让用户在那里反复重试
+      if (maxTokens <= THIRD_PARTY_MAX_TOKENS) {
+        return (
+          `输出被截断了：这一轮撞到了 ${maxTokens.toLocaleString()} token 的上限。` +
+          '当前地址不是 DeepSeek 官方接口，客户端没法控制它的思考长度，' +
+          '所以调低「思考强度」不会有效果 —— 建议换回官方接口，或者把碎片分几批整理。'
+        );
+      }
       return (
         `输出被截断了：思考过程加正文撞到了上限（max_tokens ${maxTokens.toLocaleString()}，` +
         'DeepSeek 规定思考链和正文共用这个额度）。' +
@@ -122,6 +131,15 @@ export interface RequestOptions {
    * 否则模型会把 markdown 塞进 JSON 字符串里，换行全变 `\n`，直接没法渲染。
    */
   json?: boolean;
+  /**
+   * 这一轮用多强的思考。不传就用设置页里的全局值。
+   *
+   * 为什么需要它：官方 `high` 并不只是「想久一点」。它在 prompt 最前面插了一段
+   * 「不许走捷径，穷举所有边界情况和对抗性场景，把每个中间步骤和每个被否决的假设都写出来」。
+   * 对「给三十条笔记打标签」这种机械抽取，那是纯浪费 —— 思考链能从 3K 涨到 15K，
+   * 而判断标准其实已经全部写在 system prompt 里了，不需要模型自己重新推一遍。
+   */
+  effort?: ReasoningEffort;
 }
 
 function endpoint(baseUrl: string) {
@@ -274,7 +292,7 @@ function buildBody(
 
   if (native) {
     body.thinking = { type: config.thinking ? 'enabled' : 'disabled' };
-    if (config.thinking) body.reasoning_effort = config.effort;
+    if (config.thinking) body.reasoning_effort = options.effort ?? config.effort;
   }
 
   // 思考模式下 temperature 不生效（传了不报错，只是被忽略）。

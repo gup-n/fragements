@@ -24,8 +24,19 @@ interface Props {
   seconds: number;
 }
 
+/**
+ * 展开时最多渲染多少字。
+ *
+ * v0.6.3 把输出额度提到 64K 之后，思考链动辄几万字。RN 的文本布局是线性的，
+ * 一次性丢几万字进去在真机上会明显卡顿 —— 而开头那段「让我看看这些碎片……」
+ * 本来就没有信息量，结论都在尾部。所以只留尾段，标题上的字数是全文的。
+ */
+const TAIL_CHARS = 8_000;
+
 export function ReasoningCollapse({ text, seconds }: Props) {
   const [open, setOpen] = useState(false);
+  const shown = text.length > TAIL_CHARS ? text.slice(-TAIL_CHARS) : text;
+  const omitted = text.length - shown.length;
 
   return (
     <View style={s.wrap}>
@@ -41,7 +52,10 @@ export function ReasoningCollapse({ text, seconds }: Props) {
 
       {open ? (
         <ScrollView style={s.scroll} contentContainerStyle={s.body} nestedScrollEnabled>
-          <Text style={s.text}>{text}</Text>
+          {omitted > 0 ? (
+            <Text style={s.omitted}>… 前面 {fmtCount(omitted)} 字已省略，这里只留最后的推演</Text>
+          ) : null}
+          <Text style={s.text}>{shown}</Text>
         </ScrollView>
       ) : null}
     </View>
@@ -55,5 +69,6 @@ const s = StyleSheet.create({
   meta: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
   scroll: { maxHeight: 260, marginTop: 4, backgroundColor: C.hairSoft, borderRadius: R.btn },
   body: { padding: 10 },
+  omitted: { fontSize: 11, color: C.text3, marginBottom: 6, fontStyle: 'italic' },
   text: { fontSize: 12, lineHeight: 19, color: C.text2 },
 });

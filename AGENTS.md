@@ -104,6 +104,21 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
   `organize` 必须在 `parseJsonLoose` **之前**拦下来，否则会误导成「不是合法 JSON，再试一次就好」。
 - 参数语义（尤其是「看起来没变」的）**必须回官方文档核对**，不能凭记忆、也不能信旧注释。
 
+## 思考强度与单批装载量（v0.6.4）
+
+- **`reasoning_effort: high` 不是「想久一点」，是加压指令。** 官方实现是在 prompt 最前面插一段
+  「Absolute maximum, no shortcuts permitted…穷举所有边界情况、写出每个被否决的假设」。
+  对「打标签 / 抽待办」这种机械抽取纯属浪费，思考链能从 3K 涨到 15K，而额度是思考链和正文共用的。
+  所以 `deepseek.ts` 的 `pickEffort` 会分档：**首轮且 ≤15 条用 `low`**，重构 / 追问 / 碎片多时用 `high`。
+  `low` 不等于关闭思考 —— 官方 low = **不加任何前缀**。
+- **`RequestOptions.effort` 只能对官方接口生效。** `buildBody` 里那两行在 `if (native)` 里面，
+  第三方网关根本不收 `reasoning_effort`，所以对它们「调低思考」无效，撞额度时只能建议换回官方地址。
+- **单批上限有两道**（`OrganizeScreen` 的 `packFragments`）：条数（整理 30 / 重构 20）与
+  字数（12,000 / 16,000 字）。**装箱必须至少收一条**，否则一条超长碎片会让批次永远为空，
+  那个用户就永远整理不了它。
+- **砍条数不是为了省 token。** 每轮都要重发 system + 全量清单，输入 token 反而上升。
+  买的是「单轮峰值只占额度 8%」和「失败只废一轮」。跟用户解释时别把它说成省钱。
+
 ## 三个 AI 功能的分工（v0.3.0）
 
 请求层统一在 `src/ai/chat.ts`（`requestChat(config, messages, onProgress, options)`），
