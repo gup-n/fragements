@@ -53,3 +53,6 @@ expo-qr.png
 # 本地日志与临时文件
 *.log
 err.txt
+
+# 纯函数断言脚本的编译产物
+.tmp-assert/

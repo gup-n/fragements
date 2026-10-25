@@ -1,4 +1,4 @@
-export type FragmentSource = 'app' | 'notif' | 'share';
+export type FragmentSource = 'app' | 'notif' | 'share' | 'import';
 export type FragmentStatus = 'inbox' | 'tagged' | 'merged';
 /** 内容性质，由 AI 在整理时判定，记录时不要求用户选 */
 export type FragmentNature = 'todo' | 'knowledge' | 'event';

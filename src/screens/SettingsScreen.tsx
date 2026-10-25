@@ -16,12 +16,17 @@ import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/chat';
 import { exportMarkdown } from '../export/markdown';
+import { applyImport, pickMarkdown, previewImport, type ImportPreview } from '../db/importMd';
+import { looksBinary } from '../util/mdParse';
+import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
   fragments: Fragment[];
   onClose: () => void;
+  /** 导入会新增碎片，得让 App 重新拉一遍时间轴 */
+  onChanged: () => void;
 }
 
 const EFFORT_LABEL: Record<ReasoningEffort, string> = {
@@ -36,7 +41,7 @@ const EFFORT_HINT: Record<ReasoningEffort, string> = {
   max: '想得最细，慢一些、贵一些',
 };
 
-export function SettingsScreen({ fragments, onClose }: Props) {
+export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -44,8 +49,12 @@ export function SettingsScreen({ fragments, onClose }: Props) {
   const [effort, setEffort] = useState<ReasoningEffort>('high');
   const [showKey, setShowKey] = useState(false);
   const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0, tags: 0 });
-  const [busy, setBusy] = useState<'idle' | 'saving' | 'testing' | 'exporting' | 'indexing'>('idle');
+  const [busy, setBusy] = useState<
+    'idle' | 'saving' | 'testing' | 'exporting' | 'indexing' | 'picking' | 'importing'
+  >('idle');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 非空时弹导入确认页。选完文件先看预览，确认了才写库 */
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -97,6 +106,58 @@ export function SettingsScreen({ fragments, onClose }: Props) {
       setMsg({ kind: 'ok', text: `已重建索引，共 ${indexed} 条` });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message || '重建失败' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function handlePickImport() {
+    setBusy('picking');
+    setMsg(null);
+    try {
+      const file = await pickMarkdown();
+      if (!file) return;
+      if (looksBinary(file.text)) {
+        setMsg({
+          kind: 'err',
+          text: '这个文件读不出文本。可能是选错了文件，或者它是 GBK 编码——用记事本另存为 UTF-8 再试。',
+        });
+        return;
+      }
+      const preview = await previewImport(file);
+      if (!preview.total) {
+        setMsg({
+          kind: 'err',
+          text: '文件里没找到能导入的条目。需要 `- 内容` 这样的列表行，上面最好有 `### 2026-10-25` 这样的日期标题。',
+        });
+        return;
+      }
+      setImportPreview(preview);
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message || '读取文件失败' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  async function handleConfirmImport() {
+    if (!importPreview) return;
+    setBusy('importing');
+    setMsg(null);
+    try {
+      const { inserted, tagged } = await applyImport(importPreview.fresh);
+      setImportPreview(null);
+      setStats(await repo.stats());
+      onChanged();
+      setMsg({
+        kind: 'ok',
+        text: tagged
+          ? `已导入 ${inserted} 条，其中 ${tagged} 条带标签（直接算已整理）`
+          : `已导入 ${inserted} 条`,
+      });
+    } catch (e) {
+      // 不回滚：已经写进去的靠判重挡着，重试不会产生重复
+      setMsg({ kind: 'err', text: (e as Error).message || '写入失败，可以再点一次导入' });
     } finally {
       setBusy('idle');
     }
@@ -264,9 +325,23 @@ export function SettingsScreen({ fragments, onClose }: Props) {
               {busy === 'exporting' ? '正在导出…' : '导出 Markdown'}
             </Text>
           </Pressable>
+          <Pressable
+            style={styles.ghostBtnWide}
+            onPress={handlePickImport}
+            disabled={busy !== 'idle'}
+          >
+            <Ionicons name="cloud-upload-outline" size={15} color={C.text} />
+            <Text style={styles.ghostBtnText}>
+              {busy === 'picking' ? '正在读取…' : '从 Markdown 导入'}
+            </Text>
+          </Pressable>
           <Text style={styles.note}>
             导出成一个 .md 文件，按天分节，标签写成 #tag。放到 NAS 或者 Obsidian
-            里都能直接读，也算是一份逃生舱。
+            里都能直接读，也是一份逃生舱。
+          </Text>
+          <Text style={styles.note}>
+            导入认的就是这个格式：日期标题下面的 `- 21:40 正文 #标签`。库里已经有的
+            内容会按「同一天、同一分钟、同样正文」自动跳过，重复导同一个文件不会翻倍。
           </Text>
         </View>
 
@@ -286,6 +361,15 @@ export function SettingsScreen({ fragments, onClose }: Props) {
           </View>
         </View>
       </ScrollView>
+
+      {importPreview && (
+        <ImportSheet
+          preview={importPreview}
+          busy={busy === 'importing'}
+          onCancel={() => setImportPreview(null)}
+          onConfirm={handleConfirmImport}
+        />
+      )}
     </View>
   );
 }

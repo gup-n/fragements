@@ -22,13 +22,19 @@ npx tsc --noEmit                                  # 改完必跑，当前零错�
 npm run build:web                                 # Web 平台打一遍包再删产物，**只当编译校验，不许给用户看**
 npx expo install <pkg>                            # 装依赖用它，别用 npm install
 
+npm run test:md                                   # 导入/导出的 24 项回归断言（唯一留在仓库里的）
+
 npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
 cd android && ./gradlew assembleRelease
 ```
 
-项目**零自动化测试**。纯函数层（`util/organizePlan.ts`、`util/tokenize.ts`、`util/qaNote.ts`）
-改动时，用 `npx tsc --ignoreConfig <files> --outDir .tmpassert --module commonjs --target es2020`
-编译到临时目录、写几条 `assert` 跑一遍，**跑完立刻删**。这是唯一能验逻辑的办法。
+除了 `test:md`，项目**没有别的自动化测试**。其它纯函数层
+（`util/organizePlan.ts`、`util/tokenize.ts`、`util/qaNote.ts`）改动时，用
+`npx tsc --ignoreConfig <files> --outDir .tmpassert --module commonjs --target es2020`
+编译到临时目录、写几条 `assert` 跑一遍，**跑完立刻删**。
+
+为什么导入导出是例外：**那是备份链路**。`test:md` 里有一条往返测试
+（碎片 → md → 碎片），导出格式和解析规则任何一边改了，它会立刻变红。
 
 ## 给用户看界面：**不做预览**（用户 2026-10-25 明确要求）
 
@@ -141,6 +147,27 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - `ensureSearchIndex` 在启动时比条数，不一致就整库重建。设置页另有手动「重建搜索索引」。
 - **FTS 失败或 0 命中时退回 `LIKE`**（`likeNeedle` 转义 `%` / `_`）。
   宁可慢一点，也不能让用户搜出空结果还不知道为什么。
+
+## 导出与导入（v0.7.2）
+
+导出和导入是**同一份格式的两个方向**，分开在 `util/mdBuild.ts` 和 `util/mdParse.ts`。
+两边各改各的，等用户真去恢复数据时才发现对不上——那时候数据已经在文件里了。
+
+**唯一的保障是 `npm run test:md` 那 24 项断言**。改导出格式、改解析规则，
+两边必须一起改，然后让往返测试（碎片 → md → 碎片）重新绿。
+
+四条别踩：
+
+1. **判重指纹只能有一份**：`mdParse.fragmentKey(createdAt, content)`。
+   导入层和库里现有碎片比对时调的是同一个函数。各写一份的下场是
+   「明明重复了却导进来两份」，而且没人会发现。
+2. **文件选择器别按 MIME 过滤**。安卓上 `.md` 的注册类型五花八门，
+   按 `text/markdown` 过滤会让一部分机型根本看不到自己的文件。传通配符，
+   选错文件由 `looksBinary` 兜（NUL 字节 / 大量 `\uFFFD`）。
+3. **日期要真校验，不是只校验形状**。`\d{4}-\d{2}-\d{2}` 会放 `2026-13-99` 进来。
+   而且格式对不上时**不能静默落到今天**——用户会完全不知道自己的日期被忽略了。
+4. **块注释里别写 MIME 通配符**。那个字符串里含 `*/`，会把注释提前闭合，
+   报的是一串莫名其妙的语法错。写成「传通配符」就不会中招。
 
 ## 「问」（v0.7.1）
 

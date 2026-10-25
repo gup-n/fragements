@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.7.1（versionCode 23）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.7.2（versionCode 24）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.7.1 / versionCode 23 |
+| 版本 | v0.7.2 / versionCode 24 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v6 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,7 +38,7 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.1 MiB，产物跑完即删） |
 | 自动化测试 | **没有**。只有纯函数层的临时 `assert` 脚本（跑完删） |
-| 真机验证 | v0.7 这批**基本没验**，20 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 这批**基本没验**，23 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏入口、导入） |
 | 数据迁移 | v6。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留 |
 
@@ -74,7 +74,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **11,395 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **12,129 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -111,6 +111,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/db/repo.web.ts` | 453 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/commit.ts` | 192 | **应用**：按勾选写库，合并 → 标状态的顺序，真实计数 |
+| `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
 
 ### 纯函数层（改动时最好写断言）
 
@@ -122,6 +123,8 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/batch.ts` | 41 | `packFragments`（条数 + 字数双上限，至少收一条）、`pendingOnly` |
 | `src/util/qaNote.ts` | 74 | 纪要压缩：最近 6 轮、每答前 3 句 / 300 字、剥 Markdown |
 | `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
+| `src/util/mdBuild.ts` | 103 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
+| `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
 | `src/util/date.ts` | 189 | 日 / 周 / 月键、`periodAnchor`、格式化 |
 | `src/util/digest.ts` | 97 | 待补小结清单（配额 daily 6 / weekly 2 / monthly 2） |
 | `src/util/keyboard.ts` | 39 | `useKeyboardHeight()`（替代 `KeyboardAvoidingView`） |
@@ -134,13 +137,14 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/SummarySheet.tsx` | 486 | 小结面板：粒度 / 周期、预览、替换确认、保存 |
 | `src/components/ResultSections.tsx` | 318 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 312 | 标签管理：改名 / 合并 / 删除 |
+| `src/components/ImportSheet.tsx` | 201 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
 | `src/components/NoteBody.tsx` | 100 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`） |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 95 / 80 | 全项目唯一的图标按钮与页头 |
 | `src/components/Reasoning*.tsx` | 74 / 85 / 68 | 思维链实时流 / 折叠 / 轨迹 |
 | `src/components/BacklogCard.tsx` | 86 | 整理页的「待补小结」条目 |
 | `src/components/TagPill.tsx` | 63 | 标签胶囊（哈希取色） |
 | `src/types.ts` | 274 | 全部领域类型 |
-| `src/export/markdown.ts` | 144 | 导出：时间轴 + 待办 + 标签索引 |
+| `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
 | `src/theme.ts` · `src/version.ts` | 52 / 8 | 颜色与版本常量 |
 
 ---
@@ -338,16 +342,17 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 
 ## 9. 真机待验
 
-20 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的五条：
+23 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的六条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**
 3. 「应用」回报的写入数与实际变化**对不对**
 4. 跑到一半杀 App，重进有没有**继续上次**
 5. 「问」的引用 `[F12]` 点开**是不是原文**
+6. **导出 → 卸载重装 → 导入**，条数/时间/标签能不能原样回来（这条最像「真的会用到」）
 
 v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在之前版本验过，
-但这版动了数据层（v6 迁移），升级路径必须验一次：**v0.6.6 直接升到 v0.7.1，旧数据要在**。
+但这版动了数据层（v6 迁移），升级路径必须验一次：**v0.6.6 直接升到 v0.7.2，旧数据要在**。
 
 ---
 
@@ -370,7 +375,10 @@ v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在�
 
 ## 11. 下一步（按顺序）
 
-1. 用户装 `fragments-v0.7.1.apk`，按 ROADMAP 那 20 条验。**有问题先修，不要叠新功能。**
-2. 验完补「从 Markdown 导入」—— 现在数据只能出不能回，这是真正的黑洞。
-3. 通知栏常驻入口（SPEC 第 10 节末尾有实现约束）。
-4. 更新分发方式（EAS Update / GitHub Release），等用户定。
+1. 用户装 `fragments-v0.7.2.apk`，按 ROADMAP 那 23 条验。**有问题先修，不要叠新功能。**
+2. 通知栏常驻入口（SPEC 第 10 节末尾有实现约束）。
+3. 更新分发方式（EAS Update / GitHub Release），等用户定 —— 装 APK 太麻烦这件事还没解决。
+4. 大库性能：几千条时时间轴全量读进内存会开始慢，等量真上来再动。
+
+> 「从 Markdown 导入」已在 v0.7.2 补上（数据只出不能回的那个黑洞堵住了）。
+> 它的回归测试是 `npm run test:md`，**改导出格式前后都要跑**。

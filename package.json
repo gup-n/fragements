@@ -1,11 +1,12 @@
 {
   "name": "fragments",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
     "@expo/vector-icons": "^15.0.2",
     "expo": "~58.0.16",
+    "expo-document-picker": "~58.0.4",
     "expo-file-system": "~58.0.10",
     "expo-haptics": "~58.0.7",
     "expo-secure-store": "~58.0.2",
@@ -27,6 +28,7 @@
     "android": "expo run:android",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
+    "test:md": "tsc --ignoreConfig src/util/mdBuild.ts src/util/mdParse.ts src/util/text.ts src/util/date.ts --outDir .tmp-assert --module commonjs --target es2020 --moduleResolution node --skipLibCheck --esModuleInterop --ignoreDeprecations 6.0 && node scripts/assert_md.cjs",
     "build:web": "node scripts/build_web.mjs"
   },
   "private": true

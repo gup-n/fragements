@@ -251,6 +251,7 @@ export default function App() {
                 <SettingsScreen
                   fragments={fragments}
                   onClose={() => setRoute(settingsFrom)}
+                  onChanged={reload}
                 />
               )}
               {route === 'review' && (
