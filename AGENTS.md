@@ -136,5 +136,6 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 |---|---|
 | `HANDOFF.md` | **交接文档，先读这个** |
 | `SPEC.md` | 需求与设计唯一依据（数据模型、AI 契约、Android 红线、构建环境） |
-| `README.md` | 给人看的项目说明 |
-| `ROADMAP.md` | 分级开发计划与待决问题 |
+| `README.md` | 给人看的项目说明与构建指引 |
+| `ROADMAP.md` | 还没做的事、明确不做的事、待决问题 |
+| `CHANGELOG.md` | 每个版本改了什么、为什么、踩了什么坑。**想知道「为什么写成这样」来这查，别猜** |
