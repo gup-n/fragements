@@ -35,6 +35,15 @@ const PER_CARD_CLIP = 1200;
  * 这里给到 2500，正常长度的回答一个字都不会截。
  */
 const HISTORY_CLIP = 2500;
+/**
+ * 最多回传几轮历史。
+ *
+ * 「一次打开算一轮」不等于「无限记」。问到第十几轮时，历史已经几万字，
+ * 每一轮都要重发一遍：请求越来越慢、模型也更容易被前文带偏。
+ * 留 10 轮（第 1 轮 + 最近 9 轮）—— 第 1 轮里装着卡片清单，不能丢；
+ * 最近几轮决定「它指的是什么」。更早的仍然在界面上，只是不再回喂给模型。
+ */
+const MAX_HISTORY_TURNS = 10;
 /** 一条网络资料最多进多少字。官方 summary 本身就是 600–800 字 */
 const WEB_CLIP = 700;
 /**
@@ -249,6 +258,14 @@ export interface AskOutcome {
   rejected: number;
   /** 这一轮实际用了哪些网络资料 */
   web: WebHit[];
+  /**
+   * 回答是不是被输出上限截断了。
+   *
+   * `requestChat` 只在正文**为空**时报截断；正文有内容但撞了上限时它照常返回，
+   * 于是半截回答会被当成完整回答显示出来 —— 用户看到一句没说完的话，
+   * 完全不知道是模型的问题，会以为「它就这水平」。必须如实标出来。
+   */
+  truncated: boolean;
   /** 实际读了几张卡 */
   scanned: number;
   /** 候选卡总数 */
@@ -263,6 +280,16 @@ function cleanAnswer(raw: string) {
 }
 
 /**
+ * 历史轮数收敛：**保住第 1 轮**（卡片清单在它的 user 消息里），
+ * 其余只留最近几轮。超出部分不是被删，只是这一轮不再发给模型。
+ */
+export function trimTurns(turns: AskTurn[]): AskTurn[] {
+  if (turns.length <= MAX_HISTORY_TURNS) return turns;
+  const keep = MAX_HISTORY_TURNS - 1;
+  return [turns[0], ...turns.slice(turns.length - keep)];
+}
+
+/**
  * 拼多轮消息。
  *
  * 抽成独立导出函数是为了能直接跑断言 —— 「第 N 轮到底有没有把前几轮带上」
@@ -272,6 +299,7 @@ function cleanAnswer(raw: string) {
  * - 第一条 user = 卡片清单 + 第一个问题（资料只出现一次，不每轮重发）
  * - 之后每轮是干净的 user / assistant 对
  * - 网络资料只挂在当前这一轮（每次搜的东西不一样，不能混进历史）
+ * - 超过 10 轮时由 `trimTurns` 收敛，第 1 轮永远保留
  */
 export function buildAskMessages(input: {
   question: string;
@@ -279,7 +307,8 @@ export function buildAskMessages(input: {
   web: WebHit[];
   turns: AskTurn[];
 }): ChatMessage[] {
-  const { question, picked, web, turns } = input;
+  const { question, picked, web } = input;
+  const turns = trimTurns(input.turns);
   const cardText = ['【知识库卡片】', ...picked.map(cardBlock)].join('\n\n');
 
   const current: string[] = [];
@@ -360,6 +389,7 @@ export async function askKnowledge(options: AskOptions): Promise<AskOutcome> {
     cited,
     actions,
     rejected,
+    truncated: outcome.finishReason === 'length',
     web,
     scanned: picked.length,
     total: cards.length,

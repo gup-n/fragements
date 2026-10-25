@@ -19,6 +19,21 @@ const isWeb = Platform.OS === 'web';
 export default function App() {
   const [ready, setReady] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');
+  /**
+   * 从哪个页面进的设置页。
+   *
+   * 原来是「一律回时间轴」：整理页在缺 API Key 时会给一个「去设置里填」的入口，
+   * 点进去填完，回来人已经站在时间轴上了，之前那一屏全白点。
+   * 现在记住来路，关掉设置就回原地。
+   */
+  const [settingsFrom, setSettingsFrom] = useState<Route>('timeline');
+  /**
+   * 输入框草稿放在 App 里，不放在 TimelineScreen 里。
+   *
+   * 切到知识库/设置/回顾时 TimelineScreen 会被卸载，草稿跟着一起没：
+   * 打了半句去翻一张卡，回来输入框是空的 —— 这不是「没保存」，是根本没留住。
+   */
+  const [draft, setDraft] = useState('');
   const [fragments, setFragments] = useState<Fragment[]>([]);
   /** 周期总结，时间轴按 period 把它们插回对应日期 */
   const [notes, setNotes] = useState<Note[]>([]);
@@ -64,6 +79,11 @@ export default function App() {
   useEffect(() => {
     if (isWeb) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route === 'settings') {
+        // 设置页回到它来时的那个页面，不要一律弹回时间轴
+        setRoute(settingsFrom);
+        return true;
+      }
       if (route !== 'timeline') {
         setRoute('timeline');
         return true;
@@ -71,7 +91,7 @@ export default function App() {
       return false;
     });
     return () => sub.remove();
-  }, [route]);
+  }, [route, settingsFrom]);
 
   const handleAdd = useCallback(
     async (text: string) => {
@@ -244,12 +264,17 @@ export default function App() {
                   notes={notes}
                   inboxCount={inboxCount}
                   doneIds={doneIds}
+                  draft={draft}
+                  onDraftChange={setDraft}
                   onAdd={handleAdd}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}
                   onOpenOrganize={() => setRoute('organize')}
-                  onOpenSettings={() => setRoute('settings')}
+                  onOpenSettings={() => {
+                    setSettingsFrom('timeline');
+                    setRoute('settings');
+                  }}
                   onOpenKnowledge={() => setRoute('knowledge')}
                   onOpenReview={() => setRoute('review')}
                   onSeed={isWeb ? handleSeed : undefined}
@@ -261,11 +286,17 @@ export default function App() {
                   notes={notes}
                   onClose={() => setRoute('timeline')}
                   onApplied={reload}
-                  onOpenSettings={() => setRoute('settings')}
+                  onOpenSettings={() => {
+                    setSettingsFrom('organize');
+                    setRoute('settings');
+                  }}
                 />
               )}
               {route === 'settings' && (
-                <SettingsScreen fragments={fragments} onClose={() => setRoute('timeline')} />
+                <SettingsScreen
+                  fragments={fragments}
+                  onClose={() => setRoute(settingsFrom)}
+                />
               )}
               {route === 'knowledge' && (
                 <KnowledgeScreen onClose={() => setRoute('timeline')} />

@@ -20,6 +20,7 @@ import type {
 } from '../types';
 import { C, R, tagColor } from '../theme';
 import { K, resultKeys } from '../util/resultItems';
+import { replacementOf } from '../util/dedupe';
 
 interface Props {
   result: OrganizeResult;
@@ -40,25 +41,10 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
   const todoById = useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
   /**
-   * 新卡和某张旧卡的来源碎片重叠 ≥ 50%，就认为这张新卡是旧卡的「替代版本」。
-   * 重建构场景：同一段原文重新提炼，标题措辞变了，但讲的还是同一件事。
+   * 新卡会顶掉哪张旧卡 —— 显示和写入用的是同一个判据（`util/dedupe.ts`），
+   * 以前这里各写了一份，改一处忘另一处就会出现「界面这么说、实际那么做」。
    */
-  const replacementOf = (sourceIds: number[]): KnowledgeCard | null => {
-    if (!sourceIds.length) return null;
-    const incoming = new Set(sourceIds);
-    let best: KnowledgeCard | null = null;
-    let bestScore = 0;
-    for (const c of cards) {
-      if (!c.sourceIds.length) continue;
-      const hit = c.sourceIds.filter((id) => incoming.has(id)).length;
-      const score = hit / Math.min(c.sourceIds.length, sourceIds.length);
-      if (score > bestScore) {
-        bestScore = score;
-        best = c;
-      }
-    }
-    return bestScore >= 0.5 ? best : null;
-  };
+  const replacedBy = (sourceIds: number[]) => replacementOf(cards, sourceIds);
 
   if (!resultKeys(result).length) {
     return <Text style={s.resultHint}>AI 认为这批碎片不需要处理。</Text>;
@@ -108,7 +94,7 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
             const key = K.knowledge(k.topic, k.title);
             const on = isOn(key);
             // 重构时提前算一下这张新卡会不会顶掉某张旧卡，让用户看得见
-            const replaced = mode === 'refactor' ? replacementOf(k.source_ids) : null;
+            const replaced = mode === 'refactor' ? replacedBy(k.source_ids) : null;
             // 旧卡那边被用户取消了归档，这里就得如实说保留
             const keptOld =
               !!replaced &&

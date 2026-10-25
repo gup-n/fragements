@@ -30,36 +30,72 @@ function str(v: unknown): string | null {
  */
 const ACTION_OPEN = /^\s*[:`]{3}\s*action\b/i;
 const BLOCK_CLOSE = /^\s*[:`]{3}\s*$/;
+/** 只有三个反引号的一行 —— 模型爱把 action 块包进代码围栏里 */
+const FENCE_ONLY = /^\s*```\s*$/;
 
 /**
  * 把回答切成「正文 + action 块」。
  *
  * 按行扫而不是用正则跨行匹配：模型偶尔会漏写收尾的 `:::`，
  * 正则那种写法会把后面所有正文一起吃掉，用户看到的是半截回答。
+ *
+ * 还要处理围栏：模型常写成 ``` 里包一个 :::action。
+ * 只剥 action 块会把那对围栏留在正文里，用户会看到一对空的代码块。
+ * 所以紧贴 action 块的围栏行一起丢掉 —— 只丢紧贴的，
+ * 回答里正常的代码块一行都不能动。
  */
 function splitBlocks(raw: string): { text: string; blocks: string[] } {
   const lines = raw.split('\n');
   const keep: string[] = [];
   const blocks: string[] = [];
   let buf: string[] | null = null;
+  /** 只有围栏的行先压着，确认它不是包 action 的才写回正文 */
+  let fenceHold: string[] = [];
+  /** 刚关掉一个 action 块：紧跟其后的收围栏也属于它 */
+  let justClosed = false;
+
+  const flushFence = () => {
+    if (fenceHold.length) {
+      keep.push(...fenceHold);
+      fenceHold = [];
+    }
+  };
 
   for (const line of lines) {
     if (buf) {
       if (BLOCK_CLOSE.test(line)) {
         blocks.push(buf.join('\n'));
         buf = null;
+        justClosed = true;
       } else {
         buf.push(line);
       }
       continue;
     }
+
     if (ACTION_OPEN.test(line)) {
+      // 开围栏如果就压在 action 上面，那它是包装，不是正文
+      fenceHold = [];
+      justClosed = false;
       buf = [];
       continue;
     }
+
+    if (FENCE_ONLY.test(line)) {
+      if (justClosed) {
+        justClosed = false;
+        continue;
+      }
+      fenceHold.push(line);
+      continue;
+    }
+
+    justClosed = false;
+    flushFence();
     keep.push(line);
   }
 
+  flushFence();
   // 没闭合的块当正文还回去 —— 宁可显示一段奇怪的标记，也别吞掉用户的回答
   if (buf && buf.length) keep.push(...buf);
 

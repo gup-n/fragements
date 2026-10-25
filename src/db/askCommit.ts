@@ -10,7 +10,11 @@ import { repo } from './repo';
 
 type CardPatch = Parameters<typeof repo.updateKnowledgeCard>[1];
 
-export async function applyAskAction(a: AskAction): Promise<string> {
+export async function applyAskAction(
+  a: AskAction,
+  /** 卡片标题。只用于回执文案 —— 「卡片 #12 已更新」对用户没有意义 */
+  cardTitle?: (id: number) => string | null,
+): Promise<string> {
   switch (a.kind) {
     case 'merge_topics': {
       const { moved } = await repo.retopicCards(a.from, a.to);
@@ -43,7 +47,8 @@ export async function applyAskAction(a: AskAction): Promise<string> {
       if (a.body !== undefined) patch.body = a.body;
       if (!Object.keys(patch).length) return '这条提案没有要改的字段';
       await repo.updateKnowledgeCard(a.id, patch);
-      return `卡片 #${a.id} 已更新`;
+      const title = cardTitle?.(a.id);
+      return title ? `「${title}」已更新` : `卡片 #${a.id} 已更新`;
     }
   }
 }

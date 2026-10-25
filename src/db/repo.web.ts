@@ -117,7 +117,8 @@ export const repo: Repo = {
     if (f) {
       f.tags = labels;
       f.project = project;
-      f.status = 'tagged';
+      // 已合并的不复活，理由同 repo.native.ts
+      if (f.status !== 'merged') f.status = 'tagged';
     }
     persist();
   },

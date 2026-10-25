@@ -141,6 +141,31 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **`pruneResult` 里 `existing` 数组的下标必须和 `opts.cards` 对齐**，
   所以新卡**不能**往里 push —— 同批重复交给 `knowledge` 那条判据，否则会取到 `undefined`。
 
+## 判据、截断、追加（v0.6.6）
+
+- **一个变量不要服务两个语义。** done 页曾用 `overflow = available - batch.length` 判断
+  「还有没有没处理的」，而它真实的含义是「下一批装不下的条数」：
+  50 条跑完 30 条后它是 0，于是「继续」按钮消失，用户以为整理完了。
+  **判断「还有没有剩」看 `available`，显示「下一批几条」看 `batch.length`。**
+- **判重/判替代的分母不能用 `min()`。** `命中数 / min(旧, 新)` 会让「小集合被完全包含」变成 100%：
+  一张只引用 1 条原文的窄卡，能把有 10 条来源的大卡判成「被取代」并归档。
+  用 **Jaccard**（两边都进分母）。实现在 `util/dedupe.ts` 的 `replacementOf`。
+- **显示与写入必须共用同一个函数。** `replacementOf` 原来在 `commit.ts` 和 `ResultSections.tsx`
+  各有一份，改一处忘另一处就会出现「界面说会归档 A，实际归档 B」。同理 `actionKey`、`K.*`。
+- **截断要看 `finish_reason`，不能只看正文是否为空。** 正文有内容但撞了 `max_tokens` 时
+  `requestChat` 会照常返回：问答把半句话当完整回答、小结把半篇存进时间轴。
+  问答标 `truncated` 提示；**小结直接抛错不保存** —— 残稿留在档案里比报错难查得多。
+- **「追加」语义的写入先按目标去重。** 同一张卡的两条 `card_update` 都用同一份快照算
+  「缺哪些原文」，同一段原文会被拼进正文两遍。`mergeCardUpdates` 按 `card_id` 合并 `add_source_ids`。
+- **模型回空结果时必须留出口。** `acceptedCount === 0` 时「应用」是禁用的，
+  于是「全部放弃 → 重进 → 还是同一批 → 还是空结果」成了死循环。
+  0 项时主按钮变成「跳过这批」，整批标 `tagged`（内容不动），游标照常推进。
+- **`applyTags` 不许复活已合并的碎片。** 重构按主题取碎片时，卡片的 `source_ids` 里
+  可能带着早被合并掉的那条；`status='tagged'` 一写，它同时是「已合并」和「已整理」。
+  SQL 用 `CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END`。
+- **跨页面的临时状态要提到 `App`。** `TimelineScreen` 切到知识库就会卸载，
+  草稿放在它内部等于「打个半句去翻张卡，回来全没了」。`draft` / `settingsFrom` 都在 `App` 里。
+
 ## 三个 AI 功能的分工（v0.3.0）
 
 请求层统一在 `src/ai/chat.ts`（`requestChat(config, messages, onProgress, options)`），

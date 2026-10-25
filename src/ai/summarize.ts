@@ -222,6 +222,21 @@ export async function summarizePeriod(options: SummarizeOptions): Promise<Summar
   const bodyMd = cleanBody(outcome.content);
   if (!bodyMd) throw new AiError('format', '模型没有返回内容，再试一次');
 
+  /**
+   * 撞了输出上限的半篇文章**不能写进时间轴**。
+   *
+   * 小结是要长期留着的档案：截断的一篇会以「完整小结」的身份待在时间轴上，
+   * 用户几个月后看到它，只会觉得当初就是没写完 —— 比直接报错难查得多。
+   * 重试的代价是一分钟，写入一篇残稿的代价是永远分不清哪篇是坏的。
+   */
+  if (outcome.finishReason === 'length') {
+    throw new AiError(
+      'truncated',
+      `小结写到一半撞到了输出上限（只收到 ${outcome.content.length} 字，思考链和正文共用额度）。` +
+        '这一篇没有保存。把「思考强度」调低，或者缩短周期范围（比如先写日小结）再试。',
+    );
+  }
+
   return {
     bodyMd,
     title: buildTitle(kind, period),

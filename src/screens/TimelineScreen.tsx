@@ -57,6 +57,12 @@ interface Props {
   inboxCount: number;
   /** 已完成待办对应的碎片 id，用来在时间轴上打「已完成」标记 */
   doneIds: Set<number>;
+  /**
+   * 输入框里的草稿。**由上层持有** —— 这个组件在切到知识库/设置/回顾时会被卸载，
+   * 草稿放在组件里就等于「打个半句去翻张卡，回来全没了」。
+   */
+  draft: string;
+  onDraftChange: (text: string) => void;
   onAdd: (text: string) => Promise<void>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
@@ -73,6 +79,8 @@ export function TimelineScreen({
   notes,
   inboxCount,
   doneIds,
+  draft,
+  onDraftChange,
   onAdd,
   onEdit,
   onDelete,
@@ -83,7 +91,6 @@ export function TimelineScreen({
   onOpenReview,
   onSeed,
 }: Props) {
-  const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [editing, setEditing] = useState<Fragment | null>(null);
   const [editText, setEditText] = useState('');
@@ -288,7 +295,7 @@ export function TimelineScreen({
     setSending(true);
     try {
       await onAdd(text);
-      setDraft('');
+      onDraftChange('');
       // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
       // 折叠一个「刚往里写了东西的日期」没有任何意义。
       setCollapsedDays((prev) => {
@@ -723,7 +730,7 @@ export function TimelineScreen({
             <TextInput
               ref={inputRef}
               value={draft}
-              onChangeText={setDraft}
+              onChangeText={onDraftChange}
               placeholder="随手记一条…"
               placeholderTextColor={C.text3}
               style={styles.input}
@@ -821,7 +828,7 @@ export function TimelineScreen({
           <TextInput
             ref={fullInputRef}
             value={draft}
-            onChangeText={setDraft}
+            onChangeText={onDraftChange}
             style={styles.fullInput}
             multiline
             placeholder="想写多少写多少。长一点也没关系，整理时 AI 会单独提炼要点。"

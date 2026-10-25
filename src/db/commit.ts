@@ -14,6 +14,7 @@
 import type { Fragment, KnowledgeCard, OrganizeResult } from '../types';
 import { repo } from './repo';
 import { K } from '../util/resultItems';
+import { mergeCardUpdates, replacementOf } from '../util/dedupe';
 
 export interface CommitOptions {
   result: OrganizeResult;
@@ -36,24 +37,9 @@ export interface CommitOptions {
 
 /**
  * 新卡和某张旧卡的来源碎片重叠 ≥ 50%，就认为这张新卡是旧卡的「替代版本」。
- * 重建构场景：同一段原文重新提炼，标题措辞变了，但讲的还是同一件事。
+ * 判据本身在 `util/dedupe.ts` 里 —— 结果页要显示同一件事，两处必须共用一份，
+ * 否则会出现「界面说会归档 A、实际归档了 B」。
  */
-function replacementOf(cards: KnowledgeCard[], sourceIds: number[]): KnowledgeCard | null {
-  if (!sourceIds.length) return null;
-  const incoming = new Set(sourceIds);
-  let best: KnowledgeCard | null = null;
-  let bestScore = 0;
-  for (const c of cards) {
-    if (!c.sourceIds.length) continue;
-    const hit = c.sourceIds.filter((id) => incoming.has(id)).length;
-    const score = hit / Math.min(c.sourceIds.length, sourceIds.length);
-    if (score > bestScore) {
-      bestScore = score;
-      best = c;
-    }
-  }
-  return bestScore >= 0.5 ? best : null;
-}
 
 export async function commitResult({
   result,
@@ -129,7 +115,10 @@ export async function commitResult({
     applied++;
   }
 
-  for (const c of result.card_update) {
+  // 同一条卡片可能有多条补充建议（模型给的 + 降噪转出来的）。
+  // 不合并就逐条写：两次都用同一份快照算「要追加哪些原文」，
+  // 同一段原文会被拼进正文两遍。这里再兜一次，pruneResult 已经合过也不再重复。
+  for (const c of mergeCardUpdates(result.card_update)) {
     if (!accepted(K.card(c.card_id))) continue;
     const card = cardById.get(c.card_id);
     if (!card) continue;

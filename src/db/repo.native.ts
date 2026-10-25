@@ -296,12 +296,15 @@ export const repo: Repo = {
   },
 
   async applyTags(id, labels, project) {
-    db().runSync('UPDATE fragments SET tags = ?, project = ?, status = ? WHERE id = ?', [
-      JSON.stringify(labels),
-      project,
-      'tagged',
-      id,
-    ]);
+    // 已合并的碎片不能被「打标」这一步复活成 tagged —— 重构按主题取碎片时，
+    // 卡片的 source_ids 里可能带着早就被合并掉的那条，它的 merged_into 还留着，
+    // 只改 status 会让它同时是「已合并」和「已整理」，列表里看着像多出来一条
+    db().runSync(
+      `UPDATE fragments SET tags = ?, project = ?,
+         status = CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END
+       WHERE id = ?`,
+      [JSON.stringify(labels), project, id],
+    );
   },
 
   async markMerged(dropIds, keepId) {

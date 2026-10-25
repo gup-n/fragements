@@ -59,6 +59,10 @@ interface Turn {
   actions: AskAction[];
   /** 模型写了 action 块但校验没过的条数 */
   rejected: number;
+  /** 回答被输出上限截断了（正文有内容，但不完整） */
+  truncated: boolean;
+  /** 联网搜索本身失败了。和「搜到了但没用」是两回事，要分开说 */
+  webError: string;
   scanned: number;
   total: number;
   thinkSec: number;
@@ -76,6 +80,8 @@ function blankTurn(id: number, question: string, webTried: boolean): Turn {
     web: [],
     actions: [],
     rejected: 0,
+    truncated: false,
+    webError: '',
     scanned: 0,
     total: 0,
     thinkSec: 0,
@@ -137,6 +143,12 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
   const startedAtRef = useRef(0);
   const streamRef = useRef({ lastFlush: 0 });
   const seqRef = useRef(0);
+  /**
+   * 正在跑的那一轮。`busy` 是 state，连点两下发送时两次 `submit` 可能都在
+   * 上一次渲染的闭包里读到 `busy === false` —— 那会同时发两个请求，
+   * 结果按回来的顺序互相覆盖。用 ref 做同步闸门。
+   */
+  const runningRef = useRef(false);
   const scrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
   /** 用户往上翻的时候不要把他拽回底部 */
   const stickRef = useRef(true);
@@ -230,7 +242,8 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
    * @param replaceId 传了就替换那一轮（联网重查），不传就是新的一条
    */
   async function runAsk(q: string, withWeb: boolean, replaceId?: number) {
-    if (!q || busy) return;
+    if (!q || runningRef.current) return;
+    runningRef.current = true;
 
     const id = replaceId ?? ++seqRef.current;
     /** 这一轮之前的所有轮次 —— 追问的上下文就是它们 */
@@ -286,12 +299,25 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
       setLive((prev) => (prev ? { ...prev, thinking: config.thinking } : prev));
 
       let hits: WebHit[] = [];
+      let webError = '';
       if (withWeb) {
         setSearching(true);
         const t0 = Date.now();
-        hits = await searchWeb(config, q);
-        searchMs = Date.now() - t0;
-        setSearching(false);
+        try {
+          hits = await searchWeb(config, q);
+        } catch (e) {
+          /**
+           * 搜索挂了不等于这一轮挂了。
+           *
+           * 以前 searchWeb 抛错会直接跳进外层 catch，整轮变成「提问失败」——
+           * 哪怕知识库里完全答得上来。联网只是补充，搜不到就按卡片答，
+           * 然后如实告诉他「这次没搜成」。
+           */
+          webError = e instanceof AiError ? e.message : '联网搜索失败';
+        } finally {
+          searchMs = Date.now() - t0;
+          setSearching(false);
+        }
       }
 
       const outcome = await askKnowledge({
@@ -314,6 +340,8 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
         web: outcome.web,
         actions: outcome.actions,
         rejected: outcome.rejected,
+        truncated: outcome.truncated,
+        webError,
         scanned: outcome.scanned,
         total: outcome.total,
         // 扣掉联网那一段：标签写的是「深度思考」，把搜索耗时算进去就成假数字了
@@ -339,6 +367,7 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
         error: e instanceof AiError ? e.message : e instanceof Error ? e.message : '提问失败，再试一次',
       });
     } finally {
+      runningRef.current = false;
       setSearching(false);
       setBusy(false);
       setLive(null);
@@ -602,6 +631,13 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
                 </Text>
               ) : null}
 
+              {t.truncated ? (
+                <Text style={s.rejectNote}>
+                  这条回答被输出上限截断了（思考链和正文共用额度），后半段没写完。
+                  把范围缩小到某个主题、或者到设置里把「思考强度」调低，再问一次会完整些。
+                </Text>
+              ) : null}
+
               {t.cited.length > 0 ? (
                 <>
                   <Text style={s.sectionLabel}>回答里提到的卡片</Text>
@@ -663,7 +699,11 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
                 </View>
               ) : null}
 
-              {t.webTried && t.answer && !t.web.length ? (
+              {t.webError ? (
+                <Text style={s.webEmpty}>
+                  联网没搜成（{t.webError}），上面的回答只依据知识库卡片。卡片不够时可以再试一次。
+                </Text>
+              ) : t.webTried && t.answer && !t.web.length ? (
                 <Text style={s.webEmpty}>
                   联网搜过了，没找到能用的资料，上面的回答仍然只依据卡片。
                 </Text>

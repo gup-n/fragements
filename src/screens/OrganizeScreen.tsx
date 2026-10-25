@@ -208,6 +208,13 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
   const batch = mode === 'refactor' ? refactorBatch : organizeBatch;
   const available = mode === 'refactor' ? refactorPending.length : inboxPool.length;
+  /**
+   * 这一批之外还剩多少条。
+   *
+   * 注意它**不能**用来判断「还有没有没处理的」：50 条跑完第一批 30 条之后，
+   * 剩下的 20 条正好装满下一批，overflow 就是 0，而它们一条都还没处理。
+   * done 页判断用 `available`，这个数只用于 idle 页那句「剩下 N 条下一轮」。
+   */
   const overflow = available - batch.length;
 
   const acceptedKeys = useMemo(() => resultKeys(result), [result]);
@@ -358,6 +365,38 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     }
   }
 
+  /**
+   * 跳过这批：整批标成已整理，什么内容都不动。
+   *
+   * 为什么需要它：模型偶尔会回一整份空结果（全数组为空），此时
+   * `acceptedCount` 是 0，「应用」按钮按纪律是禁用的 —— 于是用户只剩「全部放弃」，
+   * 退出再进来，装填的还是同一批，再跑一次还是空结果，永远出不去。
+   * 标 `tagged` 只表示「不再算未读」，原文一个字都不动，重构照样能再处理它们。
+   */
+  async function skipBatch() {
+    if (!batch.length) return;
+    setPhase('applying');
+    try {
+      await repo.markStatus(
+        batch.map((f) => f.id),
+        'tagged',
+      );
+      if (runId) await repo.markRunApplied(runId);
+      setApplied(0);
+      setAppliedBatch(batch.length);
+      setDoneIds((prev) => new Set([...prev, ...batch.map((f) => f.id)]));
+      try {
+        await onApplied();
+      } catch {
+        /* 刷新失败不影响「已标整理」这件事 */
+      }
+      setPhase('done');
+    } catch (e) {
+      setErrorMsg((e as Error)?.message || '标记失败');
+      setPhase('error');
+    }
+  }
+
   async function apply() {
     if (!result) return;
     setPhase('applying');
@@ -382,6 +421,18 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
         await onApplied();
       } catch {
         /* 刷新失败不该翻成「写入失败」—— 内容已经进库了，下次进页面会重读 */
+      }
+      // 自己手里的卡片快照也要重读：重构「按主题」是按卡的 sourceIds 取碎片的，
+      // 不刷新的话刚沉淀出来的卡不在快照里，那批碎片在重构范围里等于不存在
+      try {
+        const [nextCards, nextTopics] = await Promise.all([
+          repo.listKnowledgeCards(),
+          repo.listKnowledgeTopics(),
+        ]);
+        setCards(nextCards);
+        setIdleTopics(nextTopics);
+      } catch {
+        /* 读不到就沿用旧快照，下一次进页面会重读 */
       }
       setPhase('done');
     } catch (e) {
@@ -588,15 +639,15 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
             <Ionicons name="checkmark-circle-outline" size={36} color={C.accent} />
             <Text style={styles.centerText}>已写入 {applied} 项</Text>
             <Text style={styles.doneMeta}>这一批 {appliedBatch} 条已经{word}过一遍</Text>
-            {overflow > 0 ? (
+            {available > 0 ? (
               <>
                 <Text style={styles.doneSub}>
-                  还剩 {overflow} 条没{word}。一次只带 {batchLimit} 条是为了让模型专心 ——
+                  还剩 {available} 条没{word}。一次只带 {batchLimit} 条是为了让模型专心 ——
                   一轮跑太多，输出容易撞上限，出错就得从头再来。
                 </Text>
                 <Pressable style={styles.primaryBtn} onPress={start}>
                   <Text style={styles.primaryBtnText}>
-                    继续{word}剩下的 {batch.length} 条
+                    继续{word}下一批 {batch.length} 条
                   </Text>
                 </Pressable>
                 <Pressable style={styles.secondaryBtn} onPress={onClose}>
@@ -625,8 +676,12 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
             ) : (
               <>
                 <Text style={styles.resultHint}>
-                  逐条确认。关掉的项不会写入。
-                  {round > 1 ? '追问后没改动的条目，你之前的勾选状态会保留。' : ''}
+                  {acceptedCount === 0
+                    ? '这批没有可写入的条目。点「跳过这批」把它们标记为已整理，下次就不会再拿同一批来跑；原文一个字都不会动。'
+                    : '逐条确认。关掉的项不会写入。'}
+                  {acceptedCount > 0 && round > 1
+                    ? '追问后没改动的条目，你之前的勾选状态会保留。'
+                    : ''}
                 </Text>
                 {pruned.cards > 0 || pruned.todos > 0 ? (
                   <Text style={styles.pruneNote}>
@@ -691,11 +746,13 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
               <Text style={styles.secondaryBtnText}>全部放弃</Text>
             </Pressable>
             <Pressable
-              style={[styles.primaryBtnFlex, (!acceptedCount || refining) && styles.primaryBtnDisabled]}
-              onPress={apply}
-              disabled={!acceptedCount || refining}
+              style={[styles.primaryBtnFlex, refining && styles.primaryBtnDisabled]}
+              onPress={acceptedCount ? apply : skipBatch}
+              disabled={!!refining}
             >
-              <Text style={styles.primaryBtnText}>应用 {acceptedCount} 项</Text>
+              <Text style={styles.primaryBtnText}>
+                {acceptedCount ? `应用 ${acceptedCount} 项` : '跳过这批'}
+              </Text>
             </Pressable>
           </View>
         </View>

@@ -73,6 +73,62 @@ export function sameCard(a: CardShape, b: CardShape) {
   return overlap(a.sourceIds, b.sourceIds) >= 0.7;
 }
 
+/**
+ * 新卡是不是某张旧卡的「替代版本」—— 重构时用它决定要不要归档旧卡。
+ *
+ * 判据是来源碎片的 **Jaccard ≥ 0.5**，即两张卡的来源「大部分重合」。
+ *
+ * 这里曾经写成 `命中数 / min(旧来源数, 新来源数)`，看着更宽松，实际是个坑：
+ * 一张只引用 1 条原文的新卡，只要那条原文也在某张有 10 条来源的旧卡里，
+ * 得分就是 1/1 = 1.0 —— 一张窄卡把一张大卡判成「被取代」，直接归档。
+ * 小分母放大了交集，越大越不准；Jaccard 两边都算进分母，才不会反向惩罚大卡。
+ *
+ * 显示（`ResultSections`）和写入（`commitResult`）必须共用这一个函数，
+ * 否则界面说「会归档这张」，实际归档的是另一张。
+ */
+export function replacementOf(cards: KnowledgeCard[], sourceIds: number[]): KnowledgeCard | null {
+  if (!sourceIds.length) return null;
+  let best: KnowledgeCard | null = null;
+  let bestScore = 0;
+  for (const c of cards) {
+    if (!c.sourceIds.length) continue;
+    const score = overlap(c.sourceIds, sourceIds);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return bestScore >= 0.5 ? best : null;
+}
+
+/**
+ * 同一条卡片的补充建议合并成一条。
+ *
+ * 两个来源会撞到同一张卡：模型自己给的 `card_update`，和降噪时把重复新卡
+ * 转成的 `card_update`。不合并的话，界面上两条用同一个 key（React 会告警、
+ * 勾选状态互相串），写入时两条都用**同一份**卡片快照算「要追加哪些原文」，
+ * 同一段原文会被拼进正文两遍 —— 内容没丢，但是重复了，而且看不出来为什么。
+ */
+export function mergeCardUpdates(list: CardUpdateSuggestion[]): CardUpdateSuggestion[] {
+  const byCard = new Map<number, CardUpdateSuggestion>();
+  for (const c of list) {
+    const prev = byCard.get(c.card_id);
+    if (!prev) {
+      byCard.set(c.card_id, { ...c, add_source_ids: [...c.add_source_ids] });
+      continue;
+    }
+    for (const id of c.add_source_ids) {
+      if (!prev.add_source_ids.includes(id)) prev.add_source_ids.push(id);
+    }
+    // 标题/要点只保留第一个非空值：两条建议都改了它时，以先出现的为准，
+    // 至少不会出现「界面上显示 A、写进去是 B」
+    prev.title ??= c.title;
+    prev.gist ??= c.gist;
+    prev.reason ??= c.reason;
+  }
+  return Array.from(byCard.values());
+}
+
 export interface PruneReport {
   result: OrganizeResult;
   /** 因为跟已有卡片重复而被收起的张数 */
@@ -169,7 +225,7 @@ export function pruneResult(
       ...res,
       knowledge,
       todos,
-      card_update: [...res.card_update, ...extraUpdates],
+      card_update: mergeCardUpdates([...res.card_update, ...extraUpdates]),
     },
     droppedCards,
     droppedTodos,

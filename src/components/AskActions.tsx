@@ -27,7 +27,8 @@ export function AskActions({ actions, titleOf, onApplied }: Props) {
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState(false);
   const [applied, setApplied] = useState<Set<string>>(new Set());
-  const [results, setResults] = useState<string[]>([]);
+  /** 逐条执行的回执。`ok` 必须记下来 —— 失败也打绿勾等于什么也没说 */
+  const [results, setResults] = useState<{ ok: boolean; text: string }[]>([]);
 
   const open = actions.filter((a) => !applied.has(actionKey(a)));
   const pickedCount = open.filter((a) => picked.has(actionKey(a))).length;
@@ -44,17 +45,20 @@ export function AskActions({ actions, titleOf, onApplied }: Props) {
   async function run() {
     if (running || !pickedCount) return;
     setRunning(true);
-    const lines: string[] = [];
+    const lines: { ok: boolean; text: string }[] = [];
     const doneKeys: string[] = [];
     // 逐条执行：一条失败不该把成功的也回滚，用户勾了半天却什么都没生效最难排查
     for (const action of open) {
       const key = actionKey(action);
       if (!picked.has(key)) continue;
       try {
-        lines.push(await applyAskAction(action));
+        lines.push({ ok: true, text: await applyAskAction(action, titleOf) });
         doneKeys.push(key);
       } catch (e) {
-        lines.push(`${describeAction(action, titleOf).label}失败：${e instanceof Error ? e.message : '未知错误'}`);
+        lines.push({
+          ok: false,
+          text: `${describeAction(action, titleOf).label}失败：${e instanceof Error ? e.message : '未知错误'}`,
+        });
       }
     }
     setApplied((prev) => new Set([...prev, ...doneKeys]));
@@ -142,8 +146,12 @@ export function AskActions({ actions, titleOf, onApplied }: Props) {
         <View style={s.results}>
           {results.map((line, i) => (
             <View key={i} style={s.resultRow}>
-              <Ionicons name="checkmark-circle" size={12} color={C.tealText} />
-              <Text style={s.resultText}>{line}</Text>
+              <Ionicons
+                name={line.ok ? 'checkmark-circle' : 'alert-circle'}
+                size={12}
+                color={line.ok ? C.tealText : C.danger}
+              />
+              <Text style={[s.resultText, !line.ok && s.resultTextBad]}>{line.text}</Text>
             </View>
           ))}
         </View>
@@ -217,4 +225,5 @@ const s = StyleSheet.create({
   results: { marginTop: 10, gap: 5 },
   resultRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5 },
   resultText: { flex: 1, fontSize: 11.5, lineHeight: 17, color: C.tealText },
+  resultTextBad: { color: C.danger },
 });
