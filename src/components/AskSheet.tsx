@@ -1,8 +1,10 @@
 /**
  * 知识库问答面板。
  *
- * 范围默认是「当前主题」（选一个主题进来时几乎都是想知道这个主题的事），
- * 可以一键切成「全库」。
+ * 范围可以选「全库」或任意一个主题。从某个主题页进来时默认就是那个主题，
+ * 但**不锁死** —— 从知识库首页进来时同样能选，胶囊排成一行横向滚动。
+ * （v0.6.2 之前只有「当前主题 / 全库」两档，首页进来时 `topic` 是 null，
+ * 界面上就只剩一个「全库」，用户以为不能选主题。）
  *
  * v0.5.0 起这一页承担四件事：
  * 1. **回答** —— 只依据卡片，卡片没有就直说没有；
@@ -56,10 +58,22 @@ interface Props {
 
 export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
   const [view, setView] = useState<'chat' | 'history'>('chat');
-  const [scope, setScope] = useState<'topic' | 'all'>(topic ? 'topic' : 'all');
+  /**
+   * 检索范围：主题名，或 `'all'`。
+   *
+   * 原来是 `'topic' | 'all'` 两档，靠 props.topic 决定「主题」具体指哪个 ——
+   * 结果是**从知识库首页进来时 `topic` 是 null，界面上只剩「全库」一个胶囊**，
+   * 用户没有任何途径切到某个主题（真机反馈「为什么没办法选择主题」）。
+   * 现在范围直接存主题名，主题列表从库里实时取，从哪进来都能选。
+   */
+  const [scope, setScope] = useState<string>(topic ?? 'all');
+  const scopedTopic = scope === 'all' ? null : scope;
+
   const [topicCards, setTopicCards] = useState<KnowledgeCard[]>([]);
   const [allCards, setAllCards] = useState<KnowledgeCard[]>([]);
-  const [topics, setTopics] = useState<string[]>([]);
+  /** 主题 + 卡片数，用来渲染范围胶囊上的计数 */
+  const [topicStats, setTopicStats] = useState<{ topic: string; count: number }[]>([]);
+  const topics = useMemo(() => topicStats.map((t) => t.topic), [topicStats]);
 
   const [question, setQuestion] = useState('');
   /** 本轮定稿的问题。联网重查要用它 —— 用户可能已经把输入框改了 */
@@ -89,14 +103,14 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
 
   const reloadIndex = useCallback(async () => {
     const [tc, ac, ts] = await Promise.all([
-      topic ? repo.listKnowledgeCards(topic) : Promise.resolve<KnowledgeCard[]>([]),
+      scope === 'all' ? Promise.resolve<KnowledgeCard[]>([]) : repo.listKnowledgeCards(scope),
       repo.listKnowledgeCards(),
       repo.listKnowledgeTopics(),
     ]);
     setTopicCards(tc);
     setAllCards(ac);
-    setTopics(ts.map((t) => t.topic));
-  }, [topic]);
+    setTopicStats(ts.map((t) => ({ topic: t.topic, count: t.count })));
+  }, [scope]);
 
   const reloadLogs = useCallback(async () => {
     try {
@@ -133,7 +147,23 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
     return () => clearInterval(timer);
   }, [phase]);
 
-  const scopeCards = scope === 'topic' && topic ? topicCards : allCards;
+  const scopeCards = scopedTopic ? topicCards : allCards;
+
+  /**
+   * 范围胶囊的顺序：全库永远排第一，**进来时那个主题排第二** ——
+   * 主题一多就要横着找，把它顶到前面才不用滚。
+   */
+  const scopeOptions = useMemo(() => {
+    if (!topic) return topicStats;
+    return [
+      ...topicStats.filter((t) => t.topic === topic),
+      ...topicStats.filter((t) => t.topic !== topic),
+    ];
+  }, [topicStats, topic]);
+
+  /** 询问中锁住范围胶囊，道理同 pickScope */
+  const rangeLocked = phase === 'running';
+
   const pinnedLogs = useMemo(() => logs.filter((l) => pinned.has(l.id)), [logs, pinned]);
 
   function handleProgress(patch: ChatProgress) {
@@ -185,10 +215,12 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
       }
       setThinkingOn(config.thinking);
 
-      const cards = scope === 'topic' && topic ? topicCards : allCards;
+      const cards = scopedTopic ? topicCards : allCards;
       if (!cards.length) {
         setPhase('ask');
-        setError(scope === 'topic' ? '这个主题下还没有卡片' : '知识库还是空的');
+        setError(
+          scopedTopic ? `「${scopedTopic}」下还没有卡片` : '知识库还是空的',
+        );
         return;
       }
 
@@ -225,7 +257,7 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
       // 落库单独兜一层：写记录失败不该把已经拿到的答案也弄丢
       try {
         await repo.insertAskLog({
-          scope: scope === 'topic' && topic ? topic : 'all',
+          scope: scopedTopic ?? 'all',
           question: q,
           answer: outcome.answer,
           reasoning: outcome.reasoning,
@@ -259,9 +291,25 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
   async function appliedActions() {
     await reloadLogs();
     await reloadIndex();
-    // 当前主题可能刚被合并/改名，留在「本主题」范围里只会一直提示「没有卡片」
-    if (topic && !(await repo.listKnowledgeCards(topic)).length) setScope('all');
+    // 当前范围的主题可能刚被合并/改名，留在那儿只会一直提示「没有卡片」
+    if (scopedTopic && !(await repo.listKnowledgeCards(scopedTopic)).length) setScope('all');
     onChanged?.();
+  }
+
+  /**
+   * 切范围。旧答案必须一起清掉 —— 它是在另一个范围里查出来的，
+   * 留在屏幕上会让人以为切完还能继续用。
+   *
+   * 询问中不给切：请求还在跑，切完它回来会把旧范围的答案写到新范围上。
+   */
+  function pickScope(next: string) {
+    if (next === scope || phase === 'running') return;
+    setScope(next);
+    setResult(null);
+    setError('');
+    setStage(null);
+    setWebTried(false);
+    setPhase('ask');
   }
 
   async function editLog(id: number, text: string) {
@@ -339,22 +387,39 @@ export function AskSheet({ topic, onClose, onOpenCard, onChanged }: Props) {
       />
 
       <View style={s.scopeRow}>
-        {topic ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={s.scopeScroll}
+          style={s.scopeFlex}
+          keyboardShouldPersistTaps="handled"
+        >
           <Pressable
-            onPress={() => setScope('topic')}
-            style={[s.chip, scope === 'topic' && s.chipOn]}
+            onPress={() => pickScope('all')}
+            disabled={rangeLocked}
+            style={[s.chip, scope === 'all' && s.chipOn, rangeLocked && s.chipOff]}
           >
-            <Text style={[s.chipText, scope === 'topic' && s.chipTextOn]} numberOfLines={1}>
-              {topic}
-              {topicCards.length ? ` ${topicCards.length}` : ''}
+            <Text style={[s.chipText, scope === 'all' && s.chipTextOn]}>
+              全库{allCards.length ? ` ${allCards.length}` : ''}
             </Text>
           </Pressable>
-        ) : null}
-        <Pressable onPress={() => setScope('all')} style={[s.chip, scope === 'all' && s.chipOn]}>
-          <Text style={[s.chipText, scope === 'all' && s.chipTextOn]}>
-            全库{allCards.length ? ` ${allCards.length}` : ''}
-          </Text>
-        </Pressable>
+          {scopeOptions.map((t) => {
+            const on = scope === t.topic;
+            return (
+              <Pressable
+                key={t.topic}
+                onPress={() => pickScope(t.topic)}
+                disabled={rangeLocked}
+                style={[s.chip, on && s.chipOn, rangeLocked && s.chipOff]}
+              >
+                <Text style={[s.chipText, on && s.chipTextOn]} numberOfLines={1}>
+                  {t.topic}
+                  {t.count ? ` ${t.count}` : ''}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
         {pinnedLogs.length ? (
           <View style={s.ctxChip}>
             <Ionicons name="attach" size={11} color={C.accentText} />
@@ -510,8 +575,11 @@ const s = StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
 
   scopeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingBottom: 10 },
+  /** 范围胶囊横向滚动：「带 N 条」那个跟标记留在右边不滚 */
+  scopeFlex: { flex: 1 },
+  scopeScroll: { gap: 8, paddingRight: 4, alignItems: 'center' },
   chip: {
-    maxWidth: '55%',
+    maxWidth: 200,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: R.pill,
@@ -520,6 +588,8 @@ const s = StyleSheet.create({
     backgroundColor: C.card,
   },
   chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
+  /** 询问中：范围胶囊整体压暗，表示这轮不能切 */
+  chipOff: { opacity: 0.45 },
   chipText: { fontSize: 12, color: C.text2 },
   chipTextOn: { color: C.accentText, fontWeight: '500' },
   ctxChip: {
