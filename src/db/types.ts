@@ -1,7 +1,26 @@
-import type { AskLog, Fragment, FragmentNature, Note, Todo, FragmentSource, FragmentStatus, KnowledgeCard, WebHit } from '../types';
+import type {
+  Fragment,
+  FragmentNature,
+  FragmentSource,
+  FragmentStatus,
+  Note,
+  OrganizePlan,
+  OrganizeScope,
+  OrganizeSession,
+  TagStat,
+  Todo,
+} from '../types';
+
+/** 整理会话的增量更新。只传要改的字段 */
+export interface OrganizeSessionPatch {
+  cursor?: number;
+  plan?: OrganizePlan;
+  contextSummary?: string;
+  finished?: boolean;
+}
 
 /**
- * 存储层契约。native 走 SQLite，web 走 localStorage（仅供桌面预览）。
+ * 存储层契约。native 走 SQLite，web 走 localStorage（仅供桌面编译校验）。
  * 上层业务代码只依赖这个接口，不感知具体实现。
  */
 export interface Repo {
@@ -13,6 +32,15 @@ export interface Repo {
    * 周期总结必须拿到该周期的**完整**内容，用 limit 截断会漏掉月初的记录。
    */
   listFragmentsBetween(from: number, to: number): Promise<Fragment[]>;
+  /**
+   * 整理范围的碎片 id 快照，按时间升序。
+   * 开始整理时取一次，之后每批都从这份快照切 —— 不每轮重新查，避免边跑边记导致漂移。
+   */
+  listFragmentIds(scope: OrganizeScope): Promise<number[]>;
+  /** 按给定 id 取碎片。返回顺序与传入的 ids 一致（SQL 的 IN 不保证顺序） */
+  listFragmentsByIds(ids: number[]): Promise<Fragment[]>;
+  /** 某个整理范围有多少条 */
+  countFragments(scope: OrganizeScope): Promise<number>;
   insertFragment(content: string, source: FragmentSource, createdAt?: number): Promise<number>;
   updateFragmentContent(id: number, content: string): Promise<void>;
   deleteFragment(id: number): Promise<void>;
@@ -22,58 +50,28 @@ export interface Repo {
   setFragmentNature(ids: number[], nature: FragmentNature): Promise<void>;
   countInbox(): Promise<number>;
 
-  insertKnowledgeCard(input: {
-    topic: string;
-    subtopic?: string | null;
-    title: string;
-    gist: string;
-    body: string;
-    sourceIds: number[];
-  }): Promise<number>;
-  listKnowledgeCards(topic?: string): Promise<KnowledgeCard[]>;
-  /** 关键字检索：标题 / 要点 / 原文 / 主题四个字段都查 */
-  searchKnowledgeCards(keyword: string): Promise<KnowledgeCard[]>;
-  /** 已归档的卡片；归档必须可逆，所以界面上要能看到并恢复 */
-  listArchivedKnowledgeCards(): Promise<KnowledgeCard[]>;
   /**
-   * 主题及其卡片数、已分出去的方向数。
-   * `dirs` 用来在主题列表上提示「这个主题已经分了几个方向」——
-   * 否则分组做了看不见，用户不知道功能生效了没有。
+   * 本地全文检索。native 走 FTS5（中文 bigram），web 走 includes。
+   * 结果已按相关度排序；调用方不再自己排序。
    */
-  listKnowledgeTopics(): Promise<{ topic: string; count: number; dirs: number }[]>;
-  /** 某个主题下的二级方向分布。`subtopic` 为 null 的那组是「没分小方向」的卡 */
-  listKnowledgeSubtopics(topic: string): Promise<{ subtopic: string | null; count: number }[]>;
+  searchFragments(query: string, limit?: number): Promise<Fragment[]>;
+  /** 某个标签下的碎片，按时间倒序。问「工作标签下有什么」时用 */
+  listFragmentsByTag(tag: string, limit?: number): Promise<Fragment[]>;
+
   /**
-   * 把一批主题下的卡片整体改到另一个主题名下。
-   * 合并多个主题和给单个主题改名是同一件事，所以只留一个方法。
-   * 返回真正搬动的卡片数。
+   * 标签列表与使用次数。
+   * v0.7 不建 tags 表 —— 标签仍然是 fragments.tags 里的字符串，
+   * 但这里提供唯一入口，避免各处自己 GROUP BY / JSON.parse。
    */
-  retopicCards(from: string[], to: string): Promise<{ moved: number }>;
-  /** 把某主题下的一批二级方向改名 / 合并成另一个 */
-  resubtopicCards(topic: string, from: (string | null)[], to: string | null): Promise<{ moved: number }>;
-  /**
-   * 按卡片精确指定二级方向（传 null 表示清掉）。
-   *
-   * 和 `resubtopicCards` 的分工：那个是「把某一组方向整体改名」，
-   * 这个是「这几张卡归到某个方向下」—— 老卡片的 subtopic 全是空，
-   * 只能靠它一张张补，没法按组操作。
-   */
-  setCardSubtopic(ids: number[], subtopic: string | null): Promise<{ changed: number }>;
-  updateKnowledgeCard(
-    id: number,
-    patch: {
-      title?: string;
-      gist?: string;
-      body?: string;
-      topic?: string;
-      /** 传 null 表示清掉二级方向 */
-      subtopic?: string | null;
-      archived?: boolean;
-      /** 合并进已有卡时必须同步更新来源 id，否则导出和后续合并都会错 */
-      sourceIds?: number[];
-    },
-  ): Promise<void>;
-  deleteKnowledgeCard(id: number): Promise<void>;
+  listTags(): Promise<TagStat[]>;
+  /** 改名：把 from 换成 to。只改标签数组，不动正文 */
+  renameTag(from: string, to: string): Promise<{ changed: number }>;
+  /** 删除一个标签：从所有碎片里移除它 */
+  deleteTag(name: string): Promise<{ changed: number }>;
+  /** 合并：把 from 里的所有标签换成 to（to 已存在就是合并，不存在就是改名） */
+  mergeTags(from: string[], to: string): Promise<{ changed: number }>;
+  /** 重建全文索引。迁移回填失败或数据异常时由设置页兜底 */
+  rebuildSearchIndex(): Promise<{ indexed: number }>;
 
   insertTodo(input: { text: string; dueAt: string | null; sourceFragmentId: number | null }): Promise<number>;
   /** 只返回还在用的待办；被合并掉的（merged_into 非空）不在这里 */
@@ -98,10 +96,7 @@ export interface Repo {
   insertNote(input: { type: Note['type']; title: string | null; bodyMd: string; period: string | null }): Promise<number>;
   /**
    * 写入小结，同 `(type, period)` 已存在就覆盖。
-   *
-   * 一个周期只该有一条小结：同一天重复生成（晚上又记了几条）时，
-   * 不覆盖就会在时间轴上并排出现两条内容不同的「今日小结」。
-   * `insertNote` 保留给「用户明确要另存一条」那个分支。
+   * 一个周期只该有一条小结：同一天重复生成时，不覆盖就会在时间轴上并排出现两条。
    */
   upsertNote(input: {
     type: Note['type'];
@@ -110,33 +105,25 @@ export interface Repo {
     period: string | null;
   }): Promise<{ id: number; replaced: boolean }>;
   listNotes(limit?: number): Promise<Note[]>;
-  /**
-   * 按 `(type, period)` 精确找一条小结。
-   * 判断「这个周期是不是已经写过」必须用它，不能拿 `listNotes(200)` 再自己筛 ——
-   * 笔记一多就会漏掉更早的那条，于是同一天又插一条出来。
-   */
+  /** 按 `(type, period)` 精确找一条小结，不能用 listNotes 自己筛 */
   findNote(type: Note['type'], period: string): Promise<Note | null>;
   deleteNote(id: number): Promise<void>;
 
-  /**
-   * 问答记录。`scope` 是 'all' 或主题名。
-   *
-   * 刻意**不提供**「把问答当卡片检索」的方法：问答和卡片是两种东西，
-   * 混在一起会让卡片数虚高、检索捞出一堆一次性对话。
-   */
-  insertAskLog(input: {
-    scope: string;
-    question: string;
-    answer: string;
-    reasoning: string;
-    citedIds: number[];
-    web: WebHit[];
+  /** 新建一次整理会话，返回 id */
+  saveOrganizeSession(input: {
+    scope: OrganizeScope;
+    pendingIds: number[];
+    cursor: number;
+    plan: OrganizePlan;
+    contextSummary: string;
+    finished: boolean;
   }): Promise<number>;
-  /** scope 传 null 表示全部主题，按时间倒序 */
-  listAskLogs(scope: string | null, limit?: number): Promise<AskLog[]>;
-  /** 只改提问原文。回答是当时的产物，改了就成了伪造记录 */
-  updateAskLogQuestion(id: number, question: string): Promise<void>;
-  deleteAskLog(id: number): Promise<void>;
+  /** 每批结束后更新游标/计划/摘要。只传要改的字段 */
+  updateOrganizeSession(id: number, patch: OrganizeSessionPatch): Promise<void>;
+  /** 最近一次未完成的会话；没有就返回 null */
+  findUnfinishedOrganizeSession(): Promise<OrganizeSession | null>;
+  finishOrganizeSession(id: number): Promise<void>;
+  deleteOrganizeSession(id: number): Promise<void>;
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
   markRunApplied(id: number): Promise<void>;
@@ -144,7 +131,7 @@ export interface Repo {
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 
-  stats(): Promise<{ total: number; inbox: number; todoOpen: number }>;
+  stats(): Promise<{ total: number; inbox: number; todoOpen: number; tags: number }>;
 }
 
 export function parseTags(raw: unknown): string[] {

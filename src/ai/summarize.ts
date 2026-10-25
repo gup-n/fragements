@@ -7,7 +7,7 @@
  *
  * 所以这里不做 JSON 解析，输出就是 Markdown 正文。
  */
-import type { AiConfig, DigestKind, Fragment, KnowledgeCard, Todo } from '../types';
+import type { AiConfig, DigestKind, Fragment, Todo } from '../types';
 import { formatTime, periodLabel, periodRange } from '../util/date';
 import { AiError, requestChat, type ChatProgress } from './chat';
 
@@ -17,7 +17,13 @@ import { AiError, requestChat, type ChatProgress } from './chat';
  * 所以超预算时保留「前 70% + 后 30%」，中间留一句省略说明 ——
  * 两头都保住，月初的起因和月末的结论才不会丢。
  */
-const MATERIAL_BUDGET = 26_000;
+const MATERIAL_BUDGET: Record<DigestKind, number> = {
+  daily: 26_000,
+  weekly: 40_000,
+  // 月度素材从 26K 放宽到 60K：一份月的记录本来就多，
+  // 省下来的那点 token 换来的是「只看到半月的材料」，不值得
+  monthly: 60_000,
+};
 /** 单条碎片最多带多少字，防止一条长笔记吃掉整个预算 */
 const PER_FRAGMENT_CLIP = 400;
 /** 预算里前段占的比例 */
@@ -42,27 +48,43 @@ const KIND_NAME: Record<DigestKind, string> = {
   monthly: '这个月',
 };
 
+/**
+ * 固定小节。v0.7 改的是**形态**：原来是四节散文，读起来像周报；
+ * 现在是「一句话 + 几个短小节」，每条都是 `- **关键词**：一句话`，
+ * 扫一眼就能看出要点，而不是从头读到尾才知道结论。
+ */
 const SECTIONS: Record<DigestKind, string[]> = {
-  daily: ['## 做了什么', '## 想明白的事', '## 还没收尾的'],
-  weekly: ['## 这周的主线', '## 推进了什么', '## 想明白的事', '## 卡住 / 悬着的'],
-  monthly: ['## 这个月的几条主线', '## 有结果的', '## 沉淀下来的结论', '## 停下来的 / 悬着的'],
+  daily: ['## 一句话', '## 做了什么', '## 想明白的', '## 悬着的'],
+  weekly: ['## 一句话', '## 主线', '## 推进', '## 结论', '## 悬着的'],
+  monthly: ['## 一句话', '## 主线', '## 结果', '## 结论', '## 停下来的'],
+};
+
+/** 各粒度的篇幅上限。宁可短，不要注水 */
+const LENGTH: Record<DigestKind, string> = {
+  daily: '150~250 字',
+  weekly: '300~500 字',
+  monthly: '500~700 字',
 };
 
 function buildSystemPrompt(kind: DigestKind) {
   const sections = SECTIONS[kind].map((s) => `- \`${s}\``).join('\n');
   return [
     '你是一个私人笔记的回顾者。用户平时把想法、待办、事件随手丢进一个叫「碎片」的收件箱，',
-    `现在要回头看${KIND_NAME[kind]}记录下来的东西，需要你把它们压成一篇能读懂的小结。`,
+    `现在要回头看${KIND_NAME[kind]}记录下来的东西，把它们压成一篇能一眼扫完的小结。`,
     '',
     '硬规则：',
-    '1. **只写材料里出现过的事**。不要补充背景知识、不要推测没写的动机、不要给出泛泛的建议。',
+    '1. **只写材料里出现过的事**。不要补充背景知识、不要推测没写的动机、不要给泛泛的建议。',
     '   材料里没有的信息一律不写，宁可少写。',
-    '2. 用中文，第一人称（「我」），像一个人回头翻自己的记录，而不是在给老板写周报。',
-    '3. 输出 Markdown，**只用 `## ` 小标题和 `- ` 列表**，不要表格、不要代码块、不要一级标题。',
+    '2. 用中文，第一人称，像一个人回头翻自己的记录，不是在给老板写周报。',
+    '3. 输出 Markdown，**只用 `## ` 小标题和 `- ` 列表**，不要表格、不要代码块、不要一级标题，不要嵌套列表。',
     `4. 固定用这几节，顺序不要改，某节确实没内容就整节省略：\n${sections}`,
-    '5. 不要写「根据你提供的材料」「以下是总结」这类开场白，直接从第一个小标题开始。',
-    '6. 不要输出 JSON，不要输出思考过程，正文之外什么都不要。',
-    `7. 篇幅：${kind === 'daily' ? '150~300 字' : kind === 'weekly' ? '350~600 字' : '500~900 字'}。宁可短，不要注水。`,
+    '5. **除了 `## 一句话` 那一节，每条都用 `- **关键词**：一句话` 的格式**。',
+    '   关键词 2~4 个字（如「换盘」「报销」「Ventoy」），冒号后面只写一句、不超过 30 字。',
+    '   不要在一行里塞两三件事，宁可拆成两行。',
+    '6. `## 一句话` 这一节只写**一句**话，不超过 40 字，直接说这段时间最要紧的是什么。不要写「总的来说」。',
+    '7. 不要写「根据你提供的材料」「以下是总结」这类开场白，也不要结尾总结段。',
+    '8. 不要输出 JSON，不要输出思考过程，正文之外什么都不要。',
+    `9. 篇幅：${LENGTH[kind]}。宁可短，不要注水。`,
   ].join('\n');
 }
 
@@ -79,7 +101,7 @@ function fragmentLine(f: Fragment) {
  * 按预算裁剪材料。
  * 保留前段和后段、中间给一句省略说明，比「只取前 N 条」更能保住结论。
  */
-export function packFragments(fragments: Fragment[], budget = MATERIAL_BUDGET) {
+export function packFragments(fragments: Fragment[], budget = MATERIAL_BUDGET.daily) {
   const lines = fragments.map(fragmentLine);
   const total = lines.reduce((n, l) => n + l.length + 1, 0);
   if (total <= budget) return { lines, omitted: 0, included: lines.length };
@@ -119,8 +141,6 @@ export interface SummarizeOptions {
   fragments: Fragment[];
   /** 全部待办，用来区分「已完成」和「还悬着」 */
   todos?: Todo[];
-  /** 该周期沉淀出的知识卡，提供结论视角但不必复述原文 */
-  cards?: KnowledgeCard[];
   config: AiConfig;
   /** 流式进度，仅展示 */
   onProgress?: (patch: ChatProgress) => void;
@@ -141,7 +161,7 @@ export interface SummarizeOutcome {
 }
 
 function buildUserContent(options: SummarizeOptions, packed: ReturnType<typeof packFragments>) {
-  const { kind, period, fragments, todos = [], cards = [] } = options;
+  const { kind, period, fragments, todos = [] } = options;
   const range = periodRange(period);
   const out: string[] = [];
 
@@ -173,13 +193,6 @@ function buildUserContent(options: SummarizeOptions, packed: ReturnType<typeof p
     out.push('');
   }
 
-  const periodCards = cards.filter((c) => range && c.createdAt >= range.from && c.createdAt < range.to);
-  if (periodCards.length) {
-    out.push('【这段时间沉淀出的知识卡】（标题列表，正文已经在碎片里写过，不必复述）');
-    for (const c of periodCards.slice(0, 30)) out.push(`· ${c.title}`);
-    out.push('');
-  }
-
   out.push(`请按系统提示，写出${KIND_NAME[kind]}的小结。`);
   return out.join('\n');
 }
@@ -206,7 +219,7 @@ export async function summarizePeriod(options: SummarizeOptions): Promise<Summar
   if (!fragments.length) throw new AiError('format', '这个周期里没有碎片，先记点什么再总结');
   if (!periodRange(period)) throw new AiError('format', `无法识别的周期：${period}`);
 
-  const packed = packFragments(fragments);
+  const packed = packFragments(fragments, MATERIAL_BUDGET[kind]);
   const messages = [
     { role: 'system' as const, content: buildSystemPrompt(kind) },
     { role: 'user' as const, content: buildUserContent(options, packed) },

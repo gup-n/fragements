@@ -1,12 +1,24 @@
+/**
+ * 整理页：点一次「开始」，程序自己一批一批跑到结束，最后统一确认。
+ *
+ * v0.7 换掉了「一次只跑 30 条、跑完再点继续」的老流程。老流程的问题是
+ * 用户得自己判断「还剩多少、要不要再来一轮」，而模型每轮只看得到一批，
+ * 跨批的重复待办、同义标签全靠用户事后发现。现在的分工是：
+ *
+ * - **程序**：装箱、游标、失败拆分、断点续跑（`ai/organizeRun.ts`）
+ * - **模型**：只看一批，输出六类结果 + 一句摘要（`ai/prompt.ts`）
+ * - **用户**：只在最后看一眼、勾几项（本页面）
+ *
+ * 写库只发生在最后一步，走 `db/commit.ts`。中途退出、被杀、断电，
+ * 碎片和待办一个字都不会变。
+ */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,29 +26,34 @@ import type {
   AiConfig,
   DigestKind,
   Fragment,
-  KnowledgeCard,
   Note,
-  OrganizeMode,
-  OrganizeResult,
+  OrganizeReview,
+  OrganizeScope,
+  OrganizeSession,
+  TagStat,
   Todo,
 } from '../types';
 import { C, R } from '../theme';
 import { repo } from '../db/repo';
-import { commitResult } from '../db/commit';
+import { commitPlan, type CommitOutcome } from '../db/commit';
 import { loadAiConfig } from '../ai/config';
-import { AiError } from '../ai/chat';
-import { organize } from '../ai/deepseek';
-import type { OrganizeProgress } from '../ai/deepseek';
+import {
+  BatchFailure,
+  abandonSession,
+  finishSession,
+  findUnfinished,
+  runOrganize,
+  skipBatch,
+  startSession,
+  type RunProgress,
+} from '../ai/organizeRun';
+import { defaultDeselected, safeKeys, reviewCounts, allKeys } from '../util/resultItems';
+import { finalizePlan } from '../util/organizePlan';
 import { missingDigests } from '../util/digest';
-import { freshOffKeys, resultKeys } from '../util/resultItems';
-import { pruneResult } from '../util/dedupe';
-import { packFragments, pendingOnly } from '../util/batch';
-import { useKeyboardHeight } from '../util/keyboard';
 import { SummarySheet } from '../components/SummarySheet';
 import { ResultSections } from '../components/ResultSections';
 import { BacklogCard } from '../components/BacklogCard';
 import { ReasoningStream } from '../components/ReasoningStream';
-import { ReasoningTrace } from '../components/ReasoningTrace';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
@@ -48,209 +65,96 @@ interface Props {
   onOpenSettings: () => void;
 }
 
-type Phase = 'idle' | 'running' | 'error' | 'result' | 'applying' | 'done';
-
-/**
- * 重构范围：
- * - all = 全部碎片（未整理 + 已整理），一次把历史重新过一遍
- * - recent = 只挑整理过的
- * - topic = 某个知识卡主题下的碎片
- */
-type RefactorScope = 'all' | 'recent' | 'topic';
-
-/**
- * 单次整理最多带多少条。
- *
- * 这里从 60 降到 30 不是拍脑袋：条数不是成本，**字数和输出量**才是。
- * 60 条的一次整理，思考链 + 九类 JSON 很容易把输出推到三四万 token，
- * 一轮要跑七八分钟 —— 中途被截断就等于全废。砍到 30 条之后单轮输出量减半，
- * 思考链短了、失败代价也小了。剩下的用「继续整理」接着跑，
- * 比在客户端里自动拆批简单得多，而且每一轮都还能正常追问。
- */
-const INBOX_LIMIT = 30;
-/**
- * 单次整理的字符预算。条数只是粗控 ——
- * 一条三千字的长笔记和三十条随手记一样重，光按条数装箱会让它独占整批。
- * 超预算就提前收手，把它留到下一轮（单独跑而不是被截断）。
- */
-const BATCH_CHAR_BUDGET = 12_000;
-/** 重构单次上限。原文比未读碎片长得多，多了 token 会爆 */
-const REFACTOR_LIMIT = 20;
-/** 重构的字数预算比整理宽一点：它要把旧标签一起发给模型，每条天然更长 */
-const REFACTOR_CHAR_BUDGET = 16_000;
+type Phase = 'idle' | 'running' | 'review' | 'applying' | 'done';
 
 /** 整理页「待补小结」最多列几条 */
 const BACKLOG_LIMIT = 10;
 
+interface Failure {
+  message: string;
+  code: string;
+  session: OrganizeSession;
+  batchIds: number[];
+  round: number;
+  totalRounds: number;
+}
+
 export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSettings }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
-  const [mode, setMode] = useState<OrganizeMode>('organize');
-  const [refactorScope, setRefactorScope] = useState<RefactorScope>('all');
-  /** 待补小结面板：选中的那条周期 */
-  const [digestTarget, setDigestTarget] = useState<{ kind: DigestKind; period: string } | null>(null);
-  const [refactorTopic, setRefactorTopic] = useState<string | null>(null);
-  const [result, setResult] = useState<OrganizeResult | null>(null);
-  /** 模型原始输出，追问时原样回传 */
-  const [raw, setRaw] = useState('');
-  /** 被用户取消勾选的项；新结果里默认全选，所以只记「取消」比记「选中」更稳 */
+  const [scope, setScope] = useState<OrganizeScope>('inbox');
+  const [session, setSession] = useState<OrganizeSession | null>(null);
+  const [review, setReview] = useState<OrganizeReview | null>(null);
+  /** 被取消勾选的项。结果默认按 `defaultDeselected` 来，所以只记「取消」更稳 */
   const [deselected, setDeselected] = useState<Set<string>>(new Set());
-  const [round, setRound] = useState(0);
-  /** 真正写进库的条数。不能用「勾选了几项」代替 —— 勾了但无事可做的项不算 */
-  const [applied, setApplied] = useState(0);
-  /** 刚才写库的那一批有几条。done 页要报它，不能用重新装箱后的 batch.length */
-  const [appliedBatch, setAppliedBatch] = useState(0);
-  const [refineText, setRefineText] = useState('');
-  const [refineError, setRefineError] = useState('');
-  const [refining, setRefining] = useState(false);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [outcome, setOutcome] = useState<CommitOutcome | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const [runId, setRunId] = useState<number | null>(null);
-  /**
-   * 这一次进来之后已经过了一遍的碎片 id。
-   *
-   * 之前「继续整理剩下的 N 条」点下去还是原来那 20 条，根因就是批次永远从池子头部取：
-   * 重构**不改变碎片状态**（它们本来就是 tagged），池子一点没变；
-   * 整理模式只把「AI 给了标签且用户勾选」的那几条标成 tagged，
-   * 剩下没被抽到标签的仍留在 inbox 前排，下一批还是它们打头。
-   * 现在两层兜底：这里记会话内游标，commit 里再把整批标成 tagged。
-   */
-  const [doneIds, setDoneIds] = useState<Set<number>>(new Set());
-  /** 这一轮被降噪收起的重复卡片 / 待办，如实显示，别让内容悄悄少掉 */
-  const [pruned, setPruned] = useState({ cards: 0, todos: 0 });
+  const [stopping, setStopping] = useState(false);
+  const [digestTarget, setDigestTarget] = useState<{ kind: DigestKind; period: string } | null>(null);
 
-  // 首轮请求时拿到的上下文，追问要复用同一份，否则模型看到的范围会变
+  /** 上次没跑完的会话。进页面时读一次，用来显示「继续上次」 */
+  const [resume, setResume] = useState<{ session: OrganizeSession; remaining: number } | null>(null);
+
+  /** 本次运行用到的三份快照。确认页和写库都用它们，不能中途重读 —— 否则勾选会错位 */
   const [config, setConfig] = useState<AiConfig | null>(null);
-  const [topics, setTopics] = useState<string[]>([]);
-  const [cards, setCards] = useState<KnowledgeCard[]>([]);
+  const [tags, setTags] = useState<TagStat[]>([]);
   const [todos, setTodos] = useState<Todo[]>([]);
-  /** 重构 idle 面板要按主题挑范围，得先知道有哪些主题 */
-  const [idleTopics, setIdleTopics] = useState<{ topic: string; count: number }[]>([]);
 
-  /** 模型的思维链（累积全文）。只用于展示，永远不参与解析 */
-  const [reasoning, setReasoning] = useState('');
-  /** 正文已经接收到多少字，给用户一个「确实在动」的信号 */
-  const [received, setReceived] = useState(0);
-  /** 这一轮已经跑了多少秒 */
+  /** 进度。`round` 是当前批次序号，`totalRounds` 是按装箱估算的批数 */
+  const [progress, setProgress] = useState<RunProgress | null>(null);
   const [elapsed, setElapsed] = useState(0);
-  /** 结果页里思考过程是否展开 */
-  const [showReasoning, setShowReasoning] = useState(false);
-  /** 本轮模型是否开着思考模式，用来区分「还没开始想」和「模型不支持」 */
-  const [thinkingOn, setThinkingOn] = useState(false);
 
   const startedAtRef = useRef(0);
+  const stopRef = useRef(false);
   /**
-   * 流式回调的频率很高（一个思考过程可能几百个 chunk），
-   * 每来一块就 setState 会把 JS 线程占满、界面卡住。
-   * 这里用 ref 攒着，最多 120ms 上屏一次；结束时再用最终值兜一次底。
+   * 流式回调很密集（一个思考过程几百个 chunk），每块都 setState 会把 JS 线程占满。
+   * 用 ref 攒着，最多 120ms 上屏一次；结束时再用最终值兜一次底。
    */
   const streamRef = useRef({ lastFlush: 0 });
 
-  const keyboardHeight = useKeyboardHeight();
-
-  const inbox = useMemo(() => fragments.filter((f) => f.status === 'inbox'), [fragments]);
-  const organized = useMemo(() => fragments.filter((f) => f.status === 'tagged'), [fragments]);
+  const inboxCount = useMemo(() => fragments.filter((f) => f.status === 'inbox').length, [fragments]);
+  const allCount = useMemo(() => fragments.filter((f) => f.mergedInto === null).length, [fragments]);
+  const available = scope === 'inbox' ? inboxCount : allCount;
 
   const backlog = useMemo(
     () => missingDigests(fragments, notes, BACKLOG_LIMIT),
     [fragments, notes],
   );
 
-  // 进页面或切换模式时刷新一次已有卡片/主题，空闲面板要用
+  // 进页面先看有没有没跑完的会话
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [c, t] = await Promise.all([repo.listKnowledgeCards(), repo.listKnowledgeTopics()]);
-        if (!alive) return;
-        setCards(c);
-        setIdleTopics(t);
+        const s = await findUnfinished();
+        if (!alive || !s) return;
+        const done = new Set([...s.plan.processedIds, ...s.plan.skippedIds]);
+        const remaining = s.pendingIds.filter((id) => !done.has(id)).length;
+        setResume({ session: s, remaining });
+        setScope(s.scope);
       } catch {
-        /* 读不到就空着，不影响整理 */
+        /* 读不到就当没有，不影响新开一次 */
       }
     })();
     return () => {
       alive = false;
     };
-  }, [mode]);
+  }, []);
 
-  /** 还没过过一遍的待整理碎片。doneIds 是会话内游标，刷新后仍留在 inbox 的靠它挡 */
-  const inboxPool = useMemo(() => pendingOnly(inbox, doneIds), [inbox, doneIds]);
-
-  const organizeBatch = useMemo(
-    () => packFragments(inboxPool, INBOX_LIMIT, BATCH_CHAR_BUDGET),
-    [inboxPool],
-  );
-
-  const refactorPool = useMemo(() => {
-    if (refactorScope === 'topic') {
-      if (!refactorTopic) return [];
-      const ids = new Set<number>();
-      for (const c of cards) {
-        if (c.topic === refactorTopic) c.sourceIds.forEach((id) => ids.add(id));
-      }
-      return fragments.filter((f) => ids.has(f.id));
-    }
-    // 「全部」把未整理的一起带上：以前必须先整理完才能重构，等于每次都要跑两轮。
-    // 已合并（重复被折叠）的碎片不参与 —— 它们的内容已经在保留那条里了
-    if (refactorScope === 'all') return fragments.filter((f) => f.mergedInto === null);
-    return organized;
-  }, [refactorScope, refactorTopic, cards, fragments, organized]);
-
-  /** 本次会话已经重构过的不再重复装箱，否则「继续」永远取前 20 条 */
-  const refactorPending = useMemo(
-    () => pendingOnly(refactorPool, doneIds),
-    [refactorPool, doneIds],
-  );
-
-  const refactorBatch = useMemo(
-    () => packFragments(refactorPending, REFACTOR_LIMIT, REFACTOR_CHAR_BUDGET),
-    [refactorPending],
-  );
-
-  const batch = mode === 'refactor' ? refactorBatch : organizeBatch;
-  const available = mode === 'refactor' ? refactorPending.length : inboxPool.length;
-  /**
-   * 这一批之外还剩多少条。
-   *
-   * 注意它**不能**用来判断「还有没有没处理的」：50 条跑完第一批 30 条之后，
-   * 剩下的 20 条正好装满下一批，overflow 就是 0，而它们一条都还没处理。
-   * done 页判断用 `available`，这个数只用于 idle 页那句「剩下 N 条下一轮」。
-   */
-  const overflow = available - batch.length;
-
-  const acceptedKeys = useMemo(() => resultKeys(result), [result]);
-  const isOn = (key: string) => !deselected.has(key);
-  const acceptedCount = acceptedKeys.filter(isOn).length;
-
-  // 运行中每 0.5 秒刷新一次计时，让人知道没卡住
+  // 运行中每 0.5 秒刷新计时，让人知道没卡住
   useEffect(() => {
-    if (phase !== 'running' && !refining) return;
+    if (phase !== 'running') return;
     const timer = setInterval(() => {
       setElapsed(Math.round((Date.now() - startedAtRef.current) / 1000));
     }, 500);
     return () => clearInterval(timer);
-  }, [phase, refining]);
+  }, [phase]);
 
-  /**
-   * 流式回调。传进来的都是累积全文，所以丢掉几次中间态不会导致内容缺失 ——
-   * 但最终值一定要在请求结束后再兜一次底，否则最后 120ms 里的内容会看不见。
-   */
-  function handleProgress(patch: OrganizeProgress) {
-    const now = Date.now();
-    if (now - streamRef.current.lastFlush < 120) return;
-    streamRef.current.lastFlush = now;
-    if (patch.reasoning !== undefined) setReasoning(patch.reasoning);
-    if (patch.content !== undefined) setReceived(patch.content.length);
-  }
-
-  /** 开始新一轮之前把流式相关的状态清干净 */
-  function beginRun() {
-    setReasoning('');
-    setReceived(0);
-    setElapsed(0);
-    setShowReasoning(false);
-    streamRef.current.lastFlush = 0;
-    startedAtRef.current = Date.now();
-  }
+  const acceptedKeys = useMemo(() => (review ? allKeys(review) : []), [review]);
+  const isOn = (key: string) => !deselected.has(key);
+  const acceptedCount = acceptedKeys.filter(isOn).length;
+  const safe = useMemo(() => (review ? safeKeys(review).length : 0), [review]);
+  const counts = useMemo(() => (review ? reviewCounts(review) : null), [review]);
 
   function toggle(key: string) {
     setDeselected((prev) => {
@@ -261,357 +165,433 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     });
   }
 
-  async function start() {
-    setPhase('running');
+  function selectSafe() {
+    if (!review) return;
+    const on = new Set(safeKeys(review));
+    setDeselected(new Set(allKeys(review).filter((k) => !on.has(k))));
+  }
+
+  function selectNone() {
+    if (!review) return;
+    setDeselected(new Set(allKeys(review)));
+  }
+
+  /** 流式回调，节流上屏 */
+  function handleProgress(update: RunProgress) {
+    const now = Date.now();
+    if (now - streamRef.current.lastFlush < 120) return;
+    streamRef.current.lastFlush = now;
+    setProgress(update);
+  }
+
+  /** 准备一次运行需要的三份快照。确认页与写库必须用同一份 */
+  async function loadContext() {
+    const cfg = await loadAiConfig();
+    if (!cfg.apiKey) throw new Error('还没配置 API Key，先去设置页填一个');
+    const [tagList, todoList] = await Promise.all([repo.listTags(), repo.listTodos()]);
+    setConfig(cfg);
+    setTags(tagList);
+    setTodos(todoList);
+    return { cfg, tagList, todoList };
+  }
+
+  /** 把会话收成确认页。跑了 0 条时不算成功，回到 idle 并说明原因 */
+  function showReview(next: OrganizeSession, tagList: TagStat[]) {
+    const processed = next.plan.processedIds.length;
+    if (!processed) {
+      setPhase('idle');
+      setErrorMsg('这次一条都没跑成，没有任何改动。可以再试一次。');
+      return;
+    }
+    const rev = finalizePlan(next.plan, tagList);
+    setSession(next);
+    setReview(rev);
+    setDeselected(defaultDeselected(rev));
+    setFailure(null);
+    setPhase('review');
+  }
+
+  /** 跑（或续跑）一次。失败不抛到界面，收成 `failure` 让用户选下一步 */
+  async function loop(
+    start: OrganizeSession,
+    cfg: AiConfig,
+    tagList: TagStat[],
+    todoList: Todo[],
+  ) {
+    stopRef.current = false;
+    setStopping(false);
+    startedAtRef.current = Date.now();
+    streamRef.current.lastFlush = 0;
+    setElapsed(0);
+    setProgress(null);
     setErrorMsg('');
-    setRefineError('');
-    beginRun();
+    setPhase('running');
+
     try {
-      const cfg = await loadAiConfig();
-      if (!cfg.apiKey) {
-        setPhase('idle');
-        setErrorMsg('还没配置 API Key，先去设置页填一个');
+      const next = await runOrganize({
+        session: start,
+        config: cfg,
+        existingTags: tagList,
+        todos: todoList,
+        onProgress: handleProgress,
+        shouldStop: () => stopRef.current,
+      });
+      setSession(next);
+      showReview(next, tagList);
+    } catch (e) {
+      if (e instanceof BatchFailure) {
+        setSession(e.session);
+        setFailure({
+          message: e.message || '这一批失败了',
+          code: e.code,
+          session: e.session,
+          batchIds: e.batchIds,
+          round: e.round,
+          totalRounds: e.totalRounds,
+        });
+        setPhase('running');
         return;
       }
-      setThinkingOn(cfg.thinking);
-      const startedAt = startedAtRef.current;
-      const topicList = (await repo.listKnowledgeTopics()).map((t) => t.topic);
-      const cardList = await repo.listKnowledgeCards();
-      const todoList = await repo.listTodos();
-
-      const outcome = await organize({
-        fragments: batch,
-        config: cfg,
-        topics: topicList,
-        cards: cardList,
-        todos: todoList,
-        mode,
-        onProgress: handleProgress,
-      });
-      const cleaned = pruneResult(outcome.result, {
-        cards: cardList,
-        todos: todoList,
-        refactor: mode === 'refactor',
-      });
-
-      const id = await repo.saveRun({
-        startedAt,
-        fragmentIds: batch.map((f) => f.id),
-        model: cfg.model,
-        resultJson: outcome.raw,
-      });
-
-      setRunId(id);
-      setConfig(cfg);
-      setTopics(topicList);
-      setCards(cardList);
-      setTodos(todoList);
-      setRaw(outcome.raw);
-      // 以最终值为准，补上节流可能漏掉的尾巴
-      setReasoning(outcome.reasoning);
-      setReceived(outcome.raw.length);
-      setResult(cleaned.result);
-      setPruned({ cards: cleaned.droppedCards, todos: cleaned.droppedTodos });
-      setDeselected(freshOffKeys(new Set(), cleaned.result, null));
-      setRound(1);
-      setPhase('result');
-    } catch (e) {
-      const err = e as AiError;
-      setErrorMsg(err?.message || '整理失败，稍后再试');
-      setPhase('error');
+      setErrorMsg((e as Error)?.message || '整理失败，稍后再试');
+      setPhase('idle');
     }
   }
 
-  /** 多轮追问：把上一轮原始输出回传给模型，让它基于自己的结果改 */
-  async function refine() {
-    const instruction = refineText.trim();
-    if (!instruction || !config || !raw) return;
-    setRefining(true);
-    setRefineError('');
-    setErrorMsg('');
-    beginRun();
-    setThinkingOn(config.thinking);
+  /** 新开一次 */
+  async function start() {
+    if (!available) return;
     try {
-      const outcome = await organize({
-        fragments: batch,
-        config,
-        topics,
-        cards,
-        todos,
-        previousRaw: raw,
-        instruction,
-        mode,
-        onProgress: handleProgress,
-      });
-      const cleaned = pruneResult(outcome.result, {
-        cards,
-        todos,
-        refactor: mode === 'refactor',
-      });
-      setRaw(outcome.raw);
-      setResult(cleaned.result);
-      setPruned({ cards: cleaned.droppedCards, todos: cleaned.droppedTodos });
-      setReasoning(outcome.reasoning);
-      setReceived(outcome.raw.length);
-      // 内容没变的条目保留用户之前的勾选状态，只有新冒出来的破坏性操作才置为不勾
-      setDeselected((prev) => freshOffKeys(prev, cleaned.result, result));
-      setRefineText('');
-      setRound((r) => r + 1);
+      const { cfg, tagList, todoList } = await loadContext();
+      const fresh = await startSession(scope);
+      setResume(null);
+      await loop(fresh, cfg, tagList, todoList);
     } catch (e) {
-      const err = e as AiError;
-      setRefineError(err?.message || '追问失败，稍后再试');
-    } finally {
-      setRefining(false);
+      setErrorMsg((e as Error)?.message || '启动失败');
+      setPhase('idle');
     }
   }
 
-  /**
-   * 跳过这批：整批标成已整理，什么内容都不动。
-   *
-   * 为什么需要它：模型偶尔会回一整份空结果（全数组为空），此时
-   * `acceptedCount` 是 0，「应用」按钮按纪律是禁用的 —— 于是用户只剩「全部放弃」，
-   * 退出再进来，装填的还是同一批，再跑一次还是空结果，永远出不去。
-   * 标 `tagged` 只表示「不再算未读」，原文一个字都不动，重构照样能再处理它们。
-   */
-  async function skipBatch() {
-    if (!batch.length) return;
-    setPhase('applying');
+  /** 继续上次：没跑完就接着跑，跑完了直接进确认页 */
+  async function resumeRun() {
+    if (!resume) return;
     try {
-      await repo.markStatus(
-        batch.map((f) => f.id),
-        'tagged',
-      );
-      if (runId) await repo.markRunApplied(runId);
-      setApplied(0);
-      setAppliedBatch(batch.length);
-      setDoneIds((prev) => new Set([...prev, ...batch.map((f) => f.id)]));
-      try {
-        await onApplied();
-      } catch {
-        /* 刷新失败不影响「已标整理」这件事 */
+      const { cfg, tagList, todoList } = await loadContext();
+      if (resume.remaining > 0) {
+        await loop(resume.session, cfg, tagList, todoList);
+      } else {
+        showReview(resume.session, tagList);
       }
-      setPhase('done');
     } catch (e) {
-      setErrorMsg((e as Error)?.message || '标记失败');
-      setPhase('error');
+      setErrorMsg((e as Error)?.message || '继续失败');
+      setPhase('idle');
     }
+  }
+
+  async function dropResume() {
+    if (!resume) return;
+    try {
+      await abandonSession(resume.session.id);
+    } catch {
+      /* 删不掉也不影响新开一次 */
+    }
+    setResume(null);
+  }
+
+  /** 失败后：重试这一批 */
+  async function retryBatch() {
+    if (!failure) return;
+    const sess = failure.session;
+    setFailure(null);
+    try {
+      const { cfg, tagList, todoList } = await loadContext();
+      await loop(sess, cfg, tagList, todoList);
+    } catch (e) {
+      setErrorMsg((e as Error)?.message || '重试失败');
+      setPhase('idle');
+    }
+  }
+
+  /** 失败后：跳过这一批（不标记碎片状态，下次整理还在） */
+  async function skipThisBatch() {
+    if (!failure) return;
+    const { session: sess, batchIds } = failure;
+    setFailure(null);
+    try {
+      const { cfg, tagList, todoList } = await loadContext();
+      const next = await skipBatch(sess, batchIds);
+      await loop(next, cfg, tagList, todoList);
+    } catch (e) {
+      setErrorMsg((e as Error)?.message || '跳过失败');
+      setPhase('idle');
+    }
+  }
+
+  /** 失败后：放弃本次，已跑完的批次也一并丢掉（还没写库，所以没有残留） */
+  async function abortRun() {
+    if (!failure) return;
+    const sess = failure.session;
+    setFailure(null);
+    setSession(null);
+    setProgress(null);
+    setPhase('idle');
+    try {
+      await abandonSession(sess.id);
+    } catch {
+      /* 删不掉只会留个「继续上次」的提示，不影响数据 */
+    }
+  }
+
+  /** 用户主动停止：当前批跑完就收，已跑完的照常进确认页 */
+  function stopRun() {
+    stopRef.current = true;
+    setStopping(true);
   }
 
   async function apply() {
-    if (!result) return;
+    if (!session) return;
     setPhase('applying');
     try {
-      const report = await commitResult({
-        result,
+      const report = await commitPlan({
+        plan: session.plan,
+        existingTags: tags,
         accepted: isOn,
-        fragments,
-        cards,
-        // 整批都算「过了一遍」：只标「有标签且被勾选」的那几条，
-        // 剩下没被抽到标签的会永远留在 inbox 前排，下次整理又是它们
-        batchFragmentIds: batch.map((f) => f.id),
+        // 跳过的批次不在这里，它们要保持 inbox，下次还能被整理到
+        processedIds: session.plan.processedIds,
       });
-      if (runId) await repo.markRunApplied(runId);
-      setApplied(report.applied);
-      setAppliedBatch(batch.length);
-      // 会话内游标。重构不改碎片状态，没有它「继续重构」永远是同一批
-      setDoneIds((prev) => new Set([...prev, ...batch.map((f) => f.id)]));
-      // 先刷新再进 done：done 页要显示「还剩几条待整理」，
-      // 用刷新前的 inbox 去算会把这一批已经整理完的又算一遍
+      await finishSession(session.id);
+      setOutcome(report);
+      setResume(null);
+      // 先刷新再进 done：done 页要显示「还剩几条」，用旧数据算会把刚整理的又算一遍
       try {
         await onApplied();
       } catch {
-        /* 刷新失败不该翻成「写入失败」—— 内容已经进库了，下次进页面会重读 */
-      }
-      // 自己手里的卡片快照也要重读：重构「按主题」是按卡的 sourceIds 取碎片的，
-      // 不刷新的话刚沉淀出来的卡不在快照里，那批碎片在重构范围里等于不存在
-      try {
-        const [nextCards, nextTopics] = await Promise.all([
-          repo.listKnowledgeCards(),
-          repo.listKnowledgeTopics(),
-        ]);
-        setCards(nextCards);
-        setIdleTopics(nextTopics);
-      } catch {
-        /* 读不到就沿用旧快照，下一次进页面会重读 */
+        /* 刷新失败不该翻成「写入失败」—— 内容已经进库了 */
       }
       setPhase('done');
     } catch (e) {
       setErrorMsg((e as Error)?.message || '写入失败');
-      setPhase('error');
+      setPhase('review');
     }
   }
 
-  const word = mode === 'refactor' ? '重构' : '整理';
-  /** 当前模式的单批条数上限。文案里要用它，别再直接引常量 —— 重构那档是另一个数 */
-  const batchLimit = mode === 'refactor' ? REFACTOR_LIMIT : INBOX_LIMIT;
-  const headerTitle = round > 1 ? `${word} · 第 ${round} 版` : word;
-
-  function switchMode(next: OrganizeMode) {
-    if (next === mode) return;
-    setMode(next);
-    setErrorMsg('');
+  /** 全部放弃：还没写库，删掉会话即可 */
+  async function discard() {
+    if (session) {
+      try {
+        await abandonSession(session.id);
+      } catch {
+        /* 同上 */
+      }
+    }
+    setSession(null);
+    setReview(null);
+    setResume(null);
+    setPhase('idle');
   }
 
-  /** 切到按主题时自动选中第一个，否则池子是空的，用户会以为没东西可重构 */
-  function pickTopicScope() {
-    setRefactorScope('topic');
-    if (!refactorTopic && idleTopics.length) setRefactorTopic(idleTopics[0].topic);
-  }
+  const refactor = (session?.scope ?? scope) === 'all';
 
   return (
     <View style={styles.root}>
       <ScreenHeader
-        title={headerTitle}
-        subtitle={mode === 'refactor' ? '把碎片重新过一遍，与旧结果对照' : '处理还没整理过的碎片'}
+        title="整理"
+        subtitle={
+          phase === 'review'
+            ? review
+              ? `跑完 ${review.rounds} 批，处理 ${review.processedCount} 条`
+              : '确认后才会写库'
+            : '自动跑完所有批次，最后统一确认'
+        }
         onBack={onClose}
       />
 
-      <ScrollView
-        contentContainerStyle={styles.content}
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {phase === 'idle' && (
           <View>
             <View style={styles.segment}>
               <Pressable
-                style={[styles.segmentItem, mode === 'organize' && styles.segmentItemOn]}
-                onPress={() => switchMode('organize')}
+                style={[styles.segmentItem, scope === 'inbox' && styles.segmentItemOn]}
+                onPress={() => setScope('inbox')}
               >
                 <Ionicons
                   name="sparkles-outline"
                   size={14}
-                  color={mode === 'organize' ? C.accentText : C.text3}
+                  color={scope === 'inbox' ? C.accentText : C.text3}
                 />
-                <Text style={[styles.segmentText, mode === 'organize' && styles.segmentTextOn]}>
+                <Text style={[styles.segmentText, scope === 'inbox' && styles.segmentTextOn]}>
                   整理未读
                 </Text>
               </Pressable>
               <Pressable
-                style={[styles.segmentItem, mode === 'refactor' && styles.segmentItemOn]}
-                onPress={() => switchMode('refactor')}
+                style={[styles.segmentItem, scope === 'all' && styles.segmentItemOn]}
+                onPress={() => setScope('all')}
               >
                 <Ionicons
                   name="sync-outline"
                   size={14}
-                  color={mode === 'refactor' ? C.accentText : C.text3}
+                  color={scope === 'all' ? C.accentText : C.text3}
                 />
-                <Text style={[styles.segmentText, mode === 'refactor' && styles.segmentTextOn]}>
-                  重构已整理
+                <Text style={[styles.segmentText, scope === 'all' && styles.segmentTextOn]}>
+                  全部重过
                 </Text>
               </Pressable>
             </View>
+
+            {resume && (
+              <View style={styles.resumeCard}>
+                <View style={styles.resumeHead}>
+                  <Ionicons name="time-outline" size={15} color={C.amberText} />
+                  <Text style={styles.resumeTitle}>
+                    {resume.remaining > 0
+                      ? `上次整理到 ${resume.session.pendingIds.length - resume.remaining} / ${resume.session.pendingIds.length}`
+                      : '上次已经跑完了，还没确认写入'}
+                  </Text>
+                </View>
+                <Text style={styles.resumeSub}>
+                  {resume.remaining > 0
+                    ? `还剩 ${resume.remaining} 条没跑。继续会接着上次的进度，不会从头再来。`
+                    : `有 ${(resume.session.plan.processedIds ?? []).length} 条的整理结果等着你确认。`}
+                </Text>
+                <View style={styles.resumeRow}>
+                  <Pressable style={styles.resumePrimary} onPress={resumeRun}>
+                    <Text style={styles.resumePrimaryText}>
+                      {resume.remaining > 0 ? '继续上次' : '去确认'}
+                    </Text>
+                  </Pressable>
+                  <Pressable style={styles.resumeGhost} onPress={dropResume}>
+                    <Text style={styles.resumeGhostText}>丢掉</Text>
+                  </Pressable>
+                </View>
+              </View>
+            )}
 
             <View style={styles.heroCard}>
               <Text style={styles.heroNum}>{available}</Text>
               <Text style={styles.heroLabel}>
-                {mode === 'refactor'
-                  ? refactorScope === 'topic' && refactorTopic
-                    ? `「${refactorTopic}」下待重构`
-                    : refactorScope === 'all'
-                      ? '条待重构（未整理 + 已整理）'
-                      : '条已整理待重构'
-                  : '条未整理的碎片'}
+                {scope === 'all' ? '条碎片全部重过一遍' : '条未整理的碎片'}
               </Text>
-              {doneIds.size > 0 && (
-                <Text style={styles.heroSub}>本次已经过 {doneIds.size} 条，不会再重复取</Text>
-              )}
-
-              {mode === 'refactor' && (
-                <View style={styles.scopeBlock}>
-                  <Text style={styles.scopeLabel}>重构范围</Text>
-                  <View style={styles.chipRow}>
-                    <Chip
-                      label="全部碎片"
-                      on={refactorScope === 'all'}
-                      onPress={() => setRefactorScope('all')}
-                    />
-                    <Chip
-                      label="只重构已整理"
-                      on={refactorScope === 'recent'}
-                      onPress={() => setRefactorScope('recent')}
-                    />
-                    <Chip label="按主题" on={refactorScope === 'topic'} onPress={pickTopicScope} />
-                  </View>
-                  {refactorScope === 'topic' && (
-                    <View style={styles.chipRow}>
-                      {idleTopics.length ? (
-                        idleTopics.map((t) => (
-                          <Chip
-                            key={t.topic}
-                            label={`${t.topic} · ${t.count}`}
-                            on={refactorTopic === t.topic}
-                            onPress={() => setRefactorTopic(t.topic)}
-                          />
-                        ))
-                      ) : (
-                        <Text style={styles.scopeSub}>还没有知识卡，先用「整理未读」跑一轮。</Text>
-                      )}
-                    </View>
-                  )}
-                </View>
-              )}
-
               <Pressable
-                style={[styles.primaryBtn, !batch.length && styles.primaryBtnDisabled]}
+                style={[styles.primaryBtn, !available && styles.primaryBtnDisabled]}
                 onPress={start}
-                disabled={!batch.length}
+                disabled={!available}
               >
                 <Text style={styles.primaryBtnText}>
-                  {batch.length
-                    ? `${mode === 'refactor' ? '开始重构' : '开始整理'} ${batch.length} 条`
-                    : '没有可处理的碎片'}
+                  {available ? `开始整理 ${available} 条` : '没有可整理的碎片'}
                 </Text>
               </Pressable>
-
-              <BacklogCard
-                backlog={backlog}
-                onPick={(kind, period) => setDigestTarget({ kind, period })}
-              />
-
-              {overflow > 0 && (
-                <Text style={styles.overflowText}>
-                  一次只带 {batchLimit} 条，剩下 {overflow} 条下一轮。
-                </Text>
-              )}
               {!!errorMsg && <Text style={styles.errText}>{errorMsg}</Text>}
+              {errorMsg.includes('API Key') && (
+                <Pressable style={styles.linkRow} onPress={onOpenSettings}>
+                  <Text style={styles.linkText}>去设置里填 API Key</Text>
+                  <Ionicons name="chevron-forward" size={13} color={C.accent} />
+                </Pressable>
+              )}
             </View>
 
-            {mode === 'refactor' && (
-              <View style={styles.explainCard}>
-                <Text style={styles.explainTitle}>重构做什么</Text>
-                <Text style={styles.explainText}>
-                  把这些碎片重新过一遍：重新判标签、重新沉淀知识卡。结果会跟原来的整理逐条对照，
-                  被新卡取代的旧卡只会建议归档 —— 归档可恢复，原文一个字都不动。
+            <View style={styles.explainCard}>
+              <Text style={styles.explainTitle}>它会怎么做</Text>
+              <Text style={styles.explainText}>
+                每批 40 条、16000 字，跑完一批自动接下一批，直到全部跑完 —— 你不用一次次点「继续」。
+                每批的结论会总结成一句话带给下一批，所以不会重复抽同样的待办、也不会给同一件事起两种标签。
+              </Text>
+              <Text style={styles.explainText}>
+                跑完会给你一张确认页：标签按名字分组、新标签单独标出来。会删内容的操作（删待办、合并待办、
+                合并碎片）默认都不勾，得你自己点。
+              </Text>
+              <Text style={styles.explainText}>
+                中途返回、手机关掉都没关系：进度存在本地，下次进来有「继续上次」。而且只有最后点「应用」
+                才会写库，中途出任何问题，你的碎片一个字都不会变。
+              </Text>
+              {scope === 'all' ? (
+                <Text style={styles.explainWarn}>
+                  全部重过会把已有标签重新判一遍。勾上的标签会覆盖旧的，没勾的保留原样，不会被清空。
                 </Text>
-                <Text style={styles.explainText}>
-                  会减少内容的三类操作（归档卡、删待办、合并待办）默认不勾选，得你自己点。
-                  已做完的待办会自动标掉，因为那不算删除，回顾页里还能看到、也能撤回。
+              ) : null}
+            </View>
+
+            <BacklogCard backlog={backlog} onPick={(kind, period) => setDigestTarget({ kind, period })} />
+          </View>
+        )}
+
+        {phase === 'running' && !failure && (
+          <View>
+            <View style={styles.progressCard}>
+              <View style={styles.progressTop}>
+                <Text style={styles.progressTitle}>
+                  {/* 撞额度被拆开重试时批次会超出估算值，别显示「第 9 / 8 批」 */}
+                  第 {progress?.round ?? 1} /{' '}
+                  {Math.max(progress?.totalRounds ?? 1, progress?.round ?? 1)} 批
                 </Text>
-                <Text style={styles.explainText}>
-                  不会重复抽待办 —— 上一轮已经抽过了，再抽一遍只会让列表变重复。
+                <Text style={styles.progressMeta}>
+                  {progress?.done ?? 0} / {progress?.total ?? session?.pendingIds.length ?? available} 条
                 </Text>
               </View>
-            )}
+              <View style={styles.bar}>
+                <View
+                  style={[
+                    styles.barFill,
+                    {
+                      width: `${Math.min(
+                        100,
+                        Math.round(
+                          ((progress?.done ?? 0) / Math.max(1, progress?.total ?? available)) * 100,
+                        ),
+                      )}%`,
+                    },
+                  ]}
+                />
+              </View>
+              <Text style={styles.progressSub}>
+                本批 {progress?.batchCount ?? '—'} 条 · 已用 {elapsed} 秒
+                {stopping ? ' · 正在跑完这一批…' : ''}
+              </Text>
+              <Pressable
+                style={[styles.stopBtn, stopping && styles.stopBtnOff]}
+                onPress={stopRun}
+                disabled={stopping}
+              >
+                <Text style={styles.stopBtnText}>{stopping ? '收尾中…' : '停止，先看已跑完的'}</Text>
+              </Pressable>
+            </View>
 
-            {mode === 'organize' && errorMsg.includes('API Key') && (
+            <ReasoningStream
+              title="正在思考…"
+              text={progress?.reasoning ?? ''}
+              received={progress?.content.length ?? 0}
+              elapsed={elapsed}
+              thinking={config?.thinking ?? false}
+              height={280}
+            />
+          </View>
+        )}
+
+        {phase === 'running' && failure && (
+          <View style={styles.heroCard}>
+            <Ionicons name="alert-circle-outline" size={30} color={C.danger} />
+            <Text style={styles.failTitle}>
+              第 {failure.round} / {failure.totalRounds} 批失败了
+            </Text>
+            <Text style={styles.failMsg}>{failure.message}</Text>
+            <Text style={styles.failHint}>
+              前面已经跑完的 {failure.session.plan.rounds} 批结果都还在，选「跳过这一批」或「重试」
+              不会让它们白跑。这一批的 {failure.batchIds.length} 条碎片不会被标记，下次整理还会遇到。
+            </Text>
+            <Pressable style={styles.primaryBtn} onPress={retryBatch}>
+              <Text style={styles.primaryBtnText}>重试这一批</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryBtn} onPress={skipThisBatch}>
+              <Text style={styles.secondaryBtnText}>跳过这一批，继续跑后面的</Text>
+            </Pressable>
+            <Pressable style={styles.secondaryBtn} onPress={abortRun}>
+              <Text style={styles.secondaryBtnText}>放弃本次（什么都不写）</Text>
+            </Pressable>
+            {failure.code === 'auth' && (
               <Pressable style={styles.linkRow} onPress={onOpenSettings}>
-                <Text style={styles.linkText}>去设置里填 API Key</Text>
+                <Text style={styles.linkText}>检查 API Key 和 Base URL</Text>
                 <Ionicons name="chevron-forward" size={13} color={C.accent} />
               </Pressable>
             )}
           </View>
-        )}
-
-        {phase === 'running' && (
-          <ReasoningStream
-            title={`${word} ${batch.length} 条碎片…`}
-            text={reasoning}
-            received={received}
-            elapsed={elapsed}
-            thinking={thinkingOn}
-            height={300}
-          />
         )}
 
         {phase === 'applying' && (
@@ -621,140 +601,87 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
           </View>
         )}
 
-        {phase === 'error' && (
-          <View style={styles.heroCard}>
-            <Text style={styles.errTitle}>出错了</Text>
-            <Text style={styles.errText}>{errorMsg}</Text>
-            <Pressable style={styles.primaryBtn} onPress={start}>
-              <Text style={styles.primaryBtnText}>重试</Text>
-            </Pressable>
-            <Pressable style={styles.secondaryBtn} onPress={onOpenSettings}>
-              <Text style={styles.secondaryBtnText}>检查设置</Text>
-            </Pressable>
-          </View>
-        )}
-
-        {phase === 'done' && (
-          <View style={styles.centerBox}>
-            <Ionicons name="checkmark-circle-outline" size={36} color={C.accent} />
-            <Text style={styles.centerText}>已写入 {applied} 项</Text>
-            <Text style={styles.doneMeta}>这一批 {appliedBatch} 条已经{word}过一遍</Text>
-            {available > 0 ? (
-              <>
-                <Text style={styles.doneSub}>
-                  还剩 {available} 条没{word}。一次只带 {batchLimit} 条是为了让模型专心 ——
-                  一轮跑太多，输出容易撞上限，出错就得从头再来。
-                </Text>
-                <Pressable style={styles.primaryBtn} onPress={start}>
-                  <Text style={styles.primaryBtnText}>
-                    继续{word}下一批 {batch.length} 条
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.secondaryBtn} onPress={onClose}>
-                  <Text style={styles.secondaryBtnText}>先回时间轴</Text>
-                </Pressable>
-              </>
-            ) : (
-              <Pressable style={styles.primaryBtn} onPress={onClose}>
-                <Text style={styles.primaryBtnText}>回到时间轴</Text>
-              </Pressable>
-            )}
-          </View>
-        )}
-
-        {phase === 'result' && result && (
+        {phase === 'review' && review && (
           <View>
-            {refining ? (
-              <ReasoningStream
-                title={`按第 ${round} 版的要求重写…`}
-                text={reasoning}
-                received={received}
-                elapsed={elapsed}
-                thinking={thinkingOn}
-                height={300}
+            {!!errorMsg && <Text style={styles.reviewErr}>{errorMsg}</Text>}
+            <Text style={styles.resultHint}>
+              跑完 {review.rounds} 批、处理 {review.processedCount} 条
+              {review.skippedCount > 0 ? `，跳过 ${review.skippedCount} 条` : ''}。
+              {review.rejected > 0
+                ? `另有 ${review.rejected} 条结果不合法已丢弃（id 不存在、日期不对之类）。`
+                : ''}
+            </Text>
+            <View style={styles.summaryRow}>
+              <Stat
+                label="标签组"
+                value={review.tags.length}
               />
-            ) : (
-              <>
-                <Text style={styles.resultHint}>
-                  {acceptedCount === 0
-                    ? '这批没有可写入的条目。点「跳过这批」把它们标记为已整理，下次就不会再拿同一批来跑；原文一个字都不会动。'
-                    : '逐条确认。关掉的项不会写入。'}
-                  {acceptedCount > 0 && round > 1
-                    ? '追问后没改动的条目，你之前的勾选状态会保留。'
-                    : ''}
-                </Text>
-                {pruned.cards > 0 || pruned.todos > 0 ? (
-                  <Text style={styles.pruneNote}>
-                    已自动收起
-                    {pruned.cards > 0 ? `${pruned.cards} 张和已有卡片重复的知识卡` : ''}
-                    {pruned.cards > 0 && pruned.todos > 0 ? '、' : ''}
-                    {pruned.todos > 0 ? `${pruned.todos} 条重复待办` : ''}
-                    —— 重复的新卡会把新来源补进旧卡，内容一个字都没丢。
-                  </Text>
-                ) : null}
-                <ReasoningTrace
-                  text={reasoning}
-                  expanded={showReasoning}
-                  onToggle={() => setShowReasoning((v) => !v)}
-                />
-              </>
-            )}
+              <Stat label="新待办" value={`${counts?.todos ?? 0}`} />
+              <Stat label="已完成" value={`${counts?.done ?? 0}`} />
+              <Stat label="合并碎片" value={`${counts?.mergedFragments ?? 0}`} />
+            </View>
+
+            <View style={styles.quickRow}>
+              <Pressable style={styles.quickBtn} onPress={selectSafe}>
+                <Ionicons name="shield-checkmark-outline" size={13} color={C.accentText} />
+                <Text style={styles.quickBtnText}>全选安全项 {safe}</Text>
+              </Pressable>
+              <Pressable style={styles.quickBtnGhost} onPress={selectNone}>
+                <Text style={styles.quickBtnGhostText}>全不选</Text>
+              </Pressable>
+            </View>
 
             <ResultSections
-              result={result}
-              mode={mode}
+              review={review}
               fragments={fragments}
-              cards={cards}
               todos={todos}
               isOn={isOn}
               onToggle={toggle}
+              refactor={refactor}
             />
+          </View>
+        )}
+
+        {phase === 'done' && outcome && (
+          <View style={styles.centerBox}>
+            <Ionicons name="checkmark-circle-outline" size={34} color={C.accent} />
+            <Text style={styles.centerText}>已写入 {outcome.applied} 项</Text>
+            <Text style={styles.doneMeta}>
+              {[
+                outcome.tags ? `标签 ${outcome.tags} 条` : '',
+                outcome.todos ? `新待办 ${outcome.todos} 条` : '',
+                outcome.done ? `标完成 ${outcome.done} 条` : '',
+                outcome.dropped ? `删待办 ${outcome.dropped} 条` : '',
+                outcome.mergedTodos ? `并待办 ${outcome.mergedTodos} 组` : '',
+                outcome.mergedFragments ? `并碎片 ${outcome.mergedFragments} 组` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ') || '没有需要写入的改动'}
+            </Text>
+            <Text style={styles.doneSub}>
+              {outcome.marked} 条碎片已记为「整理过」，原文一个字都没动。
+              {outcome.applied === 0 ? '这次只更新了状态，下次整理不会再拿它们来跑。' : ''}
+            </Text>
+            <Pressable style={styles.primaryBtn} onPress={onClose}>
+              <Text style={styles.primaryBtnText}>回到时间轴</Text>
+            </Pressable>
           </View>
         )}
       </ScrollView>
 
-      {phase === 'result' && (
-        <View style={[styles.footer, keyboardHeight > 0 && { paddingBottom: keyboardHeight + 8 }]}>
-          <View style={styles.refineRow}>
-            <TextInput
-              value={refineText}
-              onChangeText={setRefineText}
-              placeholder="不满意？说一句让 AI 改，比如「待办合并成一条」"
-              placeholderTextColor={C.text3}
-              style={styles.refineInput}
-              multiline
-              maxLength={200}
-              editable={!refining}
-            />
-            <Pressable
-              onPress={refine}
-              disabled={!refineText.trim() || refining}
-              style={[styles.refineSend, refineText.trim() && styles.refineSendOn]}
-              hitSlop={6}
-            >
-              {refining ? (
-                <ActivityIndicator size="small" color={C.text3} />
-              ) : (
-                <Ionicons name="arrow-up" size={15} color={refineText.trim() ? '#FFFFFF' : C.text3} />
-              )}
-            </Pressable>
-          </View>
-          {!!refineError && <Text style={styles.refineErr}>{refineError}</Text>}
-
-          <View style={styles.bottomBar}>
-            <Pressable style={styles.secondaryBtnFlex} onPress={onClose}>
-              <Text style={styles.secondaryBtnText}>全部放弃</Text>
-            </Pressable>
-            <Pressable
-              style={[styles.primaryBtnFlex, refining && styles.primaryBtnDisabled]}
-              onPress={acceptedCount ? apply : skipBatch}
-              disabled={!!refining}
-            >
-              <Text style={styles.primaryBtnText}>
-                {acceptedCount ? `应用 ${acceptedCount} 项` : '跳过这批'}
-              </Text>
-            </Pressable>
-          </View>
+      {phase === 'review' && (
+        <View style={styles.footer}>
+          <Pressable style={styles.secondaryBtnFlex} onPress={discard}>
+            <Text style={styles.secondaryBtnText}>全部放弃</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.primaryBtnFlex, !acceptedCount && styles.primaryBtnDisabled]}
+            onPress={apply}
+          >
+            <Text style={styles.primaryBtnText}>
+              {acceptedCount ? `应用 ${acceptedCount} 项` : '只标记为已整理'}
+            </Text>
+          </Pressable>
         </View>
       )}
 
@@ -770,18 +697,17 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
   );
 }
 
-function Chip({ label, on, onPress }: { label: string; on: boolean; onPress: () => void }) {
+function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <Pressable style={[styles.chip, on && styles.chipOn]} onPress={onPress}>
-      {on ? <Ionicons name="checkmark" size={12} color={C.accentText} /> : null}
-      <Text style={[styles.chipText, on && styles.chipTextOn]}>{label}</Text>
-    </Pressable>
+    <View style={styles.stat}>
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.page },
-
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
 
   segment: {
@@ -804,6 +730,33 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: 13, color: C.text2 },
   segmentTextOn: { color: C.text, fontWeight: '500' },
 
+  resumeCard: {
+    backgroundColor: C.amberBg,
+    borderRadius: R.card,
+    padding: 14,
+    marginBottom: 14,
+    gap: 6,
+  },
+  resumeHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  resumeTitle: { fontSize: 13, color: C.amberText, fontWeight: '500' },
+  resumeSub: { fontSize: 11.5, color: C.amberText, lineHeight: 17, opacity: 0.9 },
+  resumeRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  resumePrimary: {
+    backgroundColor: C.amberText,
+    borderRadius: R.btn,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+  },
+  resumePrimaryText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
+  resumeGhost: {
+    borderRadius: R.btn,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderWidth: 0.5,
+    borderColor: C.amberText,
+  },
+  resumeGhostText: { fontSize: 13, color: C.amberText },
+
   heroCard: {
     backgroundColor: C.card,
     borderRadius: R.card,
@@ -814,31 +767,6 @@ const styles = StyleSheet.create({
   },
   heroNum: { fontSize: 40, color: C.text, fontWeight: '500', lineHeight: 46 },
   heroLabel: { fontSize: 13, color: C.text2, marginTop: 2 },
-  heroSub: { fontSize: 11, color: C.text3, marginTop: 6 },
-
-  scopeBlock: {
-    alignSelf: 'stretch',
-    marginTop: 18,
-    paddingTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
-  },
-  scopeLabel: { fontSize: 12, color: C.text2, marginBottom: 9 },
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: R.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderWidth: 0.5,
-    borderColor: C.hair,
-  },
-  chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
-  chipText: { fontSize: 12, color: C.text2, lineHeight: 17 },
-  chipTextOn: { color: C.accentText },
-  scopeSub: { fontSize: 11, color: C.text3, lineHeight: 17 },
 
   explainCard: {
     marginTop: 12,
@@ -850,8 +778,36 @@ const styles = StyleSheet.create({
   },
   explainTitle: { fontSize: 12, color: C.text, fontWeight: '500' },
   explainText: { fontSize: 11, color: C.text2, lineHeight: 18 },
+  explainWarn: { fontSize: 11, color: C.amberText, lineHeight: 18 },
 
-  overflowText: { fontSize: 11, color: C.text3, marginTop: 10, textAlign: 'center', lineHeight: 17 },
+  progressCard: {
+    backgroundColor: C.card,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+    padding: 18,
+    gap: 10,
+  },
+  progressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
+  progressTitle: { fontSize: 14, color: C.text, fontWeight: '500' },
+  progressMeta: { fontSize: 12, color: C.text2 },
+  bar: { height: 6, borderRadius: 3, backgroundColor: C.hairSoft, overflow: 'hidden' },
+  barFill: { height: 6, borderRadius: 3, backgroundColor: C.accent },
+  progressSub: { fontSize: 11, color: C.text3 },
+  stopBtn: {
+    alignSelf: 'flex-start',
+    borderRadius: R.btn,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+    paddingVertical: 7,
+    paddingHorizontal: 14,
+  },
+  stopBtnOff: { opacity: 0.5 },
+  stopBtnText: { fontSize: 12, color: C.text2 },
+
+  failTitle: { fontSize: 14, color: C.text, fontWeight: '500', marginTop: 10 },
+  failMsg: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 6 },
+  failHint: { fontSize: 11, color: C.text3, lineHeight: 17, textAlign: 'center', marginTop: 8 },
 
   primaryBtn: {
     backgroundColor: C.accent,
@@ -875,82 +831,6 @@ const styles = StyleSheet.create({
     borderColor: C.hair,
   },
   secondaryBtnText: { fontSize: 13, color: C.text2 },
-
-  linkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 3,
-    marginTop: 14,
-    paddingVertical: 8,
-  },
-  linkText: { fontSize: 13, color: C.accent },
-
-  centerBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 80, gap: 10 },
-  centerText: { fontSize: 14, color: C.text2 },
-  doneMeta: { fontSize: 11.5, color: C.text3, marginTop: -2 },
-  doneSub: {
-    fontSize: 12,
-    color: C.text3,
-    lineHeight: 19,
-    textAlign: 'center',
-    maxWidth: 300,
-    marginBottom: 4,
-  },
-
-  errTitle: { fontSize: 14, color: C.danger, fontWeight: '500', marginBottom: 8 },
-  errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
-
-  resultHint: { fontSize: 12, color: C.text3, marginBottom: 14, marginTop: 4, lineHeight: 18 },
-  pruneNote: { fontSize: 11.5, color: C.amberText, lineHeight: 18, marginBottom: 14 },
-
-  footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
-    backgroundColor: C.page,
-    paddingTop: 8,
-    paddingBottom: 8,
-  },
-  refineRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    marginHorizontal: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: C.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
-    borderColor: C.hair,
-  },
-  refineInput: {
-    flex: 1,
-    fontSize: 13,
-    lineHeight: 19,
-    color: C.text,
-    maxHeight: 72,
-    paddingTop: 3,
-    paddingBottom: 3,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
-  },
-  refineSend: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: C.hairSoft,
-  },
-  refineSendOn: { backgroundColor: C.accent },
-  refineErr: { fontSize: 11, color: C.danger, paddingHorizontal: 16, paddingTop: 6, lineHeight: 16 },
-
-  bottomBar: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
   secondaryBtnFlex: {
     flex: 1,
     alignItems: 'center',
@@ -967,5 +847,85 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: R.btn,
     backgroundColor: C.accent,
+  },
+
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 3,
+    marginTop: 14,
+    paddingVertical: 8,
+  },
+  linkText: { fontSize: 13, color: C.accent },
+
+  centerBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 70, gap: 10 },
+  centerText: { fontSize: 14, color: C.text2 },
+  doneMeta: { fontSize: 11.5, color: C.text3, textAlign: 'center', lineHeight: 18, paddingHorizontal: 20 },
+  doneSub: {
+    fontSize: 12,
+    color: C.text3,
+    lineHeight: 19,
+    textAlign: 'center',
+    maxWidth: 320,
+    marginBottom: 4,
+  },
+
+  errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
+  reviewErr: {
+    fontSize: 12,
+    color: C.danger,
+    lineHeight: 18,
+    backgroundColor: C.dangerBg,
+    borderRadius: R.btn,
+    padding: 10,
+    marginBottom: 12,
+  },
+
+  resultHint: { fontSize: 12, color: C.text3, marginBottom: 12, marginTop: 4, lineHeight: 18 },
+
+  summaryRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
+  stat: {
+    flex: 1,
+    backgroundColor: C.card,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+    paddingVertical: 10,
+    alignItems: 'center',
+    gap: 2,
+  },
+  statValue: { fontSize: 15, color: C.text, fontWeight: '500' },
+  statLabel: { fontSize: 10.5, color: C.text3 },
+
+  quickRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  quickBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: C.accentBg,
+    borderRadius: R.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  quickBtnText: { fontSize: 12, color: C.accentText },
+  quickBtnGhost: {
+    borderRadius: R.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderWidth: 0.5,
+    borderColor: C.hair,
+  },
+  quickBtnGhostText: { fontSize: 12, color: C.text2 },
+
+  footer: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 10,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: C.hair,
+    backgroundColor: C.page,
   },
 });

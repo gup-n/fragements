@@ -1,7 +1,28 @@
 import * as SQLite from 'expo-sqlite';
-import type { Repo } from './types';
+import type { Repo, OrganizeSessionPatch } from './types';
 import { parseTags } from './types';
-import type { AskLog, Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo, WebHit } from '../types';
+import type {
+  Fragment,
+  FragmentNature,
+  FragmentSource,
+  FragmentStatus,
+  Note,
+  OrganizePlan,
+  OrganizeScope,
+  OrganizeSession,
+  TagStat,
+  Todo,
+} from '../types';
+import { normalizePlan } from '../util/organizePlan';
+import {
+  buildFtsQuery,
+  cleanTag,
+  dedupeTags,
+  indexText,
+  likeNeedle,
+  normalizeTag,
+  sameTag,
+} from '../util/tokenize';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -61,7 +82,7 @@ const MIGRATIONS: string[] = [
     value TEXT NOT NULL
   );
   `,
-  // v2：引入内容性质与知识卡
+  // v2：引入内容性质与知识卡（v0.7 已废弃，表在 v6 删除）
   `
   ALTER TABLE fragments ADD COLUMN nature TEXT;
 
@@ -82,14 +103,12 @@ const MIGRATIONS: string[] = [
   ALTER TABLE todos ADD COLUMN merged_into INTEGER;
   CREATE INDEX IF NOT EXISTS idx_todos_merged ON todos(merged_into);
   `,
-  // v4：知识卡支持二级方向。主题仍然只是字符串（没有 topics 表），
-  // 这一列解决的是「大方向一致却各占一个主题」和「一个主题下挤了十几张卡」两件事
+  // v4：知识卡支持二级方向（v0.7 已废弃）
   `
   ALTER TABLE knowledge_cards ADD COLUMN subtopic TEXT;
   CREATE INDEX IF NOT EXISTS idx_cards_subtopic ON knowledge_cards(topic, subtopic);
   `,
-  // v5：问答记录独立成表。它不是知识卡 —— 混进 knowledge_cards 会让卡片数虚高、
-  // 检索捞出一堆一次性对话，而且「删掉这条问答」和「删掉一张沉淀下来的结论」完全是两回事
+  // v5：问答记录独立成表（v0.7 已废弃，表在 v6 删除）
   `
   CREATE TABLE IF NOT EXISTS ask_logs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +121,26 @@ const MIGRATIONS: string[] = [
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_ask_scope ON ask_logs(scope, created_at DESC);
+  `,
+  // v6：v0.7 —— 去掉知识库/问答记录；加本地全文索引与整理会话
+  `
+  DROP TABLE IF EXISTS knowledge_cards;
+  DROP TABLE IF EXISTS ask_logs;
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS fragment_fts USING fts5(text, tokenize = 'unicode61');
+
+  CREATE TABLE IF NOT EXISTS organize_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    scope           TEXT    NOT NULL,
+    pending_ids     TEXT    NOT NULL DEFAULT '[]',
+    cursor          INTEGER NOT NULL DEFAULT 0,
+    plan_json       TEXT    NOT NULL DEFAULT '{}',
+    context_summary TEXT    NOT NULL DEFAULT '',
+    finished        INTEGER NOT NULL DEFAULT 0,
+    created_at      INTEGER NOT NULL,
+    updated_at      INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_sessions_open ON organize_sessions(finished, updated_at DESC);
   `,
 ];
 
@@ -163,41 +202,6 @@ function toTodo(r: TodoRow): Todo {
   };
 }
 
-interface CardRow {
-  id: number;
-  topic: string;
-  subtopic: string | null;
-  title: string;
-  gist: string;
-  body: string;
-  source_ids: string;
-  created_at: number;
-  archived: number;
-}
-
-function parseIds(raw: unknown): number[] {
-  try {
-    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(v) ? v.map(Number).filter((n) => Number.isFinite(n)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function toCard(r: CardRow): KnowledgeCard {
-  return {
-    id: r.id,
-    topic: r.topic,
-    subtopic: r.subtopic ?? null,
-    title: r.title,
-    gist: r.gist,
-    body: r.body,
-    sourceIds: parseIds(r.source_ids),
-    createdAt: r.created_at,
-    archived: r.archived === 1,
-  };
-}
-
 interface NoteRow {
   id: number;
   type: string;
@@ -218,35 +222,100 @@ function toNote(r: NoteRow): Note {
   };
 }
 
-interface AskRow {
+interface SessionRow {
   id: number;
   scope: string;
-  question: string;
-  answer: string;
-  reasoning: string;
-  cited_ids: string;
-  web_json: string;
+  pending_ids: string;
+  cursor: number;
+  plan_json: string;
+  context_summary: string;
+  finished: number;
   created_at: number;
+  updated_at: number;
 }
 
-function toAskLog(r: AskRow): AskLog {
-  let web: WebHit[] = [];
+function parseIds(raw: unknown): number[] {
   try {
-    const v = JSON.parse(r.web_json);
-    if (Array.isArray(v)) web = v;
+    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(v) ? v.map(Number).filter((n) => Number.isFinite(n)) : [];
   } catch {
-    /* 脏数据当没有，不能因为一条记录解析失败就让整个列表空白 */
+    return [];
   }
+}
+
+function toSession(r: SessionRow): OrganizeSession {
   return {
     id: r.id,
-    scope: r.scope,
-    question: r.question,
-    answer: r.answer,
-    reasoning: r.reasoning ?? '',
-    citedIds: parseIds(r.cited_ids),
-    web,
+    scope: (r.scope as OrganizeScope) ?? 'inbox',
+    pendingIds: parseIds(r.pending_ids),
+    cursor: Number(r.cursor) || 0,
+    plan: normalizePlan(parseJson(r.plan_json, {})),
+    contextSummary: r.context_summary ?? '',
+    finished: r.finished === 1,
     createdAt: r.created_at,
+    updatedAt: r.updated_at,
   };
+}
+
+function parseJson(raw: unknown, fallback: unknown): unknown {
+  try {
+    return typeof raw === 'string' ? JSON.parse(raw) : raw ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 把一条碎片写进 FTS。先删后插，更新/打标签都走它 */
+function indexFragment(
+  d: SQLite.SQLiteDatabase,
+  id: number,
+  content: string,
+  tags: string[],
+  project: string | null,
+) {
+  d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
+  d.runSync('INSERT INTO fragment_fts(rowid, text) VALUES (?, ?)', [
+    id,
+    indexText(content, tags, project),
+  ]);
+}
+
+/** 按 200 条一页重建索引。迁移回填和设置页「重建索引」共用 */
+function rebuildIndex(d: SQLite.SQLiteDatabase): number {
+  d.execSync('DELETE FROM fragment_fts');
+  let offset = 0;
+  let indexed = 0;
+  for (;;) {
+    const rows = d.getAllSync<FragmentRow>(
+      'SELECT * FROM fragments ORDER BY id ASC LIMIT 200 OFFSET ?',
+      [offset],
+    );
+    if (!rows.length) break;
+    d.execSync('BEGIN');
+    try {
+      for (const r of rows) {
+        indexFragment(d, r.id, r.content, parseTags(r.tags), r.project);
+        indexed++;
+      }
+      d.execSync('COMMIT');
+    } catch (e) {
+      d.execSync('ROLLBACK');
+      throw e;
+    }
+    offset += rows.length;
+  }
+  return indexed;
+}
+
+/** 启动时对齐索引和碎片；不一致就重建。数据量大了只会在升级后第一次慢一下 */
+function ensureSearchIndex(d: SQLite.SQLiteDatabase) {
+  const total = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments')?.n ?? 0;
+  const indexed = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragment_fts')?.n ?? 0;
+  if (total !== indexed) rebuildIndex(d);
+}
+
+function countOf(d: SQLite.SQLiteDatabase, sql: string, params: (string | number)[] = []): number {
+  return d.getFirstSync<{ n: number }>(sql, params)?.n ?? 0;
 }
 
 export const repo: Repo = {
@@ -255,6 +324,7 @@ export const repo: Repo = {
     d.execSync('PRAGMA journal_mode = WAL;');
     d.execSync('PRAGMA foreign_keys = ON;');
     migrate(d);
+    ensureSearchIndex(d);
   },
 
   async listFragments(limit = 500) {
@@ -273,38 +343,89 @@ export const repo: Repo = {
     return rows.map(toFragment);
   },
 
-  async insertFragment(content, source, createdAt) {
-    const res = db().runSync(
-      'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
-      [content.trim(), createdAt ?? Date.now(), source, 'inbox'],
+  async listFragmentIds(scope) {
+    const where = scope === 'all' ? 'merged_into IS NULL' : "status = 'inbox'";
+    const rows = db().getAllSync<{ id: number }>(
+      `SELECT id FROM fragments WHERE ${where} ORDER BY created_at ASC, id ASC`,
     );
-    return Number(res.lastInsertRowId);
+    return rows.map((r) => r.id);
+  },
+
+  async listFragmentsByIds(ids) {
+    const list = Array.from(new Set(ids.map(Number).filter((n) => Number.isFinite(n))));
+    if (!list.length) return [];
+    // SQLite 的绑定变量个数有上限（老版本 999），「全部重过」可能一次上千条，
+    // 所以按 400 一批查。顺序由传进来的 ids 决定，SQL 的 IN 不保证顺序。
+    const CHUNK = 400;
+    const byId = new Map<number, Fragment>();
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const slice = list.slice(i, i + CHUNK);
+      const ph = slice.map(() => '?').join(',');
+      const rows = db().getAllSync<FragmentRow>(
+        `SELECT * FROM fragments WHERE id IN (${ph})`,
+        slice,
+      );
+      for (const r of rows) byId.set(r.id, toFragment(r));
+    }
+    const out: Fragment[] = [];
+    for (const id of list) {
+      const f = byId.get(id);
+      if (f) out.push(f);
+    }
+    return out;
+  },
+
+  async countFragments(scope) {
+    const where = scope === 'all' ? 'merged_into IS NULL' : "status = 'inbox'";
+    return countOf(db(), `SELECT COUNT(*) AS n FROM fragments WHERE ${where}`);
+  },
+
+  async insertFragment(content, source, createdAt) {
+    const d = db();
+    const text = content.trim();
+    const row = createdAt ?? Date.now();
+    const res = d.runSync(
+      'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
+      [text, row, source, 'inbox'],
+    );
+    const id = Number(res.lastInsertRowId);
+    indexFragment(d, id, text, [], null);
+    return id;
   },
 
   async updateFragmentContent(id, content) {
-    db().runSync('UPDATE fragments SET content = ? WHERE id = ?', [content.trim(), id]);
+    const d = db();
+    const text = content.trim();
+    d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [text, id]);
+    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
+    if (row) indexFragment(d, id, text, parseTags(row.tags), row.project);
   },
 
   async deleteFragment(id) {
-    db().runSync('DELETE FROM fragments WHERE id = ?', [id]);
+    const d = db();
+    d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
+    d.runSync('DELETE FROM fragments WHERE id = ?', [id]);
     // 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
     // 再加 status='merged'，它们就既不在时间轴上、也不会被重新整理，等于凭空消失
-    db().runSync(
+    d.runSync(
       "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
       [id],
     );
   },
 
   async applyTags(id, labels, project) {
-    // 已合并的碎片不能被「打标」这一步复活成 tagged —— 重构按主题取碎片时，
-    // 卡片的 source_ids 里可能带着早就被合并掉的那条，它的 merged_into 还留着，
-    // 只改 status 会让它同时是「已合并」和「已整理」，列表里看着像多出来一条
-    db().runSync(
+    const d = db();
+    // 存显示形式（保留 NAS/AI 的大小写），按归一化键去重
+    const clean = dedupeTags(labels);
+    // 已合并的碎片不能被「打标」这一步复活成 tagged
+    d.runSync(
       `UPDATE fragments SET tags = ?, project = ?,
          status = CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END
        WHERE id = ?`,
-      [JSON.stringify(labels), project, id],
+      [JSON.stringify(clean), project, id],
     );
+    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
+    if (row) indexFragment(d, id, row.content, clean, project);
   },
 
   async markMerged(dropIds, keepId) {
@@ -332,184 +453,90 @@ export const repo: Repo = {
     db().runSync(`UPDATE fragments SET nature = ? WHERE id IN (${placeholders})`, [nature, ...ids]);
   },
 
-  async insertKnowledgeCard(input) {
-    const res = db().runSync(
-      'INSERT INTO knowledge_cards (topic, subtopic, title, gist, body, source_ids, created_at, archived) VALUES (?, ?, ?, ?, ?, ?, ?, 0)',
-      [
-        input.topic,
-        input.subtopic ?? null,
-        input.title,
-        input.gist,
-        input.body,
-        JSON.stringify(input.sourceIds),
-        Date.now(),
-      ],
-    );
-    return Number(res.lastInsertRowId);
-  },
-
-  async listKnowledgeCards(topic) {
-    const rows = topic
-      ? db().getAllSync<CardRow>(
-          'SELECT * FROM knowledge_cards WHERE topic = ? AND archived = 0 ORDER BY created_at DESC',
-          [topic],
-        )
-      : db().getAllSync<CardRow>(
-          'SELECT * FROM knowledge_cards WHERE archived = 0 ORDER BY topic ASC, created_at DESC',
-        );
-    return rows.map(toCard);
-  },
-
-  async listArchivedKnowledgeCards() {
-    const rows = db().getAllSync<CardRow>(
-      'SELECT * FROM knowledge_cards WHERE archived = 1 ORDER BY created_at DESC',
-    );
-    return rows.map(toCard);
-  },
-
-  async searchKnowledgeCards(keyword) {
-    const kw = keyword.trim();
-    if (!kw) return [];
-    // 转义 LIKE 的通配符，否则用户输个 % 就把整库捞出来了
-    const like = `%${kw.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-    const rows = db().getAllSync<CardRow>(
-      `SELECT * FROM knowledge_cards
-        WHERE archived = 0
-          AND (title LIKE ? ESCAPE '\\' OR gist LIKE ? ESCAPE '\\'
-               OR body LIKE ? ESCAPE '\\' OR topic LIKE ? ESCAPE '\\')
-        ORDER BY created_at DESC`,
-      [like, like, like, like],
-    );
-    return rows.map(toCard);
-  },
-
-  async listKnowledgeTopics() {
-    const rows = db().getAllSync<{ topic: string; n: number; d: number }>(
-      // COUNT(DISTINCT subtopic) 天然忽略 NULL，正好是「已分出去几个方向」
-      `SELECT topic, COUNT(*) AS n, COUNT(DISTINCT subtopic) AS d
-         FROM knowledge_cards WHERE archived = 0
-        GROUP BY topic ORDER BY n DESC, topic ASC`,
-    );
-    return rows.map((r) => ({ topic: r.topic, count: r.n, dirs: r.d }));
-  },
-
-  async listKnowledgeSubtopics(topic) {
-    const rows = db().getAllSync<{ subtopic: string | null; n: number }>(
-      `SELECT subtopic, COUNT(*) AS n FROM knowledge_cards
-        WHERE archived = 0 AND topic = ?
-        GROUP BY subtopic
-        ORDER BY n DESC, subtopic ASC`,
-      [topic],
-    );
-    return rows.map((r) => ({ subtopic: r.subtopic ?? null, count: r.n }));
-  },
-
-  async retopicCards(from, to) {
-    // 改名到自己、或者空列表，都不做任何事（否则会白跑一趟 UPDATE）
-    const list = Array.from(new Set(from.filter((t) => !!t && t !== to)));
-    if (!list.length) return { moved: 0 };
-    const ph = list.map(() => '?').join(',');
-    // 归档的卡片一起改：否则恢复之后会凭空多出一个只含归档卡的主题
-    const res = db().runSync(`UPDATE knowledge_cards SET topic = ? WHERE topic IN (${ph})`, [
-      to,
-      ...list,
-    ]);
-    return { moved: res.changes };
-  },
-
-  async resubtopicCards(topic, from, to) {
-    const conds: string[] = [];
-    const fromParams: string[] = [];
-    for (const s of from) {
-      if (s === to) continue;
-      if (s === null || s === '') {
-        conds.push('subtopic IS NULL');
-      } else {
-        conds.push('subtopic = ?');
-        fromParams.push(s);
-      }
-    }
-    if (!conds.length) return { moved: 0 };
-    // 同上：目标是空的时候走 NULL 字面量，别指望 ? 能绑 null
-    const clear = to === null || to === '';
-    const res = db().runSync(
-      `UPDATE knowledge_cards SET ${clear ? 'subtopic = NULL' : 'subtopic = ?'} WHERE topic = ? AND (${conds.join(' OR ')})`,
-      clear ? [topic, ...fromParams] : [to, topic, ...fromParams],
-    );
-    return { moved: res.changes };
-  },
-
-  async setCardSubtopic(ids, subtopic) {
-    const list = Array.from(new Set(ids.filter((n) => Number.isFinite(n))));
-    if (!list.length) return { changed: 0 };
-    const ph = list.map(() => '?').join(',');
-    // 清空方向必须把 NULL 写进 SQL 字面量，不能靠 `?` 绑定 null。
-    // expo-sqlite 在部分版本上会把 JS null 当成「没给参数」或绑成字符串，
-    // 结果是 UPDATE 改 0 行却正常返回 —— 表现就是「方向设得上、删不掉」。
-    // NULL 在这里是 SQL 关键字不是用户数据，没有注入面。
-    if (subtopic === null || subtopic === '') {
-      const res = db().runSync(`UPDATE knowledge_cards SET subtopic = NULL WHERE id IN (${ph})`, list);
-      return { changed: res.changes };
-    }
-    const res = db().runSync(`UPDATE knowledge_cards SET subtopic = ? WHERE id IN (${ph})`, [
-      subtopic,
-      ...list,
-    ]);
-    return { changed: res.changes };
-  },
-
-  async updateKnowledgeCard(id, patch) {
-    const sets: string[] = [];
-    const params: (string | number | null)[] = [];
-    if (patch.title !== undefined) {
-      sets.push('title = ?');
-      params.push(patch.title);
-    }
-    if (patch.gist !== undefined) {
-      sets.push('gist = ?');
-      params.push(patch.gist);
-    }
-    if (patch.body !== undefined) {
-      sets.push('body = ?');
-      params.push(patch.body);
-    }
-    if (patch.topic !== undefined) {
-      sets.push('topic = ?');
-      params.push(patch.topic);
-    }
-    // 显式传 null 是「清掉二级方向」，和「不传」含义不同，所以不能用 || 判断。
-    // 清空时写 NULL 字面量，理由同 setCardSubtopic —— 空方向必须真的变成 NULL，
-    // 否则会留下一个叫空字符串的方向组。
-    if (patch.subtopic !== undefined) {
-      if (patch.subtopic === null || patch.subtopic === '') {
-        sets.push('subtopic = NULL');
-      } else {
-        sets.push('subtopic = ?');
-        params.push(patch.subtopic);
-      }
-    }
-    if (patch.archived !== undefined) {
-      sets.push('archived = ?');
-      params.push(patch.archived ? 1 : 0);
-    }
-    if (patch.sourceIds !== undefined) {
-      sets.push('source_ids = ?');
-      params.push(JSON.stringify(patch.sourceIds));
-    }
-    if (!sets.length) return;
-    params.push(id);
-    db().runSync(`UPDATE knowledge_cards SET ${sets.join(', ')} WHERE id = ?`, params);
-  },
-
-  async deleteKnowledgeCard(id) {
-    db().runSync('DELETE FROM knowledge_cards WHERE id = ?', [id]);
-  },
-
   async countInbox() {
-    const row = db().getFirstSync<{ n: number }>(
-      "SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'",
+    return countOf(db(), "SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'");
+  },
+
+  async searchFragments(query, limit = 40) {
+    const d = db();
+    const match = buildFtsQuery(query);
+    if (match) {
+      try {
+        const rows = d.getAllSync<FragmentRow>(
+          `SELECT f.*, bm25(fragment_fts) AS rank FROM fragment_fts
+             JOIN fragments f ON f.id = fragment_fts.rowid
+            WHERE fragment_fts MATCH ? AND f.merged_into IS NULL
+            ORDER BY rank
+            LIMIT ?`,
+          [match, limit],
+        );
+        if (rows.length) return rows.map(toFragment);
+      } catch {
+        /* FTS 语法/扩展异常时退回 LIKE，不能让问答整条挂掉 */
+      }
+    }
+
+    const like = likeNeedle(query);
+    if (!like) return [];
+    const rows = d.getAllSync<FragmentRow>(
+      `SELECT * FROM fragments
+        WHERE merged_into IS NULL
+          AND (content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\')
+        ORDER BY created_at DESC LIMIT ?`,
+      [like, like, like, limit],
     );
-    return row?.n ?? 0;
+    return rows.map(toFragment);
+  },
+
+  async listFragmentsByTag(tag, limit = 50) {
+    const like = likeNeedle(tag);
+    if (!like) return [];
+    const rows = db().getAllSync<FragmentRow>(
+      `SELECT * FROM fragments
+        WHERE merged_into IS NULL AND tags LIKE ? ESCAPE '\\'
+        ORDER BY created_at DESC LIMIT ?`,
+      [like, limit],
+    );
+    return rows.map(toFragment);
+  },
+
+  async listTags() {
+    const rows = db().getAllSync<{ tags: string }>(
+      'SELECT tags FROM fragments WHERE merged_into IS NULL',
+    );
+    const map = new Map<string, { name: string; count: number }>();
+    for (const r of rows) {
+      for (const raw of parseTags(r.tags)) {
+        const key = normalizeTag(raw);
+        if (!key) continue;
+        const hit = map.get(key);
+        if (hit) hit.count += 1;
+        else map.set(key, { name: raw, count: 1 });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  },
+
+  async renameTag(from, to) {
+    const target = cleanTag(to);
+    if (!normalizeTag(target)) return { changed: 0 };
+    return rewriteTags((tag) => (sameTag(tag, from) ? target : tag));
+  },
+
+  async deleteTag(name) {
+    return rewriteTags((tag) => (sameTag(tag, name) ? null : tag));
+  },
+
+  async mergeTags(from, to) {
+    const target = cleanTag(to);
+    if (!normalizeTag(target) || !from.length) return { changed: 0 };
+    const set = new Set(from.map(normalizeTag).filter(Boolean));
+    return rewriteTags((tag) => (set.has(normalizeTag(tag)) ? target : tag));
+  },
+
+  async rebuildSearchIndex() {
+    const indexed = rebuildIndex(db());
+    return { indexed };
   },
 
   async insertTodo(input) {
@@ -570,7 +597,7 @@ export const repo: Repo = {
   },
 
   async upsertNote(input) {
-    // period 为空的（主题总结之类）没有「同一周期」的概念，直接新增
+    // period 为空的没有「同一周期」的概念，直接新增
     if (input.period) {
       const hit = db().getFirstSync<{ id: number }>(
         'SELECT id FROM notes WHERE type = ? AND period = ? ORDER BY created_at DESC LIMIT 1',
@@ -612,38 +639,68 @@ export const repo: Repo = {
     db().runSync('DELETE FROM notes WHERE id = ?', [id]);
   },
 
-  async insertAskLog(input) {
+  async saveOrganizeSession(input) {
+    const now = Date.now();
     const res = db().runSync(
-      'INSERT INTO ask_logs (scope, question, answer, reasoning, cited_ids, web_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      `INSERT INTO organize_sessions
+         (scope, pending_ids, cursor, plan_json, context_summary, finished, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         input.scope,
-        input.question,
-        input.answer,
-        input.reasoning,
-        JSON.stringify(input.citedIds),
-        JSON.stringify(input.web),
-        Date.now(),
+        JSON.stringify(input.pendingIds),
+        input.cursor,
+        JSON.stringify(input.plan),
+        input.contextSummary,
+        input.finished ? 1 : 0,
+        now,
+        now,
       ],
     );
     return Number(res.lastInsertRowId);
   },
 
-  async listAskLogs(scope, limit = 60) {
-    const rows = scope
-      ? db().getAllSync<AskRow>(
-          'SELECT * FROM ask_logs WHERE scope = ? ORDER BY created_at DESC LIMIT ?',
-          [scope, limit],
-        )
-      : db().getAllSync<AskRow>('SELECT * FROM ask_logs ORDER BY created_at DESC LIMIT ?', [limit]);
-    return rows.map(toAskLog);
+  async updateOrganizeSession(id, patch) {
+    const sets: string[] = [];
+    const params: (string | number)[] = [];
+    if (patch.cursor !== undefined) {
+      sets.push('cursor = ?');
+      params.push(patch.cursor);
+    }
+    if (patch.plan !== undefined) {
+      sets.push('plan_json = ?');
+      params.push(JSON.stringify(patch.plan));
+    }
+    if (patch.contextSummary !== undefined) {
+      sets.push('context_summary = ?');
+      params.push(patch.contextSummary);
+    }
+    if (patch.finished !== undefined) {
+      sets.push('finished = ?');
+      params.push(patch.finished ? 1 : 0);
+    }
+    if (!sets.length) return;
+    sets.push('updated_at = ?');
+    params.push(Date.now());
+    params.push(id);
+    db().runSync(`UPDATE organize_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
   },
 
-  async updateAskLogQuestion(id, question) {
-    db().runSync('UPDATE ask_logs SET question = ? WHERE id = ?', [question.trim(), id]);
+  async findUnfinishedOrganizeSession() {
+    const row = db().getFirstSync<SessionRow>(
+      'SELECT * FROM organize_sessions WHERE finished = 0 ORDER BY updated_at DESC LIMIT 1',
+    );
+    return row ? toSession(row) : null;
   },
 
-  async deleteAskLog(id) {
-    db().runSync('DELETE FROM ask_logs WHERE id = ?', [id]);
+  async finishOrganizeSession(id) {
+    db().runSync('UPDATE organize_sessions SET finished = 1, updated_at = ? WHERE id = ?', [
+      Date.now(),
+      id,
+    ]);
+  },
+
+  async deleteOrganizeSession(id) {
+    db().runSync('DELETE FROM organize_sessions WHERE id = ?', [id]);
   },
 
   async saveRun(input) {
@@ -671,16 +728,55 @@ export const repo: Repo = {
   },
 
   async stats() {
-    const total = db().getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments')?.n ?? 0;
-    const inbox =
-      db().getFirstSync<{ n: number }>("SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'")
-        ?.n ?? 0;
-    // 被合并掉的待办还在表里（只是隐藏了），不能算进「未完成」，
-    // 否则合并越多、首页那个数字越虚高
-    const todoOpen =
-      db().getFirstSync<{ n: number }>(
-        'SELECT COUNT(*) AS n FROM todos WHERE done = 0 AND merged_into IS NULL',
-      )?.n ?? 0;
-    return { total, inbox, todoOpen };
+    const d = db();
+    const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragments');
+    const inbox = countOf(d, "SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'");
+    // 被合并掉的待办还在表里（只是隐藏了），不能算进「未完成」
+    const todoOpen = countOf(
+      d,
+      'SELECT COUNT(*) AS n FROM todos WHERE done = 0 AND merged_into IS NULL',
+    );
+    const tags = await repo.listTags();
+    return { total, inbox, todoOpen, tags: tags.length };
   },
 };
+
+/**
+ * 标签改名/删除/合并的唯一实现。
+ *
+ * 标签不是实体表，而是 `fragments.tags` 里的字符串；所以只能逐条重写数组。
+ * `map` 返回 null 表示删掉这个标签。写完顺手重建这一条的 FTS 文本 ——
+ * 否则搜旧标签还能搜到，搜新标签搜不到。
+ */
+function rewriteTags(map: (tag: string) => string | null): { changed: number } {
+  const d = db();
+  const rows = d.getAllSync<FragmentRow>('SELECT * FROM fragments');
+  let changed = 0;
+
+  d.execSync('BEGIN');
+  try {
+    for (const row of rows) {
+      const before = parseTags(row.tags);
+      const after: string[] = [];
+      const seen = new Set<string>();
+      for (const tag of before) {
+        const next = map(tag);
+        if (!next) continue;
+        const name = cleanTag(next);
+        const key = normalizeTag(name);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        after.push(name);
+      }
+      if (before.length === after.length && before.every((t, i) => t === after[i])) continue;
+      d.runSync('UPDATE fragments SET tags = ? WHERE id = ?', [JSON.stringify(after), row.id]);
+      indexFragment(d, row.id, row.content, after, row.project);
+      changed++;
+    }
+    d.execSync('COMMIT');
+  } catch (e) {
+    d.execSync('ROLLBACK');
+    throw e;
+  }
+  return { changed };
+}

@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import type { Fragment, KnowledgeCard } from '../types';
+import type { Fragment, Todo } from '../types';
 import { dayKey, formatTime, weekdayCN } from '../util/date';
 
 export interface ExportFile {
@@ -21,28 +21,41 @@ function daySections(fragments: Fragment[]) {
     const lines = items.map((f) => {
       const text = f.content.replace(/\r?\n/g, ' ').trim();
       const tags = f.tags.map((t) => `#${t}`).join(' ');
-      const base = `- ${formatTime(f.createdAt)} ${text}`;
+      const merged = f.mergedInto !== null ? '（已合并）' : '';
+      const base = `- ${formatTime(f.createdAt)} ${text}${merged}`;
       return tags ? `${base} ${tags}` : base;
     });
     return { key, date: new Date(items[0].createdAt), body: lines.join('\n'), count: items.length };
   });
 }
 
+/** 标签索引：标签名 → 条数，按条数降序 */
+function tagIndex(fragments: Fragment[]) {
+  const counts = new Map<string, number>();
+  for (const f of fragments) {
+    for (const t of f.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 /**
- * 单文件、按天分节 + 知识库附录。
+ * 单文件、按天分节 + 待办清单 + 标签索引。
  * 刻意不写任何专有格式：换掉 App、丢进 Obsidian、直接 cat 都能读。
+ *
+ * v0.7 去掉了「知识库」附录（卡片已经不存在），换成标签索引 ——
+ * 导出的文件要能回答「我在哪些标签下记过东西」，而不是给一堆没有归属的段落。
  */
 /** 纯拼接，只被 exportMarkdown 调用，不对外暴露 */
-function buildMarkdown(fragments: Fragment[], cards: KnowledgeCard[] = []): ExportFile {
+function buildMarkdown(fragments: Fragment[], todos: Todo[] = []): ExportFile {
   const sections = daySections(fragments);
   const stamp = dayKey(Date.now());
-  const knowledgeCount = cards.length;
+  const tags = tagIndex(fragments);
 
   const head = [
     `# 碎片导出 · ${stamp}`,
     '',
     `共 ${fragments.length} 条碎片，覆盖 ${sections.length} 天` +
-      (knowledgeCount ? `；另有 ${knowledgeCount} 张知识卡。` : '。'),
+      (tags.length ? `，${tags.length} 个标签。` : '。'),
     '',
     '---',
     '',
@@ -54,54 +67,42 @@ function buildMarkdown(fragments: Fragment[], cards: KnowledgeCard[] = []): Expo
     .map((s) => `### ${s.key} ${weekdayCN(s.date)}\n\n${s.body}\n`)
     .join('\n');
 
-  const byTopic = new Map<string, KnowledgeCard[]>();
-  for (const c of cards) {
-    const list = byTopic.get(c.topic);
-    if (list) list.push(c);
-    else byTopic.set(c.topic, [c]);
-  }
+  const open = todos.filter((t) => !t.done);
+  const done = todos.filter((t) => t.done);
+  const todoBlock =
+    todos.length === 0
+      ? ''
+      : [
+          '',
+          '---',
+          '',
+          '## 待办',
+          '',
+          open.length
+            ? `### 未完成（${open.length}）\n\n${open
+                .map((t) => `- [ ] ${t.text}${t.dueAt ? ` · ${t.dueAt}` : ''}`)
+                .join('\n')}\n`
+            : '### 未完成\n\n（没有未完成的待办）\n',
+          done.length
+            ? `### 已完成（${done.length}）\n\n${done.map((t) => `- [x] ${t.text}`).join('\n')}\n`
+            : '',
+        ].join('\n');
 
-  const knowledge = knowledgeCount
-    ? [
-        '',
-        '---',
-        '',
-        '## 知识库',
-        '',
-        Array.from(byTopic.entries())
-          .map(([topic, list]) => {
-            const items = list
-              .map((c) => {
-                const gist = c.gist
-                  .split('\n')
-                  .filter(Boolean)
-                  .map((line) => (line.trim().startsWith('-') ? line.trim() : `- ${line.trim()}`))
-                  .join('\n');
-                const quote = c.body
-                  .split(/\n{2,}/)
-                  .map((para) => `> ${para.replace(/\r?\n/g, ' ').trim()}`)
-                  .join('\n>\n');
-                // 二级方向跟在标题后面：不额外加一级标题（那会让层级过深），
-                // 但导出后仍能看出这张卡属于哪个小方向
-                const heading = c.subtopic ? `${c.title}（${c.subtopic}）` : c.title;
-                return `#### ${heading}\n\n${gist}\n\n原文：\n\n${quote}\n`;
-              })
-              .join('\n');
-            return `### ${topic}\n\n${items}`;
-          })
-          .join('\n'),
-      ].join('\n')
+  const tagBlock = tags.length
+    ? ['', '---', '', '## 标签索引', '', ...tags.map(([name, n]) => `- #${name}（${n} 条）`)].join(
+        '\n',
+      )
     : '';
 
-  return { name: `fragments-${stamp}.md`, content: `${head}${body}${knowledge}` };
+  return { name: `fragments-${stamp}.md`, content: `${head}${body}${todoBlock}${tagBlock}` };
 }
 
 export async function exportMarkdown(
   fragments: Fragment[],
-  cards: KnowledgeCard[] = [],
+  todos: Todo[] = [],
 ): Promise<{ message: string }> {
-  if (!fragments.length && !cards.length) throw new Error('还没有内容可以导出');
-  const file = buildMarkdown(fragments, cards);
+  if (!fragments.length) throw new Error('还没有内容可以导出');
+  const file = buildMarkdown(fragments, todos);
 
   if (Platform.OS === 'web') {
     const doc = (globalThis as any).document;

@@ -14,7 +14,7 @@ export interface Fragment {
   project: string | null;
   /** 被合并到哪一条。为 null 表示没被合并 */
   mergedInto: number | null;
-  /** AI 判定的内容性质，未整理时为 null */
+  /** AI 判定的内容性质，未整理时为 null。v0.7 起不再写 knowledge，保留字段兼容旧数据 */
   nature: FragmentNature | null;
 }
 
@@ -35,7 +35,7 @@ export interface Todo {
 
 export interface Note {
   id: number;
-  /** daily = 今日小结 / daily/weekly/monthly = 周期总结 / theme = 按主题 */
+  /** daily / weekly / monthly；theme 只为兼容旧数据保留，v0.7 起不再生成 */
   type: 'daily' | 'weekly' | 'monthly' | 'theme';
   title: string | null;
   bodyMd: string;
@@ -48,146 +48,100 @@ export interface Note {
 export type DigestKind = 'daily' | 'weekly' | 'monthly';
 
 /**
- * 整理的两个入口：
- * - organize = 处理还没整理过的碎片
- * - refactor = 把碎片重新过一遍，结果与旧标签 / 旧知识卡逐项对照
+ * 整理范围：
+ * - inbox = 只处理还没整理过的碎片
+ * - all   = 把所有未合并的碎片重新过一遍（重新判标签、重新看待办）
  */
-export type OrganizeMode = 'organize' | 'refactor';
+export type OrganizeScope = 'inbox' | 'all';
 
 /**
- * 知识卡：从碎片里沉淀出的「可复用结论」。
- * gist 是 AI 写的索引（几条要点），body 是原文保真，两者职责不同不能互相替代。
+ * 整理的一批输出。v0.7 起**没有知识卡/主题** ——
+ * 模型只做四件事：打标签、抽待办、处理已有待办、合并重复碎片。
  */
-export interface KnowledgeCard {
-  id: number;
-  /** 归类主题，如「NAS 维护」。AI 应优先复用已有主题 */
-  topic: string;
-  /**
-   * 二级方向，如「NAS 维护」下的「换盘」。
-   *
-   * 主题不是独立实体，只是卡片上的字符串；所以两级都靠字段而不是外键。
-   * 这一列刻意可空 —— 大多数主题下只有两三张卡，硬分小方向反而更碎。
-   */
-  subtopic: string | null;
-  /** 一句话结论，8-15 字 */
-  title: string;
-  /** AI 提炼的 2-4 条要点，每行以 - 开头 */
-  gist: string;
-  /** 原始碎片原文，逐字保留，多条用空行分隔 */
-  body: string;
-  sourceIds: number[];
-  createdAt: number;
-  archived: boolean;
-}
-
-/**
- * AI 一次调用返回的结果，字段顺序与契约一致。
- *
- * 这里**没有**小结 —— 整理只处理碎片本身。小结走独立的周期总结面板
- * （`components/SummarySheet.tsx`），因为一条小结要覆盖整个周期，
- * 而整理一次只看 60 条、可能只是这个周期的一部分，在这里顺手写必然写残。
- * 整理页只负责列出「哪些周期还没有小结」。
- */
-export interface OrganizeResult {
+export interface BatchResult {
   tags: TagSuggestion[];
   todos: TodoSuggestion[];
   merge: MergeSuggestion[];
-  knowledge: KnowledgeSuggestion[];
   /** 建议把已有待办标记为完成（碎片里说了「已经做了」） */
   todo_done: TodoDoneSuggestion[];
-  /** 建议把本轮碎片补充进已有的知识卡，而不是新建一张同题的 */
-  card_update: CardUpdateSuggestion[];
-  /** 建议归档的已有知识卡 —— 归档可恢复，不是删除 */
-  archive_cards: ArchiveCardSuggestion[];
   /** 建议删掉的已有待办（过时、重复、不该存在） */
   drop_todos: DropTodoSuggestion[];
   /** 建议把几条重复的已有待办并成一条（被合并的隐藏，可撤回） */
   merge_todos: MergeTodoSuggestion[];
-  /** 建议把几个方向相近的已有主题并成一个 */
-  merge_topics: MergeTopicSuggestion[];
+  /** 这一批做了什么的一句话摘要，拼进下一轮上下文 */
+  batch_summary: string;
+  /** 被代码校验丢掉的条数。界面要如实报，不能静默消失 */
+  rejected: number;
+}
+
+/** 多轮循环累积出来的完整计划。确认页和应用都读它 */
+export interface OrganizePlan {
+  tags: TagSuggestion[];
+  todos: TodoSuggestion[];
+  merge: MergeSuggestion[];
+  todo_done: TodoDoneSuggestion[];
+  drop_todos: DropTodoSuggestion[];
+  merge_todos: MergeTodoSuggestion[];
+  /** 每批摘要，按顺序累积；给下一轮做上下文 */
+  batchSummaries: string[];
+  /** 真正交给模型处理过的碎片 id */
+  processedIds: number[];
+  /** 失败后被用户跳过的碎片 id，不标记整理状态 */
+  skippedIds: number[];
+  /** 跑了几批 */
+  rounds: number;
+  /** 被代码校验丢掉的条目总数（id 不在本批、日期非法等） */
+  rejected: number;
 }
 
 /**
- * 合并方向相近的主题。
- *
- * 这是「越整理越碎」的治本项：主题只是卡片上的字符串，
- * 模型新建一个主题的成本为零，于是「工具」「资讯」各占一个，
- * 而它们其实都是「AI」。这条建议把这类碎片收回去。
- *
- * 不设「改名」—— 改名是纯用户意图，由知识库的主题管理入口直接做。
+ * 一次整理会话。每批结束落库，App 被杀/用户返回后能续跑。
+ * `pendingIds` 是开始时的快照 —— 不每轮重新查，避免边跑边记导致游标漂移。
  */
-export interface MergeTopicSuggestion {
-  /** 被并掉的主题名，至少两个 */
-  from: string[];
-  /** 合并后的主题名。可以是 from 之一，也可以是新名字 */
-  to: string;
-  reason: string | null;
+export interface OrganizeSession {
+  id: number;
+  scope: OrganizeScope;
+  pendingIds: number[];
+  cursor: number;
+  plan: OrganizePlan;
+  contextSummary: string;
+  finished: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 标签及其使用次数，标签页和整理 prompt 都用它 */
+export interface TagStat {
+  name: string;
+  count: number;
 }
 
 /**
- * 合并重复待办。
- * 保留 `keep_id`，其余被打上 merged_into 标记不再显示；
- * `text` 有值时用合并后的文案替换保留那条 —— 两条各说了半句的情况很常见。
+ * 确认页里的一组标签。
+ * 按标签名分组而不是按碎片列 —— 200 条标签如果逐条列，用户根本审不过来。
  */
-export interface MergeTodoSuggestion {
-  keep_id: number;
-  drop_ids: number[];
-  /** 合并后更完整的文案，null 表示沿用保留那条的原文 */
-  text: string | null;
-  reason: string | null;
+export interface TagGroup {
+  label: string;
+  /** 已有标签表里没有它 = 这次新建的 */
+  isNew: boolean;
+  /** 和已有标签高度相似时给个提示，避免又裂出一个近义词 */
+  similarTo: string | null;
+  fragmentIds: number[];
 }
 
-/**
- * 标记已有待办为完成。
- * 这是一条**破坏性较弱但仍需确认**的建议：误标会让用户漏掉事情，
- * 所以只在碎片明确写了「已经做完」时才允许出现。
- */
-export interface TodoDoneSuggestion {
-  todo_id: number;
-  reason: string | null;
-}
-
-/**
- * 把本轮碎片并入已有知识卡。
- * 只做追加：原文按顺序接在后面，绝不覆盖卡片已有的正文。
- */
-export interface CardUpdateSuggestion {
-  card_id: number;
-  add_source_ids: number[];
-  /** 补进去之后更贴切的标题，null 表示沿用原标题 */
-  title: string | null;
-  /** 补进去之后更新的要点，null 表示沿用原要点 */
-  gist: string | null;
-  reason: string | null;
-}
-
-/**
- * 建议归档的已有知识卡。
- * 归档 ≠ 删除：卡片只是从知识库里折叠起来，随时可以恢复。
- * 重构场景下，被新卡完整取代的旧卡走这条。
- */
-export interface ArchiveCardSuggestion {
-  card_id: number;
-  reason: string | null;
-}
-
-/**
- * 建议删掉的已有待办：过时了、重复了、或者本来就是随手记的不是真事。
- * 这是真删除，所以界面上默认不勾选。
- */
-export interface DropTodoSuggestion {
-  todo_id: number;
-  reason: string | null;
-}
-
-export interface KnowledgeSuggestion {
-  topic: string;
-  /** 二级方向，可空。只在同一个主题下确实有多种细分时才填 */
-  subtopic: string | null;
-  title: string;
-  gist: string;
-  body: string;
-  source_ids: number[];
+/** 整理完成后交给确认页的汇总 */
+export interface OrganizeReview {
+  tags: TagGroup[];
+  todos: TodoSuggestion[];
+  merge: MergeSuggestion[];
+  todo_done: TodoDoneSuggestion[];
+  drop_todos: DropTodoSuggestion[];
+  merge_todos: MergeTodoSuggestion[];
+  newTagCount: number;
+  processedCount: number;
+  skippedCount: number;
+  rounds: number;
+  rejected: number;
 }
 
 export interface TagSuggestion {
@@ -205,6 +159,38 @@ export interface TodoSuggestion {
 export interface MergeSuggestion {
   keep_id: number;
   drop_ids: number[];
+  reason: string | null;
+}
+
+/**
+ * 标记已有待办为完成。
+ * 这是一条**破坏性较弱但仍需确认**的建议：误标会让用户漏掉事情，
+ * 所以只在碎片明确写了「已经做完」时才允许出现。
+ */
+export interface TodoDoneSuggestion {
+  todo_id: number;
+  reason: string | null;
+}
+
+/**
+ * 建议删掉的已有待办：过时了、重复了、或者本来就是随手记的不是真事。
+ * 这是真删除，所以界面上默认不勾选。
+ */
+export interface DropTodoSuggestion {
+  todo_id: number;
+  reason: string | null;
+}
+
+/**
+ * 合并重复待办。
+ * 保留 `keep_id`，其余被打上 merged_into 标记不再显示；
+ * `text` 有值时用合并后的文案替换保留那条 —— 两条各说了半句的情况很常见。
+ */
+export interface MergeTodoSuggestion {
+  keep_id: number;
+  drop_ids: number[];
+  /** 合并后更完整的文案，null 表示沿用保留那条的原文 */
+  text: string | null;
   reason: string | null;
 }
 
@@ -227,9 +213,6 @@ export interface AiConfig {
 /**
  * 联网搜索命中的一条。字段取自 DeepSeek `/v1/tools/search`，
  * 只留问答用得到的三个：标题、链接、摘要。
- *
- * 摘要官方说是 600–800 字、本来就是给模型读的，所以直接塞进上下文，
- * 不用再 Fetch 一次正文（Fetch 另计费，且很多站点取不到）。
  */
 export interface WebHit {
   title: string;
@@ -239,58 +222,36 @@ export interface WebHit {
   score: number;
 }
 
-/**
- * 一条问答记录。
- *
- * 单独存表，**不混进知识卡**：问答是「提问的痕迹」，卡片是「沉淀的结论」，
- * 混在一起会让知识库的卡片数虚高，也会让检索捞出一堆一次性对话。
- * 想让它进上下文，只能由用户手动勾选。
- */
-export interface AskLog {
-  id: number;
-  /** 'all' 或主题名。用来取「同一主题最近的几轮」 */
-  scope: string;
+/** 问答会话里的一轮。sourceIds 只用于把上一轮引用过的碎片带进下一轮 */
+export interface QaTurn {
   question: string;
   answer: string;
-  /** 思维链原文。只用于回看，永远不进上下文 */
-  reasoning: string;
-  /** 回答引用到的卡片 id */
-  citedIds: number[];
-  /** 这一轮搜到的网络资料，翻旧记录时还能看见来源 */
-  web: WebHit[];
-  createdAt: number;
+  sourceIds: number[];
 }
 
-/**
- * 问答里模型提出的「操作提案」。
- *
- * 模型只出建议，界面逐条勾选后才写库 —— 和整理页同一套授权原则。
- * 这里没有 delete_card：知识卡只能归档，归档可恢复，删了就真没了。
- */
-export type AskAction =
-  | { kind: 'merge_topics'; from: string[]; to: string; reason: string | null }
-  | { kind: 'rename_topic'; from: string; to: string; reason: string | null }
-  | { kind: 'archive_cards'; ids: number[]; reason: string | null }
-  | {
-      kind: 'update_card';
-      id: number;
-      /**
-       * 只填要改的字段，缺省 = 不动。
-       * `subtopic` 显式给 null 表示「清掉小方向」—— 这一点和「不传」必须能区分开，
-       * 否则模型永远没法把一张卡从小方向里拿出来。
-       */
-      topic?: string;
-      subtopic?: string | null;
-      title?: string;
-      gist?: string;
-      /**
-       * 重写卡片正文。以前只能改主题/方向/标题/要点，
-       * 用户说「把这张卡里那条结论改掉」时模型根本无处可写，
-       * 只能回一句做不到 —— 真机上反馈的「让它改却没改」有一半是这个原因。
-       */
-      body?: string;
-      reason: string | null;
-    };
+/** 一次问答的结果 */
+export interface QaOutcome {
+  /** Markdown 回答 */
+  answer: string;
+  /** 思维链，仅展示 */
+  reasoning: string;
+  /** 本轮实际装进上下文的碎片 */
+  fragments: Fragment[];
+  /** 本轮引用到的碎片（回答里出现 [F12] 的那些） */
+  cited: Fragment[];
+  /** 本轮装进上下文的小结 */
+  notes: Note[];
+  /** 未完成待办 + 最近完成待办 */
+  todos: Todo[];
+  /** 本轮网络资料，没联网就是空数组 */
+  web: WebHit[];
+  /** 回答被输出上限截断 */
+  truncated: boolean;
+  /** 联网搜失败的原因；没开联网或搜成功就是 null */
+  webError: string | null;
+  /** 实际读了几条碎片 */
+  scanned: number;
+}
 
 /**
  * 默认模型是 `deepseek-flash`（DeepSeek-V4.1-Flash）。
@@ -311,4 +272,3 @@ export const RETIRED_MODELS: Record<string, string> = {
   'deepseek-chat': 'deepseek-flash',
   'deepseek-reasoner': 'deepseek-flash',
 };
-

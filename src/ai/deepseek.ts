@@ -1,377 +1,158 @@
-import type {
-  AiConfig,
-  ArchiveCardSuggestion,
-  CardUpdateSuggestion,
-  DropTodoSuggestion,
-  Fragment,
-  KnowledgeCard,
-  KnowledgeSuggestion,
-  MergeSuggestion,
-  MergeTodoSuggestion,
-  MergeTopicSuggestion,
-  OrganizeResult,
-  TagSuggestion,
-  Todo,
-  TodoDoneSuggestion,
-  TodoSuggestion,
-  ReasoningEffort,
-} from '../types';
+/**
+ * 整理的一批：把一批碎片交给模型，收敛成 `BatchResult`。
+ *
+ * v0.7 起这里**只做一件事**：一次一整批。循环、游标、断点续跑、失败拆分
+ * 全在 `db/organizeLoop.ts` 里，本文件不碰数据库也不持有状态 ——
+ * 上一版把「第几批」「上一次的原始输出」混进这里，导致谁也说不清一次请求的边界。
+ *
+ * 业务校验（id 属于本批、日期合法、待办互斥）**不在这里**，
+ * 全部在 `util/organizePlan.ts` 的 `mergeBatchResult` 里做一份。
+ * 两处各校验一遍的历史教训是：判据一歪，界面说的和写库的就对不上。
+ */
+import type { AiConfig, BatchResult, Fragment, ReasoningEffort, TagStat, Todo } from '../types';
 import { AiError, parseJsonLoose, requestChat, type ChatMessage, type ChatProgress } from './chat';
-import { SYSTEM_PROMPT, buildRefineContent, buildUserContent } from './prompt';
+import { SYSTEM_PROMPT, buildUserContent } from './prompt';
 
-/** 日期格式 YYYY-MM-DD */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+/** 流式回调，传的是**累积全文**，界面直接覆盖显示 */
+export type BatchProgress = ChatProgress;
 
-/** 收敛 `todo_done` / `card_update` 时需要知道哪些 id 真实存在 */
-export interface NormalizeContext {
-  /** 允许被标记为完成的待办 id */
-  todoIds?: number[];
-  /** 允许被补充内容的知识卡 id */
-  cardIds?: number[];
-  /** 允许被合并的已有主题名 */
-  topicNames?: string[];
-}
+const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : []);
+const obj = (v: unknown): Record<string, unknown> =>
+  v && typeof v === 'object' ? (v as Record<string, unknown>) : {};
+const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+const num = (v: unknown): number => Number(v);
 
 /**
- * 把模型的自由输出收敛成可信结构：ID 必须存在于本次输入，
- * 日期必须合法，去重合并不得指向自己。任何不合规项直接丢弃。
+ * 只收敛「形状」，不做业务判断：把 unknown 摊平成 BatchResult 的字段类型。
+ * 非法条目照样往下传，由 `mergeBatchResult` 统一计入 `rejected` ——
+ * 在这里悄悄丢掉，用户就永远不知道模型给了什么。
  */
-export function normalizeResult(
-  raw: unknown,
-  fragments: Fragment[],
-  context: NormalizeContext = {},
-): OrganizeResult {
-  const valid = new Set(fragments.map((f) => f.id));
-  const obj = (raw ?? {}) as Record<string, unknown>;
+export function coerceBatch(raw: unknown): BatchResult {
+  const root = obj(raw);
 
-  const tagMap = new Map<number, TagSuggestion>();
-  for (const item of Array.isArray(obj.tags) ? obj.tags : []) {
-    const t = item as Record<string, unknown>;
-    const id = Number(t?.id);
-    if (!Number.isFinite(id) || !valid.has(id)) continue;
-    const labels = (Array.isArray(t?.labels) ? t.labels : [])
-      .filter((x): x is string => typeof x === 'string')
-      .map((x) => x.trim().replace(/^#/, ''))
-      .filter(Boolean)
-      .slice(0, 4);
-    const project = typeof t?.project === 'string' && t.project.trim() ? t.project.trim() : null;
-    tagMap.set(id, { id, labels, project });
-  }
+  const tags = arr(root.tags).map((item) => {
+    const t = obj(item);
+    return {
+      id: num(t.id),
+      labels: arr(t.labels).filter((x): x is string => typeof x === 'string'),
+      project: text(t.project) || null,
+    };
+  });
 
-  const seenTodo = new Set<string>();
-  const todos: TodoSuggestion[] = [];
-  for (const item of Array.isArray(obj.todos) ? obj.todos : []) {
-    const t = item as Record<string, unknown>;
-    const rawText = typeof t?.text === 'string' ? t.text.trim() : '';
-    if (!rawText) continue;
-    // 超长不整条丢弃 —— 丢掉等于让 AI 的产出凭空消失，截断保留更有用
-    const text = rawText.length > 100 ? `${rawText.slice(0, 98)}…` : rawText;
-    if (seenTodo.has(text)) continue;
-    seenTodo.add(text);
-    const due = typeof t?.due === 'string' && DATE_RE.test(t.due.trim()) ? t.due.trim() : null;
-    const rawId = Number(t?.id);
-    const id = Number.isFinite(rawId) && valid.has(rawId) ? rawId : null;
-    todos.push({ text, due, id });
-  }
+  const todos = arr(root.todos).map((item) => {
+    const t = obj(item);
+    return {
+      text: text(t.text),
+      due: text(t.due) || null,
+      id: Number.isFinite(num(t.id)) ? num(t.id) : null,
+    };
+  });
 
-  const merges: MergeSuggestion[] = [];
-  for (const item of Array.isArray(obj.merge) ? obj.merge : []) {
-    const m = item as Record<string, unknown>;
-    const keep = Number(m?.keep_id);
-    if (!Number.isFinite(keep) || !valid.has(keep)) continue;
-    const drops = (Array.isArray(m?.drop_ids) ? m.drop_ids : [])
-      .map(Number)
-      .filter((n) => Number.isFinite(n) && valid.has(n) && n !== keep);
-    if (!drops.length) continue;
-    merges.push({
-      keep_id: keep,
-      drop_ids: Array.from(new Set(drops)),
-      reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
-    });
-  }
+  const merge = arr(root.merge).map((item) => {
+    const m = obj(item);
+    return {
+      keep_id: num(m.keep_id),
+      drop_ids: arr(m.drop_ids).map(num),
+      reason: text(m.reason) || null,
+    };
+  });
 
-  const byId = new Map(fragments.map((f) => [f.id, f]));
-  const knowledge: KnowledgeSuggestion[] = [];
-  for (const item of Array.isArray(obj.knowledge) ? obj.knowledge : []) {
-    const k = item as Record<string, unknown>;
-    const title = typeof k?.title === 'string' ? k.title.trim() : '';
-    if (!title) continue;
-    const topicRaw = typeof k?.topic === 'string' ? k.topic.trim() : '';
-    const topic = (topicRaw || '未归类').slice(0, 20);
-    const subRaw = typeof k?.subtopic === 'string' ? k.subtopic.trim() : '';
-    // 和主题同名的小方向没有任何区分作用，当作没填
-    const subtopic = subRaw && subRaw !== topic ? subRaw.slice(0, 20) : null;
-    const gist = typeof k?.gist === 'string' ? k.gist.trim() : '';
-    const sourceIds = Array.from(
-      new Set(
-        (Array.isArray(k?.source_ids) ? k.source_ids : [])
-          .map(Number)
-          .filter((n) => Number.isFinite(n) && valid.has(n)),
-      ),
-    );
+  const todoDone = arr(root.todo_done).map((item) => {
+    const d = obj(item);
+    return { todo_id: num(d.todo_id), reason: text(d.reason) || null };
+  });
 
-    // body 一律用碎片原文拼接，不用模型给的内容——
-    // "原文保真"这条承诺必须由代码保证，不能寄希望于模型不说谎。
-    const verbatim = sourceIds
-      .map((id) => byId.get(id)?.content.trim())
-      .filter(Boolean)
-      .join('\n\n');
-    const body = verbatim || (typeof k?.body === 'string' ? k.body.trim() : '');
-    if (!body) continue;
+  const dropTodos = arr(root.drop_todos).map((item) => {
+    const d = obj(item);
+    return { todo_id: num(d.todo_id), reason: text(d.reason) || null };
+  });
 
-    knowledge.push({ topic, subtopic, title: title.slice(0, 60), gist, body, source_ids: sourceIds });
-  }
-
-  // 标记已有待办完成：只认「真实存在过的待办 id」，并且同一条只处理一次
-  const validTodoIds = new Set(context.todoIds ?? []);
-  const todoDone: TodoDoneSuggestion[] = [];
-  const seenDone = new Set<number>();
-  for (const item of Array.isArray(obj.todo_done) ? obj.todo_done : []) {
-    const d = item as Record<string, unknown>;
-    const todoId = Number(d?.todo_id);
-    if (!Number.isFinite(todoId) || !validTodoIds.has(todoId) || seenDone.has(todoId)) continue;
-    seenDone.add(todoId);
-    todoDone.push({
-      todo_id: todoId,
-      reason: typeof d?.reason === 'string' && d.reason.trim() ? d.reason.trim() : null,
-    });
-  }
-
-  // 补充已有知识卡：必须指向真实卡片，且至少要带上一条本轮碎片，否则这条建议没有意义
-  const validCardIds = new Set(context.cardIds ?? []);
-  const cardUpdate: CardUpdateSuggestion[] = [];
-  const seenCard = new Set<number>();
-  for (const item of Array.isArray(obj.card_update) ? obj.card_update : []) {
-    const c = item as Record<string, unknown>;
-    const cardId = Number(c?.card_id);
-    if (!Number.isFinite(cardId) || !validCardIds.has(cardId) || seenCard.has(cardId)) continue;
-    const addIds = Array.from(
-      new Set(
-        (Array.isArray(c?.add_source_ids) ? c.add_source_ids : [])
-          .map(Number)
-          .filter((n) => Number.isFinite(n) && valid.has(n)),
-      ),
-    );
-    if (!addIds.length) continue;
-    seenCard.add(cardId);
-    cardUpdate.push({
-      card_id: cardId,
-      add_source_ids: addIds,
-      title: typeof c?.title === 'string' && c.title.trim() ? c.title.trim().slice(0, 60) : null,
-      gist: typeof c?.gist === 'string' && c.gist.trim() ? c.gist.trim() : null,
-      reason: typeof c?.reason === 'string' && c.reason.trim() ? c.reason.trim() : null,
-    });
-  }
-
-  // 建议归档的旧卡：必须真实存在，且不能和「补充到这张卡」自相矛盾
-  const archiveCards: ArchiveCardSuggestion[] = [];
-  const seenArchive = new Set<number>();
-  for (const item of Array.isArray(obj.archive_cards) ? obj.archive_cards : []) {
-    const a = item as Record<string, unknown>;
-    const cardId = Number(a?.card_id);
-    if (!Number.isFinite(cardId) || !validCardIds.has(cardId) || seenArchive.has(cardId)) continue;
-    // 同一张卡又要补充又要归档，说明模型自己没想清楚，这条归档建议丢掉
-    if (seenCard.has(cardId)) continue;
-    seenArchive.add(cardId);
-    archiveCards.push({
-      card_id: cardId,
-      reason: typeof a?.reason === 'string' && a.reason.trim() ? a.reason.trim() : null,
-    });
-  }
-
-  // 建议删掉的待办
-  const dropTodos: DropTodoSuggestion[] = [];
-  const seenDrop = new Set<number>();
-  for (const item of Array.isArray(obj.drop_todos) ? obj.drop_todos : []) {
-    const d = item as Record<string, unknown>;
-    const todoId = Number(d?.todo_id);
-    if (!Number.isFinite(todoId) || !validTodoIds.has(todoId) || seenDrop.has(todoId)) continue;
-    // 又要标完成又要删，同一条待办不能既生又死
-    if (seenDone.has(todoId)) continue;
-    seenDrop.add(todoId);
-    dropTodos.push({
-      todo_id: todoId,
-      reason: typeof d?.reason === 'string' && d.reason.trim() ? d.reason.trim() : null,
-    });
-  }
-
-  // 建议合并的重复待办
-  const mergeTodos: MergeTodoSuggestion[] = [];
-  const mergedAway = new Set<number>();
-  for (const item of Array.isArray(obj.merge_todos) ? obj.merge_todos : []) {
-    const m = item as Record<string, unknown>;
-    const keepId = Number(m?.keep_id);
-    if (!Number.isFinite(keepId) || !validTodoIds.has(keepId)) continue;
-    if (seenDone.has(keepId) || seenDrop.has(keepId) || mergedAway.has(keepId)) continue;
-
-    const drops: number[] = [];
-    for (const raw of Array.isArray(m?.drop_ids) ? m.drop_ids : []) {
-      const id = Number(raw);
-      // 被合并的必须是真实存在、且没被别处用掉的待办；自己不能合并自己
-      if (!Number.isFinite(id) || id === keepId) continue;
-      if (!validTodoIds.has(id) || seenDone.has(id) || seenDrop.has(id) || mergedAway.has(id)) continue;
-      if (drops.includes(id)) continue;
-      drops.push(id);
-    }
-    if (!drops.length) continue;
-
-    drops.forEach((id) => mergedAway.add(id));
-    mergeTodos.push({
-      keep_id: keepId,
-      drop_ids: drops,
-      text: typeof m?.text === 'string' && m.text.trim() ? m.text.trim().slice(0, 60) : null,
-      reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
-    });
-  }
-
-  // 建议合并的主题：from 必须真实存在、至少两个，且一个主题只能被一条建议吃掉
-  const validTopics = new Set(context.topicNames ?? []);
-  const mergeTopics: MergeTopicSuggestion[] = [];
-  const consumedTopics = new Set<string>();
-  for (const item of Array.isArray(obj.merge_topics) ? obj.merge_topics : []) {
-    const m = item as Record<string, unknown>;
-    const from = Array.from(
-      new Set(
-        (Array.isArray(m?.from) ? m.from : [])
-          .filter((x): x is string => typeof x === 'string')
-          .map((x) => x.trim())
-          .filter((x) => validTopics.has(x)),
-      ),
-    );
-    if (from.length < 2) continue;
-    // 两条建议抢同一个主题时，后面那条丢掉 —— 否则先并完再并，结果不可预测
-    if (from.some((t) => consumedTopics.has(t))) continue;
-    const toRaw = typeof m?.to === 'string' ? m.to.trim() : '';
-    if (!toRaw) continue;
-    const to = toRaw.slice(0, 20);
-    from.forEach((t) => consumedTopics.add(t));
-    mergeTopics.push({
-      from,
-      to,
-      reason: typeof m?.reason === 'string' && m.reason.trim() ? m.reason.trim() : null,
-    });
-  }
+  const mergeTodos = arr(root.merge_todos).map((item) => {
+    const m = obj(item);
+    return {
+      keep_id: num(m.keep_id),
+      drop_ids: arr(m.drop_ids).map(num),
+      text: text(m.text) || null,
+      reason: text(m.reason) || null,
+    };
+  });
 
   return {
-    tags: Array.from(tagMap.values()),
+    tags,
     todos,
-    merge: merges,
-    knowledge,
+    merge,
     todo_done: todoDone,
-    card_update: cardUpdate,
-    archive_cards: archiveCards,
     drop_todos: dropTodos,
     merge_todos: mergeTodos,
-    merge_topics: mergeTopics,
+    batch_summary: text(root.batch_summary),
+    rejected: 0,
   };
 }
 
-/** 流式过程中的增量回调，传的都是**累积全文**，UI 直接覆盖显示 */
-export type OrganizeProgress = ChatProgress;
-
-export interface OrganizeOptions {
-  fragments: Fragment[];
-  config: AiConfig;
-  /** 已有主题列表，传进去让模型优先复用，避免长出一堆同义主题 */
-  topics?: string[];
-  /** 已有知识卡，用于「把新碎片补进老卡」 */
-  cards?: KnowledgeCard[];
-  /** 已有待办，用于「标记已完成」；内部只取未完成的 */
-  todos?: Todo[];
-  /** 上一轮模型的原始输出。多轮追问时原样回传，模型才知道自己上次说了什么 */
-  previousRaw?: string;
-  /** 这一轮用户的追问。为空表示首轮 */
-  instruction?: string;
-  /** organize = 整理未读；refactor = 把已整理过的重新过一遍并和旧结果对照 */
-  mode?: 'organize' | 'refactor';
-  /** 流式进度。只用于界面展示，不参与任何解析 */
-  onProgress?: (patch: OrganizeProgress) => void;
-}
-
-export interface OrganizeOutcome {
-  result: OrganizeResult;
-  /** 模型原始输出（正文），留着给下一轮追问回传 */
-  raw: string;
-  /** 思维链，仅用于展示。模型没开思考时为空串 */
-  reasoning: string;
-}
-
 /**
- * 这一轮该用多强的思考。
+ * 这一批该用多强的思考。
  *
  * 官方 `high` 不只是「想久一点」——它在 prompt 最前面插了一段
- * 「不许走捷径，穷举所有边界情况和对抗性场景，写出每个中间步骤和每个被否决的假设」。
- * 对「给十几条笔记打标签、抽待办」这种机械抽取，判断标准已经全部写在 system prompt 里，
- * 让模型再按「绝对最大努力」重推一遍纯属浪费：实测能把思考链从 3K 拉到 15K，
- * 而额度是思考链和正文共用的，这正是当初「思考到一半就停住」的推手之一。
+ * 「穷举所有边界情况和对抗性场景，写出每个中间步骤」。对「给四十条笔记打标签」
+ * 这种机械抽取纯属浪费：思考链能从 3K 涨到 15K，而额度是思考链和正文共用的，
+ * 这正是当初「思考到一半就停住」的推手之一。
  *
- * 所以小额首轮降到 `low`。注意 `low` 不等于「不许思考」——
- * 官方 low 的实现是**不加任何前缀**，模型按自己的节奏思考，只是不被人为加压。
- *
- * 三种情况仍然给 `high`：
- * - **重构**：要和旧结果逐项比对，判断「哪里变了」，这是真判断任务
- * - **追问**：用户在纠错，模型得先理解「上一轮为什么不对」
- * - **碎片多**：跨条目归并（merge_topics / drop_todos）需要把整批放在一起看
+ * 所以小额批次给 `low`（官方 low 的实现是**不加任何前缀**，模型按自己节奏思考）。
+ * v0.6 里「重构模式一律 high」那条规则在这里取消了：那时是要和旧知识卡逐项比对，
+ * 现在没有卡片，旧标签已经直接列在 prompt 里，比对成本降下来了。
  */
 const SMALL_BATCH = 15;
 
-function pickEffort(
-  count: number,
-  mode: 'organize' | 'refactor',
-  refining: boolean,
-): ReasoningEffort {
-  if (refining || mode === 'refactor') return 'high';
+function pickEffort(count: number): ReasoningEffort {
   return count <= SMALL_BATCH ? 'low' : 'high';
 }
 
-export async function organize(options: OrganizeOptions): Promise<OrganizeOutcome> {
-  const {
-    fragments,
-    config,
-    topics = [],
-    cards = [],
-    todos = [],
-    previousRaw,
-    instruction,
-    mode = 'organize',
-    onProgress,
-  } = options;
+export interface BatchOptions {
+  fragments: Fragment[];
+  config: AiConfig;
+  existingTags: TagStat[];
+  todos: Todo[];
+  plannedTodos: string[];
+  summaries: string;
+  round: number;
+  total: number;
+  refactor: boolean;
+  onProgress?: (patch: BatchProgress) => void;
+}
+
+export interface BatchOutcome {
+  batch: BatchResult;
+  /** 模型原始输出，排查问题时留着看 */
+  raw: string;
+  /** 思维链，只用于展示 */
+  reasoning: string;
+  /** 实际用的思考强度，失败重试时要原样复用 */
+  effort: ReasoningEffort;
+}
+
+export async function organizeBatch(options: BatchOptions): Promise<BatchOutcome> {
+  const { fragments, config, onProgress, ...context } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
-  if (!fragments.length) throw new AiError('format', '没有待整理的碎片');
+  if (!fragments.length) throw new AiError('format', '这一批没有碎片');
 
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: buildUserContent({ fragments, topics, cards, todos, mode }) },
+    { role: 'user', content: buildUserContent({ fragments, ...context }) },
   ];
-  if (previousRaw) messages.push({ role: 'assistant', content: previousRaw });
-  if (instruction) messages.push({ role: 'user', content: buildRefineContent(instruction) });
 
-  // 九类结果的输出必须走 json_object，追问回传的 raw 也是 JSON，靠它保证格式稳定
-  const outcome = await requestChat(config, messages, onProgress, {
-    json: true,
-    effort: pickEffort(fragments.length, mode, !!instruction),
-  });
+  const effort = pickEffort(fragments.length);
+  const outcome = await requestChat(config, messages, onProgress, { json: true, effort });
 
-  // 完全空的情况请求层已经按 finish_reason 报过了，这里只是兜底
-  if (!outcome.content.trim()) throw new AiError('format', '模型没有返回内容');
-
-  // 正文非空、但撞了额度上限：JSON 必然是残的。
-  // 不先拦下来的话，parseJsonLoose 会报「不是合法 JSON，再试一次通常就好了」——
-  // 而这种情况重试必然同样失败（同样的输入、同样的额度），那句提示纯属误导。
+  // 正文非空但撞了额度：JSON 必然是残的。不先拦下来的话，
+  // parseJsonLoose 会报「不是合法 JSON，再试一次」—— 而同样的输入重试必然同样失败。
+  // 抛 `truncated` 让循环层把这批对半拆开重试（SPEC 0.3 第 8 条）。
   if (outcome.finishReason === 'length') {
     throw new AiError(
       'truncated',
-      `整理结果被截断了（只收到 ${outcome.content.length} 字，JSON 不完整）。` +
-        '这一批的内容量超过了模型的单次输出上限，把碎片分两批再试，' +
-        '或者到设置里把「思考强度」调低。',
+      `这一批的输出被截断了（${fragments.length} 条碎片）。会把这批拆小再试。`,
     );
   }
 
-  const result = normalizeResult(parseJsonLoose(outcome.content), fragments, {
-    todoIds: todos.filter((t) => !t.done).map((t) => t.id),
-    cardIds: cards.map((c) => c.id),
-    topicNames: topics,
-  });
-  return { result, raw: outcome.content, reasoning: outcome.reasoning };
+  const batch = coerceBatch(parseJsonLoose(outcome.content));
+  return { batch, raw: outcome.content, reasoning: outcome.reasoning, effort };
 }
-

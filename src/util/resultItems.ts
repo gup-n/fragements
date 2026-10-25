@@ -1,110 +1,111 @@
 /**
- * 「逐条确认」这一类界面逻辑的元数据表。
+ * 确认页的字段元数据与勾选 key。
  *
- * 整理结果有十类输出，以前每加一类都要在四个地方同步改：
- * 确认项的 key 生成、`allKeys` 的汇总、`withFreshOff` 的默认勾选、
- * 「AI 认为不需要处理」的空结果判断。漏一个就是 bug，而且是很难发现的那种
- * （比如新加的类型默认被勾上了，用户点一下「应用」就把东西删了）。
- *
- * 现在只有这张表需要改，其余三处都是遍历它。`GroupTable` 是
- * `{[F in keyof OrganizeResult]: …}`，所以**少写一个字段会直接编译不过** ——
- * 契约加了新字段而忘了登记，tsc 会拦住你。
+ * v0.7 起只有六组：标签、新待办、标记完成、删除待办、合并待办、合并碎片。
+ * 「会让内容消失」的三组（删除待办 / 合并待办 / 合并碎片）默认不勾，
+ * 这条纪律由本文件统一决定，**不要在渲染代码里另写一份**。
  */
-import type { OrganizeResult } from '../types';
+import type { OrganizeReview } from '../types';
+import { normText } from './text';
 
 /**
  * 确认项的稳定 key。
  *
- * 不能用数组下标 —— 追问之后模型会重排、增删条目，下标一动，
- * 用户刚才取消掉的勾选就会落到另一条内容上。用内容本身做 key，
- * 只要这一条没变，它的勾选状态就跟着它走。
+ * 不能用数组下标 —— 结果会重排、增删条目，下标一动，
+ * 用户刚才取消掉的勾选就会落到另一条内容上。用内容本身做 key。
  */
 export const K = {
-  todo: (text: string) => `todo|${text}`,
-  knowledge: (topic: string, title: string) => `knowledge|${topic}|${title}`,
-  tag: (id: number) => `tag|${id}`,
-  merge: (keepId: number, dropIds: number[]) => `merge|${keepId}|${dropIds.join(',')}`,
-  done: (todoId: number) => `done|${todoId}`,
-  card: (cardId: number) => `card|${cardId}`,
-  archive: (cardId: number) => `archive|${cardId}`,
-  drop: (todoId: number) => `drop|${todoId}`,
-  mergeTodo: (keepId: number) => `mergeTodo|${keepId}`,
-  // from 排序后 join：追问时模型可能换个顺序重列同一组主题，
-  // 排过序才能让「用户已经勾过这一条」的状态跟得住
-  mergeTopic: (to: string, from: string[]) => `mergeTopic|${to}|${[...from].sort().join(',')}`,
-};
+  /** 标签按名字分组，勾选粒度是「整组标签」 */
+  tagGroup: (label: string) => `tag:${label}`,
+  todo: (text: string) => `todo:${normText(text)}`,
+  merge: (keepId: number) => `merge:${keepId}`,
+  done: (todoId: number) => `done:${todoId}`,
+  drop: (todoId: number) => `drop:${todoId}`,
+  mergeTodo: (keepId: number) => `mtodo:${keepId}`,
+} as const;
 
-type ResultField = keyof OrganizeResult;
-
-interface GroupMeta<F extends ResultField> {
-  /** 这一类里单条结果的确认 key */
-  key: (item: OrganizeResult[F][number]) => string;
-  /**
-   * 会让内容从列表里消失的操作。新冒出来的默认不勾选 ——
-   * 误操作的后果是「东西不见了」，而用户当时多半没注意到。
-   */
+export interface GroupMeta {
+  key: 'tags' | 'todos' | 'todo_done' | 'drop_todos' | 'merge_todos' | 'merge';
+  label: string;
+  /** true = 会让内容消失，默认不勾 */
   destructive: boolean;
+  hint: string;
 }
 
-type GroupTable = { [F in ResultField]: GroupMeta<F> };
+export const GROUPS: GroupMeta[] = [
+  { key: 'tags', label: '标签', destructive: false, hint: '按标签名分组；取消一组就等于这批碎片不打这个标签' },
+  { key: 'todos', label: '新待办', destructive: false, hint: '从碎片里抽出来的、还没进回顾页的待办' },
+  { key: 'todo_done', label: '标记完成', destructive: false, hint: '碎片里明确说了已经做完；不丢内容，回顾页还能取消' },
+  { key: 'drop_todos', label: '删除待办', destructive: true, hint: '真删除，不可撤销；只有确认是误抽/过时才勾' },
+  { key: 'merge_todos', label: '合并待办', destructive: true, hint: '被合并的那条会隐藏，回顾页「已合并」里能撤回' },
+  { key: 'merge', label: '合并碎片', destructive: true, hint: '重复的原文折叠到保留那条里，原文不删除' },
+];
 
-const GROUPS: GroupTable = {
-  tags: { key: (t) => K.tag(t.id), destructive: false },
-  todos: { key: (t) => K.todo(t.text), destructive: false },
-  merge: { key: (m) => K.merge(m.keep_id, m.drop_ids), destructive: false },
-  knowledge: { key: (k) => K.knowledge(k.topic, k.title), destructive: false },
-  // 标完成不让内容消失：回顾页有独立的已完成区，时间轴上对应碎片带「已完成」标记。
-  // 而且用户明确要求过「已经做完的自动标掉」，所以它默认勾选。
-  todo_done: { key: (d) => K.done(d.todo_id), destructive: false },
-  card_update: { key: (c) => K.card(c.card_id), destructive: false },
-  // 归档只是折叠，能恢复；但内容确实从知识库里消失了，所以算破坏性操作。
-  archive_cards: { key: (a) => K.archive(a.card_id), destructive: true },
-  drop_todos: { key: (d) => K.drop(d.todo_id), destructive: true },
-  // 合并是「隐藏」不是「删除」，回顾页能撤回，但仍然算消失。
-  merge_todos: { key: (m) => K.mergeTodo(m.keep_id), destructive: true },
-  // 合并主题一张卡都不会丢，但它改的是**用户自己的组织结构**，
-  // 而且合并之后回不到原来的主题名（只能手动重拆）。所以归到需要主动确认的一类。
-  merge_topics: { key: (m) => K.mergeTopic(m.to, m.from), destructive: true },
-};
-
-export const RESULT_FIELDS = Object.keys(GROUPS) as ResultField[];
-
-/**
- * 某一类输出的确认 key 列表。
- *
- * key 生成函数的入参类型逐类不同，联合起来不收窄没法直接调用；
- * 但表里每一项的 key 只接受自己那一类的 item，运行期一定安全。
- */
-function keysOf(result: OrganizeResult, field: ResultField): string[] {
-  const keyOf = GROUPS[field].key as (item: unknown) => string;
-  return (result[field] as unknown[]).map(keyOf);
-}
-
-/** 结果里所有确认项。空数组就意味着「AI 认为这批碎片不需要处理」 */
-export function resultKeys(result: OrganizeResult | null): string[] {
-  if (!result) return [];
+/** 所有可勾选的 key（用于「应用 N 项」计数与全选） */
+export function allKeys(review: OrganizeReview): string[] {
   const out: string[] = [];
-  for (const field of RESULT_FIELDS) out.push(...keysOf(result, field));
+  for (const g of review.tags) out.push(K.tagGroup(g.label));
+  for (const t of review.todos) out.push(K.todo(t.text));
+  for (const d of review.todo_done) out.push(K.done(d.todo_id));
+  for (const d of review.drop_todos) out.push(K.drop(d.todo_id));
+  for (const m of review.merge_todos) out.push(K.mergeTodo(m.keep_id));
+  for (const m of review.merge) out.push(K.merge(m.keep_id));
   return out;
 }
 
-/**
- * 追问产生新一版结果时，只把**这一轮新冒出来的**破坏性操作置为不勾选；
- * 用户已经表过态的（勾上的、取消的）保持原样。
- */
-export function freshOffKeys(
-  prev: Set<string>,
-  fresh: OrganizeResult | null,
-  before: OrganizeResult | null,
-): Set<string> {
-  const next = new Set(prev);
-  if (!fresh) return next;
-  const known = new Set(resultKeys(before));
-  for (const field of RESULT_FIELDS) {
-    if (!GROUPS[field].destructive) continue;
-    for (const key of keysOf(fresh, field)) {
-      if (!known.has(key)) next.add(key);
-    }
+/** 安全项（不会让内容消失）。「全选安全项」只勾这些 */
+export function safeKeys(review: OrganizeReview): string[] {
+  const out: string[] = [];
+  for (const g of review.tags) {
+    // 新标签且和已有标签长得很像：默认不勾，让用户先看一眼
+    if (g.isNew && g.similarTo) continue;
+    out.push(K.tagGroup(g.label));
   }
-  return next;
+  for (const t of review.todos) out.push(K.todo(t.text));
+  for (const d of review.todo_done) out.push(K.done(d.todo_id));
+  return out;
+}
+
+/** 默认取消勾选的集合：破坏性操作 + 疑似重复的新标签 */
+export function defaultDeselected(review: OrganizeReview): Set<string> {
+  const safe = new Set(safeKeys(review));
+  const off = new Set<string>();
+  for (const key of allKeys(review)) if (!safe.has(key)) off.add(key);
+  return off;
+}
+
+export interface ReviewCounts {
+  /** 会被打标签的碎片条数（一个碎片可能出现在多组里，按 id 去重） */
+  taggedFragments: number;
+  newTags: number;
+  todos: number;
+  done: number;
+  dropped: number;
+  mergedTodos: number;
+  mergedFragments: number;
+  processed: number;
+  skipped: number;
+  rejected: number;
+}
+
+export function reviewCounts(review: OrganizeReview): ReviewCounts {
+  const ids = new Set<number>();
+  for (const g of review.tags) for (const id of g.fragmentIds) ids.add(id);
+  return {
+    taggedFragments: ids.size,
+    newTags: review.newTagCount,
+    todos: review.todos.length,
+    done: review.todo_done.length,
+    dropped: review.drop_todos.length,
+    mergedTodos: review.merge_todos.length,
+    mergedFragments: review.merge.length,
+    processed: review.processedCount,
+    skipped: review.skippedCount,
+    rejected: review.rejected,
+  };
+}
+
+/** 这个 key 是否属于破坏性操作 —— commit 里也要用它兜底 */
+export function isDestructiveKey(key: string): boolean {
+  return key.startsWith('merge:') || key.startsWith('drop:') || key.startsWith('mtodo:');
 }

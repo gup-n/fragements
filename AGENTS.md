@@ -10,7 +10,7 @@
 模板自带的这份 AGENTS.md 让用 Expo Router，**本项目没有用**。页面栈是 `App.tsx` 里一个 `route` state：
 
 ```ts
-type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
+type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
 ```
 
 没有 `src/app/`、没有 `_layout.tsx`、没有 `expo-router` 依赖。**不要引入。**
@@ -26,7 +26,9 @@ npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不�
 cd android && ./gradlew assembleRelease
 ```
 
-项目**零自动化测试**，`tsc` + `export` 是唯一的自动检查。
+项目**零自动化测试**。纯函数层（`util/organizePlan.ts`、`util/tokenize.ts`、`util/qaNote.ts`）
+改动时，用 `npx tsc --ignoreConfig <files> --outDir .tmpassert --module commonjs --target es2020`
+编译到临时目录、写几条 `assert` 跑一遍，**跑完立刻删**。这是唯一能验逻辑的办法。
 
 ## 给用户看界面：**不做预览**（用户 2026-10-25 明确要求）
 
@@ -35,12 +37,6 @@ cd android && ./gradlew assembleRelease
 所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
 `npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途：产物打进 `.tmp-bundle/`，
 同一次运行里量完体积就删掉。**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
-
-> v0.6.6 起 `npm run preview` 和 `scripts/preview_server.mjs` 也删了 ——
-> 留着命令就等于留了一条随时能破规的路。
-
-> 历史：v0.4.0–v0.6.0 期间走过 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`，
-> 用户根本看不到（内置面板里只是个空数据的壳），这条路作废。
 
 ## 改完必须自己打包
 
@@ -64,31 +60,109 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 4. **不要用 `Modal`**。它带 `FLAG_LAYOUT_NO_LIMITS`，会画到状态栏下且收不到键盘事件。用 `position:absolute` 覆盖层 + 自己的 `BackHandler`。
 5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 `npm run build:web` 编译校验会挂。
 6. **改功能先改 `SPEC.md`**。文档是唯一设计依据。
-7. **主题不是实体**，只是 `knowledge_cards.topic` 上的一个字符串。改主题名要批量 `UPDATE`（`repo.retopicCards`），
-   别去找 `topics` 表 —— 没有那张表。二级方向同理，是 `subtopic` 列而不是外键。
-   因为新建主题的成本为零，prompt 里必须把「大方向一致就复用已有主题」写死，否则模型会给每张卡开一个新主题。
-8. **全屏详情的「正在看哪一个」只能存 id，不能存对象快照**。存对象的话上层刷新后它还是旧的，
-   页面看起来「没变」，得关掉重进。碎片详情页（v0.4.2）、知识卡详情页（v0.6.0）各栽过一次。
-   正确做法：存 `id` / `ids[]`，内容用 `useMemo` 从当前 props 里实时查，查不到才退回快照
-   （从问答里点开的卡可能不在当前列表范围内）。
+7. **标签不是实体**，只是 `fragments.tags` 这个 JSON 数组里的字符串，没有 `tags` 表。改名 / 合并 / 删除统一走
+   `repo.renameTag / mergeTags / deleteTag`（底层是 `rewriteTags`），**不要在各个页面里自己遍历碎片改 JSON**。
+   仓库里唯一一份实现，就是为了不出现「界面上改了 3 条、库里只改了 2 条」。
+8. **全屏详情页的「正在看哪一个」只能存 id，不能存对象快照**。存对象的话上层刷新后它还是旧的，
+   页面看起来「没变」，得关掉重进。碎片详情页（v0.4.2）栽过一次。
+   正确做法：存 `id` / `ids[]`，内容用 `useMemo` 从当前 props 里实时查。
 
 ## 最容易搞错的概念
 
-- **「重构」= 针对原文重新整理**（重新判标签、重新提炼知识卡），再与旧结果比对、由用户逐项授权。
-  **不是**「让 AI 重写知识卡正文」。
-- **`knowledge` 的 `body` 字段永远由代码从 `source_ids` 拼接原文**，不采信模型输出。
-- **「会让内容消失」的三类操作（归档卡 / 删待办 / 合并待办）默认不勾选**，且用户取消的授权代码层面也不能绕过。
-  `todo_done`（标完成待办）从 v0.3.0 起**默认勾选** —— 用户要求「做完的自动标掉」，且标完成不丢内容。
-  这三类登记在 `src/util/resultItems.ts` 的 `GROUPS` 表里，别在渲染代码里另写一份。
-- **整理不产出小结**（v0.3.1 起）。小结只能由 `SummarySheet` 写，且必须走 `repo.upsertNote`。
-  判断「这个周期写过没有」用 `repo.findNote`，不要拿 `listNotes(n)` 自己筛 —— 数据一多就静默漏。
-- **周期总结 ≠ 重构**。总结只写 `notes` 表、不动碎片；重构是重新整理原文并与旧结果对照。
+- **v0.7 起没有知识库**。没有 `knowledge_cards`、没有 `topic` / `subtopic`、没有 `ask_logs`。
+  **时间轴就是知识库**：碎片原文 + 标签 + 时间就是全部沉淀。别再往「卡」的方向加东西。
+- **「整理」= 一批一批跑到完，最后统一确认**。不是「一次调用出十类结果」，也不是「让 AI 重写正文」。
+  一次点击会跑 N 批（每批 40 条 / 16000 字），每批结果合并进同一个 `OrganizePlan`，
+  **只有用户点「应用」才写库**（`db/commit.ts`）。
+- **「问」的纪要是普通碎片**，不是新表。存下来的是 `buildQaNote` 生成的 Q-A 文本，
+  进时间轴、能被搜索、也能被下次整理打标签。
+- **会让内容消失的操作默认不勾**：合并碎片 / 删待办 / 合并待办。`todo_done`（标完成）**默认勾**。
+  登记表只有一份：`src/util/resultItems.ts` 的 `GROUPS`，别在渲染代码里另写一份。
+- **小结只有一个写入路径**：`SummarySheet` → `repo.upsertNote`。整理流程不产出小结。
+  判断「这个周期写过没有」用 `repo.findNote`，不要拿 `listNotes(n)` 自己筛。
+
+## 整理循环（v0.7 的核心，最容易改错）
+
+分层是死的，别越界：
+
+| 层 | 文件 | 职责 |
+|---|---|---|
+| 一次请求 | `ai/deepseek.ts` | 拼 prompt、解析 JSON、**只收敛形状**，不做业务校验 |
+| 会话与循环 | `ai/organizeRun.ts` | id 快照、装箱、批循环、截断拆分、每批落库、进度 |
+| 合并与校验 | `util/organizePlan.ts` | `mergeBatchResult`：**唯一一份业务判据** |
+| 写库 | `db/commit.ts` | 用户确认之后才动数据库 |
+
+- **剩余量 = 快照 − 已处理 − 已跳过**（`runOrganize`）。不要再引入 offset 游标 ——
+  v0.6 的翻车点就是「游标和池子各算一次」，点多少次「继续」都是同一批。
+  `organize_sessions.cursor` 只用来显示进度，**不参与切分**。
+- **`batch_summary` 是跨批唯一的交接信息**。模型看不到别的批次，没有这句摘要，
+  它会给同一件事起两种写法、把上一批抽过的待办再抽一遍。
+  累积用 `appendSummary`，尾部保留 1500 字。
+- **`plannedTodoTexts` 必须传给下一批**。前面几批抽的待办还没写库，
+  模型在【未完成待办】里看不到；不给这份清单，同一件事会被每批各抽一遍。
+- **校验必须用原始的 `todos` 表，不是 `effectiveTodos`**。计划里的「标完成 / 删除」还没落库，
+  拿有效视图去校验 id，会把本来存在的待办判成不存在。
+- **`truncated` 不是错误，是对半拆的信号**。`organizeRun.handle` 捕获 `AiError.code === 'truncated'`
+  且本批 > 1 条时递归拆开重试；只剩一条还截断，才是真的报错。
+- **某批彻底失败时抛 `BatchFailure`，不要让整次整理归零**。它带着已经跑完的 `session`，
+  界面可以选「重试这一批 / 跳过这一批 / 放弃本次」。
+- **每批跑完立刻 `persist`**。断网、退出、崩溃之后要能「继续上次」，靠的就是这一步。
+- **`skipBatch` 不标记碎片状态**。跳过的是「这一次的请求」，不是这些内容；下次整理它们还在 inbox 里。
+- **合并与「标已整理」的顺序不能换**。`commitPlan` 里先合并、最后 `markStatus('tagged')`；
+  标状态是唯一会改变碎片状态的步骤，放最后才能在失败时留在原状态重跑。
+- **报数要真**。`commitPlan` 返回的是真实写入条数：被合并掉的碎片 `markStatus` 会跳过，
+  不能算进「已整理 N 条」。勾了但无事可做的项也不算。
+
+## 标签（v0.7 重写，两个函数别混）
+
+| 函数 | 干什么 | 用在哪 |
+|---|---|---|
+| `cleanTag(raw)` | 去 `#`、全角转半角、压空白、截 12 字，**保留大小写** | 存库的显示形式 |
+| `normalizeTag(raw)` | 在 `cleanTag` 基础上再小写 | **只做比较键**，绝不存库 |
+| `dedupeTags(list, max=3)` | 按归一化键去重，保留第一次出现的写法 | 写库与计划层共用 |
+
+- **标签只能有一个来源**：`repo.applyTags` 走 `dedupeTags`，计划层 `mergeBatchResult` 也走它。
+  各写一份的下场是「界面显示 3 个标签、库里存了 2 个」。
+- 以前按 `normalizeTag` 存库，把 `NAS` 存成 `nas`、`AI` 存成 `ai`，界面上像个错别字。
+  **键归键、显示归显示。**
+- 把新标签对到已有写法上靠 `canonical` Map（`normalizeTag` → 已有写法）。
+  模型写「nas」、库里有「NAS」，就存「NAS」。
+- **一条碎片的标签全被取消时，直接跳过，不写空数组**。静默清空是那种「事后才发现、找不回来」的破坏。
+- 一个碎片可能同时属于多组标签，**先合并成一条 `labels` 再写一次**；
+  逐组 `applyTags` 会让后一次覆盖前一次。
+
+## 全文检索（FTS5 + bigram）
+
+- **中文必须 bigram**（相邻两字一组）。`unicode61` 把整句当一个词，`trigram` 对 <3 字查询不命中
+  —— 「报销」「NAS」会直接搜不到，而且**没有任何报错**。`util/tokenize.ts` 里写死了这条。
+- `fragment_fts` 的 `rowid` **就是 `fragments.id`**，不另建映射表。
+  写入一律「先 `DELETE WHERE rowid = ?` 再 INSERT」（`indexFragment`）。
+- 每次改碎片内容 / 标签 / 合并 / 删除都要同步索引。漏一处，搜索结果就会指向一条已经改过的原文。
+- `ensureSearchIndex` 在启动时比条数，不一致就整库重建。设置页另有手动「重建搜索索引」。
+- **FTS 失败或 0 命中时退回 `LIKE`**（`likeNeedle` 转义 `%` / `_`）。
+  宁可慢一点，也不能让用户搜出空结果还不知道为什么。
+
+## 「问」（v0.7.1）
+
+- **只给模型筛过的资料**，不是全库。18 条 / 单条 1200 字 / 总 36000 字，FTS 命中优先。
+  上一版全库塞上下文，问题一具体就答偏。
+- 检索是**四路并集**：全文、时间意图（今天/上周/最近 N 天）、标签意图、上一轮引用。
+  加一条新路之前先想清楚它和已有四路的重叠。
+- **联网与本地检索并行**，搜索失败只置 `webError`，本地照常答。
+- `[F12]` / `[N3]` / `[T5]` / `[W1]` 四类引用。**反查只认本轮真的给过的编号**
+  （`answer.includes('[F' + id + ']')`），模型编的编号不算来源。
+- **`json: false` 不能省**。开着 `response_format: json_object` 会把整篇 Markdown 压成一个字符串，
+  换行全变 `\n`。
+- **多轮只带「问题 + 回答」，不带上一轮资料**。资料每轮重新检索；
+  重复塞进去既撑爆上下文，又会让模型拿旧资料答新问题。
+- **返回键由 `App` 转发**。`AskScreen` 关闭时带着「要不要存纪要」的内部状态，
+  通过 `registerClose` 交给 App；`registerClose` 必须 `useCallback` 固定身份。
 
 ## 流式与思考过程（v0.2.4）
 
 - **读流必须用 `import { fetch } from 'expo/fetch'`**。RN 自带的 fetch 没有 `response.body`。
 - **`TextDecoder` 必须 `{ stream: true }`**，否则跨分片的中文会解成乱码。
-- **`delta.reasoning_content`（思维链）只上屏，`delta.content`（JSON）才进解析**。两者绝不能拼进同一个缓冲区。
+- **`delta.reasoning_content`（思维链）只上屏，`delta.content` 才进解析**。两者绝不能拼进同一个缓冲区。
 - **超时是四段**（建连 90s / 首字 120s / 空闲 60s / 硬上限 12min），不要改回单一总时长。
   硬上限是 12 分钟而不是 6 —— 输出额度 64K 之后，正常生成本来就要十几分钟。
 - **UI 更新要节流**（120ms），否则几百个 chunk 的 setState 会卡死。
@@ -97,151 +171,40 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 
 ## 输出额度与 `finish_reason`（v0.6.3）
 
-- **`max_tokens` 同时限制「思考链 + 正文」，不是只管正文。** 老版 `deepseek-reasoner` 的规则是
-  「思维链另算」，V4 系列已经改成单次输出总长度。代码注释里曾经写着「思考链不计入这个额度」，
-  照着那行注释设了 8000，结果思考一长正文就一个字都出不来，界面上表现为
-  **「思考到一半突然停住 + 模型没有返回内容」**。现在官方额度（64K）照抄，第三方 clamp 到 8K。
+- **`max_tokens` 同时限制「思考链 + 正文」，不是只管正文。** 官方额度（64K）照抄，第三方 clamp 到 8K。
+  照着旧注释设 8000，思考一长正文就一个字都出不来，界面上表现为「思考到一半突然停住 + 没有内容」。
 - **`finish_reason` 必须读，而且要在读 `delta` 之前读。** 它挂在最后一个 chunk 上，
   而那个 chunk 的 `delta` 是空对象 `{}` —— 任何「先看 delta，没内容就 return」的写法都会漏掉它。
-- **空结果要按原因分开报**：`length` = 撞额度（重试没用，得调小思考强度或拆批次），
-  `insufficient_system_resource` = 对方资源不足（过一会儿再试）。两者报同一句
-  「模型没有返回内容」的话，用户只会反复重试同一个必然失败的操作。
-- **正文非空但 `finishReason === 'length'` 更危险**：JSON 一定是残的。
-  `organize` 必须在 `parseJsonLoose` **之前**拦下来，否则会误导成「不是合法 JSON，再试一次就好」。
-- 参数语义（尤其是「看起来没变」的）**必须回官方文档核对**，不能凭记忆、也不能信旧注释。
+- **空结果要按原因分开报**：`length` = 撞额度（重试没用，得拆批次），
+  `insufficient_system_resource` = 对方资源不足（过一会儿再试）。
+- **正文非空但 `finish_reason === 'length'` 更危险**：JSON 一定是残的。
+  `organize` 必须在 `parseJsonLoose` **之前**拦下来（抛 `AiError('truncated')`），
+  否则会误导成「不是合法 JSON，再试一次就好」。
 
-## 思考强度与单批装载量（v0.6.4）
+## 思考强度（v0.6.4）
 
 - **`reasoning_effort: high` 不是「想久一点」，是加压指令。** 官方实现是在 prompt 最前面插一段
   「Absolute maximum, no shortcuts permitted…穷举所有边界情况、写出每个被否决的假设」。
-  对「打标签 / 抽待办」这种机械抽取纯属浪费，思考链能从 3K 涨到 15K，而额度是思考链和正文共用的。
-  所以 `deepseek.ts` 的 `pickEffort` 会分档：**首轮且 ≤15 条用 `low`**，重构 / 追问 / 碎片多时用 `high`。
+  对「打标签 / 抽待办」这种机械抽取纯属浪费。`pickEffort`：首轮且 ≤15 条用 `low`，其余用 `high`。
   `low` 不等于关闭思考 —— 官方 low = **不加任何前缀**。
-- **`RequestOptions.effort` 只能对官方接口生效。** `buildBody` 里那两行在 `if (native)` 里面，
-  第三方网关根本不收 `reasoning_effort`，所以对它们「调低思考」无效，撞额度时只能建议换回官方地址。
-- **单批上限有两道**（`util/batch.ts` 的 `packFragments`）：条数（整理 30 / 重构 20）与
-  字数（12,000 / 16,000 字）。**装箱必须至少收一条**，否则一条超长碎片会让批次永远为空，
-  那个用户就永远整理不了它。
-- **砍条数不是为了省 token。** 每轮都要重发 system + 全量清单，输入 token 反而上升。
-  买的是「单轮峰值只占额度 8%」和「失败只废一轮」。跟用户解释时别把它说成省钱。
-
-## 分批游标与去重（v0.6.5）
-
-- **凡是有「继续处理下一批」的地方，必须有游标，而且要验证第二次的输入变了没有。**
-  v0.6.4 加了「继续整理剩下的 N 条」，但批次永远从池子头部装填：
-  重构**不改变碎片状态**（它们本来就 `tagged`），池子一个字都没变，点多少次都是同一批。
-  现在两层兜底：`util/batch.ts` 的 `pendingOnly(pool, doneIds)` + `commitResult({ batchFragmentIds })`
-  把整批标成 `tagged`。
-- **`commitResult` 的 `batchFragmentIds` 不能省。** 只标「AI 给了标签且用户勾选」的那几条时，
-  模型没抽到标签的仍留在 inbox，下一批又从 inbox 头部取，于是还是它们打头。
-  标 `tagged` 只表示「不再算未读」，内容一个字都不动。
-- **降噪要覆盖这个流程所有会新增的东西，不是想到哪类做哪类。**
-  `pruneRefactorResult` 曾经只过滤重复待办、不管知识卡，于是重构几次之后知识库里全是近义标题的孪生卡。
-  现在统一在 `util/dedupe.ts` 的 `pruneResult` 里做，判据三条（同主题前提下）：
-  标题归一化后相同 / 短标题被长标题完整包含且 ≥6 字 / 来源碎片 Jaccard ≥ 0.7。
-  **重复的不删内容**：跟已有卡重复的转成 `card_update` 补来源，跟同批重复的合并 `source_ids`。
-- **6 字门槛不能去掉。** 否则「换盘」会把整个主题下的卡都吃掉。
-- **`pruneResult` 里 `existing` 数组的下标必须和 `opts.cards` 对齐**，
-  所以新卡**不能**往里 push —— 同批重复交给 `knowledge` 那条判据，否则会取到 `undefined`。
-
-## 判据、截断、追加（v0.6.6）
-
-- **一个变量不要服务两个语义。** done 页曾用 `overflow = available - batch.length` 判断
-  「还有没有没处理的」，而它真实的含义是「下一批装不下的条数」：
-  50 条跑完 30 条后它是 0，于是「继续」按钮消失，用户以为整理完了。
-  **判断「还有没有剩」看 `available`，显示「下一批几条」看 `batch.length`。**
-- **判重/判替代的分母不能用 `min()`。** `命中数 / min(旧, 新)` 会让「小集合被完全包含」变成 100%：
-  一张只引用 1 条原文的窄卡，能把有 10 条来源的大卡判成「被取代」并归档。
-  用 **Jaccard**（两边都进分母）。实现在 `util/dedupe.ts` 的 `replacementOf`。
-- **显示与写入必须共用同一个函数。** `replacementOf` 原来在 `commit.ts` 和 `ResultSections.tsx`
-  各有一份，改一处忘另一处就会出现「界面说会归档 A，实际归档 B」。同理 `actionKey`、`K.*`。
-- **截断要看 `finish_reason`，不能只看正文是否为空。** 正文有内容但撞了 `max_tokens` 时
-  `requestChat` 会照常返回：问答把半句话当完整回答、小结把半篇存进时间轴。
-  问答标 `truncated` 提示；**小结直接抛错不保存** —— 残稿留在档案里比报错难查得多。
-- **「追加」语义的写入先按目标去重。** 同一张卡的两条 `card_update` 都用同一份快照算
-  「缺哪些原文」，同一段原文会被拼进正文两遍。`mergeCardUpdates` 按 `card_id` 合并 `add_source_ids`。
-- **模型回空结果时必须留出口。** `acceptedCount === 0` 时「应用」是禁用的，
-  于是「全部放弃 → 重进 → 还是同一批 → 还是空结果」成了死循环。
-  0 项时主按钮变成「跳过这批」，整批标 `tagged`（内容不动），游标照常推进。
-- **`applyTags` 不许复活已合并的碎片。** 重构按主题取碎片时，卡片的 `source_ids` 里
-  可能带着早被合并掉的那条；`status='tagged'` 一写，它同时是「已合并」和「已整理」。
-  SQL 用 `CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END`。
-- **跨页面的临时状态要提到 `App`。** `TimelineScreen` 切到知识库就会卸载，
-  草稿放在它内部等于「打个半句去翻张卡，回来全没了」。`draft` / `settingsFrom` 都在 `App` 里。
-
-## 三个 AI 功能的分工（v0.3.0）
-
-请求层统一在 `src/ai/chat.ts`（`requestChat(config, messages, onProgress, options)`），
-四段超时、流式回退、错误映射都在那里。**新加 AI 功能不要自己写 fetch。**
-
-| 功能 | 文件 | 输出 | `json` 选项 |
-|---|---|---|---|
-| 整理 | `ai/deepseek.ts` | 十类 JSON | `true`（默认） |
-| 周期总结 | `ai/summarize.ts` | Markdown | **`false`** |
-| 知识库问答 | `ai/ask.ts` | Markdown | **`false`** |
-
-- **`json: false` 不能省**。开着 `response_format: json_object` 时模型会把整篇 Markdown 塞进 JSON 字符串，
-  换行变 `\n`，界面上糊成一行。
-- **取一段时间的碎片用 `repo.listFragmentsBetween(from, to)`**（半开区间），不要用 `listFragments(limit)` 再过滤 ——
-  超过 limit 会静默丢掉最早的记录。
-- 小结正文用 `<NoteBody>` 渲染（标题 / 列表 / 段落），不要直接把 `bodyMd` 丢进 `<Text>`。
-
-## 问答的操作提案与联网（v0.5.0）
-
-- **提案靠 `:::action` 围栏**，不能开 `json_object`（整篇 Markdown 会被压成一坨字符串）。
-  解析在 `util/askActions.ts`，执行在 `db/askCommit.ts`。
-- **解析必须用字符类写围栏正则**（把「冒号」和「反引号」一起放进方括号，重复三次）：
-
-  ```
-  /^\s*[:`]{3}\s*action\b/i      // 开块
-  /^\s*[:`]{3}\s*$/              // 收块
-  ```
-
-  **不要写成 `(?:::{3})`** —— `(?:` 是非捕获组括号，会吃掉一个冒号，结果只认 `::action`。
-  失败时完全没有报错，表现只是「模型给了提案但界面一条都不显示」。
-- **提案必须校验**（主题名逐字存在于 `listKnowledgeTopics()`、卡片 id 存在于全库），
-  否则 `retopicCards` 改 0 张还报成功，`update_card` 会改到另一张卡上。
-- **联网只能用 `/v1/tools/search`**（`ai/search.ts`）。Responses API 的内置 `web_search`
-  **只在 `deepseek-v4-pro` 生效**，`deepseek-flash` 下静默忽略 —— 不报错、只是没搜，然后模型凭记忆编。
-- **问答记录独立成表 `ask_logs`**，不混进 `knowledge_cards`；也不提供「把问答当卡片检索」的方法。
-- **问答的多轮和整理的多轮不是一回事**（v0.6.5）。整理是把 `raw` 当 `assistant` 回传；
-  问答是整场会话：`system(规则) → user(卡片清单 + 第1问) → assistant(第1答) → … → user(当前问题)`。
-  卡片清单**只放第一条 user**，网络资料**只挂当前轮**，`turns` 只在退出面板时清掉。
-- **`update_card` 支持 `body`**（v0.6.5）。以前只能改主题/方向/标题/要点，用户说「把这条结论改掉」时模型无处可写。
-- **提案被校验丢掉要回执**（`parseAskActions` 的 `rejected`）。静默丢弃在体验上和「它没有权限」无法区分。
-
-## 二级方向的两种写法（v0.6.0）
-
-| 方法 | 按什么匹配 | 用在哪 |
-|---|---|---|
-| `repo.setCardSubtopic(ids, to)` | **卡片 id** | 手动分方向（详情页 / 主题页 / 点方向小节头） |
-| `repo.resubtopicCards(topic, from[], to)` | **方向组** | 按组改名 |
-
-两者不能互相替代：老卡片的 `subtopic` 全是 `null`，用组操作选不中任何一组，等于没有入口。
-这正是 v0.4.1 之后「按方向分组在已有数据上看不到效果」的原因 —— **不是功能没写，是没有入口**。
-
-另外：`KnowledgeScreen` 里返回键的订阅变量**不能叫 `sub`**。它和分方向面板的 `sub` state 重名时，
-闭包里永远拿到订阅对象（恒为真）→ 每次 `return false` → 安卓返回键彻底失效。
-**这类重名 tsc 不会报**，因为两者都是合法值。
+- **`RequestOptions.effort` 只能对官方接口生效**。第三方网关不收 `reasoning_effort`，
+  撞额度时只能建议换回官方地址或减小批次。
 
 ## SQL 里清空字段要写 `NULL` 字面量（v0.6.1）
 
 ```ts
 // 对：关键字进 SQL 文本，没有注入面
-db().runSync(`UPDATE knowledge_cards SET subtopic = NULL WHERE id IN (${ph})`, ids);
+db().runSync(`UPDATE fragments SET project = NULL WHERE id IN (${ph})`, ids);
 // 错：靠 ? 绑 JS null，expo-sqlite 在部分版本上会当成「没给参数」或绑成字符串，
 //     UPDATE 改 0 行却正常返回 → 设得上、删不掉，且零报错
-db().runSync(`UPDATE knowledge_cards SET subtopic = ? WHERE id IN (${ph})`, [null, ...ids]);
+db().runSync(`UPDATE fragments SET project = ? WHERE id IN (${ph})`, [null, ...ids]);
 ```
-
-`setCardSubtopic` / `resubtopicCards` / `updateKnowledgeCard` 三处都按这个写法。
-空字符串一并归一成 `NULL`，否则会多出一个「名字是空」的分组。
 
 ## 别用返回的 `changed` 判断成败
 
 不同 SQLite 驱动对「新值和旧值相同算不算一次修改」说法不一，有的返回 0。
 拿 0 当失败，就会出现「其实已经删掉了，界面却提示失败、面板还关不掉」。
-写库之后一律以 `onChanged()` 重新查询的结果为准。
+写库之后一律以 `onChanged()` 重新查询的结果为准。标签改名 / 合并同理。
 
 ## Expo 会发破坏性变更，别信训练数据
 

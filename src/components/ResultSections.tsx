@@ -1,79 +1,114 @@
 /**
- * 整理结果页的十类条目。
+ * 整理确认页的六组条目。
  *
  * 单独拆出来有两个原因：
- * 1. `OrganizeScreen` 已经一千多行，再塞着十段几乎同构的渲染分支会没法读；
- * 2. 这里的每一段都是「一类建议 + 逐条勾选」，改动频率低、波动小，
- *    和页面的状态机（idle / running / result / done）分开更安全。
+ * 1. `OrganizeScreen` 已经很长了，再塞六段几乎同构的渲染分支会没法读；
+ * 2. 这里每一段都是「一类建议 + 勾选」，改动频率低，和页面的状态机分开更安全。
  *
  * 组件本身无状态：勾选状态由页面统一持有，这里只负责画和回调。
+ * **哪些项默认不勾由 `util/resultItems.ts` 决定**，不要在这里另写一份 ——
+ * 破坏性操作默认不勾这条纪律，只允许有一个出处。
  */
 import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type {
-  Fragment,
-  KnowledgeCard,
-  OrganizeMode,
-  OrganizeResult,
-  Todo,
-} from '../types';
+import type { Fragment, OrganizeReview, Todo } from '../types';
 import { C, R, tagColor } from '../theme';
-import { K, resultKeys } from '../util/resultItems';
-import { replacementOf } from '../util/dedupe';
+import { K } from '../util/resultItems';
 
 interface Props {
-  result: OrganizeResult;
-  mode: OrganizeMode;
-  /** 本轮碎片，用来显示原文、判断标签改没改 */
+  review: OrganizeReview;
+  /** 本轮碎片，用来看标签改没改、显示合并的原文 */
   fragments: Fragment[];
-  /** 打开结果页时的卡片快照，用来显示旧卡标题、判断新卡取代了谁 */
-  cards: KnowledgeCard[];
   /** 已有待办，用来把 todo_id 翻成人话 */
   todos: Todo[];
   isOn: (key: string) => boolean;
   onToggle: (key: string) => void;
+  /** all 模式：标签会覆盖旧值，要标出「原来是什么」 */
+  refactor: boolean;
 }
 
-export function ResultSections({ result, mode, fragments, cards, todos, isOn, onToggle }: Props) {
+export function ResultSections({ review, fragments, todos, isOn, onToggle, refactor }: Props) {
   const byId = useMemo(() => new Map(fragments.map((f) => [f.id, f])), [fragments]);
-  const cardById = useMemo(() => new Map(cards.map((c) => [c.id, c])), [cards]);
   const todoById = useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
-  /**
-   * 新卡会顶掉哪张旧卡 —— 显示和写入用的是同一个判据（`util/dedupe.ts`），
-   * 以前这里各写了一份，改一处忘另一处就会出现「界面这么说、实际那么做」。
-   */
-  const replacedBy = (sourceIds: number[]) => replacementOf(cards, sourceIds);
+  const total =
+    review.tags.length +
+    review.todos.length +
+    review.todo_done.length +
+    review.drop_todos.length +
+    review.merge_todos.length +
+    review.merge.length;
 
-  if (!resultKeys(result).length) {
-    return <Text style={s.resultHint}>AI 认为这批碎片不需要处理。</Text>;
+  if (!total) {
+    return (
+      <Text style={s.resultHint}>
+        这次跑完了 {review.processedCount} 条碎片，没有需要改动的内容。点下面的按钮把它们记为已整理即可，
+        原文一个字都不会动。
+      </Text>
+    );
   }
 
   return (
     <View>
-      {result.todos.length > 0 && (
-        <Section title="提炼待办" count={result.todos.length}>
-          {result.todos.map((t) => {
-            const key = K.todo(t.text);
+      {review.tags.length > 0 && (
+        <Section
+          title="标签"
+          count={review.tags.length}
+          hint={
+            review.newTagCount > 0
+              ? `其中 ${review.newTagCount} 个是新建的。勾一整组 = 这批碎片都打上这个标签。`
+              : '全部是已有标签，勾选后直接套用。'
+          }
+        >
+          {review.tags.map((g) => {
+            const key = K.tagGroup(g.label);
             const on = isOn(key);
+            const col = tagColor(g.label);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]}>{t.text}</Text>
-                {t.due ? <Text style={s.dueText}>{t.due}</Text> : null}
+                <View style={s.tagHead}>
+                  <View style={[s.labelPill, { backgroundColor: col.bg }]}>
+                    <Text style={[s.labelPillText, { color: col.fg }]}>{g.label}</Text>
+                  </View>
+                  {g.isNew ? (
+                    <View style={s.newPill}>
+                      <Text style={s.newPillText}>新</Text>
+                    </View>
+                  ) : null}
+                  <Text style={s.metaText}>{g.fragmentIds.length} 条</Text>
+                </View>
+                {g.similarTo ? (
+                  <Text style={s.warnText}>和已有的「{g.similarTo}」很像，是同一个意思就改用那个</Text>
+                ) : null}
               </CheckRow>
             );
           })}
         </Section>
       )}
 
-      {result.todo_done.length > 0 && (
+      {review.todos.length > 0 && (
+        <Section title="新待办" count={review.todos.length} hint="从碎片里抽出来、还没进回顾页的待办。">
+          {review.todos.map((t) => {
+            const key = K.todo(t.text);
+            const on = isOn(key);
+            return (
+              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
+                <Text style={[s.rowText, !on && s.rowTextOff]}>{t.text}</Text>
+                {t.due ? <Text style={s.dueText}>截止 {t.due}</Text> : null}
+              </CheckRow>
+            );
+          })}
+        </Section>
+      )}
+
+      {review.todo_done.length > 0 && (
         <Section
           title="这些待办好像做完了"
-          count={result.todo_done.length}
-          hint="默认勾选 —— 碎片里写明已经做完的，自动标掉。标错了会在回顾页的已完成区，点一下就能撤回。"
+          count={review.todo_done.length}
+          hint="默认勾选。标错了在回顾页的「已完成」里点一下就能撤回，不丢内容。"
         >
-          {result.todo_done.map((d) => {
+          {review.todo_done.map((d) => {
             const key = K.done(d.todo_id);
             const on = isOn(key);
             return (
@@ -88,136 +123,13 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
         </Section>
       )}
 
-      {result.knowledge.length > 0 && (
-        <Section title="沉淀知识" count={result.knowledge.length}>
-          {result.knowledge.map((k) => {
-            const key = K.knowledge(k.topic, k.title);
-            const on = isOn(key);
-            // 重构时提前算一下这张新卡会不会顶掉某张旧卡，让用户看得见
-            const replaced = mode === 'refactor' ? replacedBy(k.source_ids) : null;
-            // 旧卡那边被用户取消了归档，这里就得如实说保留
-            const keptOld =
-              !!replaced &&
-              result.archive_cards.some(
-                (a) => a.card_id === replaced.id && !isOn(K.archive(a.card_id)),
-              );
-            return (
-              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <View style={s.kHead}>
-                  <Text style={[s.rowText, s.kTitle, !on && s.rowTextOff]}>{k.title}</Text>
-                  <View style={s.topicPill}>
-                    <Text style={s.topicPillText}>{k.topic}</Text>
-                  </View>
-                </View>
-                {k.gist ? (
-                  <Text style={[s.gistText, !on && s.rowTextOff]}>{k.gist}</Text>
-                ) : null}
-                {replaced ? (
-                  <Text style={s.reasonText}>
-                    {keptOld
-                      ? `旧卡「${replaced.title}」保留，不归档`
-                      : `会归档被它取代的旧卡：${replaced.title}`}
-                  </Text>
-                ) : null}
-              </CheckRow>
-            );
-          })}
-        </Section>
-      )}
-
-      {result.card_update.length > 0 && (
-        <Section title="补充到已有知识卡" count={result.card_update.length}>
-          {result.card_update.map((c) => {
-            const key = K.card(c.card_id);
-            const on = isOn(key);
-            const card = cardById.get(c.card_id);
-            const added = c.add_source_ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
-            return (
-              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, s.kTitle, !on && s.rowTextOff]}>
-                  {c.title ?? card?.title ?? `#${c.card_id}`}
-                </Text>
-                <View style={s.pillRow}>
-                  <View style={s.topicPill}>
-                    <Text style={s.topicPillText}>{card?.topic ?? '未知主题'}</Text>
-                  </View>
-                  <Text style={s.metaText}>补 {added.length} 条原文</Text>
-                </View>
-                {c.title && card && c.title !== card.title ? (
-                  <Text style={s.reasonText}>原标题：{card.title}</Text>
-                ) : null}
-                {added.map((f) => (
-                  <Text key={f.id} style={s.dropText} numberOfLines={2}>
-                    ＋ {f.content}
-                  </Text>
-                ))}
-                {c.reason ? <Text style={s.reasonText}>{c.reason}</Text> : null}
-              </CheckRow>
-            );
-          })}
-        </Section>
-      )}
-
-      {result.archive_cards.length > 0 && (
-        <Section
-          title="建议归档的知识卡"
-          count={result.archive_cards.length}
-          hint="归档后卡片会从知识库折叠进「已归档」，随时能恢复，原文不会丢。默认不勾选。"
-        >
-          {result.archive_cards.map((a) => {
-            const key = K.archive(a.card_id);
-            const on = isOn(key);
-            const card = cardById.get(a.card_id);
-            return (
-              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <View style={s.kHead}>
-                  <Text style={[s.rowText, s.kTitle, !on && s.rowTextOff]}>
-                    {card?.title ?? `#${a.card_id}`}
-                  </Text>
-                  <View style={s.topicPill}>
-                    <Text style={s.topicPillText}>{card?.topic ?? '未知主题'}</Text>
-                  </View>
-                </View>
-                {card?.gist ? <Text style={s.gistText}>{card.gist}</Text> : null}
-                {a.reason ? <Text style={s.reasonText}>{a.reason}</Text> : null}
-              </CheckRow>
-            );
-          })}
-        </Section>
-      )}
-
-      {result.merge_topics.length > 0 && (
-        <Section
-          title="合并相近主题"
-          count={result.merge_topics.length}
-          hint="只改主题名，卡片一张都不会少。合并后想拆回去，得去知识库手动改。默认不勾选。"
-        >
-          {result.merge_topics.map((m) => {
-            const key = K.mergeTopic(m.to, m.from);
-            const on = isOn(key);
-            return (
-              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <View style={s.kHead}>
-                  <Text style={[s.rowText, s.kTitle, !on && s.rowTextOff]}>{m.to}</Text>
-                  <View style={s.topicPill}>
-                    <Text style={s.topicPillText}>{m.from.length} 个主题</Text>
-                  </View>
-                </View>
-                <Text style={s.mergeDrops}>并入：{m.from.join('、')}</Text>
-                {m.reason ? <Text style={s.reasonText}>{m.reason}</Text> : null}
-              </CheckRow>
-            );
-          })}
-        </Section>
-      )}
-
-      {result.drop_todos.length > 0 && (
+      {review.drop_todos.length > 0 && (
         <Section
           title="建议删掉的待办"
-          count={result.drop_todos.length}
-          hint="真删除，不能撤销。待办删了不影响原碎片，原文还在时间轴上。默认不勾选。"
+          count={review.drop_todos.length}
+          hint="真删除，不能撤销。碎片原文不受影响。默认不勾选。"
         >
-          {result.drop_todos.map((d) => {
+          {review.drop_todos.map((d) => {
             const key = K.drop(d.todo_id);
             const on = isOn(key);
             return (
@@ -232,13 +144,13 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
         </Section>
       )}
 
-      {result.merge_todos.length > 0 && (
+      {review.merge_todos.length > 0 && (
         <Section
           title="合并重复待办"
-          count={result.merge_todos.length}
+          count={review.merge_todos.length}
           hint="保留信息最全的一条，其余隐藏。回顾页有「已合并」入口，合错了能撤回。默认不勾选。"
         >
-          {result.merge_todos.map((m) => {
+          {review.merge_todos.map((m) => {
             const key = K.mergeTodo(m.keep_id);
             const on = isOn(key);
             const keep = todoById.get(m.keep_id);
@@ -260,57 +172,17 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
         </Section>
       )}
 
-      {result.tags.length > 0 && (
+      {review.merge.length > 0 && (
         <Section
-          title="分类打标"
-          count={result.tags.length}
-          hint={
-            mode === 'refactor'
-              ? '重构会覆盖旧标签。下面标出「原标签」的条目是这次真正改了的，其余没变。'
-              : undefined
-          }
+          title="疑似重复的碎片"
+          count={review.merge.length}
+          hint="重复的原文折叠到保留那条里，原文不删除，详情页还能看到「已合并」。默认不勾选。"
         >
-          {result.tags.map((t) => {
-            const key = K.tag(t.id);
-            const on = isOn(key);
-            const f = byId.get(t.id);
-            const labelsChanged = !!f && !sameLabels(f.tags, t.labels);
-            const projectChanged = !!f && (f.project ?? null) !== (t.project ?? null);
-            return (
-              <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]} numberOfLines={2}>
-                  {f?.content ?? `#${t.id}`}
-                </Text>
-                <View style={s.pillRow}>
-                  {t.labels.map((l) => {
-                    const col = tagColor(l);
-                    return (
-                      <View key={l} style={[s.labelPill, { backgroundColor: col.bg }]}>
-                        <Text style={[s.labelPillText, { color: col.fg }]}>{l}</Text>
-                      </View>
-                    );
-                  })}
-                  {t.project ? <Text style={s.projectText}>{t.project}</Text> : null}
-                </View>
-                {mode === 'refactor' && labelsChanged ? (
-                  <Text style={s.reasonText}>原标签：{f.tags.length ? f.tags.join('、') : '无'}</Text>
-                ) : null}
-                {mode === 'refactor' && projectChanged ? (
-                  <Text style={s.reasonText}>原项目：{f.project ?? '无'}</Text>
-                ) : null}
-              </CheckRow>
-            );
-          })}
-        </Section>
-      )}
-
-      {result.merge.length > 0 && (
-        <Section title="疑似重复" count={result.merge.length}>
-          {result.merge.map((m) => {
-            const key = K.merge(m.keep_id, m.drop_ids);
+          {review.merge.map((m) => {
+            const key = K.merge(m.keep_id);
             const on = isOn(key);
             const keep = byId.get(m.keep_id);
-            const drops = m.drop_ids.map((id) => byId.get(id)).filter(Boolean) as Fragment[];
+            const drops = m.drop_ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
                 <Text style={[s.rowText, !on && s.rowTextOff]} numberOfLines={2}>
@@ -327,16 +199,14 @@ export function ResultSections({ result, mode, fragments, cards, todos, isOn, on
           })}
         </Section>
       )}
+
+      {refactor ? (
+        <Text style={s.footNote}>
+          这一轮是「全部重过」：勾上的标签会覆盖旧标签；没勾的碎片保留原有标签，不会被清空。
+        </Text>
+      ) : null}
     </View>
   );
-}
-
-/** 两组标签是否等价（集合比较，模型重排顺序不算变化） */
-function sameLabels(a: string[], b: string[]) {
-  if (a.length !== b.length) return false;
-  const sa = [...a].sort().join('\u0001');
-  const sb = [...b].sort().join('\u0001');
-  return sa === sb;
 }
 
 function Section({
@@ -426,25 +296,23 @@ const s = StyleSheet.create({
   rowText: { fontSize: 14, lineHeight: 21, color: C.text },
   rowTextOff: { color: C.text3 },
   strikeText: { textDecorationLine: 'line-through', color: C.text2 },
-  pillRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 5, marginTop: 2 },
-  labelPill: { borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 2 },
-  labelPillText: { fontSize: 11, lineHeight: 15 },
-  projectText: { fontSize: 11, color: C.text3 },
-  metaText: { fontSize: 11, color: C.text3 },
-  dueText: { fontSize: 11, color: C.text3, marginTop: 1 },
-  kHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  kTitle: { flex: 1 },
-  topicPill: {
-    backgroundColor: C.tealBg,
+
+  tagHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  labelPill: { borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 3 },
+  labelPillText: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
+  newPill: {
+    backgroundColor: C.amberBg,
     borderRadius: R.pill,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    marginTop: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
   },
-  topicPillText: { fontSize: 11, lineHeight: 15, color: C.tealText },
-  gistText: { fontSize: 12, lineHeight: 19, color: C.text2 },
+  newPillText: { fontSize: 10, lineHeight: 14, color: C.amberText },
+  metaText: { fontSize: 11, color: C.text3 },
+  warnText: { fontSize: 11, color: C.amberText, lineHeight: 16 },
+  dueText: { fontSize: 11, color: C.text3, marginTop: 1 },
   dropText: { fontSize: 12, color: C.text3, lineHeight: 18 },
   reasonText: { fontSize: 11, color: C.text3, marginTop: 2, lineHeight: 16 },
   mergeNewText: { fontSize: 12, color: C.accentText, marginTop: 4, lineHeight: 18 },
   mergeDrops: { fontSize: 11, color: C.text2, marginTop: 3, lineHeight: 17 },
+  footNote: { fontSize: 11, color: C.text3, lineHeight: 17, paddingHorizontal: 2, marginTop: -6 },
 });

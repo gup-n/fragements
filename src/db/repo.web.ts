@@ -1,14 +1,26 @@
 import type { Repo } from './types';
-import { parseTags } from './types';
-import type { AskLog, Fragment, FragmentNature, FragmentSource, FragmentStatus, KnowledgeCard, Note, Todo } from '../types';
+import type {
+  Fragment,
+  FragmentNature,
+  FragmentSource,
+  FragmentStatus,
+  Note,
+  OrganizePlan,
+  OrganizeScope,
+  OrganizeSession,
+  TagStat,
+  Todo,
+} from '../types';
+import { emptyPlan, normalizePlan } from '../util/organizePlan';
+import { cleanTag, dedupeTags, normalizeTag, sameTag, tokenizeText } from '../util/tokenize';
 
 /**
  * 浏览器预览用的存储实现，数据落在 localStorage。
- * 只服务于桌面端调试/预览，真机走 repo.native.ts 的 SQLite。
+ * 只服务于桌面端编译校验，真机走 repo.native.ts 的 SQLite。
  * 行为与 native 版保持语义一致，方便对照排查问题。
  */
 
-const KEY = 'fragments.webdb.v1';
+const KEY = 'fragments.webdb.v2';
 
 interface WebDb {
   seq: number;
@@ -17,12 +29,11 @@ interface WebDb {
   notes: Note[];
   runs: { id: number; startedAt: number; fragmentIds: number[]; model: string; resultJson: string; applied: number }[];
   settings: Record<string, string>;
-  knowledgeCards: KnowledgeCard[];
-  askLogs: AskLog[];
+  sessions: OrganizeSession[];
 }
 
 function empty(): WebDb {
-  return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, knowledgeCards: [], askLogs: [] };
+  return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, sessions: [] };
 }
 
 let cache: WebDb | null = null;
@@ -32,14 +43,10 @@ function load(): WebDb {
   try {
     const raw = globalThis.localStorage?.getItem(KEY);
     cache = raw ? { ...empty(), ...JSON.parse(raw) } : empty();
-    // v0.4.1 之前的卡片没有 subtopic 字段，补成 null，
-    // 否则下游拿到 undefined，`subtopic === null` 的分组判断会漏掉这批卡
-    cache!.knowledgeCards = (cache!.knowledgeCards ?? []).map((c) => ({
-      ...c,
-      subtopic: c.subtopic ?? null,
+    cache!.sessions = (cache!.sessions ?? []).map((s) => ({
+      ...s,
+      plan: normalizePlan(s.plan ?? emptyPlan()),
     }));
-    // v0.5.0 之前没有问答记录这张表
-    cache!.askLogs = cache!.askLogs ?? [];
   } catch {
     cache = empty();
   }
@@ -58,6 +65,10 @@ function nextId(d: WebDb) {
   return d.seq++;
 }
 
+function active(d: WebDb) {
+  return d.fragments.filter((f) => f.mergedInto === null);
+}
+
 export const repo: Repo = {
   async init() {
     load();
@@ -71,6 +82,22 @@ export const repo: Repo = {
     return load()
       .fragments.filter((f) => f.createdAt >= from && f.createdAt < to)
       .sort((a, b) => a.createdAt - b.createdAt);
+  },
+
+  async listFragmentIds(scope: OrganizeScope) {
+    return (scope === 'all' ? active(load()) : load().fragments.filter((f) => f.status === 'inbox'))
+      .sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)
+      .map((f) => f.id);
+  },
+
+  async listFragmentsByIds(ids: number[]) {
+    const set = new Set(ids);
+    const byId = new Map(load().fragments.filter((f) => set.has(f.id)).map((f) => [f.id, f]));
+    return ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
+  },
+
+  async countFragments(scope: OrganizeScope) {
+    return (await this.listFragmentIds(scope)).length;
   },
 
   async insertFragment(content, source: FragmentSource, createdAt?: number) {
@@ -115,7 +142,7 @@ export const repo: Repo = {
     const d = load();
     const f = d.fragments.find((x) => x.id === id);
     if (f) {
-      f.tags = labels;
+      f.tags = dedupeTags(labels);
       f.project = project;
       // 已合并的不复活，理由同 repo.native.ts
       if (f.status !== 'merged') f.status = 'tagged';
@@ -142,10 +169,6 @@ export const repo: Repo = {
     persist();
   },
 
-  async countInbox() {
-    return load().fragments.filter((f) => f.status === 'inbox').length;
-  },
-
   async setFragmentNature(ids, nature: FragmentNature) {
     const d = load();
     d.fragments.forEach((f) => {
@@ -154,134 +177,66 @@ export const repo: Repo = {
     persist();
   },
 
-  async insertKnowledgeCard(input) {
-    const d = load();
-    const id = nextId(d);
-    d.knowledgeCards.push({
-      id,
-      topic: input.topic,
-      subtopic: input.subtopic ?? null,
-      title: input.title,
-      gist: input.gist,
-      body: input.body,
-      sourceIds: input.sourceIds,
-      createdAt: Date.now(),
-      archived: false,
-    });
-    persist();
-    return id;
+  async countInbox() {
+    return load().fragments.filter((f) => f.status === 'inbox').length;
   },
 
-  async listKnowledgeCards(topic) {
-    const cards = load().knowledgeCards.filter((c) => !c.archived && (!topic || c.topic === topic));
-    return cards.sort((a, b) => a.topic.localeCompare(b.topic) || b.createdAt - a.createdAt);
-  },
-
-  async searchKnowledgeCards(keyword) {
-    const kw = keyword.trim().toLowerCase();
-    if (!kw) return [];
-    return load()
-      .knowledgeCards.filter(
-        (c) =>
-          !c.archived &&
-          [c.title, c.gist, c.body, c.topic].some((s) => s.toLowerCase().includes(kw)),
-      )
-      .sort((a, b) => b.createdAt - a.createdAt);
-  },
-
-  async listArchivedKnowledgeCards() {
-    return load()
-      .knowledgeCards.filter((c) => c.archived)
-      .sort((a, b) => b.createdAt - a.createdAt);
-  },
-
-  async listKnowledgeTopics() {
-    const map = new Map<string, { count: number; dirs: Set<string> }>();
-    for (const c of load().knowledgeCards) {
-      if (c.archived) continue;
-      const row = map.get(c.topic) ?? { count: 0, dirs: new Set<string>() };
-      row.count++;
-      if (c.subtopic) row.dirs.add(c.subtopic);
-      map.set(c.topic, row);
+  async searchFragments(query, limit = 40) {
+    const tokens = tokenizeText(query);
+    if (!tokens.length) return [];
+    const scored: { f: Fragment; score: number }[] = [];
+    for (const f of active(load())) {
+      const hay = `${f.content} ${f.tags.join(' ')} ${f.project ?? ''}`.toLowerCase();
+      let score = 0;
+      for (const t of tokens) if (hay.includes(t)) score += t.length >= 2 ? 2 : 1;
+      if (score > 0) scored.push({ f, score });
     }
-    return Array.from(map.entries())
-      .map(([topic, row]) => ({ topic, count: row.count, dirs: row.dirs.size }))
-      .sort((a, b) => b.count - a.count || a.topic.localeCompare(b.topic));
+    return scored
+      .sort((a, b) => b.score - a.score || b.f.createdAt - a.f.createdAt)
+      .slice(0, limit)
+      .map((x) => x.f);
   },
 
-  async listKnowledgeSubtopics(topic) {
-    const map = new Map<string | null, number>();
-    for (const c of load().knowledgeCards) {
-      if (c.archived || c.topic !== topic) continue;
-      const key = c.subtopic ?? null;
-      map.set(key, (map.get(key) ?? 0) + 1);
+  async listFragmentsByTag(tag, limit = 50) {
+    return active(load())
+      .filter((f) => f.tags.some((t) => sameTag(t, tag)))
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
+  },
+
+  async listTags(): Promise<TagStat[]> {
+    const map = new Map<string, { name: string; count: number }>();
+    for (const f of active(load())) {
+      for (const raw of f.tags) {
+        const key = normalizeTag(raw);
+        if (!key) continue;
+        const hit = map.get(key);
+        if (hit) hit.count += 1;
+        else map.set(key, { name: raw, count: 1 });
+      }
     }
-    return Array.from(map.entries())
-      .map(([subtopic, count]) => ({ subtopic, count }))
-      .sort((a, b) => b.count - a.count || (a.subtopic ?? '').localeCompare(b.subtopic ?? ''));
+    return Array.from(map.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   },
 
-  async retopicCards(from, to) {
-    const list = new Set(from.filter((t) => !!t && t !== to));
-    if (!list.size) return { moved: 0 };
-    let moved = 0;
-    // 归档的一起改，否则恢复后会多出一个只含归档卡的主题
-    for (const c of load().knowledgeCards) {
-      if (!list.has(c.topic)) continue;
-      c.topic = to;
-      moved++;
-    }
-    if (moved) persist();
-    return { moved };
+  async renameTag(from, to) {
+    const target = cleanTag(to);
+    if (!normalizeTag(target)) return { changed: 0 };
+    return rewriteTags((tag) => (sameTag(tag, from) ? target : tag));
   },
 
-  async resubtopicCards(topic, from, to) {
-    const list = from.filter((s) => s !== to);
-    if (!list.length) return { moved: 0 };
-    let moved = 0;
-    for (const c of load().knowledgeCards) {
-      if (c.topic !== topic || !list.includes(c.subtopic ?? null)) continue;
-      c.subtopic = to ? to : null;
-      moved++;
-    }
-    if (moved) persist();
-    return { moved };
+  async deleteTag(name) {
+    return rewriteTags((tag) => (sameTag(tag, name) ? null : tag));
   },
 
-  async setCardSubtopic(ids, subtopic) {
-    const set = new Set(ids);
-    if (!set.size) return { changed: 0 };
-    // 空字符串一律归成 null：否则会凭空多出一个「名字是空」的方向组
-    const next = subtopic ? subtopic : null;
-    let changed = 0;
-    for (const c of load().knowledgeCards) {
-      if (!set.has(c.id)) continue;
-      c.subtopic = next;
-      changed++;
-    }
-    if (changed) persist();
-    return { changed };
+  async mergeTags(from, to) {
+    const target = cleanTag(to);
+    const set = new Set(from.map(normalizeTag).filter(Boolean));
+    if (!normalizeTag(target) || !set.size) return { changed: 0 };
+    return rewriteTags((tag) => (set.has(normalizeTag(tag)) ? target : tag));
   },
 
-  async updateKnowledgeCard(id, patch) {
-    const d = load();
-    const c = d.knowledgeCards.find((x) => x.id === id);
-    if (!c) return;
-    if (patch.title !== undefined) c.title = patch.title;
-    if (patch.gist !== undefined) c.gist = patch.gist;
-    if (patch.body !== undefined) c.body = patch.body;
-    if (patch.topic !== undefined) c.topic = patch.topic;
-    // 传 null 是「清掉二级方向」，不能用 || 判断
-    if (patch.subtopic !== undefined) c.subtopic = patch.subtopic;
-    if (patch.archived !== undefined) c.archived = patch.archived;
-    if (patch.sourceIds !== undefined) c.sourceIds = patch.sourceIds;
-    persist();
-  },
-
-  async deleteKnowledgeCard(id) {
-    const d = load();
-    d.knowledgeCards = d.knowledgeCards.filter((c) => c.id !== id);
-    persist();
+  async rebuildSearchIndex() {
+    return { indexed: active(load()).length };
   },
 
   async insertTodo(input) {
@@ -388,32 +343,52 @@ export const repo: Repo = {
     persist();
   },
 
-  async insertAskLog(input) {
+  async saveOrganizeSession(input) {
     const d = load();
     const id = nextId(d);
-    d.askLogs.push({ id, ...input, createdAt: Date.now() });
+    const now = Date.now();
+    d.sessions.push({
+      id,
+      scope: input.scope,
+      pendingIds: input.pendingIds,
+      cursor: input.cursor,
+      plan: input.plan,
+      contextSummary: input.contextSummary,
+      finished: input.finished,
+      createdAt: now,
+      updatedAt: now,
+    });
     persist();
     return id;
   },
 
-  async listAskLogs(scope, limit = 60) {
-    const all = load().askLogs ?? [];
-    return [...(scope ? all.filter((x) => x.scope === scope) : all)]
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, limit);
-  },
-
-  async updateAskLogQuestion(id, question) {
-    const hit = load().askLogs.find((x) => x.id === id);
-    if (hit) {
-      hit.question = question.trim();
-      persist();
-    }
-  },
-
-  async deleteAskLog(id) {
+  async updateOrganizeSession(id, patch) {
     const d = load();
-    d.askLogs = (d.askLogs ?? []).filter((x) => x.id !== id);
+    const s = d.sessions.find((x) => x.id === id);
+    if (!s) return;
+    if (patch.cursor !== undefined) s.cursor = patch.cursor;
+    if (patch.plan !== undefined) s.plan = patch.plan;
+    if (patch.contextSummary !== undefined) s.contextSummary = patch.contextSummary;
+    if (patch.finished !== undefined) s.finished = patch.finished;
+    s.updatedAt = Date.now();
+    persist();
+  },
+
+  async findUnfinishedOrganizeSession() {
+    return (
+      [...load().sessions]
+        .filter((s) => !s.finished)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
+    );
+  },
+
+  async finishOrganizeSession(id) {
+    return this.updateOrganizeSession(id, { finished: true });
+  },
+
+  async deleteOrganizeSession(id) {
+    const d = load();
+    d.sessions = d.sessions.filter((s) => s.id !== id);
     persist();
   },
 
@@ -448,9 +423,31 @@ export const repo: Repo = {
       inbox: d.fragments.filter((f) => f.status === 'inbox').length,
       // 被合并掉的待办不算「未完成」，和 native 版口径保持一致
       todoOpen: d.todos.filter((t) => !t.done && t.mergedInto === null).length,
+      tags: (await this.listTags()).length,
     };
   },
 };
 
-// parseTags 在此实现中不参与（web 版直接存数组），保留导入以避免 tree-shaking 弃用告警
-void parseTags;
+function rewriteTags(map: (tag: string) => string | null): { changed: number } {
+  const d = load();
+  let changed = 0;
+  for (const f of d.fragments) {
+    const before = [...f.tags];
+    const after: string[] = [];
+    const seen = new Set<string>();
+    for (const tag of before) {
+      const next = map(tag);
+      if (!next) continue;
+      const name = cleanTag(next);
+      const key = normalizeTag(name);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      after.push(name);
+    }
+    if (before.length === after.length && before.every((t, i) => t === after[i])) continue;
+    f.tags = after;
+    changed++;
+  }
+  if (changed) persist();
+  return { changed };
+}

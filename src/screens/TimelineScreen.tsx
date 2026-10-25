@@ -69,7 +69,7 @@ interface Props {
   onDeleteNote: (id: number) => Promise<void>;
   onOpenOrganize: () => void;
   onOpenSettings: () => void;
-  onOpenKnowledge: () => void;
+  onOpenAsk: () => void;
   onOpenReview: () => void;
   onSeed?: () => Promise<void>;
 }
@@ -87,7 +87,7 @@ export function TimelineScreen({
   onDeleteNote,
   onOpenOrganize,
   onOpenSettings,
-  onOpenKnowledge,
+  onOpenAsk,
   onOpenReview,
   onSeed,
 }: Props) {
@@ -422,13 +422,13 @@ export function TimelineScreen({
 
         <View style={styles.headerActions}>
           <IconButton
-            name="library-outline"
-            size={20}
+            name="chatbubble-ellipses-outline"
+            size={19}
             tone="soft"
             color={C.text2}
             diameter={34}
-            onPress={onOpenKnowledge}
-            accessibilityLabel="知识库"
+            onPress={onOpenAsk}
+            accessibilityLabel="问：查自己的记录"
           />
           <IconButton
             name="checkmark-circle-outline"

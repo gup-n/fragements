@@ -169,10 +169,9 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
       const range = periodRange(period);
       if (!range) throw new AiError('format', `无法识别的周期：${period}`);
 
-      const [fragments, todos, cards] = await Promise.all([
+      const [fragments, todos] = await Promise.all([
         repo.listFragmentsBetween(range.from, range.to),
         repo.listTodos(),
-        repo.listKnowledgeCards(),
       ]);
       if (!fragments.length) {
         setPhase('pick');
@@ -185,7 +184,6 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
         period,
         fragments: fragments as Fragment[],
         todos,
-        cards,
         config,
         onProgress: handleProgress,
       });

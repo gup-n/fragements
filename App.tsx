@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Platform, StyleSheet, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
@@ -8,11 +8,11 @@ import { repo } from './src/db/repo';
 import { TimelineScreen } from './src/screens/TimelineScreen';
 import { OrganizeScreen } from './src/screens/OrganizeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
-import { KnowledgeScreen } from './src/screens/KnowledgeScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
+import { AskScreen } from './src/screens/AskScreen';
 import { dayKey } from './src/util/date';
 
-type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
+type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
 
 const isWeb = Platform.OS === 'web';
 
@@ -34,6 +34,18 @@ export default function App() {
    * 打了半句去翻一张卡，回来输入框是空的 —— 这不是「没保存」，是根本没留住。
    */
   const [draft, setDraft] = useState('');
+  /**
+   * 「问」页的关闭动作。
+   *
+   * 安卓返回键由这里的 BackHandler 统一接（它是后注册的，页面自己抢不过），
+   * 但「退出前问要不要保留纪要」是页面内部的状态，所以必须由 App 反过来调它。
+   * 页面卸载时置空，避免调到已卸载组件的 setState。
+   */
+  const askCloseRef = useRef<(() => void) | null>(null);
+  /** 用 useCallback 固定身份：否则 AskScreen 每渲染一次都要重挂一遍 */
+  const registerAskClose = useCallback((fn: (() => void) | null) => {
+    askCloseRef.current = fn;
+  }, []);
   const [fragments, setFragments] = useState<Fragment[]>([]);
   /** 周期总结，时间轴按 period 把它们插回对应日期 */
   const [notes, setNotes] = useState<Note[]>([]);
@@ -79,6 +91,10 @@ export default function App() {
   useEffect(() => {
     if (isWeb) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (route === 'ask') {
+        askCloseRef.current?.();
+        return true;
+      }
       if (route === 'settings') {
         // 设置页回到它来时的那个页面，不要一律弹回时间轴
         setRoute(settingsFrom);
@@ -173,57 +189,7 @@ export default function App() {
       if (ids[i] !== undefined) await repo.applyTags(ids[i], labels, project);
     }
 
-    // 顺带造几张知识卡：预览里 otherwise 知识库永远是空的，
-    // 「主题 → 小方向」两级和主题整理入口就没东西可看
-    const seedCards: { topic: string; subtopic: string | null; title: string; gist: string; body: string }[] = [
-      {
-        topic: 'NAS 维护',
-        subtopic: '换盘',
-        title: 'RAID5 降级后先确认故障盘再拔',
-        gist: '- 先看存储池状态确认降级位置\n- 热备会自动顶上重建，拔错盘直接报废\n- 新盘先跑 SMART 长检再插',
-        body: 'RAID5 降级后先别急着拔盘，得先确认哪一块是热备、哪一块是真正故障的。热备会自动顶上开始重建，这时候拔错盘直接阵列报废。',
-      },
-      {
-        topic: 'NAS 维护',
-        subtopic: '备份',
-        title: '配置备份要脚本化定时跑',
-        gist: '- 群晖配置备份不能靠手点\n- 计划任务每周跑一次，存到独立卷',
-        body: '群晖的配置备份一直没做，得写个脚本定时跑。',
-      },
-      {
-        topic: 'NAS 维护',
-        subtopic: null,
-        title: 'SHR 比 RAID5 更适合混插盘位',
-        gist: '- SHR 允许不同容量混插\n- RAID5 按最小盘算，大盘浪费',
-        body: '整理旧笔记时发现：同容量盘才用 RAID5，混插一律 SHR。',
-      },
-      {
-        topic: '装机',
-        subtopic: null,
-        title: 'Ventoy 升级后要重新校验启动',
-        gist: '- 升级 Ventoy 会重写引导区\n- 老机器上要再验一次 UEFI 启动',
-        body: 'Ventoy 更新了，回头升级 U 盘。',
-      },
-      {
-        topic: '工具',
-        subtopic: null,
-        title: '批量做启动盘可以脚本化',
-        gist: '- 用 diskpart + imagex 组合\n- 一次做十张，别一张张点',
-        body: '想起上周答应给行政做一批 U 盘启动盘。',
-      },
-      {
-        topic: '资讯',
-        subtopic: null,
-        title: '长文档问答的关键是切片粒度',
-        gist: '- 切太碎丢上下文，切太大挤爆窗口\n- 按语义段落切比按字数切稳',
-        body: '看了一篇讲 RAG 的文章，说切片粒度比模型选型更影响效果。',
-      },
-    ];
-    for (const c of seedCards) {
-      await repo.insertKnowledgeCard({ ...c, sourceIds: [] });
-    }
-
-    // 一条当天小结：否则详情页底部「当天小结」那块在预览里永远是空的
+    // 顺带造一条当天小结：否则详情页底部「当天小结」那块在预览里永远是空的
     await repo.upsertNote({
       type: 'daily',
       title: null,
@@ -235,17 +201,6 @@ export default function App() {
         '- 一批启动盘还欠着行政，得排个时间',
         '- 报销单明天上午补完',
       ].join('\n'),
-    });
-
-    // 一条问答记录：预览里「问答记录」那个扁平和区才有东西可看
-    await repo.insertAskLog({
-      scope: 'NAS 维护',
-      question: '群晖换盘之后还要做什么？',
-      answer:
-        '换完新盘先别急着结束：先在存储池页面确认重建已经跑起来，重建期间别动其他盘位。重建完成后跑一次数据一致性检查，再确认 SMART 没有新增告警。',
-      reasoning: '',
-      citedIds: [],
-      web: [],
     });
 
     await reload();
@@ -275,7 +230,7 @@ export default function App() {
                     setSettingsFrom('timeline');
                     setRoute('settings');
                   }}
-                  onOpenKnowledge={() => setRoute('knowledge')}
+                  onOpenAsk={() => setRoute('ask')}
                   onOpenReview={() => setRoute('review')}
                   onSeed={isWeb ? handleSeed : undefined}
                 />
@@ -298,11 +253,15 @@ export default function App() {
                   onClose={() => setRoute(settingsFrom)}
                 />
               )}
-              {route === 'knowledge' && (
-                <KnowledgeScreen onClose={() => setRoute('timeline')} />
-              )}
               {route === 'review' && (
                 <ReviewScreen onClose={() => setRoute('timeline')} onChanged={reload} />
+              )}
+              {route === 'ask' && (
+                <AskScreen
+                  onClose={() => setRoute('timeline')}
+                  onSaved={reload}
+                  registerClose={registerAskClose}
+                />
               )}
             </SafeAreaView>
           ) : (

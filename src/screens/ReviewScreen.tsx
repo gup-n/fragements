@@ -7,6 +7,7 @@ import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NoteBody } from '../components/NoteBody';
 import { SummarySheet } from '../components/SummarySheet';
+import { TagPanel } from '../components/TagPanel';
 import { ScreenHeader } from '../components/ScreenHeader';
 
 interface Props {
@@ -15,7 +16,7 @@ interface Props {
   onChanged?: () => void | Promise<void>;
 }
 
-type Tab = 'todo' | 'note';
+type Tab = 'todo' | 'note' | 'tag';
 
 const NOTE_KIND: Record<Note['type'], string> = {
   daily: '日小结',
@@ -86,6 +87,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
         {([
           ['todo', `待办${pending.length ? ` ${pending.length}` : ''}`],
           ['note', '小结'],
+          ['tag', '标签'],
         ] as [Tab, string][]).map(([key, label]) => (
           <Pressable
             key={key}
@@ -196,6 +198,8 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
             </>
           )}
         </ScrollView>
+      ) : tab === 'tag' ? (
+        <TagPanel onChanged={onChanged} />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Pressable

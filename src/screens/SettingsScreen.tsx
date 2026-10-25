@@ -43,9 +43,8 @@ export function SettingsScreen({ fragments, onClose }: Props) {
   const [thinking, setThinking] = useState(true);
   const [effort, setEffort] = useState<ReasoningEffort>('high');
   const [showKey, setShowKey] = useState(false);
-  const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0 });
-  const [knowledgeCount, setKnowledgeCount] = useState(0);
-  const [busy, setBusy] = useState<'idle' | 'saving' | 'testing' | 'exporting'>('idle');
+  const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0, tags: 0 });
+  const [busy, setBusy] = useState<'idle' | 'saving' | 'testing' | 'exporting' | 'indexing'>('idle');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   useEffect(() => {
@@ -57,7 +56,6 @@ export function SettingsScreen({ fragments, onClose }: Props) {
       setThinking(cfg.thinking);
       setEffort(cfg.effort);
       setStats(await repo.stats());
-      setKnowledgeCount((await repo.listKnowledgeCards()).length);
     })();
   }, []);
 
@@ -87,12 +85,29 @@ export function SettingsScreen({ fragments, onClose }: Props) {
     }
   }
 
+  /**
+   * 重建全文索引。「问」和搜索都靠它；迁移回填失败、或者从别处导入了
+   * 一批碎片之后，这里的兜底入口能让搜索重新可用，不用重装 App。
+   */
+  async function handleRebuildIndex() {
+    setBusy('indexing');
+    setMsg(null);
+    try {
+      const { indexed } = await repo.rebuildSearchIndex();
+      setMsg({ kind: 'ok', text: `已重建索引，共 ${indexed} 条` });
+    } catch (e) {
+      setMsg({ kind: 'err', text: (e as Error).message || '重建失败' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
   async function handleExport() {
     setBusy('exporting');
     setMsg(null);
     try {
-      const cards = await repo.listKnowledgeCards();
-      const { message } = await exportMarkdown(fragments, cards);
+      const todos = await repo.listTodos();
+      const { message } = await exportMarkdown(fragments, todos);
       setMsg({ kind: 'ok', text: message });
     } catch (e) {
       setMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
@@ -229,8 +244,19 @@ export function SettingsScreen({ fragments, onClose }: Props) {
             <Stat num={stats.total} label="总条数" />
             <Stat num={stats.inbox} label="待整理" />
             <Stat num={stats.todoOpen} label="未完成待办" />
-            <Stat num={knowledgeCount} label="知识卡" />
+            <Stat num={stats.tags} label="标签" />
           </View>
+
+          <Pressable
+            style={styles.ghostBtnWide}
+            onPress={handleRebuildIndex}
+            disabled={busy !== 'idle'}
+          >
+            <Ionicons name="refresh-outline" size={15} color={C.text} />
+            <Text style={styles.ghostBtnText}>
+              {busy === 'indexing' ? '正在重建…' : '重建搜索索引'}
+            </Text>
+          </Pressable>
 
           <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
             <Ionicons name="download-outline" size={15} color={C.text} />
