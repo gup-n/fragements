@@ -283,6 +283,12 @@ export type AskAction =
       subtopic?: string | null;
       title?: string;
       gist?: string;
+      /**
+       * 重写卡片正文。以前只能改主题/方向/标题/要点，
+       * 用户说「把这张卡里那条结论改掉」时模型根本无处可写，
+       * 只能回一句做不到 —— 真机上反馈的「让它改却没改」有一半是这个原因。
+       */
+      body?: string;
       reason: string | null;
     };
 

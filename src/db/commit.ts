@@ -23,6 +23,15 @@ export interface CommitOptions {
   fragments: Fragment[];
   /** 打开结果页那一刻的卡片快照，用来判断「新卡取代了哪张旧卡」 */
   cards: KnowledgeCard[];
+  /**
+   * 本轮实际交给模型的那一批碎片 id。
+   *
+   * 只要用户点了「应用」，这一批就算**过了一遍**，全部标成 tagged ——
+   * 以前只标「AI 给了标签且被勾选」的那几条，剩下没抽到标签的仍留在 inbox，
+   * 而批次永远从池子头部装填，于是下一轮「继续整理」拿到的还是同一批。
+   * 标 tagged 只是表示不再算未读，内容一个字都不动，重构里照样能再处理它们。
+   */
+  batchFragmentIds?: number[];
 }
 
 /**
@@ -51,6 +60,7 @@ export async function commitResult({
   accepted,
   fragments,
   cards,
+  batchFragmentIds = [],
 }: CommitOptions): Promise<{ applied: number }> {
   const byId = new Map(fragments.map((f) => [f.id, f]));
   const cardById = new Map(cards.map((c) => [c.id, c]));
@@ -161,11 +171,11 @@ export async function commitResult({
 
   // 打标是这一轮唯一会改变碎片状态的步骤，放最后：
   // 中途失败时，碎片仍然留在待整理里，用户可以重跑一遍
-  if (tagItems.length) {
-    await repo.markStatus(
-      tagItems.map((t) => t.id),
-      'tagged',
-    );
+  const taggedIds = new Set(tagItems.map((t) => t.id));
+  for (const id of batchFragmentIds) taggedIds.add(id);
+  if (taggedIds.size) {
+    // markStatus 内部会跳过已被合并的条目，这里不用再判
+    await repo.markStatus(Array.from(taggedIds), 'tagged');
   }
 
   return { applied };

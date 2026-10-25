@@ -8,19 +8,33 @@
  *
  * v0.5.0 起多了三样东西，都是**可选**的，开启时才改 prompt：
  * - `web`：联网搜到的资料。卡片优先，网络只用来补卡片没有的
- * - `history`：用户手动带进来的更早问答。只当对话上下文，不当事实
+ * - `turns`：这一次打开面板以来的更早问答。v0.6.5 之前是拼成一段文本塞进
+ *   同一条 user 消息里，而且默认只带用户手动勾选的记录 —— 等于每问一句都是新的一轮，
+ *   用户说「那它呢」「把这个改掉」时模型完全不知道指什么
  * - 操作提案（`:::action` 块）：模型只能建议，由界面勾选后执行
+ *
+ * ## 多轮是怎么拼的
+ *
+ * 卡片清单只出现一次，放在**第一条 user 消息**里（它就是这一轮的「资料」）；
+ * 之后每一轮就是纯粹的 user/assistant 对话。这样既省 token，
+ * 也让模型看到清晰的对话边界 —— 拼成一整段文本时它分不清哪句是它自己说的。
  */
 import type { AiConfig, AskAction, KnowledgeCard, WebHit } from '../types';
 import { parseAskActions } from '../util/askActions';
-import { AiError, requestChat, type ChatProgress } from './chat';
+import { AiError, requestChat, type ChatMessage, type ChatProgress } from './chat';
 
 /** 上下文预算（字符）。卡片原文很长，必须给上限 */
 const CARD_BUDGET = 26_000;
 /** 单张卡最多带多少字原文 */
 const PER_CARD_CLIP = 1200;
-/** 带进来的历史回答最多保留多少字 —— 只是用来理解指代，不需要全文 */
-const HISTORY_CLIP = 700;
+/**
+ * 多轮里更早那条回答最多保留多少字。
+ *
+ * 原来是 700 —— 一条稍微详细点的回答就被砍掉后半段，
+ * 下一轮模型只看到半句话，追问自然接不上。问答记录本身就是上下文，
+ * 这里给到 2500，正常长度的回答一个字都不会截。
+ */
+const HISTORY_CLIP = 2500;
 /** 一条网络资料最多进多少字。官方 summary 本身就是 600–800 字 */
 const WEB_CLIP = 700;
 /**
@@ -55,33 +69,47 @@ const WEB_RULES = [
 
 const HISTORY_RULES = [
   '',
-  '【这次带了他更早的问答】',
-  '8. 下面有【更早的问答】，那是他之前的提问记录，只用来理解指代和上下文（比如「那它呢」指什么）。',
-  '   它不是事实来源：里面的结论都要重新用卡片核对，卡片里没有就照实说没有。',
+  '【这是一次连续对话】',
+  '8. 前面几轮是你刚回答过的内容，**直接接着聊**：他说的「这个」「那张卡」「再改一下」都指前文。',
+  '   但事实来源仍然只有下面那份知识库清单：前文里你自己说过的话不能当证据，',
+  '   两边冲突时以卡片为准，并把差异说出来。',
 ];
 
 const ACTION_RULES = [
   '',
-  '【你可以提议改知识库，但不能直接改】',
-  '只有当用户**明确要求**你动知识库（合并主题、给主题改名、归档旧卡、重写某张卡）时，',
-  '才在回答的最末尾追加一段（要多办几件事就写多段）：',
+  '【改知识库：你有提案权，方式是在回答末尾追加 action 块】',
+  '用户让你改东西时（合并主题、给主题改名、把卡片归到别的主题、改标题/要点/正文、归档旧卡），',
+  '**你必须输出 action 块**。不要回「我没有修改权限」「请你自己去改」——',
+  '你没有直接写的权限，但有提案权：下面的块会被界面解析成几条建议，他勾选后一键执行。',
+  '只写「好的，我已经改好了」而不给 action 块，是他最讨厌的一种失败 —— 他看不到任何变化。',
+  '',
+  '格式（要多办几件事就写多段）：',
   '',
   ':::action',
-  '{"kind":"merge_topics","from":["工具","资讯"],"to":"AI 与工具","reason":"两张卡都在讲 AI"}',
+  '{"kind":"rename_topic","from":"工具","to":"AI 与工具","reason":"两个主题下都是 AI 相关的结论"}',
   ':::',
   '',
   '支持的 kind：',
   '- merge_topics　{"from":[至少两个已存在的主题],"to":"合并后的名字"}',
   '- rename_topic　{"from":"已存在的主题","to":"新名字"}',
   '- archive_cards　{"ids":[已存在的卡片 id]}　只归档被新结论**完全取代**的旧卡',
-  '- update_card　{"id":卡片 id,"topic":"新主题","subtopic":"新方向","title":"新标题","gist":"新要点"}',
-  '  只写要改的字段；"subtopic": null 表示取消小方向',
+  '- update_card　{"id":卡片 id,"topic":"新主题","subtopic":"新方向","title":"新标题","gist":"新要点","body":"新正文"}',
+  '  只写要改的字段；"subtopic": null 表示取消小方向。',
+  '  **用户说「改掉这条结论」「把正文里那段删了」「重新写一遍这张卡」时，必须用 body 给完整的新正文**，',
+  '  不能只改标题或要点 —— 那两样是索引，正文才是他真正要改的东西。',
+  '  正文里原样保留还有效的内容，只改他指出的部分；不要顺手删掉别的段落。',
+  '',
+  '什么情况**不要**输出 action：',
+  '- 他只是在提问、在了解知识库里有什么；',
+  '- 他说的是「以后要不要…」「是不是该…」这种还在商量的口气，而不是让你动手；',
+  '- 你要改的主题名/卡片 id 无法从下面的清单里逐字确认 —— 这时候宁可先问一句「你是指 XX 这张卡吗」，',
+  '  也不要编一个不存在的名字，那会被校验丢掉，他看到的是一条建议都没有。',
   '',
   '硬规则：',
-  '9. 用户只是在提问，就不要输出 action。宁可只回答。',
-  '10. 主题名、卡片 id 必须**逐字**来自下面的清单，不要自己编，也不要改一个字。',
-  '11. action 块外面照常用一两句话说明你打算怎么改，让人看懂之后再决定勾不勾。',
-  '12. action 块里的 JSON 必须单行、合法，不要加注释，不要用 Markdown 代码围栏。',
+  '9. 主题名、卡片 id 必须**逐字**来自下面的清单，不要自己编，也不要改一个字。',
+  '10. action 块外面要用一两句话说明你打算怎么改，让人看懂之后再决定勾不勾。',
+  '11. action 块里的 JSON 必须单行、合法，不要加注释，不要用 Markdown 代码围栏。',
+  '12. 一次能改完的就给一条，不要把一个改动拆成好几条重复的。',
 ];
 
 function buildPrompt(opts: { web: boolean; history: boolean }) {
@@ -176,11 +204,14 @@ export function packCards(cards: KnowledgeCard[], budget = CARD_BUDGET) {
   return picked;
 }
 
-/** 手动带进上下文的一条更早问答 */
-export interface AskHistoryItem {
+/** 会话里的一轮问答。answer 必须已经剥掉 action 块 —— 那是内部标记，不该回喂给模型 */
+export interface AskTurn {
   question: string;
   answer: string;
 }
+
+/** 兼容旧名字：从问答记录里挑出来的「带进本轮」也是这个结构 */
+export type AskHistoryItem = AskTurn;
 
 export interface AskOptions {
   question: string;
@@ -193,8 +224,13 @@ export interface AskOptions {
   contextCardIds?: number[];
   /** 联网搜到的资料。空数组和省略都等于「没联网」 */
   web?: WebHit[];
-  /** 用户手动勾选的更早问答，默认不带 */
-  history?: AskHistoryItem[];
+  /**
+   * 这一次打开面板以来更早的几轮问答，按时间升序。
+   *
+   * v0.6.5 之前这里只有「用户手动勾选的问答记录」，默认为空，
+   * 于是每问一句都是全新一轮 —— 追问「那它呢」模型完全接不上。
+   */
+  turns?: AskTurn[];
   onProgress?: (patch: ChatProgress) => void;
 }
 
@@ -206,6 +242,11 @@ export interface AskOutcome {
   cited: KnowledgeCard[];
   /** 模型提议要改的东西。空数组表示这一轮只回答不动手 */
   actions: AskAction[];
+  /**
+   * 模型写了 action 块但校验没过的条数。
+   * 界面上要如实提示 —— 静默丢掉会让用户以为「它没有权限」。
+   */
+  rejected: number;
   /** 这一轮实际用了哪些网络资料 */
   web: WebHit[];
   /** 实际读了几张卡 */
@@ -221,8 +262,67 @@ function cleanAnswer(raw: string) {
   return text.replace(/\n{3,}/g, '\n\n').trim();
 }
 
+/**
+ * 拼多轮消息。
+ *
+ * 抽成独立导出函数是为了能直接跑断言 —— 「第 N 轮到底有没有把前几轮带上」
+ * 这种问题靠肉眼读代码很容易看漏，而它正是 v0.6.5 之前每次提问都像新开一轮的根因。
+ *
+ * - system 只放规则
+ * - 第一条 user = 卡片清单 + 第一个问题（资料只出现一次，不每轮重发）
+ * - 之后每轮是干净的 user / assistant 对
+ * - 网络资料只挂在当前这一轮（每次搜的东西不一样，不能混进历史）
+ */
+export function buildAskMessages(input: {
+  question: string;
+  picked: KnowledgeCard[];
+  web: WebHit[];
+  turns: AskTurn[];
+}): ChatMessage[] {
+  const { question, picked, web, turns } = input;
+  const cardText = ['【知识库卡片】', ...picked.map(cardBlock)].join('\n\n');
+
+  const current: string[] = [];
+  if (web.length) {
+    current.push('【网络资料】');
+    web.forEach((hit, i) => {
+      const summary =
+        hit.summary.length > WEB_CLIP ? `${hit.summary.slice(0, WEB_CLIP)}…` : hit.summary;
+      current.push(`[W${i + 1}] ${hit.title} — ${hit.url}`, summary, '');
+    });
+  }
+  current.push(`【问题】${question.trim()}`);
+
+  const messages: ChatMessage[] = [
+    {
+      role: 'system',
+      content: buildPrompt({ web: web.length > 0, history: turns.length > 0 }),
+    },
+  ];
+
+  const clipAnswer = (text: string) => {
+    const t = text.trim();
+    return t.length > HISTORY_CLIP ? `${t.slice(0, HISTORY_CLIP)}…` : t;
+  };
+
+  if (turns.length) {
+    const [first, ...rest] = turns;
+    messages.push({ role: 'user', content: `${cardText}\n\n【问题】${first.question.trim()}` });
+    messages.push({ role: 'assistant', content: clipAnswer(first.answer) });
+    for (const t of rest) {
+      messages.push({ role: 'user', content: `【问题】${t.question.trim()}` });
+      messages.push({ role: 'assistant', content: clipAnswer(t.answer) });
+    }
+    messages.push({ role: 'user', content: current.join('\n') });
+  } else {
+    messages.push({ role: 'user', content: `${cardText}\n\n${current.join('\n')}` });
+  }
+
+  return messages;
+}
+
 export async function askKnowledge(options: AskOptions): Promise<AskOutcome> {
-  const { question, cards, config, topics = [], web = [], history = [], onProgress } = options;
+  const { question, cards, config, topics = [], web = [], turns = [], onProgress } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!question.trim()) throw new AiError('format', '先写个问题');
   if (!cards.length) throw new AiError('format', '这个范围里还没有卡片，先去整理点东西');
@@ -231,34 +331,7 @@ export async function askKnowledge(options: AskOptions): Promise<AskOutcome> {
   const picked = packCards(ranked);
   if (!picked.length) throw new AiError('format', '卡片原文太长，装不进上下文，先整理一下知识库');
 
-  const parts: string[] = [];
-
-  if (history.length) {
-    parts.push('【更早的问答】');
-    for (const h of history) {
-      parts.push(`Q：${h.question.trim()}`);
-      const answer =
-        h.answer.length > HISTORY_CLIP ? `${h.answer.slice(0, HISTORY_CLIP)}…` : h.answer;
-      parts.push(`A：${answer.trim()}`);
-      parts.push('');
-    }
-  }
-
-  parts.push(`【问题】${question.trim()}`, '', '【知识库卡片】');
-  for (const card of picked) parts.push(cardBlock(card));
-
-  if (web.length) {
-    parts.push('', '【网络资料】');
-    web.forEach((hit, i) => {
-      const summary = hit.summary.length > WEB_CLIP ? `${hit.summary.slice(0, WEB_CLIP)}…` : hit.summary;
-      parts.push(`[W${i + 1}] ${hit.title} — ${hit.url}`, summary, '');
-    });
-  }
-
-  const messages = [
-    { role: 'system' as const, content: buildPrompt({ web: web.length > 0, history: history.length > 0 }) },
-    { role: 'user' as const, content: parts.join('\n') },
-  ];
+  const messages = buildAskMessages({ question, picked, web, turns });
 
   // 回答是给人读的 Markdown，绝不能开 json_object
   const outcome = await requestChat(config, messages, onProgress, {
@@ -266,10 +339,11 @@ export async function askKnowledge(options: AskOptions): Promise<AskOutcome> {
     maxTokens: MAX_TOKENS,
   });
 
-  const { text, actions } = parseAskActions(cleanAnswer(outcome.content), {
+  const parsed = parseAskActions(cleanAnswer(outcome.content), {
     topics,
     cardIds: options.contextCardIds ?? cards.map((c) => c.id),
   });
+  const { text, actions, rejected } = parsed;
 
   if (!text && !actions.length) throw new AiError('format', '模型没有返回内容，再问一次');
 
@@ -277,10 +351,15 @@ export async function askKnowledge(options: AskOptions): Promise<AskOutcome> {
   const cited = picked.filter((c) => text.includes(c.title));
 
   return {
-    answer: text || '（这一轮只给了改法，没有正文。勾选下面的建议就可以执行。）',
+    answer:
+      text ||
+      (rejected
+        ? '（这一轮的改动建议里，主题名或卡片 id 跟知识库对不上，已经丢掉。可以让它按清单里的原名重给一次。）'
+        : '（这一轮只给了改法，没有正文。勾选下面的建议就可以执行。）'),
     reasoning: outcome.reasoning,
     cited,
     actions,
+    rejected,
     web,
     scanned: picked.length,
     total: cards.length,

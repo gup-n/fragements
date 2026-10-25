@@ -40,6 +40,7 @@ export async function applyAskAction(a: AskAction): Promise<string> {
       if (a.subtopic !== undefined) patch.subtopic = a.subtopic;
       if (a.title !== undefined) patch.title = a.title;
       if (a.gist !== undefined) patch.gist = a.gist;
+      if (a.body !== undefined) patch.body = a.body;
       if (!Object.keys(patch).length) return '这条提案没有要改的字段';
       await repo.updateKnowledgeCard(a.id, patch);
       return `卡片 #${a.id} 已更新`;

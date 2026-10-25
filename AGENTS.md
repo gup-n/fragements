@@ -19,8 +19,7 @@ type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 
 ```bash
 npx tsc --noEmit                                  # 改完必跑，当前零错误
-npm run build:web                                 # 导出到固定目录 web-preview/（先删后导）
-npm run preview                                   # 起本地静态服务 127.0.0.1:8731
+npm run build:web                                 # 导出到 web-preview/，**只当编译校验，不许给用户看**
 npx expo install <pkg>                            # 装依赖用它，别用 npm install
 
 npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
@@ -29,12 +28,16 @@ cd android && ./gradlew assembleRelease
 
 项目**零自动化测试**，`tsc` + `export` 是唯一的自动检查。
 
-## 给用户看界面
+## 给用户看界面：**不做预览**（用户 2026-10-25 明确要求）
 
-**`present_files(["http://127.0.0.1:8731"])`** —— 内置浏览器面板会直接打开，用户可点可操作。
-服务只起一次，改完代码重跑 `npm run build:web`，浏览器刷新即可。
+用户原话：「不要再开预览了，我要你直接生图而不是 html 的预览，不能生图就不要做预览的步骤」。
 
-> 不要再生成单文件 HTML（`build_single_file.py` 已删）。用户 2026-10-24 明确说过「我看不到」。
+所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
+`npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途，产物不许拿给用户看。
+**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
+
+> 历史：v0.4.0–v0.6.2 期间走过 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`，
+> 用户根本看不到（内置面板里只是个空数据的壳），这条路作废。
 
 ## 改完必须自己打包
 
@@ -113,11 +116,30 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
   `low` 不等于关闭思考 —— 官方 low = **不加任何前缀**。
 - **`RequestOptions.effort` 只能对官方接口生效。** `buildBody` 里那两行在 `if (native)` 里面，
   第三方网关根本不收 `reasoning_effort`，所以对它们「调低思考」无效，撞额度时只能建议换回官方地址。
-- **单批上限有两道**（`OrganizeScreen` 的 `packFragments`）：条数（整理 30 / 重构 20）与
+- **单批上限有两道**（`util/batch.ts` 的 `packFragments`）：条数（整理 30 / 重构 20）与
   字数（12,000 / 16,000 字）。**装箱必须至少收一条**，否则一条超长碎片会让批次永远为空，
   那个用户就永远整理不了它。
 - **砍条数不是为了省 token。** 每轮都要重发 system + 全量清单，输入 token 反而上升。
   买的是「单轮峰值只占额度 8%」和「失败只废一轮」。跟用户解释时别把它说成省钱。
+
+## 分批游标与去重（v0.6.5）
+
+- **凡是有「继续处理下一批」的地方，必须有游标，而且要验证第二次的输入变了没有。**
+  v0.6.4 加了「继续整理剩下的 N 条」，但批次永远从池子头部装填：
+  重构**不改变碎片状态**（它们本来就 `tagged`），池子一个字都没变，点多少次都是同一批。
+  现在两层兜底：`util/batch.ts` 的 `pendingOnly(pool, doneIds)` + `commitResult({ batchFragmentIds })`
+  把整批标成 `tagged`。
+- **`commitResult` 的 `batchFragmentIds` 不能省。** 只标「AI 给了标签且用户勾选」的那几条时，
+  模型没抽到标签的仍留在 inbox，下一批又从 inbox 头部取，于是还是它们打头。
+  标 `tagged` 只表示「不再算未读」，内容一个字都不动。
+- **降噪要覆盖这个流程所有会新增的东西，不是想到哪类做哪类。**
+  `pruneRefactorResult` 曾经只过滤重复待办、不管知识卡，于是重构几次之后知识库里全是近义标题的孪生卡。
+  现在统一在 `util/dedupe.ts` 的 `pruneResult` 里做，判据三条（同主题前提下）：
+  标题归一化后相同 / 短标题被长标题完整包含且 ≥6 字 / 来源碎片 Jaccard ≥ 0.7。
+  **重复的不删内容**：跟已有卡重复的转成 `card_update` 补来源，跟同批重复的合并 `source_ids`。
+- **6 字门槛不能去掉。** 否则「换盘」会把整个主题下的卡都吃掉。
+- **`pruneResult` 里 `existing` 数组的下标必须和 `opts.cards` 对齐**，
+  所以新卡**不能**往里 push —— 同批重复交给 `knowledge` 那条判据，否则会取到 `undefined`。
 
 ## 三个 AI 功能的分工（v0.3.0）
 
@@ -154,6 +176,11 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **联网只能用 `/v1/tools/search`**（`ai/search.ts`）。Responses API 的内置 `web_search`
   **只在 `deepseek-v4-pro` 生效**，`deepseek-flash` 下静默忽略 —— 不报错、只是没搜，然后模型凭记忆编。
 - **问答记录独立成表 `ask_logs`**，不混进 `knowledge_cards`；也不提供「把问答当卡片检索」的方法。
+- **问答的多轮和整理的多轮不是一回事**（v0.6.5）。整理是把 `raw` 当 `assistant` 回传；
+  问答是整场会话：`system(规则) → user(卡片清单 + 第1问) → assistant(第1答) → … → user(当前问题)`。
+  卡片清单**只放第一条 user**，网络资料**只挂当前轮**，`turns` 只在退出面板时清掉。
+- **`update_card` 支持 `body`**（v0.6.5）。以前只能改主题/方向/标题/要点，用户说「把这条结论改掉」时模型无处可写。
+- **提案被校验丢掉要回执**（`parseAskActions` 的 `rejected`）。静默丢弃在体验上和「它没有权限」无法区分。
 
 ## 二级方向的两种写法（v0.6.0）
 

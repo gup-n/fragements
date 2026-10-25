@@ -126,7 +126,13 @@ function toAction(raw: any, ctx: ActionContext): AskAction | null {
     const id = Number(raw.id);
     if (!cardSet.has(id)) return null;
 
-    const patch: { topic?: string; subtopic?: string | null; title?: string; gist?: string } = {};
+    const patch: {
+      topic?: string;
+      subtopic?: string | null;
+      title?: string;
+      gist?: string;
+      body?: string;
+    } = {};
     const topic = str(raw.topic);
     if (topic) patch.topic = topic;
 
@@ -143,6 +149,9 @@ function toAction(raw: any, ctx: ActionContext): AskAction | null {
     if (title) patch.title = title;
     const gist = str(raw.gist);
     if (gist) patch.gist = gist;
+    // 正文是长文本，换行很多，不做 trim 之外的处理
+    const body = typeof raw.body === 'string' ? raw.body.trim() : '';
+    if (body) patch.body = body;
 
     if (!Object.keys(patch).length) return null;
     return { kind: 'update_card', id, ...patch, reason: str(raw.reason) };
@@ -155,21 +164,35 @@ function toAction(raw: any, ctx: ActionContext): AskAction | null {
 export function parseAskActions(
   raw: string,
   ctx: ActionContext,
-): { text: string; actions: AskAction[] } {
+): {
+  text: string;
+  actions: AskAction[];
+  /**
+   * 模型写了 `:::action` 块、但校验没过的条数。
+   *
+   * 必须回传给界面：主题名差一个字、卡片 id 记错，提案就会被静默丢掉，
+   * 用户看到模型说「我帮你改好了」而界面上一条建议都没有，只能理解为「它没有权限」。
+   */
+  rejected: number;
+} {
   const { text, blocks } = splitBlocks(raw);
   const seen = new Set<string>();
   const actions: AskAction[] = [];
+  let rejected = 0;
 
   for (const block of blocks) {
     const action = toAction(readJson(block), ctx);
-    if (!action) continue;
+    if (!action) {
+      rejected++;
+      continue;
+    }
     const key = actionKey(action);
     if (seen.has(key)) continue;
     seen.add(key);
     actions.push(action);
   }
 
-  return { text, actions };
+  return { text, actions, rejected };
 }
 
 /** 勾选状态按内容做 key，不按数组下标 —— 提案会被去重、重排 */
@@ -187,6 +210,7 @@ export function actionKey(a: AskAction): string {
         a.subtopic === null ? '~' : (a.subtopic ?? ''),
         a.title ?? '',
         a.gist ?? '',
+        a.body ?? '',
       ].join('\u0001');
       return `update|${a.id}|${fields}`;
     }
@@ -228,6 +252,7 @@ export function describeAction(
       if (a.subtopic !== undefined) changed.push(`方向 → ${a.subtopic ?? '不分'}`);
       if (a.title !== undefined) changed.push('改标题');
       if (a.gist !== undefined) changed.push('改要点');
+      if (a.body !== undefined) changed.push('重写正文');
       return {
         label: `重构卡片${titleOf?.(a.id) ? `「${titleOf(a.id)}」` : ` #${a.id}`}`,
         detail: changed.join(' · '),

@@ -29,6 +29,8 @@ import { organize } from '../ai/deepseek';
 import type { OrganizeProgress } from '../ai/deepseek';
 import { missingDigests } from '../util/digest';
 import { freshOffKeys, resultKeys } from '../util/resultItems';
+import { pruneResult } from '../util/dedupe';
+import { packFragments, pendingOnly } from '../util/batch';
 import { useKeyboardHeight } from '../util/keyboard';
 import { SummarySheet } from '../components/SummarySheet';
 import { ResultSections } from '../components/ResultSections';
@@ -77,23 +79,6 @@ const REFACTOR_LIMIT = 20;
 /** 重构的字数预算比整理宽一点：它要把旧标签一起发给模型，每条天然更长 */
 const REFACTOR_CHAR_BUDGET = 16_000;
 
-/**
- * 按「条数 + 字数」双上限装箱。
- *
- * 至少收一条，否则一条超长碎片会让批次永远是空的，
- * 那个用户就永远整理不了它 —— 宁可让一条独占一批。
- */
-function packFragments(list: Fragment[], limit: number, budget: number): Fragment[] {
-  const out: Fragment[] = [];
-  let chars = 0;
-  for (const f of list) {
-    if (out.length >= limit) break;
-    if (out.length && chars + f.content.length > budget) break;
-    out.push(f);
-    chars += f.content.length;
-  }
-  return out;
-}
 /** 整理页「待补小结」最多列几条 */
 const BACKLOG_LIMIT = 10;
 
@@ -112,11 +97,25 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
   const [round, setRound] = useState(0);
   /** 真正写进库的条数。不能用「勾选了几项」代替 —— 勾了但无事可做的项不算 */
   const [applied, setApplied] = useState(0);
+  /** 刚才写库的那一批有几条。done 页要报它，不能用重新装箱后的 batch.length */
+  const [appliedBatch, setAppliedBatch] = useState(0);
   const [refineText, setRefineText] = useState('');
   const [refineError, setRefineError] = useState('');
   const [refining, setRefining] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [runId, setRunId] = useState<number | null>(null);
+  /**
+   * 这一次进来之后已经过了一遍的碎片 id。
+   *
+   * 之前「继续整理剩下的 N 条」点下去还是原来那 20 条，根因就是批次永远从池子头部取：
+   * 重构**不改变碎片状态**（它们本来就是 tagged），池子一点没变；
+   * 整理模式只把「AI 给了标签且用户勾选」的那几条标成 tagged，
+   * 剩下没被抽到标签的仍留在 inbox 前排，下一批还是它们打头。
+   * 现在两层兜底：这里记会话内游标，commit 里再把整批标成 tagged。
+   */
+  const [doneIds, setDoneIds] = useState<Set<number>>(new Set());
+  /** 这一轮被降噪收起的重复卡片 / 待办，如实显示，别让内容悄悄少掉 */
+  const [pruned, setPruned] = useState({ cards: 0, todos: 0 });
 
   // 首轮请求时拿到的上下文，追问要复用同一份，否则模型看到的范围会变
   const [config, setConfig] = useState<AiConfig | null>(null);
@@ -173,9 +172,12 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     };
   }, [mode]);
 
+  /** 还没过过一遍的待整理碎片。doneIds 是会话内游标，刷新后仍留在 inbox 的靠它挡 */
+  const inboxPool = useMemo(() => pendingOnly(inbox, doneIds), [inbox, doneIds]);
+
   const organizeBatch = useMemo(
-    () => packFragments(inbox, INBOX_LIMIT, BATCH_CHAR_BUDGET),
-    [inbox],
+    () => packFragments(inboxPool, INBOX_LIMIT, BATCH_CHAR_BUDGET),
+    [inboxPool],
   );
 
   const refactorPool = useMemo(() => {
@@ -193,13 +195,19 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     return organized;
   }, [refactorScope, refactorTopic, cards, fragments, organized]);
 
+  /** 本次会话已经重构过的不再重复装箱，否则「继续」永远取前 20 条 */
+  const refactorPending = useMemo(
+    () => pendingOnly(refactorPool, doneIds),
+    [refactorPool, doneIds],
+  );
+
   const refactorBatch = useMemo(
-    () => packFragments(refactorPool, REFACTOR_LIMIT, REFACTOR_CHAR_BUDGET),
-    [refactorPool],
+    () => packFragments(refactorPending, REFACTOR_LIMIT, REFACTOR_CHAR_BUDGET),
+    [refactorPending],
   );
 
   const batch = mode === 'refactor' ? refactorBatch : organizeBatch;
-  const available = mode === 'refactor' ? refactorPool.length : inbox.length;
+  const available = mode === 'refactor' ? refactorPending.length : inboxPool.length;
   const overflow = available - batch.length;
 
   const acceptedKeys = useMemo(() => resultKeys(result), [result]);
@@ -246,27 +254,6 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
     });
   }
 
-  /**
-   * 重构模式要做的降噪，不能寄希望于模型自己收敛：
-   * **不再重复抽待办** —— 这些碎片上次整理时已经抽过一遍了，模型重看一遍
-   * 会再抽出来一批同样的，每重构一次待办列表就多一份重复。判据两条：
-   * 文案（去掉标点空白后）相同，或者这条碎片本来就派生出过待办。
-   *
-   * 标签、知识卡、归档、删待办、合并待办这些才是重构真正要产出的东西，原样保留。
-   */
-  function pruneRefactorResult(res: OrganizeResult, existing: Todo[]): OrganizeResult {
-    if (mode !== 'refactor') return res;
-    const norm = (s: string) => s.replace(/[\s，。、,.!！?？~～;；:：'"“”‘’()（）\[\]【】\-—_/]/g, '');
-    const seenText = new Set(existing.map((t) => norm(t.text)));
-    const seenSource = new Set(
-      existing.map((t) => t.sourceFragmentId).filter((n): n is number => n !== null),
-    );
-    const todos = res.todos.filter(
-      (t) => !seenText.has(norm(t.text)) && !(t.id !== null && seenSource.has(t.id)),
-    );
-    return { ...res, todos };
-  }
-
   async function start() {
     setPhase('running');
     setErrorMsg('');
@@ -294,7 +281,11 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
         mode,
         onProgress: handleProgress,
       });
-      const cleaned = pruneRefactorResult(outcome.result, todoList);
+      const cleaned = pruneResult(outcome.result, {
+        cards: cardList,
+        todos: todoList,
+        refactor: mode === 'refactor',
+      });
 
       const id = await repo.saveRun({
         startedAt,
@@ -312,8 +303,9 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
       // 以最终值为准，补上节流可能漏掉的尾巴
       setReasoning(outcome.reasoning);
       setReceived(outcome.raw.length);
-      setResult(cleaned);
-      setDeselected(freshOffKeys(new Set(), cleaned, null));
+      setResult(cleaned.result);
+      setPruned({ cards: cleaned.droppedCards, todos: cleaned.droppedTodos });
+      setDeselected(freshOffKeys(new Set(), cleaned.result, null));
       setRound(1);
       setPhase('result');
     } catch (e) {
@@ -344,13 +336,18 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
         mode,
         onProgress: handleProgress,
       });
-      const cleaned = pruneRefactorResult(outcome.result, todos);
+      const cleaned = pruneResult(outcome.result, {
+        cards,
+        todos,
+        refactor: mode === 'refactor',
+      });
       setRaw(outcome.raw);
-      setResult(cleaned);
+      setResult(cleaned.result);
+      setPruned({ cards: cleaned.droppedCards, todos: cleaned.droppedTodos });
       setReasoning(outcome.reasoning);
       setReceived(outcome.raw.length);
       // 内容没变的条目保留用户之前的勾选状态，只有新冒出来的破坏性操作才置为不勾
-      setDeselected((prev) => freshOffKeys(prev, cleaned, result));
+      setDeselected((prev) => freshOffKeys(prev, cleaned.result, result));
       setRefineText('');
       setRound((r) => r + 1);
     } catch (e) {
@@ -370,9 +367,15 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
         accepted: isOn,
         fragments,
         cards,
+        // 整批都算「过了一遍」：只标「有标签且被勾选」的那几条，
+        // 剩下没被抽到标签的会永远留在 inbox 前排，下次整理又是它们
+        batchFragmentIds: batch.map((f) => f.id),
       });
       if (runId) await repo.markRunApplied(runId);
       setApplied(report.applied);
+      setAppliedBatch(batch.length);
+      // 会话内游标。重构不改碎片状态，没有它「继续重构」永远是同一批
+      setDoneIds((prev) => new Set([...prev, ...batch.map((f) => f.id)]));
       // 先刷新再进 done：done 页要显示「还剩几条待整理」，
       // 用刷新前的 inbox 去算会把这一批已经整理完的又算一遍
       try {
@@ -453,12 +456,15 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
               <Text style={styles.heroLabel}>
                 {mode === 'refactor'
                   ? refactorScope === 'topic' && refactorTopic
-                    ? `「${refactorTopic}」下的碎片`
+                    ? `「${refactorTopic}」下待重构`
                     : refactorScope === 'all'
-                      ? '条碎片（未整理 + 已整理）'
-                      : '条已整理的碎片'
+                      ? '条待重构（未整理 + 已整理）'
+                      : '条已整理待重构'
                   : '条未整理的碎片'}
               </Text>
+              {doneIds.size > 0 && (
+                <Text style={styles.heroSub}>本次已经过 {doneIds.size} 条，不会再重复取</Text>
+              )}
 
               {mode === 'refactor' && (
                 <View style={styles.scopeBlock}>
@@ -581,6 +587,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
           <View style={styles.centerBox}>
             <Ionicons name="checkmark-circle-outline" size={36} color={C.accent} />
             <Text style={styles.centerText}>已写入 {applied} 项</Text>
+            <Text style={styles.doneMeta}>这一批 {appliedBatch} 条已经{word}过一遍</Text>
             {overflow > 0 ? (
               <>
                 <Text style={styles.doneSub}>
@@ -589,7 +596,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                 </Text>
                 <Pressable style={styles.primaryBtn} onPress={start}>
                   <Text style={styles.primaryBtnText}>
-                    继续{word}剩下的 {Math.min(overflow, batchLimit)} 条
+                    继续{word}剩下的 {batch.length} 条
                   </Text>
                 </Pressable>
                 <Pressable style={styles.secondaryBtn} onPress={onClose}>
@@ -621,6 +628,15 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                   逐条确认。关掉的项不会写入。
                   {round > 1 ? '追问后没改动的条目，你之前的勾选状态会保留。' : ''}
                 </Text>
+                {pruned.cards > 0 || pruned.todos > 0 ? (
+                  <Text style={styles.pruneNote}>
+                    已自动收起
+                    {pruned.cards > 0 ? `${pruned.cards} 张和已有卡片重复的知识卡` : ''}
+                    {pruned.cards > 0 && pruned.todos > 0 ? '、' : ''}
+                    {pruned.todos > 0 ? `${pruned.todos} 条重复待办` : ''}
+                    —— 重复的新卡会把新来源补进旧卡，内容一个字都没丢。
+                  </Text>
+                ) : null}
                 <ReasoningTrace
                   text={reasoning}
                   expanded={showReasoning}
@@ -741,6 +757,7 @@ const styles = StyleSheet.create({
   },
   heroNum: { fontSize: 40, color: C.text, fontWeight: '500', lineHeight: 46 },
   heroLabel: { fontSize: 13, color: C.text2, marginTop: 2 },
+  heroSub: { fontSize: 11, color: C.text3, marginTop: 6 },
 
   scopeBlock: {
     alignSelf: 'stretch',
@@ -814,6 +831,7 @@ const styles = StyleSheet.create({
 
   centerBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 80, gap: 10 },
   centerText: { fontSize: 14, color: C.text2 },
+  doneMeta: { fontSize: 11.5, color: C.text3, marginTop: -2 },
   doneSub: {
     fontSize: 12,
     color: C.text3,
@@ -827,6 +845,7 @@ const styles = StyleSheet.create({
   errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
 
   resultHint: { fontSize: 12, color: C.text3, marginBottom: 14, marginTop: 4, lineHeight: 18 },
+  pruneNote: { fontSize: 11.5, color: C.amberText, lineHeight: 18, marginBottom: 14 },
 
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
