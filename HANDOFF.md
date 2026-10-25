@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**：§4 的 500 行变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.6.2（versionCode 17）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.6.3（versionCode 18）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 6 节（AI 契约 + 流式 + 总结与问答）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -19,12 +19,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.6.2`，`versionCode 17`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.6.3`，`versionCode 18`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 5` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 12,290 行 TS/TSX（48 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
-| 最新 APK | `fragments-v0.6.2.apk`，21.91 MiB（22,976,354 字节），MD5 `fc64a50a8533e94e2275d772a5a8fd55`（`versionCode 17` / `versionName 0.6.2` 已用 aapt2 核对） |
+| 规模 | 12,450 行 TS/TSX（48 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
+| 最新 APK | `fragments-v0.6.3.apk`，21.91 MiB（22,977,890 字节），MD5 `372e28ee67f8a70b8e45f8078a1d62aa`（`versionCode 18` / `versionName 0.6.3` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -116,6 +116,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 | 版本 | 一句话 |
 |---|---|
+| **v0.6.3** | 真机反馈「整理时思考突然终止，报错模型没有返回内容」。真因是 `max_tokens` 的语义：V4 里它**同时限制思考链和正文**，而代码写着「思考链不计入」并设成 8000 —— 思考一长正文一个字都出不来。加上 `finish_reason` 从来没被读，截断被误报成「模型没返回」。额度改为 64K（第三方 clamp 8K），流式与非流式都读 `finish_reason`，按原因分别报错 |
 | **v0.6.2** | 真机反馈「提问没法选主题，都是全库」。根因是 `scope` 只有「当前主题 / 全库」两档、具体主题靠 `props.topic`，从知识库首页进来时它是 `null`，主题胶囊整段不渲染。改成 scope 直接存主题名 + 一行横滚的范围胶囊；切范围清掉上一轮答案；询问中锁住胶囊 |
 | **v0.6.1** | 真机反馈「方向可分，但不可移除」。移除动作从「输入框留空 + 确定」这个隐藏约定换成面板底部的显式按钮；SQL 清空字段改写成 `NULL` 字面量（`?` 绑 JS null 会静默改 0 行）；空字符串方向归一成 `NULL` |
 | **v0.6.0** | 补上两个「做了但用不上」：卡片的二级方向可以手动设了（详情页 / 主题页 / 点小节头三个入口），标签可以点了筛（还带事项）。prompt 里带上已有方向并要求复用 |
@@ -146,12 +147,12 @@ src/
     config.ts                    35  读 AI 配置（默认值 + repo.getSetting）+ 已停用模型名映射
     keyStore.ts                  37  API Key 存 expo-secure-store（不进 DB、不进导出）
     prompt.ts                   237  SYSTEM_PROMPT（九项）+ buildUserContent（含【已完成待办】）+ buildRefineContent
-    chat.ts                     339  ★ 请求层：四段超时 / 流式 / 非流式 / 错误映射 / testConnection（三功能共用）
-    deepseek.ts                 332  整理：prompt 组装 + normalizeResult（全部校验都在这）+ organize()
-    summarize.ts                226  ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗
-    ask.ts                      282  ★ 知识库问答：关键词打分选卡、预算装填、引用反查、历史与网络资料注入、提案解析入口
+    chat.ts                     439  ★ 请求层：四段超时 / 流式 / 非流式 / 错误映射 / 额度解析 / describeFinish（三功能共用）
+    deepseek.ts                 345  整理：prompt 组装 + normalizeResult（全部校验都在这）+ organize()
+    summarize.ts                233  ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗
+    ask.ts                      288  ★ 知识库问答：关键词打分选卡、预算装填、引用反查、历史与网络资料注入、提案解析入口
     search.ts                   162  ★ DeepSeek 官方 `/v1/tools/search`：退避重试 + 结果收敛（**不要换成内置 web_search**）
-    stream.ts                   114  ★ SSE 解析：把 reasoning_content 与 content 分开累积
+    stream.ts                   148  ★ SSE 解析：reasoning_content 与 content 分开累积 + 读取 finish_reason
   db/
     types.ts                    159  Repo 接口（上下层唯一契约）
     repo.native.ts              667  SQLite 实现 + MIGRATIONS 数组（到 v5）
@@ -370,7 +371,7 @@ plugins/
 `fragments-v0.6.0.apk` 已经打好放在项目根目录（`versionCode 15`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.6.2.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.6.3.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
@@ -397,7 +398,11 @@ adb install -r fragments-v0.6.2.apk        # adb 在 %ANDROID_HOME%\platform-too
 10. **问答范围（v0.6.2 重点，上一版报过 bug）**：在知识库**首页**（主题列表，不点进任何主题）
     → 点「问模型」→ 范围那一行应该能看到 `全库 N` 加**全部主题**的胶囊，点一个就切过去 →
     提问只查那个主题的卡片；切范围后上一轮答案应该消失。从某个主题页进来时，那个主题排在第二位
-11. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
+11. **整理大批量（v0.6.3 重点，上一版报过 bug）**：攒二三十条以上未整理碎片 → 开始整理 →
+    思考过程走完应该**接着出正文**，不再出现「思考到一半突然停住 + 模型没有返回内容」。
+    万一还是被截断，报错文案必须是「输出被截断了……把思考强度调低，或把这一批拆小」，
+    **不能再是一句光秃秃的「模型没有返回内容」**（那句话把可诊断的问题变成了玄学）
+12. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
 
 ### P0 — 然后才是 v0.2.2 / v0.2.3 遗留的三问
 

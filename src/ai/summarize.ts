@@ -23,10 +23,17 @@ const PER_FRAGMENT_CLIP = 400;
 /** 预算里前段占的比例 */
 const HEAD_SHARE = 0.7;
 
+/**
+ * 输出上限。**思考模式下这个额度和思维链共用**，不是只管最终那篇 Markdown。
+ *
+ * 原来分别是 1200 / 2000 / 3000 —— 对思考模式来说等于没有额度：
+ * 思维链几十秒就能吃掉一千多 token，正文还没开始就被切断，
+ * 上层只能看到「模型没有返回内容」。
+ */
 const MAX_TOKENS: Record<DigestKind, number> = {
-  daily: 1200,
-  weekly: 2000,
-  monthly: 3000,
+  daily: 12_000,
+  weekly: 20_000,
+  monthly: 28_000,
 };
 
 const KIND_NAME: Record<DigestKind, string> = {

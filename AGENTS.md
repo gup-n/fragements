@@ -83,10 +83,26 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **读流必须用 `import { fetch } from 'expo/fetch'`**。RN 自带的 fetch 没有 `response.body`。
 - **`TextDecoder` 必须 `{ stream: true }`**，否则跨分片的中文会解成乱码。
 - **`delta.reasoning_content`（思维链）只上屏，`delta.content`（JSON）才进解析**。两者绝不能拼进同一个缓冲区。
-- **超时是四段**（建连 90s / 首字 120s / 空闲 60s / 硬上限 6min），不要改回单一总时长。
+- **超时是四段**（建连 90s / 首字 120s / 空闲 60s / 硬上限 12min），不要改回单一总时长。
+  硬上限是 12 分钟而不是 6 —— 输出额度 64K 之后，正常生成本来就要十几分钟。
 - **UI 更新要节流**（120ms），否则几百个 chunk 的 setState 会卡死。
 - **模型名**：只能用 `deepseek-flash` / `deepseek-v4-pro`。`deepseek-chat`、`deepseek-reasoner` **已于 2026-07-24 停用**，
   调不通。别在示例或文档里再写这两个旧名字。
+
+## 输出额度与 `finish_reason`（v0.6.3）
+
+- **`max_tokens` 同时限制「思考链 + 正文」，不是只管正文。** 老版 `deepseek-reasoner` 的规则是
+  「思维链另算」，V4 系列已经改成单次输出总长度。代码注释里曾经写着「思考链不计入这个额度」，
+  照着那行注释设了 8000，结果思考一长正文就一个字都出不来，界面上表现为
+  **「思考到一半突然停住 + 模型没有返回内容」**。现在官方额度（64K）照抄，第三方 clamp 到 8K。
+- **`finish_reason` 必须读，而且要在读 `delta` 之前读。** 它挂在最后一个 chunk 上，
+  而那个 chunk 的 `delta` 是空对象 `{}` —— 任何「先看 delta，没内容就 return」的写法都会漏掉它。
+- **空结果要按原因分开报**：`length` = 撞额度（重试没用，得调小思考强度或拆批次），
+  `insufficient_system_resource` = 对方资源不足（过一会儿再试）。两者报同一句
+  「模型没有返回内容」的话，用户只会反复重试同一个必然失败的操作。
+- **正文非空但 `finishReason === 'length'` 更危险**：JSON 一定是残的。
+  `organize` 必须在 `parseJsonLoose` **之前**拦下来，否则会误导成「不是合法 JSON，再试一次就好」。
+- 参数语义（尤其是「看起来没变」的）**必须回官方文档核对**，不能凭记忆、也不能信旧注释。
 
 ## 三个 AI 功能的分工（v0.3.0）
 

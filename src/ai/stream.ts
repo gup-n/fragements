@@ -17,11 +17,34 @@ export interface StreamCallbacks {
   onContent?: (text: string) => void;
 }
 
+/**
+ * 输出为什么停下。**只有 'stop' 代表完整**。
+ *
+ * - `length` —— 撞到 max_tokens（**含思考链**）或上下文上限，被硬截断
+ * - `insufficient_system_resource` —— 服务端推理资源不足，生成被打断
+ * - `content_filter` / `aborted` / `tool_calls` —— 本项目基本不会遇到（不用 tools）
+ */
+export type FinishReason =
+  | 'stop'
+  | 'length'
+  | 'content_filter'
+  | 'tool_calls'
+  | 'insufficient_system_resource'
+  | 'aborted';
+
 export interface StreamResult {
   /** 拼完的正文，交给 parseJsonLoose 解析 */
   content: string;
   /** 思维链全文，只用于展示；模型没有思考模式时为空串 */
   reasoning: string;
+  /**
+   * 停止原因。拿不到就为 null（兼容不返回该字段的第三方兼容服务）。
+   *
+   * 这个字段以前整个丢掉了，代价是：思考链吃光 max_tokens 导致正文一个字都没出时，
+   * 上层只能看到「content 为空」，于是报「模型没有返回内容」——
+   * 把「输出被截断」误诊成「模型不干活」，排查时完全摸不着方向。
+   */
+  finishReason: FinishReason | null;
 }
 
 /** 流式响应不可用（拿不到 body），调用方应回退到非流式 */
@@ -52,6 +75,7 @@ export async function readChatStream(
   let buffer = '';
   let reasoning = '';
   let content = '';
+  let finishReason: FinishReason | null = null;
 
   const consume = (line: string) => {
     const payload = payloadOf(line);
@@ -66,7 +90,17 @@ export async function readChatStream(
       return false;
     }
 
-    const delta = chunk?.choices?.[0]?.delta;
+    const choice = chunk?.choices?.[0];
+    if (!choice) return false;
+
+    // finish_reason 通常挂在**最后一个** chunk 上，而那个 chunk 的 delta 是空的。
+    // 所以必须在读 delta 之前取，否则会被 `if (!delta) return` 整个跳过 ——
+    // 那正是「截断被当成空回复」的原因。
+    if (typeof choice.finish_reason === 'string' && choice.finish_reason) {
+      finishReason = choice.finish_reason as FinishReason;
+    }
+
+    const delta = choice.delta;
     if (!delta) return false;
 
     if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
@@ -92,7 +126,7 @@ export async function readChatStream(
       // 最后一段可能只是个半行，留到下一块再拼
       buffer = lines.pop() ?? '';
       for (const line of lines) {
-        if (consume(line)) return { content, reasoning };
+        if (consume(line)) return { content, reasoning, finishReason };
       }
     }
 
@@ -110,5 +144,5 @@ export async function readChatStream(
     }
   }
 
-  return { content, reasoning };
+  return { content, reasoning, finishReason };
 }

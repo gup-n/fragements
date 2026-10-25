@@ -9,9 +9,18 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import type { AiConfig } from '../types';
 import { DEFAULT_AI_CONFIG } from '../types';
-import { NoStreamError, readChatStream } from './stream';
+import { NoStreamError, readChatStream, type FinishReason } from './stream';
 
-export type AiErrorCode = 'nokey' | 'network' | 'auth' | 'quota' | 'rate' | 'server' | 'format';
+export type AiErrorCode =
+  | 'nokey'
+  | 'network'
+  | 'auth'
+  | 'quota'
+  | 'rate'
+  | 'server'
+  | 'format'
+  /** 输出被 max_tokens 或上下文长度截断 —— 和「模型没返回」是两回事，必须分开 */
+  | 'truncated';
 
 export class AiError extends Error {
   code: AiErrorCode;
@@ -31,10 +40,27 @@ const CONNECT_TIMEOUT_MS = 90_000;
 const FIRST_TOKEN_TIMEOUT_MS = 120_000;
 /** 数据流动中，两块之间允许的最长静默 */
 const IDLE_TIMEOUT_MS = 60_000;
-/** 兜底硬上限 */
-const HARD_LIMIT_MS = 6 * 60_000;
-/** 九类输出 + 追问可能很长，给足空间；思考链不计入这个额度 */
-const MAX_TOKENS = 8000;
+/**
+ * 兜底硬上限。
+ *
+ * 提到 12 分钟是因为输出额度从 8K 涨到了 64K —— 按思考模式常见的每秒二三十 token 算，
+ * 三四十 K 的输出本来就要十几分钟，6 分钟会在正常生成途中直接掐断。
+ * 真卡住的情况由上面的 idle 兜（60 秒没有新 token 就 abort），所以这里放宽不会让人干等。
+ */
+const HARD_LIMIT_MS = 12 * 60_000;
+
+/**
+ * 输出额度。**这个数同时限制思考链和正文**，这一点极容易搞错 ——
+ * 老版 `deepseek-reasoner` 的 max_tokens 只管最终回答、思维链另算，
+ * 但 V4 系列已经改成「单次输出的总长度（含思考过程）」。
+ *
+ * 曾经这里是 8000，结果：碎片一多、思考链一长就把额度吃光，
+ * 正文一个字都没机会输出，界面表现是「思考到一半突然停住 + 模型没有返回内容」。
+ * 官方思考模式的默认值就是 64K（`reasoning_effort=max` 时 128K），照它来。
+ *
+ * 设大不会多花钱：max_tokens 只是上限，按实际生成结算。
+ */
+const MAX_TOKENS = 64_000;
 
 /** 流式过程中的增量回调，传的都是**累积全文**，UI 直接覆盖显示 */
 export interface ChatProgress {
@@ -49,11 +75,46 @@ export interface ChatOutcome {
   content: string;
   /** 思维链全文，只用于展示 */
   reasoning: string;
+  /**
+   * 为什么停下。只有 `'stop'`（或第三方服务不返回这个字段时的 `null`）代表完整。
+   *
+   * 调用方拿它区分「模型真的没话说」和「输出被截断」——
+   * 后者重试一次通常还是失败，得改参数或拆小批次，报同一句「没有返回内容」只会让人反复重试。
+   */
+  finishReason: FinishReason | null;
+}
+
+/**
+ * 把「为什么是空的」翻成用户看得懂的一句话。
+ *
+ * 这是本轮 bug 的正解：原来所有空结果都报「模型没有返回内容」，
+ * 但真正的原因（思考链吃光额度 / 上下文超限）连一个字的线索都没留下。
+ */
+export function describeFinish(reason: FinishReason | null, maxTokens: number): string {
+  switch (reason) {
+    case 'length':
+      return (
+        `输出被截断了：思考过程加正文撞到了上限（max_tokens ${maxTokens.toLocaleString()}，` +
+        'DeepSeek 规定思考链和正文共用这个额度）。' +
+        '把设置里的「思考强度」调低，或者把这一批拆小一点再试。'
+      );
+    case 'insufficient_system_resource':
+      return 'DeepSeek 那边推理资源不足，生成被中途打断。这是对方服务端的临时状态，过一会儿再试。';
+    case 'content_filter':
+      return '输出触发了 DeepSeek 的内容过滤，被拦下了。';
+    case 'aborted':
+      return '生成被中断了，再试一次。';
+    default:
+      return '模型没有返回内容。';
+  }
 }
 
 /** 每次请求的可调项。三个调用方（整理 / 周期总结 / 知识库问答）只在这些上有差别 */
 export interface RequestOptions {
-  /** 输出上限，默认 8000。思考链不占这个额度 */
+  /**
+   * 输出上限。不传就用模型对应的默认值（DeepSeek V4 是 64K，第三方是 8K）。
+   * **思维链也算在这个额度里** —— 这是最容易记错的一条。
+   */
   maxTokens?: number;
   /**
    * 要不要 `response_format: json_object`。
@@ -151,7 +212,7 @@ class TimeoutGuard {
       case 'idle':
         return '输出中途停住了（60 秒没有新内容），再试一次';
       case 'hard':
-        return '这一轮超过 6 分钟还没结束，内容多的话可以分两批';
+        return '这一轮超过 12 分钟还没结束，内容多的话可以分两批';
       default:
         return '请求被中断了';
     }
@@ -175,10 +236,28 @@ function isDeepSeekV4(model: string) {
   return name.startsWith('deepseek-flash') || name.startsWith('deepseek-v4');
 }
 
+/**
+ * 非 DeepSeek 官方模型时的保守上限。
+ *
+ * 用户把 Base URL 换成第三方 OpenAI 兼容服务时，64K 这个数它多半不认 ——
+ * 多数网关的上限是 4K~8K，直接报 400，整个功能瞬间不可用。
+ */
+const THIRD_PARTY_MAX_TOKENS = 8_000;
+
+/**
+ * 算出这次实际要用的输出额度。
+ * 请求方指定的值也要被压到上限内，否则「日小结 12K」在第三方服务上同样会 400。
+ */
+function resolveMaxTokens(model: string, requested?: number) {
+  const cap = isDeepSeekV4(model) ? MAX_TOKENS : THIRD_PARTY_MAX_TOKENS;
+  return Math.min(requested ?? cap, cap);
+}
+
 function buildBody(
   config: AiConfig,
   messages: ChatMessage[],
   stream: boolean,
+  maxTokens: number,
   options: RequestOptions = {},
 ) {
   const model = config.model || DEFAULT_AI_CONFIG.model;
@@ -186,7 +265,7 @@ function buildBody(
   const body: Record<string, unknown> = {
     model,
     messages,
-    max_tokens: options.maxTokens ?? MAX_TOKENS,
+    max_tokens: maxTokens,
     stream,
   };
 
@@ -282,10 +361,16 @@ async function postChatOnce(config: AiConfig, body: Record<string, unknown>): Pr
     if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
 
     const payload = await res.json();
-    const message = payload?.choices?.[0]?.message;
+    const choice = payload?.choices?.[0];
+    const message = choice?.message;
     return {
       content: typeof message?.content === 'string' ? message.content : '',
       reasoning: typeof message?.reasoning_content === 'string' ? message.reasoning_content : '',
+      // 非流式路径也要读，否则「回退之后错误提示变模糊」成了一条隐蔽的降级
+      finishReason:
+        typeof choice?.finish_reason === 'string' && choice.finish_reason
+          ? (choice.finish_reason as FinishReason)
+          : null,
     };
   } catch (e) {
     if (e instanceof AiError) throw e;
@@ -298,6 +383,10 @@ async function postChatOnce(config: AiConfig, body: Record<string, unknown>): Pr
 /**
  * 发一次对话请求，优先流式。
  * 只有「压根拿不到流」才回退到非流式 —— 已经开始收数据再断的不能重试，重试等于重复扣费。
+ *
+ * 正文一个字都没有时直接抛错，**并且按 finish_reason 说清原因**：
+ * 撞额度（`length`）和模型真没话说，处理方式完全相反 ——
+ * 前者重试一百次也一样，得调小思考强度或拆批次。
  */
 export async function requestChat(
   config: AiConfig,
@@ -306,13 +395,24 @@ export async function requestChat(
   options: RequestOptions = {},
 ): Promise<ChatOutcome> {
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
-  const body = buildBody(config, messages, true, options);
+  const maxTokens = resolveMaxTokens(config.model || DEFAULT_AI_CONFIG.model, options.maxTokens);
+  const body = buildBody(config, messages, true, maxTokens, options);
+
+  let outcome: ChatOutcome;
   try {
-    return await postChatStream(config, body, onProgress);
+    outcome = await postChatStream(config, body, onProgress);
   } catch (e) {
     if (!(e instanceof NoStreamError)) throw e;
-    return postChatOnce(config, body);
+    outcome = await postChatOnce(config, body);
   }
+
+  if (!outcome.content.trim()) {
+    throw new AiError(
+      outcome.finishReason === 'length' ? 'truncated' : 'format',
+      describeFinish(outcome.finishReason, maxTokens),
+    );
+  }
+  return outcome;
 }
 
 /** 设置页的连通性测试：拉模型列表，比真实对话便宜得多 */

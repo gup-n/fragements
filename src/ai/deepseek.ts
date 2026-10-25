@@ -320,7 +320,20 @@ export async function organize(options: OrganizeOptions): Promise<OrganizeOutcom
   // 九类结果的输出必须走 json_object，追问回传的 raw 也是 JSON，靠它保证格式稳定
   const outcome = await requestChat(config, messages, onProgress, { json: true });
 
+  // 完全空的情况请求层已经按 finish_reason 报过了，这里只是兜底
   if (!outcome.content.trim()) throw new AiError('format', '模型没有返回内容');
+
+  // 正文非空、但撞了额度上限：JSON 必然是残的。
+  // 不先拦下来的话，parseJsonLoose 会报「不是合法 JSON，再试一次通常就好了」——
+  // 而这种情况重试必然同样失败（同样的输入、同样的额度），那句提示纯属误导。
+  if (outcome.finishReason === 'length') {
+    throw new AiError(
+      'truncated',
+      `整理结果被截断了（只收到 ${outcome.content.length} 字，JSON 不完整）。` +
+        '这一批的内容量超过了模型的单次输出上限，把碎片分两批再试，' +
+        '或者到设置里把「思考强度」调低。',
+    );
+  }
 
   const result = normalizeResult(parseJsonLoose(outcome.content), fragments, {
     todoIds: todos.filter((t) => !t.done).map((t) => t.id),
