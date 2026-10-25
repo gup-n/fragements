@@ -416,20 +416,22 @@ export const repo: Repo = {
 
   async resubtopicCards(topic, from, to) {
     const conds: string[] = [];
-    const params: (string | number | null)[] = [to, topic];
+    const fromParams: string[] = [];
     for (const s of from) {
       if (s === to) continue;
-      if (s === null) {
+      if (s === null || s === '') {
         conds.push('subtopic IS NULL');
       } else {
         conds.push('subtopic = ?');
-        params.push(s);
+        fromParams.push(s);
       }
     }
     if (!conds.length) return { moved: 0 };
+    // 同上：目标是空的时候走 NULL 字面量，别指望 ? 能绑 null
+    const clear = to === null || to === '';
     const res = db().runSync(
-      `UPDATE knowledge_cards SET subtopic = ? WHERE topic = ? AND (${conds.join(' OR ')})`,
-      params,
+      `UPDATE knowledge_cards SET ${clear ? 'subtopic = NULL' : 'subtopic = ?'} WHERE topic = ? AND (${conds.join(' OR ')})`,
+      clear ? [topic, ...fromParams] : [to, topic, ...fromParams],
     );
     return { moved: res.changes };
   },
@@ -438,6 +440,14 @@ export const repo: Repo = {
     const list = Array.from(new Set(ids.filter((n) => Number.isFinite(n))));
     if (!list.length) return { changed: 0 };
     const ph = list.map(() => '?').join(',');
+    // 清空方向必须把 NULL 写进 SQL 字面量，不能靠 `?` 绑定 null。
+    // expo-sqlite 在部分版本上会把 JS null 当成「没给参数」或绑成字符串，
+    // 结果是 UPDATE 改 0 行却正常返回 —— 表现就是「方向设得上、删不掉」。
+    // NULL 在这里是 SQL 关键字不是用户数据，没有注入面。
+    if (subtopic === null || subtopic === '') {
+      const res = db().runSync(`UPDATE knowledge_cards SET subtopic = NULL WHERE id IN (${ph})`, list);
+      return { changed: res.changes };
+    }
     const res = db().runSync(`UPDATE knowledge_cards SET subtopic = ? WHERE id IN (${ph})`, [
       subtopic,
       ...list,
@@ -464,10 +474,16 @@ export const repo: Repo = {
       sets.push('topic = ?');
       params.push(patch.topic);
     }
-    // 显式传 null 是「清掉二级方向」，和「不传」含义不同，所以不能用 || 判断
+    // 显式传 null 是「清掉二级方向」，和「不传」含义不同，所以不能用 || 判断。
+    // 清空时写 NULL 字面量，理由同 setCardSubtopic —— 空方向必须真的变成 NULL，
+    // 否则会留下一个叫空字符串的方向组。
     if (patch.subtopic !== undefined) {
-      sets.push('subtopic = ?');
-      params.push(patch.subtopic);
+      if (patch.subtopic === null || patch.subtopic === '') {
+        sets.push('subtopic = NULL');
+      } else {
+        sets.push('subtopic = ?');
+        params.push(patch.subtopic);
+      }
     }
     if (patch.archived !== undefined) {
       sets.push('archived = ?');

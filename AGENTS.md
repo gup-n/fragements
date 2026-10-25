@@ -138,6 +138,25 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 闭包里永远拿到订阅对象（恒为真）→ 每次 `return false` → 安卓返回键彻底失效。
 **这类重名 tsc 不会报**，因为两者都是合法值。
 
+## SQL 里清空字段要写 `NULL` 字面量（v0.6.1）
+
+```ts
+// 对：关键字进 SQL 文本，没有注入面
+db().runSync(`UPDATE knowledge_cards SET subtopic = NULL WHERE id IN (${ph})`, ids);
+// 错：靠 ? 绑 JS null，expo-sqlite 在部分版本上会当成「没给参数」或绑成字符串，
+//     UPDATE 改 0 行却正常返回 → 设得上、删不掉，且零报错
+db().runSync(`UPDATE knowledge_cards SET subtopic = ? WHERE id IN (${ph})`, [null, ...ids]);
+```
+
+`setCardSubtopic` / `resubtopicCards` / `updateKnowledgeCard` 三处都按这个写法。
+空字符串一并归一成 `NULL`，否则会多出一个「名字是空」的分组。
+
+## 别用返回的 `changed` 判断成败
+
+不同 SQLite 驱动对「新值和旧值相同算不算一次修改」说法不一，有的返回 0。
+拿 0 当失败，就会出现「其实已经删掉了，界面却提示失败、面板还关不掉」。
+写库之后一律以 `onChanged()` 重新查询的结果为准。
+
 ## Expo 会发破坏性变更，别信训练数据
 
 动 Expo / RN API 之前：

@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**：§4 的 500 行变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.6.0（versionCode 15）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.6.1（versionCode 16）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 6 节（AI 契约 + 流式 + 总结与问答）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -19,12 +19,12 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
-| 版本 | `0.6.0`，`versionCode 15`，`targetSdk 36` / `minSdk 24` |
+| 版本 | `0.6.1`，`versionCode 16`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
 | 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 5` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 12,163 行 TS/TSX（48 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
-| 最新 APK | `fragments-v0.6.0.apk`，21.9 MiB（22,974,326 字节），MD5 `56374667c2e6e3c7957797e7b179866d`（`versionCode 15` / `versionName 0.6.0` 已用 aapt2 核对） |
+| 规模 | 12,217 行 TS/TSX（48 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
+| 最新 APK | `fragments-v0.6.1.apk`，21.91 MiB（22,975,358 字节），MD5 `b2ff3419d73e7dd75416f80d117fafe1`（`versionCode 16` / `versionName 0.6.1` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
 **没有用导航库**。页面栈就是 `App.tsx` 里一个 `route` state（`'timeline' | 'organize' | 'settings' | 'knowledge' | 'review'`）。别引入 Expo Router。
@@ -43,20 +43,16 @@ npm run build:web                                # 导出到固定的 web-previe
 **项目零自动化测试**，上面两条是唯一的自动检查。没有 lint、没有单测 —— 新加逻辑靠临时断言脚本，
 跑完删掉（`npx tsc xxx.ts --outDir .tmp-test` + 手写 `node` 断言，见 CHANGELOG 里 v0.5.0 那段）。
 
-### 想给用户看界面但不想装 APK
+### 界面预览：**不要做**（用户 2026-10-25 明确要求）
 
-```bash
-npm run build:web        # 清空并重新导出到固定的 web-preview/
-npm run preview          # 起本地静态服务（默认 8731，只绑 127.0.0.1）
-```
+用户原话：「不要再开预览了，我要你直接生图而不是 html 的预览，不能生图就不要做预览的步骤」。
 
-然后**用 `present_files` 传 `http://127.0.0.1:8731`**，WorkBuddy 会在内置浏览器预览面板里打开，
-用户点开就能操作 —— **不要再生成单文件 HTML**（用户看不到，v0.4.0 之后已废弃）。
+所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开 `127.0.0.1:8731`**。
+`npm run build:web` 只剩一个用途 —— 当作「Web 平台能不能编译通过」的校验，产物 `web-preview/`
+不许拿给用户看。UI 改动的唯一验证手段是**用户装 APK 真机反馈**。
 
-- 目录名固定为 `web-preview/`，所以服务只需起一次；改完代码重新 `npm run build:web`，浏览器刷新即可
-- `build_web.mjs` 会先 `rm -rf` 再导出 —— 目录已存在时 `expo export` 的覆盖行为会被安全策略拦截
-- `preview_server.mjs` 是纯 Node 实现（不依赖 python），带 SPA fallback、目录穿越防护、`Cache-Control: no-store`
-- 代价：Web 端走 `localStorage`，数据是空的；只能看界面结构，看不到真实数据
+> 历史：v0.4.0–v0.6.0 期间一直走 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`
+> 这条路，用户看不到（内置面板里只是个空数据的壳），已作废。
 
 打包 APK（**必须先看第 7 节的坑**）：
 
@@ -120,6 +116,7 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 
 | 版本 | 一句话 |
 |---|---|
+| **v0.6.1** | 真机反馈「方向可分，但不可移除」。移除动作从「输入框留空 + 确定」这个隐藏约定换成面板底部的显式按钮；SQL 清空字段改写成 `NULL` 字面量（`?` 绑 JS null 会静默改 0 行）；空字符串方向归一成 `NULL` |
 | **v0.6.0** | 补上两个「做了但用不上」：卡片的二级方向可以手动设了（详情页 / 主题页 / 点小节头三个入口），标签可以点了筛（还带事项）。prompt 里带上已有方向并要求复用 |
 | **v0.5.0** | 问答三件：`:::action` 操作提案（勾选才执行）、官方 `/v1/tools/search`（手动触发）、`ask_logs` 独立记录表（migration v5） |
 | **v0.4.2** | 详情页三处真机反馈：整屏内联编辑、保存后即时刷新（`detail` 改存 id 序列）、正文下接当天小结 |
@@ -188,7 +185,7 @@ src/
     SummarySheet.tsx            488  ★ 周期总结：选周期 → 生成 → 预览 → 保存/替换
     KnowledgeDetail.tsx         235  知识卡详情页（归档 / 恢复 / 删除，两次点击确认；顶部那行可改方向）
     TopicSheet.tsx              281  ★ 主题整理：勾一个改名、勾多个合并
-    SubtopicSheet.tsx           344  ★ 分方向：勾几张卡统一设方向，留空 = 清掉；点方向小节头进来就是整组改名
+    SubtopicSheet.tsx           380  ★ 分方向：勾几张卡统一设方向；底部「移除方向」是独立按钮；点方向小节头进来就是整组改名
     AskSheet.tsx                639  ★ 知识库问答：范围切换 / 回答 / 引用 / 联网 / 提案 / 记录
     AskActions.tsx              220  ★ 改动建议清单：默认一条不勾，勾了才写库
     AskHistory.tsx              283  ★ 问答记录：扁平 Q-A 列表，可展开 / 改问题 / 删除 / 带入本轮
@@ -372,7 +369,7 @@ plugins/
 `fragments-v0.6.0.apk` 已经打好放在项目根目录（`versionCode 15`，大小与 MD5 见第 1 节速览）。
 
 ```bash
-adb install -r fragments-v0.6.0.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
+adb install -r fragments-v0.6.1.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
 ```
 
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
@@ -388,12 +385,15 @@ adb install -r fragments-v0.6.0.apk        # adb 在 %ANDROID_HOME%\platform-too
 4. **联网**：问一个卡片里没有答案的问题 → 回答下方出现「联网再查一次」→ 点了才去搜，
    结果列成 `[W1]` 来源，并写明是「网上资料」
 5. **问答记录**：右上角时钟图标 → 扁平 Q-A 列表 → 能改问题、能删、能「带入本轮」
-6. **手动分方向**：知识库 → 进一个主题 → 右上分层图标 → 勾两三张卡 → 填「换盘」→ 确定 →
+6. **手动分方向**：知识库 → 进一个主题 → 右上分层图标 → 勾两三张卡 → 填「换盘」→ 设定 →
    **页面应该立刻分成「换盘」和「未分方向」两组**；返回主题列表，那个主题后面应该出现「1 个方向」
-7. **整组改名**：点「换盘」那个小节头 → 方向名已填好 → 改成别的 → 确定 → 组名跟着变
-8. **标签筛选**：时间轴上点一个标签胶囊 → 只剩同类，**原先折叠的日期自动展开** →
+7. **整组改名**：点「换盘」那个小节头 → 方向名已填好 → 改成别的 → 设定 → 组名跟着变
+8. **移除方向（v0.6.1 重点，上一版报过 bug）**：再点「换盘」小节头 → 底部左侧那个描边的
+   **「移除方向」**按钮 → 那几张卡应该回到「未分方向」，整组消失，**卡片一张都不能少**；
+   单个卡片也可以：进卡片详情 → 点顶部 `主题 › 方向 ✎` → 移除方向 → 回来应该显示「未分方向」
+9. **标签筛选**：时间轴上点一个标签胶囊 → 只剩同类，**原先折叠的日期自动展开** →
    搜索框下面出现一个蓝底胶囊，点它取消；再点同一个标签也能取消
-9. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
+10. **老功能回归**：整理 → 应用 → 时间轴上小结仍排当天最前；知识库主题内二级方向分组只在多方向时出现
 
 ### P0 — 然后才是 v0.2.2 / v0.2.3 遗留的三问
 

@@ -155,6 +155,9 @@ export function KnowledgeDetail({ card, onClose, onChanged }: Props) {
         <SubtopicSheet
           topic={card.topic}
           preselect={preselect}
+          /* 预填当前方向：否则面板里显示不出「这张卡现在属于哪个方向」，
+             想改名还得照着重打一遍 */
+          initialName={card.subtopic ?? undefined}
           onClose={closeSub}
           onChanged={onChanged}
         />

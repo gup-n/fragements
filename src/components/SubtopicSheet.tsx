@@ -5,10 +5,13 @@
  * 于是「主题内按方向分组」在已有数据上根本看不到效果 —— 那功能只对新卡有意义。
  *
  * 从卡片详情页进来会预选那一张；从主题页进来是空的，可以一次勾好几张。
+ * 从方向小节头进来会预选整组，改完就是给整组改名。
  * 已经用过的方向列成胶囊，点一下填进输入框 —— 顺手复用，避免「换盘」和
  * 「硬盘更换」各建一个方向，分组反而更碎。
  *
- * 输入框留空 + 确认 = 清掉方向，这是唯一需要额外解释的一处，所以副标题里写明。
+ * 「移除方向」是一个独立按钮，不是「输入框留空再点确定」——
+ * 那个约定在真机上没人发现（用户反馈「不可移除方向」），
+ * 隐藏起来的语义等于没有这个功能。
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import {
@@ -90,7 +93,11 @@ export function SubtopicSheet({ topic, preselect, initialName, onClose, onChange
   }, [cards]);
 
   const target = name.trim();
-  const canApply = picked.size > 0 && !busy;
+  /** 至少勾了一张、且没在写库 */
+  const pickable = picked.size > 0 && !busy;
+  const canApply = pickable && !!target;
+  /** 移除方向：只要勾了卡就能点，不必先清输入框 */
+  const canClear = pickable;
 
   function toggle(id: number) {
     const next = new Set(picked);
@@ -100,13 +107,16 @@ export function SubtopicSheet({ topic, preselect, initialName, onClose, onChange
     setError('');
   }
 
-  async function apply() {
-    if (!canApply) return;
+  /** @param value 方向名；null 表示清掉方向 */
+  async function commit(value: string | null) {
+    if (!pickable) return;
     Keyboard.dismiss();
     setBusy(true);
     setError('');
     try {
-      await repo.setCardSubtopic(Array.from(picked), target || null);
+      // 别看返回的 changed 判断成败：不同驱动对「值没变」算不算一次改动
+      // 说法不一致，某些版本会返回 0，照它判断就会「删掉了却提示失败、面板关不掉」。
+      await repo.setCardSubtopic(Array.from(picked), value);
       await onChanged();
       onClose();
     } catch (e) {
@@ -121,7 +131,7 @@ export function SubtopicSheet({ topic, preselect, initialName, onClose, onChange
         title="分方向"
         subtitle={
           picked.size
-            ? `${picked.size} 张卡 → ${target || '不设方向'}`
+            ? `已选 ${picked.size} 张卡`
             : `${cards?.length ?? 0} 张卡 · 勾选后统一设一个方向`
         }
         backIcon="close"
@@ -217,7 +227,7 @@ export function SubtopicSheet({ topic, preselect, initialName, onClose, onChange
             placeholderTextColor={C.text3}
             maxLength={12}
             returnKeyType="done"
-            onSubmitEditing={apply}
+            onSubmitEditing={() => commit(target)}
           />
           {name ? (
             <Pressable onPress={() => setName('')} hitSlop={8} accessibilityLabel="清空">
@@ -227,20 +237,31 @@ export function SubtopicSheet({ topic, preselect, initialName, onClose, onChange
         </View>
 
         <View style={s.footRow}>
-          <Text style={s.footHint}>
-            {picked.size ? (target ? `设为「${target}」` : '留空 = 清掉方向') : '先勾选卡片'}
+          <Text style={s.footHint} numberOfLines={1}>
+            {picked.size ? (target ? `设为「${target}」` : '输入方向名后点设定') : '先勾选卡片'}
           </Text>
           <Pressable
-            onPress={apply}
+            onPress={() => commit(null)}
+            disabled={!canClear}
+            style={({ pressed }) => [
+              s.clearBtn,
+              !canClear && s.btnOff,
+              pressed && canClear && { opacity: 0.6 },
+            ]}
+            accessibilityLabel="移除这些卡的方向"
+          >
+            <Ionicons name="close" size={13} color={canClear ? C.text2 : C.text3} />
+            <Text style={[s.clearText, !canClear && s.textOff]}>移除方向</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => commit(target)}
             disabled={!canApply}
             style={[s.applyBtn, !canApply && s.applyBtnOff]}
           >
             {busy ? (
               <ActivityIndicator color="#FFFFFF" size="small" />
             ) : (
-              <Text style={[s.applyText, !canApply && s.applyTextOff]}>
-                {target ? '设定' : '清除'}
-              </Text>
+              <Text style={[s.applyText, !canApply && s.applyTextOff]}>设定</Text>
             )}
           </Pressable>
         </View>
@@ -326,8 +347,23 @@ const s = StyleSheet.create({
   },
   input: { flex: 1, fontSize: 14.5, color: C.text, paddingVertical: 0 },
 
-  footRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
-  footHint: { flex: 1, fontSize: 12, color: C.text3 },
+  footRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  footHint: { flex: 1, fontSize: 11.5, color: C.text3 },
+  /** 次级动作：移除方向。做成描边按钮，不和主按钮抢注意力 */
+  clearBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: R.btn,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: C.hair,
+    backgroundColor: C.card,
+  },
+  clearText: { fontSize: 12.5, color: C.text2 },
+  btnOff: { backgroundColor: C.hairSoft },
+  textOff: { color: C.text3 },
   applyBtn: {
     minWidth: 64,
     paddingHorizontal: 16,

@@ -240,7 +240,7 @@ export const repo: Repo = {
     let moved = 0;
     for (const c of load().knowledgeCards) {
       if (c.topic !== topic || !list.includes(c.subtopic ?? null)) continue;
-      c.subtopic = to;
+      c.subtopic = to ? to : null;
       moved++;
     }
     if (moved) persist();
@@ -250,10 +250,12 @@ export const repo: Repo = {
   async setCardSubtopic(ids, subtopic) {
     const set = new Set(ids);
     if (!set.size) return { changed: 0 };
+    // 空字符串一律归成 null：否则会凭空多出一个「名字是空」的方向组
+    const next = subtopic ? subtopic : null;
     let changed = 0;
     for (const c of load().knowledgeCards) {
       if (!set.has(c.id)) continue;
-      c.subtopic = subtopic;
+      c.subtopic = next;
       changed++;
     }
     if (changed) persist();
