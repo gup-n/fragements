@@ -27,8 +27,7 @@
     "android": "expo run:android",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "build:web": "node scripts/build_web.mjs",
-    "preview": "node scripts/preview_server.mjs"
+    "build:web": "node scripts/build_web.mjs"
   },
   "private": true
 }

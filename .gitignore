@@ -46,13 +46,8 @@ yarn-error.*
 *.apk
 *.aab
 
-# 构建与预览产物（npm run build:web 生成，固定目录名）
-/web-preview
-/dist[0-9]*
-/dist-v[0-9]*
-/.edge-tmp
-/.edge-tmp2
-/.edge3
+# 编译校验产物（npm run build:web 生成，脚本跑完自己删；这条是异常中断时的兜底）
+/.tmp-bundle
 expo-qr.png
 
 # 本地日志与临时文件

@@ -39,6 +39,9 @@
 结果页底部可以直接追问（「待办合并成一条」「知识卡太碎了」），改到满意再应用；没改动的条目，之前取消的勾选会保留。
 生成时模型一边推理一边把思维链显示在屏幕上，结果页也留了一份折叠的「模型思考过程」。
 
+一次只带 30 条（重构 20 条），应用完直接在 done 页「继续整理下一批」；模型一条结果都没给出来时，
+主按钮变成「跳过这批」—— 不会卡在同一批上反复重试。
+
 **重构**：把碎片重新过一遍 —— 重新判标签、重新沉淀知识卡，结果与原来的整理逐条对照
 （标签行会写「原标签：…」，新卡会写明「会归档被它取代的旧卡」）。默认范围是**全部碎片**，
 也可以只挑已整理的或按主题挑。归档可恢复、删待办是真删除、合并待办可撤回，这三类默认不勾选。
@@ -82,7 +85,7 @@
 | 密钥 | expo-secure-store（Android Keystore） |
 | AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，总结与问答走流式纯文本；联网走官方 `/v1/tools/search`（手动触发） |
 | 导航 | 自实现轻量路由状态（5 个页面），不引 react-navigation |
-| Web | react-native-web + localStorage，仅供桌面预览，非交付目标 |
+| Web | react-native-web + localStorage，**只用来跑编译校验**（`npm run build:web`），不是交付目标，也不做界面预览 |
 
 ## 目录结构
 
@@ -98,9 +101,9 @@ src/
   screens/             五个页面（时间轴 / 整理 / 回顾 / 知识库 / 设置）
   components/          覆盖层与可复用区块（详情页、各类 Sheet、结果条目）
   export/              Markdown 导出
-  util/                纯函数：日期、待补清单、结果元数据、键盘、提案解析
+  util/                纯函数：日期、待补清单、结果元数据、键盘、提案解析、分批装箱、判重降噪
 plugins/               config plugin（构建优化、启动窗去动画）
-scripts/               build_web.mjs（导出预览）/ preview_server.mjs（本地静态服务）
+scripts/               build_web.mjs（Web 编译校验，产物跑完即删）
 ```
 
 每个文件干什么、多少行，见 [HANDOFF.md 第 5 节](./HANDOFF.md)（那张表每次发版都会校正行数）。
@@ -109,10 +112,12 @@ scripts/               build_web.mjs（导出预览）/ preview_server.mjs（本
 
 ```bash
 npm run typecheck           # tsc --noEmit，改完必跑（项目没有 lint、没有单测）
-npm run build:web           # 导出到 web-preview/，用来验证不崩
-npm run preview             # 起本地静态服务 127.0.0.1:8731，配合预览面板看界面
+npm run build:web           # Web 平台打一遍包，量完体积就删 —— 只当编译校验，不产出预览
 npx expo start              # dev server，手机 Expo Go 扫码
 ```
+
+> **不做界面预览**（用户 2026-10-25 明确要求）。`build:web` 的产物落在 `.tmp-bundle/`
+> 并在同一次运行里删掉，根目录不会留下能起静态服务的东西；UI 只靠装 APK 真机反馈验证。
 
 新增依赖一律用 `npx expo install <pkg>`，它会解析与当前 SDK 匹配的版本，普通 `npm install` 可能装出不兼容版本。
 

@@ -21,9 +21,9 @@
 | 包名 / 显示名 | `com.local.fragments` / 「碎片」 |
 | 版本 | `0.6.6`，`versionCode 21`，`targetSdk 36` / `minSdk 24` |
 | 技术栈 | React Native 0.88 + Expo SDK 58 + TypeScript，新架构，**Android 单端** |
-| 存储 | expo-sqlite（native）/ localStorage（web 预览），`PRAGMA user_version = 5` |
+| 存储 | expo-sqlite（native）/ localStorage（web 端，只为编译校验能过），`PRAGMA user_version = 5` |
 | AI | DeepSeek `deepseek-flash`（V4.1-Flash），OpenAI 兼容，**流式 SSE** + 思考模式；整理/总结/问答共用 `ai/chat.ts` 请求层 |
-| 规模 | 13,365 行 TS/TSX（50 个文件），最大的屏 `TimelineScreen.tsx` 1134 行 |
+| 规模 | 13,365 行 TS/TSX（50 个文件），最大的屏 `TimelineScreen.tsx` 1141 行 |
 | 最新 APK | `fragments-v0.6.6.apk`，21.93 MiB（22,992,626 字节），MD5 `19d4c078d73b2c1e06d245866265443f`（`versionCode 21` / `versionName 0.6.6` 已用 aapt2 核对） |
 | 单机 / 联网 | **只做单机**。不引账号、后端、云同步。唯一网络请求是用户自己填 Key 的 DeepSeek |
 
@@ -37,7 +37,7 @@
 cd F:/coding/python/project/Test/fragments
 
 npm run typecheck                                # tsc --noEmit，改完必跑，当前零错误
-npm run build:web                                # 导出到固定的 web-preview/（约 11 秒），验证不崩
+npm run build:web                                # Web 平台打一遍包再删产物（约 30 秒，产物约 1.2 MiB）
 ```
 
 **项目零自动化测试**，上面两条是唯一的自动检查。没有 lint、没有单测 —— 新加逻辑靠临时断言脚本，
@@ -47,9 +47,13 @@ npm run build:web                                # 导出到固定的 web-previe
 
 用户原话：「不要再开预览了，我要你直接生图而不是 html 的预览，不能生图就不要做预览的步骤」。
 
-所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开 `127.0.0.1:8731`**。
-`npm run build:web` 只剩一个用途 —— 当作「Web 平台能不能编译通过」的校验，产物 `web-preview/`
-不许拿给用户看。UI 改动的唯一验证手段是**用户装 APK 真机反馈**。
+所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
+`npm run build:web` 只剩一个用途 —— 当作「Web 平台能不能编译通过」的校验：
+它把产物打到 `.tmp-bundle/`，同一次运行里量完体积就删掉，**没有可以拿给用户看的东西**。
+UI 改动的唯一验证手段是**用户装 APK 真机反馈**。
+
+> v0.6.6 起连 `npm run preview` 和 `scripts/preview_server.mjs` 都删了。留着这两个东西，
+> 等于留了一条随时能把这个规矩破掉的路 —— 下一个接手的人（包括模型）看到命令就会用。
 
 > 历史：v0.4.0–v0.6.0 期间一直走 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`
 > 这条路，用户看不到（内置面板里只是个空数据的壳），已作废。
@@ -90,9 +94,9 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
   Expo 托管流无法做通知栏内直接输入（需原生 `RemoteInput`）。折中方案是 `expo-notifications` 发 sticky 通知，点击打开 App 并聚焦输入框。
   但**需要装包 + prebuild + 重编**，而且 sticky 通知在进程被杀后的存活能力**必须真机验证，不能只看文档**。
 
-### 从未验证过的事（重要）
+### 从未被明确验证过的事（重要）
 
-**v0.2.2 之后的每一版都只是编译 + Web 构建通过，没有真机验证过。** 六条悬着：
+真机反馈覆盖的是**用户恰好点到的路径**，下面这六条一直没被针对性地确认过：
 
 1. **追问会不会塌成增量** —— 模型可能只返回改动项，其余内容凭空消失。prompt 里写死了要求，但模型不一定听话。**这是最大风险点。**
 2. `todo_done` / `card_update` / `archive_cards` / `drop_todos` / `merge_todos` 的实际命中率。
@@ -140,10 +144,10 @@ cd android && ./gradlew assembleRelease                        # 增量约 2~3 �
 ## 5. 代码地图
 
 ```
-App.tsx                         304  路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds / 示例数据）
+App.tsx                         335  路由 state + 全局 BackHandler + 数据加载（含 notes / doneIds / 示例数据）+ 时间轴草稿
 index.ts                          8  registerRootComponent
 src/
-  types.ts                      308  Fragment / Todo / Note / KnowledgeCard / WebHit / AskLog / AskAction / OrganizeResult（十类，**无 summary**）+ AiConfig
+  types.ts                      314  Fragment / Todo / Note / KnowledgeCard / WebHit / AskLog / AskAction / OrganizeResult（十类，**无 summary**）+ AiConfig
   theme.ts                       52  颜色常量 C、圆角 R、tagColor() 稳定配色
   version.ts                      8  版本号常量（RN 读不到 app.json，发版时和它手工对齐）
   ai/
@@ -152,30 +156,32 @@ src/
     prompt.ts                   237  SYSTEM_PROMPT（九项）+ buildUserContent（含【已完成待办】）+ buildRefineContent
     chat.ts                     457  ★ 请求层：四段超时 / 流式 / 非流式 / 错误映射 / 额度解析 / effort 覆盖 / describeFinish（三功能共用）
     deepseek.ts                 377  整理：prompt 组装 + normalizeResult（全部校验都在这）+ pickEffort + organize()
-    summarize.ts                233  ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗
-    ask.ts                      288  ★ 知识库问答：关键词打分选卡、预算装填、引用反查、历史与网络资料注入、提案解析入口
+    summarize.ts                248  ★ 周期总结：日/周/月 prompt、材料裁剪（前70%+后30%）、Markdown 清洗、撞上限直接报错不落库
+    ask.ts                      397  ★ 知识库问答：关键词打分选卡、预算装填、引用反查、多轮历史（trimTurns 保留首问+最近 9 轮）、提案解析入口
     search.ts                   162  ★ DeepSeek 官方 `/v1/tools/search`：退避重试 + 结果收敛（**不要换成内置 web_search**）
     stream.ts                   148  ★ SSE 解析：reasoning_content 与 content 分开累积 + 读取 finish_reason
   db/
     types.ts                    159  Repo 接口（上下层唯一契约）
-    repo.native.ts              667  SQLite 实现 + MIGRATIONS 数组（到 v5）
-    repo.web.ts                 453  localStorage 实现（仅供桌面预览，功能对齐即可）
-    commit.ts                   172  ★ 把用户确认过的整理结果写进库：纯写入、无 UI、返回实际条数
-    askCommit.ts                 48  ★ 执行问答里的操作提案（逐条独立事务，一条失败不回滚其他）
+    repo.native.ts              686  SQLite 实现 + MIGRATIONS 数组（到 v5）
+    repo.web.ts                 456  localStorage 实现（对齐即可，只为 Web 编译校验能过）
+    commit.ts                   171  ★ 把用户确认过的整理结果写进库：纯写入、无 UI、返回实际条数
+    askCommit.ts                 54  ★ 执行问答里的操作提案（逐条独立事务，一条失败不回滚其他）
     repo.ts                       7  类型转发壳，运行时不会命中
   screens/
-    TimelineScreen.tsx         1134  时间轴 + 输入 + 长文折叠 + 全屏编辑 + 小结混排 + 按日折叠 + 搜索
-    OrganizeScreen.tsx          827  ★ 状态机 / 两模式 / 追问 / 空闲面板；结果渲染已交出去
+    TimelineScreen.tsx         1141  时间轴 + 输入 + 长文折叠 + 全屏编辑 + 小结混排 + 按日折叠 + 搜索（草稿由 App 持有）
+    OrganizeScreen.tsx          971  ★ 状态机 / 两模式 / 追问 / 空闲面板 / 分批游标 / 跳过这批；结果渲染已交出去
     KnowledgeScreen.tsx         594  主题聚合 + 搜索 + 问入口 + 已归档区 + 详情/问答覆盖层
     ReviewScreen.tsx            342  待办与小结算一页（tab）+ 生成总结入口 + 「已合并」撤回区
     SettingsScreen.tsx          411  BaseURL / 模型 / Key / 思考开关与档位 / 连接测试 / 统计
   export/markdown.ts            143  Markdown 导出（时间轴 + 知识库附录）
   util/
+    askActions.ts               314  ★ `:::action` 解析 + 校验（真实主题名/卡片 id）+ key + 描述 + 围栏切分
+    batch.ts                     41  ★ 单批两道上限（条数 + 字数）的装箱 + `pendingOnly` 会话游标
     date.ts                     189  日期格式化 + 周期键（ISO 周）/ 区间 / 锚点
+    dedupe.ts                   233  ★ 判重与判替代的唯一实现（pruneResult / replacementOf / mergeCardUpdates），显示与写入共用
     digest.ts                    97  ★ 哪些周期还没写小结（按粒度配额排序）
-    resultItems.ts              110  ★ 十类输出的字段元数据表 + 确认 key + 默认勾选策略
-    askActions.ts               253  ★ `:::action` 解析 + 校验（真实主题名/卡片 id）+ key + 描述
     keyboard.ts                  39  ★ useKeyboardHeight()，见第 7 节
+    resultItems.ts              110  ★ 十类输出的字段元数据表 + 确认 key + 默认勾选策略
   components/
     FragmentDetail.tsx          505  ★ 碎片详情页：全屏阅读 + 左右翻页 + **整屏内联编辑** + 当天小结（宽度靠 onLayout 实测）
     IconButton.tsx               95  ★ 圆形图标按钮：36px 触控区、圆底、数字角标
@@ -185,18 +191,17 @@ src/
     ReasoningStream.tsx          85  ★ 流式实时面板：转圈 + 秒数 + 思维链滚动 + 字数
     ReasoningCollapse.tsx        74  ★ 答案落地后的「深度思考 N 秒 ›」折叠行，展开只渲染尾部 8k 字
     ReasoningTrace.tsx           68  ★ 生成结束后的「模型思考过程」折叠区（整理 / 周期总结用）
-    ResultSections.tsx          464  ★ 结果页十类条目 + 逐条勾选
+    ResultSections.tsx          450  ★ 结果页十类条目 + 逐条勾选；「已被替代」调的是 dedupe 里同一个函数
     BacklogCard.tsx              86  ★ 「N 个周期还没写小结」卡片
     SummarySheet.tsx            488  ★ 周期总结：选周期 → 生成 → 预览 → 保存/替换
-    KnowledgeDetail.tsx         235  知识卡详情页（归档 / 恢复 / 删除，两次点击确认；顶部那行可改方向）
+    KnowledgeDetail.tsx         238  知识卡详情页（归档 / 恢复 / 删除，两次点击确认；顶部那行可改方向）
     TopicSheet.tsx              281  ★ 主题整理：勾一个改名、勾多个合并
     SubtopicSheet.tsx           380  ★ 分方向：勾几张卡统一设方向；底部「移除方向」是独立按钮；点方向小节头进来就是整组改名
-    AskSheet.tsx                709  ★ 知识库问答：范围胶囊（全库 / 任意主题）/ 回答 / 引用 / 联网 / 提案 / 记录
-    AskActions.tsx              220  ★ 改动建议清单：默认一条不勾，勾了才写库
+    AskSheet.tsx                908  ★ 知识库问答：范围胶囊（全库 / 任意主题）/ 回答 / 引用 / 联网 / 提案 / 记录；截断与联网失败各自单独提示
+    AskActions.tsx              229  ★ 改动建议清单：默认一条不勾，勾了才写库；失败条目用红叉
     AskHistory.tsx              283  ★ 问答记录：扁平 Q-A 列表，可展开 / 改问题 / 删除 / 带入本轮
 scripts/
-  build_web.mjs                  24  ★ 导出 Web 产物到固定的 web-preview/（先删后导）
-  preview_server.mjs             69  ★ 本地静态服务，配合 present_files 做内置预览
+  build_web.mjs                  63  ★ Web 编译校验：打包到 .tmp-bundle/，量完体积即删（**不提供预览**）
 plugins/
   withBuildOptimizations.js      65  ★ Gradle 优化写回（单 ABI / caching / shrinkResources / JDK）
   withNoSplashAnimation.js      117  ★ 启动窗改纯色、去图标动画
@@ -207,7 +212,7 @@ plugins/
 在 `components/ResultSections.tsx` 补渲染 → 在 `ai/prompt.ts` 的 JSON 模板和说明里补。五处，前两处由 tsc 兜底。
 
 **平台分流**：`import { repo } from '../db/repo'` 由 Metro 按扩展名解析，Android 拿 `repo.native.ts`，Web 拿 `repo.web.ts`。业务代码不感知实现。
-**改存储层必须同时改两个实现**，否则 Web 预览会莫名其妙地挂。
+**改存储层必须同时改两个实现**，否则 `npm run build:web` 会挂 —— 它走的就是 `repo.web.ts` 那条路。
 
 ---
 
@@ -279,7 +284,8 @@ plugins/
 | 手动改 `android/` | 该目录在 `.gitignore` 里，是 prebuild 生成物。所有 Gradle 属性改 `plugins/withBuildOptimizations.js`，否则重跑 prebuild 全丢、APK 弹回 76 MB |
 | 版本号 | `app.json` 的 `version`/`versionCode` **和** `android/app/build.gradle` 的 `versionName`/`versionCode` 两处都要对。改 `app.json` 后必须重跑 prebuild 才生效 |
 | JDK 路径 | **`D:\Program Files\Java\jdk-21`**（在 D 盘！写 C 盘会报 JAVA_HOME invalid）。Git Bash 下 `./gradlew` 靠 PATH 里的 java 即可，不必设 JAVA_HOME |
-| `dist` 目录 | 覆盖已存在的 dist 会被安全删除策略拦截，`--output-dir` 换新名字。`.gitignore` 已含 `dist-*/` |
+| `dist` 目录 | 覆盖已存在的输出目录会被安全删除策略拦截。`build:web` 用的是 `.tmp-bundle/`，**每次先 `rmSync` 再导出**，所以不用再换名字 |
+| 想给用户看 Web 界面 | **没有这条路**（第 2 节）。`build:web` 现在跑完就把产物删了，根目录不会留下能起服务的东西 |
 
 ### 7.2 Android UI（三条红线，edge-to-edge 在 targetSdk 36 下是强制的）
 
@@ -299,7 +305,7 @@ plugins/
 - Android SDK `C:\Users\14428\AppData\Local\Android\Sdk`，platforms `android-36`，build-tools `35.0.0 / 36.0.0`
 - `adb` 不在 PATH，用 `%ANDROID_HOME%\platform-tools\adb.exe` 全路径
 - **没有模拟器、没有 AVD → 只能真机**（vivo Y78 / V2278A）
-- 无头浏览器截图（Edge/Chrome `--screenshot`）在本机被策略拦截，零输出，**放弃自动截图**。想给人看界面就 `expo export -p web` 起静态服务
+- 无头浏览器截图（Edge/Chrome `--screenshot`）在本机被策略拦截，零输出，**放弃自动截图**。别再想办法「给他看一眼界面」——规矩就是不做预览
 - 本环境的 grep 带 `--color:always`，ANSI 转义码会插进匹配结果，`grep -c "key: 'xxx'"` 会假 0。用不带引号的关键字统计
 
 ### 7.4 流式与思考过程（v0.2.4 新踩的）
@@ -347,11 +353,15 @@ plugins/
 
 | 路径 | 谁生成的 | 能不能删 |
 |---|---|---|
-| `web-preview/` | `npm run build:web` | 能，重跑就有 |
-| `dist*/`（历史导出目录） | 早期 `expo export --output-dir` | 能，已清空 |
+| `.tmp-bundle/` | `npm run build:web` | 脚本自己删；只有中途 Ctrl-C 才可能残留，可以直接删 |
+| `.expo/` | `expo start` / `expo export` | 能，纯缓存；设备记录也在里面，重连一次就有 |
 | `*.log`（`build-v*.log` / `prebuild*.log`） | 打包与 prebuild | 能，排错时才需要看 |
-| `fragments-v*.apk` | `gradlew assembleRelease` 后复制的产物 | 能，但**留着当回退包**（见第 1 节） |
+| `fragments-v*.apk` | `gradlew assembleRelease` 后复制的产物 | 能，但**留当前版 + 上一版当回退包**（见第 1 节） |
 | `android/` `node_modules/` | prebuild / npm | 能删，但重装代价大（`android/` 删了要重编 45 分钟） |
+
+**v0.6.6 收尾时清过一遍**：`build-v060.log`、`.expo/`（357 KB 缓存）、`preview_server.mjs` 已删，
+`.gitignore` 里 `web-preview/` / `dist[0-9]*` / `.edge-tmp*` 这些没有对应物的条目收掉了。
+根目录现在只有源码、六份文档、`assets/`、`plugins/`、`scripts/` 和当前 APK。
 
 ---
 
@@ -381,7 +391,7 @@ plugins/
 
 ### P0 — 装机，按顺序验证
 
-`fragments-v0.6.0.apk` 已经打好放在项目根目录（`versionCode 15`，大小与 MD5 见第 1 节速览）。
+`fragments-v0.6.6.apk` 已经打好放在项目根目录（`versionCode 21`，大小与 MD5 见第 1 节速览）。
 
 ```bash
 adb install -r fragments-v0.6.6.apk        # adb 在 %ANDROID_HOME%\platform-tools\，不在 PATH
@@ -390,7 +400,8 @@ adb install -r fragments-v0.6.6.apk        # adb 在 %ANDROID_HOME%\platform-too
 > 签名是 debug key。若报 `INSTALL_FAILED_UPDATE_INCOMPATIBLE`，说明签名对不上，得先卸载旧版 ——
 > **卸载会清掉所有本地数据，先「导出 Markdown」**。
 
-装完按这个顺序验（**前五条是 v0.4.2 / v0.5.0 新增的，从来没在真机上跑过**）：
+装完按这个顺序验。**第 19–22 条是 v0.6.6 新增的**；凡标了「上一版报过 bug」的都是栽过的地方，
+重点盯。第 1–5 条从 v0.4.2 / v0.5.0 加进来之后一直没被明确确认过，也顺手过一遍：
 
 1. **碎片详情页**：点一条长记录 → 整屏阅读 → 右上「编辑」应该是**这一页直接变成输入框**（不是中间弹窗），
    字号行高与阅读时一致 → 改完保存 → **当场就能看到新内容** → 关掉重进还在
@@ -456,12 +467,12 @@ adb install -r fragments-v0.6.6.apk        # adb 在 %ANDROID_HOME%\platform-too
 
 ### P1 — 通知栏常驻入口
 
-SPEC 唯一未完成功能项。做法与约束见 `SPEC.md` 第 10 节末尾和 `ROADMAP.md` P1-4。
+SPEC 唯一未完成功能项。做法与约束见 `SPEC.md` 第 10 节末尾和 `ROADMAP.md` P0-2。
 成本：装 `expo-notifications` + prebuild（会重置 gradle.properties，但 config plugin 会自动回填）+ 重编，20~45 分钟。
 
 ### P2 — 更新分发
 
-用户痛点是「每次改完要插线装 APK」。三档方案已调研完写在 `ROADMAP.md` P1-5，
+用户痛点是「每次改完要插线装 APK」。三档方案已调研完写在 `ROADMAP.md` P1-3，
 **用户当时跳过了方案选择**，别反复追问，等他主动提。
 
 | 方案 | 改 JS 后要不要装 APK | 前置条件 |
@@ -476,7 +487,7 @@ SPEC 唯一未完成功能项。做法与约束见 `SPEC.md` 第 10 节末尾和
 
 ### P3 — 其他候选
 
-点标签筛选 / 全文搜索（碎片量大后的检索需求）。见 `ROADMAP.md` P2。
+全文搜索（`ROADMAP.md` P2-8）。标签筛选在 v0.6.0 已经做了，不再是候选。
 
 ---
 
@@ -513,7 +524,7 @@ v0.6.6 是自查版：用户让「再读一遍代码」，于是找到八处**�
 以及**一个判据写了两份**（显示用一份、写入用另一份，迟早漂移）。
 这类 bug 断言能抓，人眼很难抓 —— 这一版补了 29 条，累计 82 条。
 
-和 v0.2.2 之后的每一版一样，**只有 `tsc` + Web 构建 + 断言，没有真机验证**。
-第 9 节那二十二条悬着的事，先等用户反馈，别急着加需要 AI 参与的新功能。
+交付时能给的验证是 `tsc` + 编译校验 + 纯函数断言 —— **拿不到真机行为**。
+第 9 节那二十二条里没被用户点到的仍然悬着。先等反馈，别急着加需要 AI 参与的新功能。
 
 历史为什么长这样，翻 [CHANGELOG.md](./CHANGELOG.md)。

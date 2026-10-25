@@ -19,7 +19,7 @@ type Route = 'timeline' | 'organize' | 'settings' | 'knowledge' | 'review';
 
 ```bash
 npx tsc --noEmit                                  # 改完必跑，当前零错误
-npm run build:web                                 # 导出到 web-preview/，**只当编译校验，不许给用户看**
+npm run build:web                                 # Web 平台打一遍包再删产物，**只当编译校验，不许给用户看**
 npx expo install <pkg>                            # 装依赖用它，别用 npm install
 
 npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
@@ -33,10 +33,13 @@ cd android && ./gradlew assembleRelease
 用户原话：「不要再开预览了，我要你直接生图而不是 html 的预览，不能生图就不要做预览的步骤」。
 
 所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
-`npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途，产物不许拿给用户看。
-**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
+`npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途：产物打进 `.tmp-bundle/`，
+同一次运行里量完体积就删掉。**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
 
-> 历史：v0.4.0–v0.6.2 期间走过 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`，
+> v0.6.6 起 `npm run preview` 和 `scripts/preview_server.mjs` 也删了 ——
+> 留着命令就等于留了一条随时能破规的路。
+
+> 历史：v0.4.0–v0.6.0 期间走过 `build:web` + `preview` + `present_files(http://127.0.0.1:8731)`，
 > 用户根本看不到（内置面板里只是个空数据的壳），这条路作废。
 
 ## 改完必须自己打包
@@ -59,7 +62,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
 3. **不要用 `KeyboardAvoidingView`**。RN 0.88 + edge-to-edge 下算出的位移恒为 0。用 `useKeyboardHeight()`（`src/util/keyboard.ts`）加 `paddingBottom`。
 4. **不要用 `Modal`**。它带 `FLAG_LAYOUT_NO_LIMITS`，会画到状态栏下且收不到键盘事件。用 `position:absolute` 覆盖层 + 自己的 `BackHandler`。
-5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 Web 预览会挂。
+5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 `npm run build:web` 编译校验会挂。
 6. **改功能先改 `SPEC.md`**。文档是唯一设计依据。
 7. **主题不是实体**，只是 `knowledge_cards.topic` 上的一个字符串。改主题名要批量 `UPDATE`（`repo.retopicCards`），
    别去找 `topics` 表 —— 没有那张表。二级方向同理，是 `subtopic` 列而不是外键。
