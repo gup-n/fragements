@@ -1,3 +1,11 @@
+/**
+ * 已完成待办保留上限。超出时物理清理最旧的完成项（用户 2026-10-26 明确要求）。
+ *
+ * 放在这里是因为有**三处**要读它：native / web 两个 repo 的清理逻辑，
+ * 以及回顾页那行「已完成 N 条 · 只保留最近 5 条」。各写一份迟早对不上。
+ */
+export const DONE_TODO_KEEP = 5;
+
 export type FragmentSource = 'app' | 'notif' | 'share' | 'import';
 export type FragmentStatus = 'inbox' | 'tagged' | 'merged';
 /** 内容性质，由 AI 在整理时判定，记录时不要求用户选 */

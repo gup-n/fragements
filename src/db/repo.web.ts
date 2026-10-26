@@ -1,4 +1,5 @@
 import type { Repo } from './types';
+import { DONE_TODO_KEEP } from '../types';
 import type {
   Fragment,
   FragmentNature,
@@ -37,8 +38,6 @@ function empty(): WebDb {
 }
 
 /** 已完成待办保留上限，与 native 版保持一致 */
-const DONE_TODO_KEEP = 5;
-
 function pruneDone(d: WebDb) {
   const kept = new Set(
     d.todos

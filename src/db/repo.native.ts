@@ -1,6 +1,7 @@
 import * as SQLite from 'expo-sqlite';
 import type { Repo, OrganizeSessionPatch } from './types';
 import { parseTags } from './types';
+import { DONE_TODO_KEEP } from '../types';
 import type {
   Fragment,
   FragmentNature,
@@ -169,9 +170,6 @@ function migrate(d: SQLite.SQLiteDatabase) {
     d.execSync(`PRAGMA user_version = ${i + 1}`);
   }
 }
-
-/** 已完成待办保留上限。超出时物理清理最旧的完成项（用户 2026-10-26 要求） */
-const DONE_TODO_KEEP = 5;
 
 function pruneDoneTodos(d: SQLite.SQLiteDatabase) {
   d.runSync(

@@ -15,6 +15,48 @@
 import type { DigestKind, Fragment, Note } from '../types';
 import { dayKey, monthKey, periodRange, weekKey } from './date';
 
+/** 小结的分组顺序：粒度大的在上面，旧数据里的「主题总结」垫底 */
+export const NOTE_GROUP_ORDER: Note['type'][] = ['monthly', 'weekly', 'daily', 'theme'];
+
+export const NOTE_GROUP_LABEL: Record<Note['type'], string> = {
+  monthly: '月总结',
+  weekly: '周总结',
+  daily: '日小结',
+  theme: '主题总结',
+};
+
+export interface NoteGroup {
+  kind: Note['type'];
+  label: string;
+  notes: Note[];
+}
+
+/**
+ * 回顾页「小结」的分组。
+ *
+ * 以前直接按 createdAt 倒序排，于是「昨天的日小结」会压在「上周的周总结」上面 ——
+ * 一眼看过去分不清哪篇是概括、哪篇是流水。改成先按粒度分组（月 → 周 → 日），
+ * 组内才按时间倒序。
+ *
+ * 组内**不改顺序**：调用方传进来的已经是 createdAt DESC，
+ * 这里再排一次只会让「哪条更新」出现两套口径。
+ */
+export function groupNotes(notes: Note[]): NoteGroup[] {
+  const buckets = new Map<Note['type'], Note[]>();
+  for (const n of notes) {
+    const list = buckets.get(n.type);
+    if (list) list.push(n);
+    else buckets.set(n.type, [n]);
+  }
+
+  const out: NoteGroup[] = [];
+  for (const kind of NOTE_GROUP_ORDER) {
+    const list = buckets.get(kind);
+    if (list?.length) out.push({ kind, label: NOTE_GROUP_LABEL[kind], notes: list });
+  }
+  return out;
+}
+
 export interface MissingDigest {
   kind: DigestKind;
   period: string;

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { DONE_TODO_KEEP } from '../types';
 import type { Note, Todo } from '../types';
 import { C, R } from '../theme';
 import { repo } from '../db/repo';
@@ -9,6 +10,7 @@ import { NoteBody } from '../components/NoteBody';
 import { SummarySheet } from '../components/SummarySheet';
 import { TagPanel } from '../components/TagPanel';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { groupNotes } from '../util/digest';
 
 interface Props {
   onClose: () => void;
@@ -17,13 +19,6 @@ interface Props {
 }
 
 type Tab = 'todo' | 'note' | 'tag';
-
-const NOTE_KIND: Record<Note['type'], string> = {
-  daily: '日小结',
-  weekly: '周总结',
-  monthly: '月总结',
-  theme: '主题总结',
-};
 
 /** 到期日只显示月-日；早于今天标红 */
 function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | null {
@@ -145,7 +140,9 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 
               {finished.length > 0 && (
                 <>
-                  <Text style={styles.hint}>已完成 {finished.length} 条</Text>
+                  <Text style={styles.hint}>
+                    已完成 {finished.length} 条 · 只保留最近 {DONE_TODO_KEEP} 条
+                  </Text>
                   <View style={styles.group}>
                     {finished.map((item, i) => (
                       <Pressable
@@ -220,29 +217,41 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
               </Text>
             </View>
           ) : (
-            notes.map((note) => {
-              const open = openNote === note.id;
-              return (
-                <Pressable
-                  key={note.id}
-                  onPress={() => setOpenNote(open ? null : note.id)}
-                  style={styles.noteCard}
-                >
-                  <View style={styles.noteHead}>
-                    <Text style={styles.noteKind}>{NOTE_KIND[note.type] ?? '总结'}</Text>
-                    <Text style={styles.noteDate}>
-                      {periodLabel(note.period) || dayKey(note.createdAt)}
-                    </Text>
-                  </View>
-                  <NoteBody
-                    text={note.bodyMd}
-                    numberOfLines={open ? undefined : 5}
-                    style={styles.noteBody}
-                  />
-                  <Text style={styles.noteToggle}>{open ? '收起' : '展开'}</Text>
-                </Pressable>
-              );
-            })
+            /*
+             * 按粒度分组，不按时间一条条排。
+             * 混排时「昨天的日小结」会顶在「上周的周总结」上面，
+             * 一眼看不出哪篇是概括、哪篇是当天的流水。
+             */
+            groupNotes(notes).map((group) => (
+              <View key={group.kind}>
+                <View style={styles.noteGroupHead}>
+                  <Text style={styles.noteGroupTitle}>{group.label}</Text>
+                  <Text style={styles.noteGroupCount}>{group.notes.length} 篇</Text>
+                </View>
+                {group.notes.map((note) => {
+                  const open = openNote === note.id;
+                  return (
+                    <Pressable
+                      key={note.id}
+                      onPress={() => setOpenNote(open ? null : note.id)}
+                      style={styles.noteCard}
+                    >
+                      <View style={styles.noteHead}>
+                        <Text style={styles.noteDate}>
+                          {periodLabel(note.period) || dayKey(note.createdAt)}
+                        </Text>
+                      </View>
+                      <NoteBody
+                        text={note.bodyMd}
+                        numberOfLines={open ? undefined : 5}
+                        style={styles.noteBody}
+                      />
+                      <Text style={styles.noteToggle}>{open ? '收起' : '展开'}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ))
           )}
         </ScrollView>
       )}
@@ -329,6 +338,17 @@ const styles = StyleSheet.create({
   },
   genText: { flex: 1, fontSize: 14, color: C.accentText, fontWeight: '500' },
   genHint: { fontSize: 11, color: C.accentText, opacity: 0.7 },
+
+  noteGroupHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    paddingHorizontal: 2,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  noteGroupTitle: { fontSize: 12, color: C.text2, fontWeight: '600' },
+  noteGroupCount: { fontSize: 11, color: C.text3 },
 
   noteCard: {
     backgroundColor: C.card,
