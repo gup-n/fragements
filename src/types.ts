@@ -24,6 +24,12 @@ export interface Todo {
   /** YYYY-MM-DD，可空 */
   dueAt: string | null;
   done: boolean;
+  /**
+   * 标记完成的时间。未完成时为 null；旧数据在 v7 迁移里用 createdAt 回填。
+   * 「已完成只保留最近 5 条」按它排序，不能拿 createdAt 代替 ——
+   * 很早创建、今天才勾掉的事项会因此被误判成「旧」。
+   */
+  doneAt: number | null;
   sourceFragmentId: number | null;
   createdAt: number;
   /**

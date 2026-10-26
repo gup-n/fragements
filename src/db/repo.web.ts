@@ -36,6 +36,20 @@ function empty(): WebDb {
   return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, sessions: [] };
 }
 
+/** 已完成待办保留上限，与 native 版保持一致 */
+const DONE_TODO_KEEP = 5;
+
+function pruneDone(d: WebDb) {
+  const kept = new Set(
+    d.todos
+      .filter((t) => t.done && t.mergedInto === null)
+      .sort((a, b) => (b.doneAt ?? b.createdAt) - (a.doneAt ?? a.createdAt) || b.id - a.id)
+      .slice(0, DONE_TODO_KEEP)
+      .map((t) => t.id),
+  );
+  d.todos = d.todos.filter((t) => !t.done || t.mergedInto !== null || kept.has(t.id));
+}
+
 let cache: WebDb | null = null;
 
 function load(): WebDb {
@@ -47,6 +61,12 @@ function load(): WebDb {
       ...s,
       plan: normalizePlan(s.plan ?? emptyPlan()),
     }));
+    // 旧版本没有 doneAt：已完成的用 createdAt 回填，与 native v7 迁移口径一致
+    cache!.todos = (cache!.todos ?? []).map((t) => ({
+      ...t,
+      doneAt: t.doneAt ?? (t.done ? t.createdAt : null),
+    }));
+    pruneDone(cache!);
   } catch {
     cache = empty();
   }
@@ -247,6 +267,7 @@ export const repo: Repo = {
       text: input.text,
       dueAt: input.dueAt,
       done: false,
+      doneAt: null,
       sourceFragmentId: input.sourceFragmentId,
       createdAt: Date.now(),
       mergedInto: null,
@@ -258,13 +279,22 @@ export const repo: Repo = {
   async listTodos() {
     return load()
       .todos.filter((t) => t.mergedInto === null)
-      .sort((a, b) => Number(a.done) - Number(b.done) || b.createdAt - a.createdAt);
+      .sort(
+        (a, b) =>
+          Number(a.done) - Number(b.done) ||
+          (b.doneAt ?? b.createdAt) - (a.doneAt ?? a.createdAt) ||
+          b.id - a.id,
+      );
   },
 
   async toggleTodo(id, done) {
     const d = load();
     const t = d.todos.find((x) => x.id === id);
-    if (t) t.done = done;
+    if (t) {
+      t.done = done;
+      t.doneAt = done ? Date.now() : null;
+    }
+    if (done) pruneDone(d);
     persist();
   },
 

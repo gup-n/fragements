@@ -142,6 +142,23 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_sessions_open ON organize_sessions(finished, updated_at DESC);
   `,
+  // v7：已完成待办只保留最近 5 条（用户 2026-10-26 明确要求物理清理）。
+  //     done_at 用来判断「最近完成」；旧数据没有完成时间，用 created_at 回填。
+  //     只清理未被合并的条目 —— merged_into 非空的还要留给「已合并 → 恢复」用。
+  `
+  ALTER TABLE todos ADD COLUMN done_at INTEGER;
+  UPDATE todos SET done_at = created_at WHERE done = 1 AND done_at IS NULL;
+  DELETE FROM todos
+   WHERE merged_into IS NULL
+     AND done = 1
+     AND id NOT IN (
+       SELECT id FROM todos
+        WHERE merged_into IS NULL AND done = 1
+        ORDER BY COALESCE(done_at, created_at) DESC, id DESC
+        LIMIT 5
+     );
+  CREATE INDEX IF NOT EXISTS idx_todos_done_at ON todos(done_at DESC);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -151,6 +168,23 @@ function migrate(d: SQLite.SQLiteDatabase) {
     d.execSync(MIGRATIONS[i]);
     d.execSync(`PRAGMA user_version = ${i + 1}`);
   }
+}
+
+/** 已完成待办保留上限。超出时物理清理最旧的完成项（用户 2026-10-26 要求） */
+const DONE_TODO_KEEP = 5;
+
+function pruneDoneTodos(d: SQLite.SQLiteDatabase) {
+  d.runSync(
+    `DELETE FROM todos
+      WHERE merged_into IS NULL
+        AND done = 1
+        AND id NOT IN (
+          SELECT id FROM todos
+           WHERE merged_into IS NULL AND done = 1
+           ORDER BY COALESCE(done_at, created_at) DESC, id DESC
+           LIMIT ${DONE_TODO_KEEP}
+        )`,
+  );
 }
 
 interface FragmentRow {
@@ -184,6 +218,7 @@ interface TodoRow {
   text: string;
   due_at: string | null;
   done: number;
+  done_at: number | null;
   source_fragment_id: number | null;
   created_at: number;
   merged_into: number | null;
@@ -196,6 +231,7 @@ function toTodo(r: TodoRow): Todo {
     text: r.text,
     dueAt: r.due_at,
     done: r.done === 1,
+    doneAt: r.done_at ?? null,
     sourceFragmentId: r.source_fragment_id,
     createdAt: r.created_at,
     mergedInto: r.merged_into,
@@ -549,13 +585,19 @@ export const repo: Repo = {
 
   async listTodos() {
     const rows = db().getAllSync<TodoRow>(
-      'SELECT * FROM todos WHERE merged_into IS NULL ORDER BY done ASC, created_at DESC',
+      'SELECT * FROM todos WHERE merged_into IS NULL ORDER BY done ASC, COALESCE(done_at, created_at) DESC, id DESC',
     );
     return rows.map(toTodo);
   },
 
   async toggleTodo(id, done) {
-    db().runSync('UPDATE todos SET done = ? WHERE id = ?', [done ? 1 : 0, id]);
+    if (done) {
+      db().runSync('UPDATE todos SET done = 1, done_at = ? WHERE id = ?', [Date.now(), id]);
+      pruneDoneTodos(db());
+    } else {
+      // 清空字段必须写 NULL 字面量，不要靠 ? 绑 JS null（见 AGENTS「SQL 里清空字段」）
+      db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [id]);
+    }
   },
 
   async deleteTodo(id) {

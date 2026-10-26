@@ -27,8 +27,11 @@ type TimelineItem =
   | { kind: 'fragment'; id: number; at: number; fragment: Fragment }
   | { kind: 'note'; id: number; at: number; note: Note };
 
-/** key 是 YYYY-MM-DD，折叠状态按它记；标题只用于显示，不能拿来当键 */
-type Section = { key: string; title: string; sub: string; data: TimelineItem[] };
+/**
+ * key 是 YYYY-MM-DD（日分区）或 `week:2026-W43`（周分区），折叠状态按它记；
+ * order 决定分区在时间轴上的位置 —— 周分区用「周末 + 1ms」，压在该周所有日分区之上。
+ */
+type Section = { key: string; title: string; sub: string; order: number; data: TimelineItem[] };
 
 /**
  * 交给 SectionList 的版本：折叠时 data 清空（header 仍然渲染），
@@ -49,6 +52,9 @@ const NOTE_KIND: Record<Note['type'], string> = {
   monthly: '月总结',
   theme: '主题总结',
 };
+
+/** 同一天里有多条总结时，粒度大的先显示（月 > 周 > 日） */
+const NOTE_RANK: Record<Note['type'], number> = { monthly: 0, weekly: 1, daily: 2, theme: 3 };
 
 interface Props {
   fragments: Fragment[];
@@ -182,7 +188,15 @@ export function TimelineScreen({
       const key = dayKey(at);
       let bucket = map.get(key);
       if (!bucket) {
-        bucket = { key, title: dayLabel(at), sub: daySubLabel(at), data: [] };
+        const day = new Date(at);
+        day.setHours(0, 0, 0, 0);
+        bucket = {
+          key,
+          title: dayLabel(at),
+          sub: daySubLabel(at),
+          order: day.getTime(),
+          data: [],
+        };
         map.set(key, bucket);
       }
       bucket.data.push(item);
@@ -195,26 +209,49 @@ export function TimelineScreen({
     // 搜索 / 筛选时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条，
     // 反而看不清到底哪条碎片命中了。要翻小结请直接看时间轴。
     if (!narrowed) {
-      // 周期总结按 period 落回它覆盖的那一天/周/月末，
-      // 而不是它被生成的那天 —— 否则上周的周报会跑到今天来
       for (const n of notes) {
+        // 周总结独占一个周级分区，固定放在该周最上方；
+        // 不再落进「周日」的日期桶 —— 否则它会和周日那天的日小结挤在一起，谁上谁下看运气。
+        if (n.type === 'weekly' && n.period) {
+          const anchor = periodAnchor(n.period);
+          if (anchor === null) continue;
+          const key = `week:${n.period}`;
+          let bucket = map.get(key);
+          if (!bucket) {
+            bucket = {
+              key,
+              title: periodLabel(n.period),
+              sub: '周总结',
+              order: anchor + 1,
+              data: [],
+            };
+            map.set(key, bucket);
+          }
+          bucket.data.push({ kind: 'note', id: n.id, at: anchor, note: n });
+          continue;
+        }
+        // 日 / 月总结仍按 period 落回它覆盖的那一天/月末，而不是它被生成的那天
         const at = periodAnchor(n.period) ?? n.createdAt;
         push(at, { kind: 'note', id: n.id, at, note: n });
       }
     }
 
-    for (const bucket of map.values()) {
+    const out = Array.from(map.values());
+    for (const bucket of out) {
       bucket.data.sort((a, b) => {
         // 小结排当天最前：它是这一天的一句话结论，先看结论再看零碎
         if (a.kind !== b.kind) return a.kind === 'note' ? -1 : 1;
+        // 同一天有多条总结时，粒度大的先显示（月 > 周 > 日）
+        if (a.kind === 'note' && b.kind === 'note') {
+          const rank = NOTE_RANK[a.note.type] - NOTE_RANK[b.note.type];
+          if (rank !== 0) return rank;
+        }
         return b.at - a.at;
       });
     }
 
-    // 日期键是 YYYY-MM-DD，字典序即时间序；时间轴是新在上
-    return Array.from(map.entries())
-      .sort((a, b) => (a[0] < b[0] ? 1 : -1))
-      .map(([, bucket]) => bucket);
+    // 时间轴新在上；order 是分区在时间轴上的位置，周分区用「周末 + 1ms」压过整周
+    return out.sort((a, b) => b.order - a.order);
   }, [visibleFragments, notes, narrowed]);
 
   /**
@@ -598,7 +635,9 @@ export function TimelineScreen({
                     onPress={() => toggleNote(note.id)}
                     style={({ pressed }) => [styles.noteRow, pressed && styles.rowPressed]}
                   >
-                    <Text style={styles.time}>{formatTime(item.at)}</Text>
+                    <Text style={styles.time}>
+                      {note.type === 'daily' ? formatTime(item.at) : ''}
+                    </Text>
                     <View style={styles.rail}>
                       {!isLast && <View style={styles.railLine} />}
                       <View style={styles.noteDot} />

@@ -195,7 +195,7 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 5. 问「我上次换 NAS 盘是怎么做的」：能引用到具体碎片（`[F..]`），点来源能打开原文。
 6. 问一个本地没有的问题：不开联网时明确说没有；开联网时给出 `[W1]` 来源。
 7. 退出问答复选「保存为碎片」：时间轴出现一条「问答纪要」，下次整理能处理它。
-8. 日/周/月小结：第一行是「一句话」，每节 2–5 条，不再出现大段散文。
+8. 日/周/月小结：第一行是「一句话」，其余各节是完整书面句子；不出现「关键词：短句」的卡片式条目和大段散文。
 
 ---
 
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 **记录**
 
 - 应用内极简输入（打开即写），输入框自动增高，可一键转全屏编辑
-- 时间轴按日分组、按日折叠（默认只展开今天），长文超 3 行折叠
+- 时间轴按日分组、按日折叠（默认只展开今天），长文超 3 行折叠；周总结独占周级分区，固定在该周最上方
 - 首页搜索（原文 / 标签 / 事项，内存过滤）+ 标签胶囊筛选，两者叠乘
 - 碎片详情页：左右滑动切换、整屏内联编辑、正文下方接当天小结
 - 碎片编辑 / 删除
@@ -288,7 +288,7 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 **小结**
 
 - 日 / 周 / 月三种粒度，先预览再决定存不存
-- 格式「一句话 + 短小节」，每条 `- **关键词**：一句话`；字数 150–250 / 300–500 / 500–700
+- 格式「一句话 + 短小节」；每条是完整书面句子（不用「关键词：短句」），正式、客观、无 AI 套话；字数 150–250 / 300–500 / 500–700
 - 待补小结清单（`util/digest.ts`）列在整理页，点一条直接进生成
 - 同周期重复生成时给默认勾选的「替换原有小结」，走 `repo.upsertNote`
 
@@ -296,7 +296,7 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 
 - 标签管理页（回顾页第三个 tab）：改名 / 合并 / 删除，一个输入框搞定改名与合并
 - 整理时模型先看已有标签表再决定新建；代码层再按归一化键收敛一次
-- 待办：点击完成、截止日（过期标红）、已完成置灰划线、被合并的可逐条恢复
+- 待办：点击完成、截止日（过期标红）、已完成置灰划线、被合并的可逐条恢复；**已完成只保留最近 5 条**，超出部分物理清理（v0.7.3 起，用户明确要求）
 
 **其它**
 
@@ -341,6 +341,7 @@ CREATE TABLE todos (
   text               TEXT    NOT NULL,
   due_at             TEXT,        -- YYYY-MM-DD，可空
   done               INTEGER NOT NULL DEFAULT 0,
+  done_at            INTEGER,     -- 标记完成的时间；v7 起用于「只保留最近 5 条」
   source_fragment_id INTEGER,
   created_at         INTEGER NOT NULL,
   merged_into        INTEGER      -- 被合并到哪条；非空表示隐藏（可撤回）
@@ -386,11 +387,12 @@ CREATE TABLE organize_sessions (
 CREATE VIRTUAL TABLE fragment_fts USING fts5(text, tokenize = 'unicode61');
 ```
 
-索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、
+索引：`fragments(created_at DESC)`、`todos(done)`、`todos(done_at DESC)`、`todos(merged_into)`、
 `organize_sessions(finished, updated_at DESC)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v6。**
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v7。**
 v6 做三件事：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、建 `fragment_fts` 与 `organize_sessions`。
+v7 给 `todos` 加 `done_at`，用 `created_at` 回填旧完成项，并物理清理超过 5 条的旧完成项。
 
 **几条刻意的结构决定：**
 
@@ -402,6 +404,7 @@ v6 做三件事：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、建 `fr
 | **`fragment_fts.rowid = fragments.id`** | 免掉一张映射表；写入一律先 `DELETE WHERE rowid = ?` 再 INSERT |
 | **`notes` 的唯一性由应用层保证** | `(type, period)` 没有 UNIQUE 约束 —— period 可空，SQLite 对 NULL 不去重 |
 | **`nature` 保留但不使用** | 兼容旧数据；不要基于它做任何判断 |
+| **已完成待办只留 5 条（v0.7.3）** | 用户明确要求物理清理；这是「永不删除」红线的唯一例外，只针对待办，碎片原文仍不删 |
 
 ## 6. AI 接口契约
 
