@@ -165,6 +165,27 @@ export function Foo() {
 - 模块级常量数组里不能放颜色（拿不到 `c`），要改成函数（`IconButton` 的 `toneBg`）
 - 实心按钮上的字用 `c.onAccent`，不是 `#FFFFFF` —— 深色的 `accent` 是亮蓝，压白字只有 2.5:1
 
+## 提示词（三处，各管一件事）
+
+| 位置 | 管什么 | 输出 |
+|---|---|---|
+| `ai/prompt.ts` 的 `SYSTEM_PROMPT` | 整理：打标签、抽待办、合并 | JSON |
+| `ai/summarize.ts` 的 `buildSystemPrompt` | 小结：日/周/月那篇文字 | Markdown |
+| `ai/qa.ts` 的 `SYSTEM_PROMPT` | 问：怎么回答、怎么引用 | Markdown |
+
+**改文风先看 `TEXTS.md`** —— 那里有全部提示词的原文和行号，改完记得同步回去。
+
+三条不能碰的契约（改了整条链路断，且 `tsc` 不会报）：
+
+- 整理输出那七个字段名：`tags` / `todos` / `merge` / `todo_done` / `drop_todos` / `merge_todos` / `batch_summary`
+- 问答的引用标记：`[F12]` / `[N3]` / `[T5]` / `[W1]`。`qa.ts` 靠 `answer.includes('[F'+id+']')` 判定引用
+- 小结的小节标题：`## 一句话` 等，`util/digest.ts` 和导出解析都认它
+
+**验证只有一条路：真机生成两篇读**。`tsc` 看不见字符串里的字，断言只能证明「文本没丢、变量接对了」，
+证明不了读起来像不像人写的。两篇都要看 —— 一篇可能是运气好。
+
+调文风的经验写在 `TEXTS.md` 的 1.3 节末尾。
+
 ## 全文检索（FTS5 + bigram）
 
 - **中文必须 bigram**（相邻两字一组）。`unicode61` 把整句当一个词，`trigram` 对 <3 字查询不命中
