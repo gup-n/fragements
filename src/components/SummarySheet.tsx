@@ -24,7 +24,7 @@ import { summarizePeriod, type SummarizeOutcome } from '../ai/summarize';
 import { loadAiConfig } from '../ai/config';
 import { repo } from '../db/repo';
 import { periodLabel, periodRange, recentPeriods } from '../util/date';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
 import { ReasoningTrace } from './ReasoningTrace';
@@ -50,6 +50,7 @@ interface Props {
 }
 
 export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [kind, setKind] = useState<DigestKind>(initialKind ?? 'daily');
   const [period, setPeriod] = useState(
     () => initialPeriod ?? recentPeriods(initialKind ?? 'daily', 1)[0],
@@ -234,11 +235,11 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
   const canGenerate = count !== null && count > 0 && phase === 'pick';
 
   return (
-    <View style={s.root}>
+    <View style={styles.root}>
       <ScreenHeader title={KIND_NAME[kind]} backIcon="close" onBack={onClose} />
 
       {phase === 'running' ? (
-        <ScrollView contentContainerStyle={s.content}>
+        <ScrollView contentContainerStyle={styles.content}>
           <ReasoningStream
             title={`正在整理${kindMeta.label === '日' ? '这一天' : kindMeta.label === '周' ? '这一周' : '这个月'}的 ${count ?? 0} 条碎片…`}
             text={reasoning}
@@ -247,21 +248,21 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
             thinking={thinkingOn}
             height={260}
           />
-          <Text style={s.hint}>
+          <Text style={styles.hint}>
             总结只会写进时间轴，不会改动任何碎片。生成完可以先看一遍，再决定存不存。
           </Text>
         </ScrollView>
       ) : phase === 'preview' && draft ? (
         <>
-          <ScrollView contentContainerStyle={s.content}>
-            <View style={s.previewCard}>
-              <Text style={s.previewMeta}>
+          <ScrollView contentContainerStyle={styles.content}>
+            <View style={styles.previewCard}>
+              <Text style={styles.previewMeta}>
                 {periodLabel(period)} ·{' '}
                 {draft.used === draft.total
                   ? `${draft.total} 条碎片`
                   : `${draft.total} 条碎片（${draft.used} 条进了上下文）`}
               </Text>
-              <NoteBody text={draft.bodyMd} style={s.previewBody} />
+              <NoteBody text={draft.bodyMd} style={styles.previewBody} />
             </View>
 
             <ReasoningTrace
@@ -271,99 +272,99 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
               height={220}
             />
 
-            {error ? <Text style={s.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
           </ScrollView>
 
           {existingId ? (
-            <Pressable style={s.replaceRow} onPress={() => setReplaceExisting((v) => !v)}>
-              <View style={[s.checkBox, replaceExisting && s.checkBoxOn]}>
-                {replaceExisting ? <Ionicons name="checkmark" size={11} color="#FFFFFF" /> : null}
+            <Pressable style={styles.replaceRow} onPress={() => setReplaceExisting((v) => !v)}>
+              <View style={[styles.checkBox, replaceExisting && styles.checkBoxOn]}>
+                {replaceExisting ? <Ionicons name="checkmark" size={11} color={c.onAccent} /> : null}
               </View>
-              <Text style={s.replaceText}>替换这个周期原有的{KIND_NAME[kind]}</Text>
+              <Text style={styles.replaceText}>替换这个周期原有的{KIND_NAME[kind]}</Text>
             </Pressable>
           ) : null}
 
-          <View style={s.footer}>
-            <Pressable style={s.ghostBtn} onPress={() => setPhase('pick')} disabled={saving}>
-              <Text style={s.ghostText}>重新选</Text>
+          <View style={styles.footer}>
+            <Pressable style={styles.ghostBtn} onPress={() => setPhase('pick')} disabled={saving}>
+              <Text style={styles.ghostText}>重新选</Text>
             </Pressable>
             <Pressable
-              style={[s.primaryBtn, saving && s.btnDisabled]}
+              style={[styles.primaryBtn, saving && styles.btnDisabled]}
               onPress={save}
               disabled={saving}
             >
               {saving ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={c.onAccent} />
               ) : (
-                <Text style={s.primaryText}>保存到时间轴</Text>
+                <Text style={styles.primaryText}>保存到时间轴</Text>
               )}
             </Pressable>
           </View>
         </>
       ) : (
         <>
-          <ScrollView contentContainerStyle={s.content}>
-            <View style={s.segment}>
+          <ScrollView contentContainerStyle={styles.content}>
+            <View style={styles.segment}>
               {KINDS.map((k) => (
                 <Pressable
                   key={k.key}
                   onPress={() => setKind(k.key)}
-                  style={[s.segItem, kind === k.key && s.segItemOn]}
+                  style={[styles.segItem, kind === k.key && styles.segItemOn]}
                 >
-                  <Text style={[s.segText, kind === k.key && s.segTextOn]}>{k.label}</Text>
+                  <Text style={[styles.segText, kind === k.key && styles.segTextOn]}>{k.label}</Text>
                 </Pressable>
               ))}
             </View>
-            <Text style={s.hint}>{kindMeta.hint}</Text>
+            <Text style={styles.hint}>{kindMeta.hint}</Text>
 
-            <Text style={s.sectionLabel}>选一个周期</Text>
+            <Text style={styles.sectionLabel}>选一个周期</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
-              contentContainerStyle={s.chipRow}
+              contentContainerStyle={styles.chipRow}
             >
               {periods.map((p) => (
                 <Pressable
                   key={p}
                   onPress={() => setPeriod(p)}
-                  style={[s.chip, period === p && s.chipOn]}
+                  style={[styles.chip, period === p && styles.chipOn]}
                 >
-                  <Text style={[s.chipText, period === p && s.chipTextOn]}>
+                  <Text style={[styles.chipText, period === p && styles.chipTextOn]}>
                     {periodLabel(p)}
                   </Text>
                 </Pressable>
               ))}
             </ScrollView>
 
-            <View style={s.countCard}>
+            <View style={styles.countCard}>
               {count === null ? (
-                <ActivityIndicator size="small" color={C.accent} />
+                <ActivityIndicator size="small" color={c.accent} />
               ) : count === 0 ? (
-                <Text style={s.countEmpty}>这个周期里还没有碎片</Text>
+                <Text style={styles.countEmpty}>这个周期里还没有碎片</Text>
               ) : (
-                <Text style={s.countText}>
-                  这个周期共 <Text style={s.countNum}>{count}</Text> 条碎片
+                <Text style={styles.countText}>
+                  这个周期共 <Text style={styles.countNum}>{count}</Text> 条碎片
                   {kind !== 'daily' ? '，会一起读' : ''}
                 </Text>
               )}
               {existingId ? (
-                <Text style={s.countWarn}>
+                <Text style={styles.countWarn}>
                   这个周期已经有一份{KIND_NAME[kind]}，保存时可以替换掉
                 </Text>
               ) : null}
             </View>
 
-            {error ? <Text style={s.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error}>{error}</Text> : null}
           </ScrollView>
 
-          <View style={s.footer}>
-            <View style={s.footerSpacer} />
+          <View style={styles.footer}>
+            <View style={styles.footerSpacer} />
             <Pressable
-              style={[s.primaryBtn, !canGenerate && s.btnDisabled]}
+              style={[styles.primaryBtn, !canGenerate && styles.btnDisabled]}
               onPress={generate}
               disabled={!canGenerate}
             >
-              <Text style={s.primaryText}>生成总结</Text>
+              <Text style={styles.primaryText}>生成总结</Text>
             </Pressable>
           </View>
         </>
@@ -372,25 +373,25 @@ export function SummarySheet({ onClose, onSaved, initialKind, initialPeriod }: P
   );
 }
 
-const s = StyleSheet.create({
-  root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
 
   content: { paddingHorizontal: 16, paddingBottom: 24 },
 
   segment: {
     flexDirection: 'row',
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
     borderRadius: R.btn,
     padding: 3,
     marginTop: 4,
   },
   segItem: { flex: 1, paddingVertical: 8, borderRadius: R.btn - 1, alignItems: 'center' },
-  segItemOn: { backgroundColor: C.card },
-  segText: { fontSize: 13, color: C.text2 },
-  segTextOn: { color: C.text, fontWeight: '600' },
+  segItemOn: { backgroundColor: c.card },
+  segText: { fontSize: 13, color: c.text2 },
+  segTextOn: { color: c.text, fontWeight: '600' },
 
-  hint: { fontSize: 12, color: C.text3, lineHeight: 19, marginTop: 10 },
-  sectionLabel: { fontSize: 12, color: C.text3, marginTop: 20, marginBottom: 8 },
+  hint: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 10 },
+  sectionLabel: { fontSize: 12, color: c.text3, marginTop: 20, marginBottom: 8 },
 
   chipRow: { gap: 8, paddingRight: 16 },
   chip: {
@@ -398,26 +399,26 @@ const s = StyleSheet.create({
     paddingVertical: 7,
     borderRadius: R.pill,
     borderWidth: 0.5,
-    borderColor: C.hair,
-    backgroundColor: C.card,
+    borderColor: c.hair,
+    backgroundColor: c.card,
   },
-  chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
-  chipText: { fontSize: 12, color: C.text2, fontVariant: ['tabular-nums'] },
-  chipTextOn: { color: C.accentText, fontWeight: '500' },
+  chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
+  chipText: { fontSize: 12, color: c.text2, fontVariant: ['tabular-nums'] },
+  chipTextOn: { color: c.accentText, fontWeight: '500' },
 
   countCard: {
     marginTop: 18,
     padding: 14,
     borderRadius: R.card,
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     alignItems: 'center',
   },
-  countText: { fontSize: 13, color: C.text2 },
-  countNum: { fontSize: 15, color: C.text, fontWeight: '600' },
-  countEmpty: { fontSize: 13, color: C.text3 },
-  countWarn: { fontSize: 11, color: C.text3, marginTop: 8 },
+  countText: { fontSize: 13, color: c.text2 },
+  countNum: { fontSize: 15, color: c.text, fontWeight: '600' },
+  countEmpty: { fontSize: 13, color: c.text3 },
+  countWarn: { fontSize: 11, color: c.text3, marginTop: 8 },
 
   replaceRow: {
     flexDirection: 'row',
@@ -431,24 +432,24 @@ const s = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: C.text3,
+    borderColor: c.text3,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  checkBoxOn: { backgroundColor: C.accent, borderColor: C.accent },
-  replaceText: { fontSize: 12, color: C.text2 },
+  checkBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
+  replaceText: { fontSize: 12, color: c.text2 },
 
-  error: { fontSize: 12, color: C.danger, lineHeight: 19, marginTop: 14 },
+  error: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 14 },
 
   previewCard: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     padding: 16,
     marginTop: 4,
   },
-  previewMeta: { fontSize: 11, color: C.text3, marginBottom: 10 },
+  previewMeta: { fontSize: 11, color: c.text3, marginBottom: 10 },
   previewBody: { fontSize: 14, lineHeight: 24 },
 
   footer: {
@@ -460,27 +461,27 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 18,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
-    backgroundColor: C.page,
+    borderTopColor: c.hair,
+    backgroundColor: c.page,
   },
   footerSpacer: { flex: 1 },
   primaryBtn: {
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     borderRadius: R.btn,
     paddingHorizontal: 20,
     paddingVertical: 12,
     minWidth: 132,
     alignItems: 'center',
   },
-  primaryText: { fontSize: 14, color: '#FFFFFF', fontWeight: '500' },
+  primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
   ghostBtn: {
     borderRadius: R.btn,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderWidth: 0.5,
-    borderColor: C.hair,
-    backgroundColor: C.card,
+    borderColor: c.hair,
+    backgroundColor: c.card,
   },
-  ghostText: { fontSize: 14, color: C.text2 },
+  ghostText: { fontSize: 14, color: c.text2 },
   btnDisabled: { opacity: 0.4 },
 });

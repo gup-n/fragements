@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-26 更新到 v0.7.4**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.7.4（versionCode 26）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-27 更新到 v0.8.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.0（versionCode 27）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.7.4 / versionCode 26 |
+| 版本 | v0.8.0 / versionCode 27 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v7 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -36,9 +36,10 @@
 | 项 | 状态 |
 |---|---|
 | 编译 | `tsc --noEmit` 零错误 |
-| Web 编译校验 | `npm run build:web` 通过（约 1.1 MiB，产物跑完即删） |
+| Web 编译校验 | `npm run build:web` 通过（约 1.16 MiB，产物跑完即删） |
 | 自动化测试 | **没有**。只有纯函数层的临时 `assert` 脚本（跑完删） |
-| 真机验证 | v0.7 这批**基本没验**，26 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，30 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏入口、导入） |
 | 数据迁移 | v7。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项 |
 
@@ -81,18 +82,19 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **12,129 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **12,753 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `App.tsx` | 294 | 路由 state（5 个页面）、全局 BackHandler、`draft` / `settingsFrom`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1141 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口 |
-| `src/screens/OrganizeScreen.tsx` | 931 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
-| `src/screens/AskScreen.tsx` | 603 | 「问」：聊天布局、两个开关、引用来源、退出存纪要 |
-| `src/screens/ReviewScreen.tsx` | 346 | 回顾：待办 / 小结 / 标签三个 tab |
-| `src/screens/SettingsScreen.tsx` | 437 | API 配置、测试连接、重建索引、导出、统计 |
+| `App.tsx` | 346 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom`、数据加载 |
+| `src/screens/TimelineScreen.tsx` | 1181 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口 |
+| `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
+| `src/screens/AskScreen.tsx` | 604 | 「问」：聊天布局、两个开关、引用来源、退出存纪要 |
+| `src/screens/ReviewScreen.tsx` | 367 | 回顾：待办 / 小结 / 标签三个 tab |
+| `src/screens/SettingsScreen.tsx` | 646 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
+| `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
 ### AI 层
 
@@ -346,6 +348,22 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 - **显示与写入共用同一个函数**。两份实现迟早漂移，表现是「界面说改 A，实际改 B」。
 
 ---
+
+### 8.6 主题（v0.8.0）
+
+- **`StyleSheet.create` 会在模块加载时把色值固化。** 所以「给 `C` 加个 setter 就行」
+  是错的 —— 换主题后旧样式表不会变。任何带颜色的样式必须是
+  `const makeStyles = (c: Palette) => StyleSheet.create({...})`，
+  组件里 `const { c, styles } = useThemedStyles(makeStyles)`。
+- **JSX 内联的颜色也要走 `c`。** `<Ionicons color={c.text2}>`、`placeholderTextColor`。
+  写死一个 `#FFFFFF`，深色下就是一块拍在脸上的白。
+- **模块级常量拿不到 `c`。** `IconButton` 的 `TONE_BG` 因此改成了函数。
+- **实心按钮上的字不能恒白。** 深色的 `accent` 是 `#5B9BD8`，压白字只有 2.5:1，
+  要用 `c.onAccent`。
+- **`userInterfaceStyle: "automatic"` 要装 `expo-system-ui`**，不装 prebuild 会警告、
+  Android 侧开关不生效。
+- **启动屏有第二份颜色。** `plugins/withNoSplashAnimation.js` 会写
+  `values-night/colors.xml`，改 `DARK.page` 时记得同步 `PAGE_COLOR_DARK`。
 
 ## 9. 真机待验
 

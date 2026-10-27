@@ -11,7 +11,14 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, ReasoningEffort } from '../types';
-import { C, R } from '../theme';
+import {
+  R,
+  THEME_MODE_LABEL,
+  useTheme,
+  useThemedStyles,
+  type Palette,
+  type ThemeMode,
+} from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/chat';
@@ -21,6 +28,7 @@ import { looksBinary } from '../util/mdParse';
 import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
+import type { IoniconName } from '../components/IconButton';
 
 interface Props {
   fragments: Fragment[];
@@ -42,6 +50,8 @@ const EFFORT_HINT: Record<ReasoningEffort, string> = {
 };
 
 export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const { mode, setMode } = useTheme();
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -53,6 +63,20 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
     'idle' | 'saving' | 'testing' | 'exporting' | 'indexing' | 'picking' | 'importing'
   >('idle');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * 数据区自己的反馈位。
+   *
+   * 原来所有操作共用上面那个 `msg`，而 `msg` 渲染在「AI 接口」卡片里 ——
+   * 人在页面最下面点「重建搜索索引」，提示出现在屏幕上方几十甚至几百像素外，
+   * 看起来就是「点了没反应」。分开之后，谁触发的就显示在谁旁边。
+   */
+  const [indexMsg, setIndexMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 导出/导入的反馈，渲染在它们自己的按钮下方 */
+  const [ioMsg, setIoMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 索引健康度。null = 还没查出来 */
+  const [indexState, setIndexState] = useState<{ indexed: number; total: number } | null>(null);
+  /** 搜索自检结果。checked = 抽了几条，hit = 有几条能搜回来 */
+  const [probe, setProbe] = useState<{ checked: number; hit: number } | null>(null);
   /** 非空时弹导入确认页。选完文件先看预览，确认了才写库 */
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
@@ -65,6 +89,9 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setThinking(cfg.thinking);
       setEffort(cfg.effort);
       setStats(await repo.stats());
+      // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
+      setIndexState(await repo.searchIndexStats());
+      setProbe(await repo.selfTestSearch(5));
     })();
   }, []);
 
@@ -100,12 +127,24 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
    */
   async function handleRebuildIndex() {
     setBusy('indexing');
-    setMsg(null);
+    setIndexMsg(null);
     try {
+      const before = indexState?.indexed ?? null;
       const { indexed } = await repo.rebuildSearchIndex();
-      setMsg({ kind: 'ok', text: `已重建索引，共 ${indexed} 条` });
+      const [nextIndex, nextProbe] = await Promise.all([
+        repo.searchIndexStats(),
+        repo.selfTestSearch(5),
+      ]);
+      setIndexState(nextIndex);
+      setProbe(nextProbe);
+
+      // 报「修了什么」，不只报「成功了」：条数没变就说没变，别让人误以为修好了什么
+      const parts = [`已重建 ${indexed} 条`];
+      if (nextProbe.checked > 0) parts.push(`自检 ${nextProbe.hit}/${nextProbe.checked} 通过`);
+      if (before !== null && before !== indexed) parts.push(`原来 ${before} 条`);
+      setIndexMsg({ kind: 'ok', text: parts.join(' · ') });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message || '重建失败' });
+      setIndexMsg({ kind: 'err', text: (e as Error).message || '重建失败' });
     } finally {
       setBusy('idle');
     }
@@ -113,12 +152,12 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
   async function handlePickImport() {
     setBusy('picking');
-    setMsg(null);
+    setIoMsg(null);
     try {
       const file = await pickMarkdown();
       if (!file) return;
       if (looksBinary(file.text)) {
-        setMsg({
+        setIoMsg({
           kind: 'err',
           text: '这个文件读不出文本。可能是选错了文件，或者它是 GBK 编码——用记事本另存为 UTF-8 再试。',
         });
@@ -126,7 +165,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       }
       const preview = await previewImport(file);
       if (!preview.total) {
-        setMsg({
+        setIoMsg({
           kind: 'err',
           text: '文件里没找到能导入的条目。需要 `- 内容` 这样的列表行，上面最好有 `### 2026-10-25` 这样的日期标题。',
         });
@@ -134,7 +173,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       }
       setImportPreview(preview);
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message || '读取文件失败' });
+      setIoMsg({ kind: 'err', text: (e as Error).message || '读取文件失败' });
     } finally {
       setBusy('idle');
     }
@@ -143,13 +182,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   async function handleConfirmImport() {
     if (!importPreview) return;
     setBusy('importing');
-    setMsg(null);
+    setIoMsg(null);
     try {
       const { inserted, tagged } = await applyImport(importPreview.fresh);
       setImportPreview(null);
       setStats(await repo.stats());
       onChanged();
-      setMsg({
+      setIoMsg({
         kind: 'ok',
         text: tagged
           ? `已导入 ${inserted} 条，其中 ${tagged} 条带标签（直接算已整理）`
@@ -157,7 +196,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       });
     } catch (e) {
       // 不回滚：已经写进去的靠判重挡着，重试不会产生重复
-      setMsg({ kind: 'err', text: (e as Error).message || '写入失败，可以再点一次导入' });
+      setIoMsg({ kind: 'err', text: (e as Error).message || '写入失败，可以再点一次导入' });
     } finally {
       setBusy('idle');
     }
@@ -165,23 +204,80 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
   async function handleExport() {
     setBusy('exporting');
-    setMsg(null);
+    setIoMsg(null);
     try {
       const todos = await repo.listTodos();
       const { message } = await exportMarkdown(fragments, todos);
-      setMsg({ kind: 'ok', text: message });
+      setIoMsg({ kind: 'ok', text: message });
     } catch (e) {
-      setMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
+      setIoMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
     } finally {
       setBusy('idle');
     }
   }
+
+  // 索引状态分两层说：条数对不对是「完整性」，自检命中率是「可用性」。
+  // 只报完整可能是「全建了但搜不出来」，只报自检又看不出漏了哪几条。
+  const indexOk = !!indexState && indexState.indexed === indexState.total;
+  const probeOk = !probe || probe.checked === 0 || probe.hit === probe.checked;
+  const indexHealthy = indexOk && probeOk;
+  // 空库谈不上健康，别给它打绿勾
+  const indexEmpty = !!indexState && indexState.total === 0;
+  const indexColor =
+    !indexState || indexEmpty ? c.text2 : indexHealthy ? c.tealText : c.danger;
+  const indexIcon: IoniconName = !indexState
+    ? 'ellipsis-horizontal-circle-outline'
+    : indexEmpty
+      ? 'information-circle-outline'
+      : indexHealthy
+        ? 'checkmark-circle-outline'
+        : 'alert-circle-outline';
+  const indexLine = !indexState
+    ? '正在检查索引…'
+    : indexState.total === 0
+      ? '库里还没有碎片'
+      : indexOk
+        ? `索引完整 · ${indexState.total} 条全部可搜`
+        : `索引不全 · ${indexState.total} 条里缺 ${indexState.total - indexState.indexed} 条`;
+  const probeLine = !probe
+    ? '正在自检…'
+    : probe.checked === 0
+      ? indexEmpty
+        ? '空库没有可自检的碎片'
+        : '能自检的碎片还不够（太短），先记几条长一点的'
+      : probe.hit === probe.checked
+        ? `抽样自检：拿正文中的一段往回搜，${probe.checked} 条全部搜回`
+        : `抽样自检：${probe.checked} 条里只有 ${probe.hit} 条能搜回，搜索可能不准`;
 
   return (
     <View style={styles.root}>
       <ScreenHeader title="设置" subtitle={'v' + APP_VERSION} onBack={onClose} />
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.groupTitle}>外观</Text>
+        <View style={styles.card}>
+          <View style={styles.chipRow}>
+            {(['light', 'dark', 'system'] as const).map((m) => (
+              <Pressable
+                key={m}
+                style={[styles.chip, mode === m && styles.chipOn]}
+                onPress={() => setMode(m)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: mode === m }}
+              >
+                <Text style={[styles.chipText, mode === m && styles.chipTextOn]}>
+                  {THEME_MODE_LABEL[m]}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text style={styles.note}>
+            {mode === 'system'
+              ? '跟着手机的深色模式走 —— 系统几点切深色，这里就几点换。'
+              : `固定用${THEME_MODE_LABEL[mode]}，手机怎么切都不变。`}
+          </Text>
+        </View>
+
         <Text style={styles.groupTitle}>AI 接口</Text>
         <View style={styles.card}>
           <Field label="Base URL">
@@ -191,7 +287,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="https://api.deepseek.com/v1"
-              placeholderTextColor={C.text3}
+              placeholderTextColor={c.text3}
               style={styles.input}
             />
           </Field>
@@ -202,7 +298,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               autoCapitalize="none"
               autoCorrect={false}
               placeholder="deepseek-flash"
-              placeholderTextColor={C.text3}
+              placeholderTextColor={c.text3}
               style={styles.input}
             />
           </Field>
@@ -215,14 +311,14 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 autoCorrect={false}
                 secureTextEntry={!showKey}
                 placeholder="sk-…"
-                placeholderTextColor={C.text3}
+                placeholderTextColor={c.text3}
                 style={[styles.input, styles.keyInput]}
               />
               <Pressable onPress={() => setShowKey((v) => !v)} hitSlop={8}>
                 <Ionicons
                   name={showKey ? 'eye-off-outline' : 'eye-outline'}
                   size={17}
-                  color={C.text3}
+                  color={c.text3}
                 />
               </Pressable>
             </View>
@@ -236,7 +332,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </Pressable>
             <Pressable style={styles.solidBtn} onPress={handleTest} disabled={busy !== 'idle'}>
               {busy === 'testing' ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
+                <ActivityIndicator size="small" color={c.onAccent} />
               ) : (
                 <Text style={styles.solidBtnText}>测试连接</Text>
               )}
@@ -308,19 +404,37 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             <Stat num={stats.tags} label="标签" />
           </View>
 
+          <View style={styles.indexBox}>
+            <View style={styles.indexHead}>
+              <Ionicons name={indexIcon} size={14} color={indexColor} />
+              <Text style={[styles.indexTitle, { color: indexColor }]}>{indexLine}</Text>
+            </View>
+            <Text style={styles.indexHint}>{probeLine}</Text>
+            {indexMsg && (
+              <Text
+                style={[styles.indexHint, indexMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}
+              >
+                {indexMsg.text}
+              </Text>
+            )}
+          </View>
+
           <Pressable
             style={styles.ghostBtnWide}
             onPress={handleRebuildIndex}
             disabled={busy !== 'idle'}
           >
-            <Ionicons name="refresh-outline" size={15} color={C.text} />
+            <Ionicons name="refresh-outline" size={15} color={c.text} />
             <Text style={styles.ghostBtnText}>
               {busy === 'indexing' ? '正在重建…' : '重建搜索索引'}
             </Text>
           </Pressable>
+          <Text style={styles.note}>
+            搜索和「问」的检索都走这张索引。平时不用点 —— 只有明明记过、却搜不出来的时候才需要重来一遍。
+          </Text>
 
           <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
-            <Ionicons name="download-outline" size={15} color={C.text} />
+            <Ionicons name="download-outline" size={15} color={c.text} />
             <Text style={styles.ghostBtnText}>
               {busy === 'exporting' ? '正在导出…' : '导出 Markdown'}
             </Text>
@@ -330,11 +444,16 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             onPress={handlePickImport}
             disabled={busy !== 'idle'}
           >
-            <Ionicons name="cloud-upload-outline" size={15} color={C.text} />
+            <Ionicons name="cloud-upload-outline" size={15} color={c.text} />
             <Text style={styles.ghostBtnText}>
               {busy === 'picking' ? '正在读取…' : '从 Markdown 导入'}
             </Text>
           </Pressable>
+          {ioMsg && (
+            <Text style={[styles.msg, ioMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+              {ioMsg.text}
+            </Text>
+          )}
           <Text style={styles.note}>
             导出成一个 .md 文件，按天分节，标签写成 #tag。放到 NAS 或者 Obsidian
             里都能直接读，也是一份逃生舱。
@@ -383,6 +502,7 @@ function Field({
   children: React.ReactNode;
   last?: boolean;
 }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
     <View style={[styles.field, last && { borderBottomWidth: 0 }]}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -392,6 +512,7 @@ function Field({
 }
 
 function Stat({ num, label }: { num: number; label: string }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
     <View style={styles.stat}>
       <Text style={styles.statNum}>{num}</Text>
@@ -400,13 +521,13 @@ function Stat({ num, label }: { num: number; label: string }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.page },
 
   content: { paddingHorizontal: 16, paddingBottom: 40 },
   groupTitle: {
     fontSize: 11.5,
-    color: C.text2,
+    color: c.text2,
     fontWeight: '600',
     letterSpacing: 0.6,
     marginTop: 20,
@@ -414,21 +535,21 @@ const styles = StyleSheet.create({
     marginLeft: 4,
   },
   card: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     padding: 14,
   },
   field: {
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
-  fieldLabel: { fontSize: 11, color: C.text3, marginBottom: 5 },
+  fieldLabel: { fontSize: 11, color: c.text3, marginBottom: 5 },
   input: {
     fontSize: 14.5,
-    color: C.text,
+    color: c.text,
     paddingVertical: 2,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
@@ -442,7 +563,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: R.btn,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
   ghostBtnWide: {
     flexDirection: 'row',
@@ -452,38 +573,38 @@ const styles = StyleSheet.create({
     paddingVertical: 11,
     borderRadius: R.btn,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     marginTop: 14,
   },
-  ghostBtnText: { fontSize: 13, color: C.text },
+  ghostBtnText: { fontSize: 13, color: c.text },
   solidBtn: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
     borderRadius: R.btn,
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
   },
-  solidBtnText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
+  solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
 
   msg: { fontSize: 12, lineHeight: 19, marginTop: 12 },
-  msgOk: { color: C.tealText },
-  msgErr: { color: C.danger },
-  note: { fontSize: 11, color: C.text3, lineHeight: 18, marginTop: 12 },
+  msgOk: { color: c.tealText },
+  msgErr: { color: c.danger },
+  note: { fontSize: 11, color: c.text3, lineHeight: 18, marginTop: 12 },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   toggle: {
     width: 38,
     height: 22,
     borderRadius: 11,
-    backgroundColor: C.hair,
+    backgroundColor: c.hair,
     padding: 2,
     flexDirection: 'row',
     justifyContent: 'flex-start',
   },
-  toggleOn: { backgroundColor: C.accent, justifyContent: 'flex-end' },
+  toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
-  toggleHint: { flex: 1, fontSize: 11, color: C.text3, lineHeight: 16 },
+  toggleHint: { flex: 1, fontSize: 11, color: c.text3, lineHeight: 16 },
 
   chipRow: { flexDirection: 'row', gap: 7 },
   chip: {
@@ -491,31 +612,42 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 5,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
-  chipOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
-  chipText: { fontSize: 12, color: C.text2, lineHeight: 17 },
-  chipTextOn: { color: C.accentText },
-  fieldHint: { fontSize: 11, color: C.text3, marginTop: 7, lineHeight: 16 },
+  chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
+  chipText: { fontSize: 12, color: c.text2, lineHeight: 17 },
+  chipTextOn: { color: c.accentText },
+  fieldHint: { fontSize: 11, color: c.text3, marginTop: 7, lineHeight: 16 },
 
   statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
   stat: {
     flex: 1,
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
     borderRadius: R.btn,
     paddingVertical: 12,
     alignItems: 'center',
   },
-  statNum: { fontSize: 20, color: C.text, fontWeight: '600' },
-  statLabel: { fontSize: 11, color: C.text3, marginTop: 3 },
+  statNum: { fontSize: 20, color: c.text, fontWeight: '600' },
+  statLabel: { fontSize: 11, color: c.text3, marginTop: 3 },
+
+  indexBox: {
+    marginTop: 14,
+    backgroundColor: c.hairSoft,
+    borderRadius: R.btn,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+  },
+  indexHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  indexTitle: { flex: 1, fontSize: 12.5, fontWeight: '500', lineHeight: 18 },
+  indexHint: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 4 },
 
   aboutRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingVertical: 9,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
-  aboutKey: { fontSize: 13.5, color: C.text2 },
-  aboutVal: { fontSize: 13.5, color: C.text3, fontVariant: ['tabular-nums'] },
+  aboutKey: { fontSize: 13.5, color: c.text2 },
+  aboutVal: { fontSize: 13.5, color: c.text3, fontVariant: ['tabular-nums'] },
 });

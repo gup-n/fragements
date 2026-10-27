@@ -9,7 +9,7 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { C } from '../theme';
+import { useThemedStyles, type Palette } from '../theme';
 import { IconButton, type IoniconName } from './IconButton';
 
 interface Props {
@@ -32,9 +32,10 @@ export function ScreenHeader({
   right,
   bordered = true,
 }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
-    <View style={[s.wrap, bordered && s.bordered]}>
-      <View style={s.side}>
+    <View style={[styles.wrap, bordered && styles.bordered]}>
+      <View style={styles.side}>
         {onBack ? (
           <IconButton
             name={backIcon}
@@ -46,35 +47,35 @@ export function ScreenHeader({
         ) : null}
       </View>
 
-      <View style={s.center}>
-        <Text style={s.title} numberOfLines={1}>
+      <View style={styles.center}>
+        <Text style={styles.title} numberOfLines={1}>
           {title}
         </Text>
         {subtitle ? (
-          <Text style={s.sub} numberOfLines={1}>
+          <Text style={styles.sub} numberOfLines={1}>
             {subtitle}
           </Text>
         ) : null}
       </View>
 
-      <View style={[s.side, s.sideRight]}>{right}</View>
+      <View style={[styles.side, styles.sideRight]}>{right}</View>
     </View>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   wrap: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
     paddingTop: 6,
     paddingBottom: 8,
-    backgroundColor: C.page,
+    backgroundColor: c.page,
   },
-  bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.hair },
+  bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
   side: { minWidth: 40, justifyContent: 'center' },
   sideRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
   center: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
-  title: { fontSize: 16, color: C.text, fontWeight: '600', letterSpacing: 0.3 },
-  sub: { fontSize: 11, color: C.text3, marginTop: 1 },
+  title: { fontSize: 16, color: c.text, fontWeight: '600', letterSpacing: 0.3 },
+  sub: { fontSize: 11, color: c.text3, marginTop: 1 },
 });

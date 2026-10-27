@@ -13,7 +13,7 @@ import React, { useMemo } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, OrganizeReview, Todo } from '../types';
-import { C, R, tagColor } from '../theme';
+import { R, useThemedStyles, type Palette, tagColor } from '../theme';
 import { K } from '../util/resultItems';
 
 interface Props {
@@ -29,6 +29,7 @@ interface Props {
 }
 
 export function ResultSections({ review, fragments, todos, isOn, onToggle, refactor }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const byId = useMemo(() => new Map(fragments.map((f) => [f.id, f])), [fragments]);
   const todoById = useMemo(() => new Map(todos.map((t) => [t.id, t])), [todos]);
 
@@ -42,7 +43,7 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
 
   if (!total) {
     return (
-      <Text style={s.resultHint}>
+      <Text style={styles.resultHint}>
         这次跑完了 {review.processedCount} 条碎片，没有需要改动的内容。点下面的按钮把它们记为已整理即可，
         原文一个字都不会动。
       </Text>
@@ -64,22 +65,22 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
           {review.tags.map((g) => {
             const key = K.tagGroup(g.label);
             const on = isOn(key);
-            const col = tagColor(g.label);
+            const col = tagColor(c, g.label);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <View style={s.tagHead}>
-                  <View style={[s.labelPill, { backgroundColor: col.bg }]}>
-                    <Text style={[s.labelPillText, { color: col.fg }]}>{g.label}</Text>
+                <View style={styles.tagHead}>
+                  <View style={[styles.labelPill, { backgroundColor: col.bg }]}>
+                    <Text style={[styles.labelPillText, { color: col.fg }]}>{g.label}</Text>
                   </View>
                   {g.isNew ? (
-                    <View style={s.newPill}>
-                      <Text style={s.newPillText}>新</Text>
+                    <View style={styles.newPill}>
+                      <Text style={styles.newPillText}>新</Text>
                     </View>
                   ) : null}
-                  <Text style={s.metaText}>{g.fragmentIds.length} 条</Text>
+                  <Text style={styles.metaText}>{g.fragmentIds.length} 条</Text>
                 </View>
                 {g.similarTo ? (
-                  <Text style={s.warnText}>和已有的「{g.similarTo}」很像，是同一个意思就改用那个</Text>
+                  <Text style={styles.warnText}>和已有的「{g.similarTo}」很像，是同一个意思就改用那个</Text>
                 ) : null}
               </CheckRow>
             );
@@ -94,8 +95,8 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
             const on = isOn(key);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]}>{t.text}</Text>
-                {t.due ? <Text style={s.dueText}>截止 {t.due}</Text> : null}
+                <Text style={[styles.rowText, !on && styles.rowTextOff]}>{t.text}</Text>
+                {t.due ? <Text style={styles.dueText}>截止 {t.due}</Text> : null}
               </CheckRow>
             );
           })}
@@ -113,10 +114,10 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
             const on = isOn(key);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, on && s.strikeText, !on && s.rowTextOff]}>
+                <Text style={[styles.rowText, on && styles.strikeText, !on && styles.rowTextOff]}>
                   {todoById.get(d.todo_id)?.text ?? `#${d.todo_id}`}
                 </Text>
-                {d.reason ? <Text style={s.reasonText}>{d.reason}</Text> : null}
+                {d.reason ? <Text style={styles.reasonText}>{d.reason}</Text> : null}
               </CheckRow>
             );
           })}
@@ -134,10 +135,10 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
             const on = isOn(key);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]}>
+                <Text style={[styles.rowText, !on && styles.rowTextOff]}>
                   {todoById.get(d.todo_id)?.text ?? `#${d.todo_id}`}
                 </Text>
-                {d.reason ? <Text style={s.reasonText}>{d.reason}</Text> : null}
+                {d.reason ? <Text style={styles.reasonText}>{d.reason}</Text> : null}
               </CheckRow>
             );
           })}
@@ -156,16 +157,16 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
             const keep = todoById.get(m.keep_id);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]}>
+                <Text style={[styles.rowText, !on && styles.rowTextOff]}>
                   {keep?.text ?? `#${m.keep_id}`}
                 </Text>
                 {m.text && m.text !== keep?.text ? (
-                  <Text style={s.mergeNewText}>合并后：{m.text}</Text>
+                  <Text style={styles.mergeNewText}>合并后：{m.text}</Text>
                 ) : null}
-                <Text style={s.mergeDrops}>
+                <Text style={styles.mergeDrops}>
                   并入：{m.drop_ids.map((id) => todoById.get(id)?.text ?? `#${id}`).join('；')}
                 </Text>
-                {m.reason ? <Text style={s.reasonText}>{m.reason}</Text> : null}
+                {m.reason ? <Text style={styles.reasonText}>{m.reason}</Text> : null}
               </CheckRow>
             );
           })}
@@ -185,15 +186,15 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
             const drops = m.drop_ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
             return (
               <CheckRow key={key} on={on} onPress={() => onToggle(key)}>
-                <Text style={[s.rowText, !on && s.rowTextOff]} numberOfLines={2}>
+                <Text style={[styles.rowText, !on && styles.rowTextOff]} numberOfLines={2}>
                   保留：{keep?.content ?? `#${m.keep_id}`}
                 </Text>
                 {drops.map((d) => (
-                  <Text key={d.id} style={s.dropText} numberOfLines={1}>
+                  <Text key={d.id} style={styles.dropText} numberOfLines={1}>
                     并入：{d.content}
                   </Text>
                 ))}
-                {m.reason ? <Text style={s.reasonText}>{m.reason}</Text> : null}
+                {m.reason ? <Text style={styles.reasonText}>{m.reason}</Text> : null}
               </CheckRow>
             );
           })}
@@ -201,7 +202,7 @@ export function ResultSections({ review, fragments, todos, isOn, onToggle, refac
       )}
 
       {refactor ? (
-        <Text style={s.footNote}>
+        <Text style={styles.footNote}>
           这一轮是「全部重过」：勾上的标签会覆盖旧标签；没勾的碎片保留原有标签，不会被清空。
         </Text>
       ) : null}
@@ -220,14 +221,15 @@ function Section({
   hint?: string;
   children: React.ReactNode;
 }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
-    <View style={s.section}>
-      <View style={s.sectionHead}>
-        <Text style={s.sectionTitle}>{title}</Text>
-        <Text style={s.sectionCount}>{count}</Text>
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <Text style={styles.sectionTitle}>{title}</Text>
+        <Text style={styles.sectionCount}>{count}</Text>
       </View>
-      {hint ? <Text style={s.sectionHint}>{hint}</Text> : null}
-      <View style={s.sectionBody}>{children}</View>
+      {hint ? <Text style={styles.sectionHint}>{hint}</Text> : null}
+      <View style={styles.sectionBody}>{children}</View>
     </View>
   );
 }
@@ -241,18 +243,19 @@ function CheckRow({
   onPress: () => void;
   children: React.ReactNode;
 }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
-    <Pressable style={s.checkRow} onPress={onPress}>
-      <View style={[s.checkCircle, on && s.checkCircleOn]}>
-        {on && <Ionicons name="checkmark" size={12} color="#FFFFFF" />}
+    <Pressable style={styles.checkRow} onPress={onPress}>
+      <View style={[styles.checkCircle, on && styles.checkCircleOn]}>
+        {on && <Ionicons name="checkmark" size={12} color={c.onAccent} />}
       </View>
-      <View style={s.checkBody}>{children}</View>
+      <View style={styles.checkBody}>{children}</View>
     </Pressable>
   );
 }
 
-const s = StyleSheet.create({
-  resultHint: { fontSize: 12, color: C.text3, marginBottom: 14, marginTop: 4, lineHeight: 18 },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  resultHint: { fontSize: 12, color: c.text3, marginBottom: 14, marginTop: 4, lineHeight: 18 },
 
   section: { marginBottom: 20 },
   sectionHead: {
@@ -262,14 +265,14 @@ const s = StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 2,
   },
-  sectionTitle: { fontSize: 13, color: C.text, fontWeight: '500' },
-  sectionCount: { fontSize: 11, color: C.text3 },
-  sectionHint: { fontSize: 11, color: C.text3, lineHeight: 16, marginBottom: 7, paddingHorizontal: 2 },
+  sectionTitle: { fontSize: 13, color: c.text, fontWeight: '500' },
+  sectionCount: { fontSize: 11, color: c.text3 },
+  sectionHint: { fontSize: 11, color: c.text3, lineHeight: 16, marginBottom: 7, paddingHorizontal: 2 },
   sectionBody: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     overflow: 'hidden',
   },
 
@@ -279,40 +282,40 @@ const s = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
   checkCircle: {
     width: 17,
     height: 17,
     borderRadius: 9,
     borderWidth: 1,
-    borderColor: C.hair,
+    borderColor: c.hair,
     alignItems: 'center',
     justifyContent: 'center',
     marginTop: 2,
   },
-  checkCircleOn: { backgroundColor: C.accent, borderColor: C.accent },
+  checkCircleOn: { backgroundColor: c.accent, borderColor: c.accent },
   checkBody: { flex: 1, gap: 4 },
-  rowText: { fontSize: 14, lineHeight: 21, color: C.text },
-  rowTextOff: { color: C.text3 },
-  strikeText: { textDecorationLine: 'line-through', color: C.text2 },
+  rowText: { fontSize: 14, lineHeight: 21, color: c.text },
+  rowTextOff: { color: c.text3 },
+  strikeText: { textDecorationLine: 'line-through', color: c.text2 },
 
   tagHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   labelPill: { borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 3 },
   labelPillText: { fontSize: 12, lineHeight: 16, fontWeight: '500' },
   newPill: {
-    backgroundColor: C.amberBg,
+    backgroundColor: c.amberBg,
     borderRadius: R.pill,
     paddingHorizontal: 6,
     paddingVertical: 1,
   },
-  newPillText: { fontSize: 10, lineHeight: 14, color: C.amberText },
-  metaText: { fontSize: 11, color: C.text3 },
-  warnText: { fontSize: 11, color: C.amberText, lineHeight: 16 },
-  dueText: { fontSize: 11, color: C.text3, marginTop: 1 },
-  dropText: { fontSize: 12, color: C.text3, lineHeight: 18 },
-  reasonText: { fontSize: 11, color: C.text3, marginTop: 2, lineHeight: 16 },
-  mergeNewText: { fontSize: 12, color: C.accentText, marginTop: 4, lineHeight: 18 },
-  mergeDrops: { fontSize: 11, color: C.text2, marginTop: 3, lineHeight: 17 },
-  footNote: { fontSize: 11, color: C.text3, lineHeight: 17, paddingHorizontal: 2, marginTop: -6 },
+  newPillText: { fontSize: 10, lineHeight: 14, color: c.amberText },
+  metaText: { fontSize: 11, color: c.text3 },
+  warnText: { fontSize: 11, color: c.amberText, lineHeight: 16 },
+  dueText: { fontSize: 11, color: c.text3, marginTop: 1 },
+  dropText: { fontSize: 12, color: c.text3, lineHeight: 18 },
+  reasonText: { fontSize: 11, color: c.text3, marginTop: 2, lineHeight: 16 },
+  mergeNewText: { fontSize: 12, color: c.accentText, marginTop: 4, lineHeight: 18 },
+  mergeDrops: { fontSize: 11, color: c.text2, marginTop: 3, lineHeight: 17 },
+  footNote: { fontSize: 11, color: c.text3, lineHeight: 17, paddingHorizontal: 2, marginTop: -6 },
 });

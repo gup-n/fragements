@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 import type { ImportPreview } from '../db/importMd';
 
 interface Props {
@@ -19,6 +19,7 @@ interface Props {
  * 而不是点一下就闷头写。选错文件、选成旧备份，都靠这一层拦下来。
  */
 export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const nothing = preview.fresh.length === 0;
 
   // 返回键只在挂载时注册一次：onCancel 每次渲染都是新函数，
@@ -48,7 +49,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
       <View style={styles.card}>
         <View style={styles.head}>
           <View style={styles.iconWrap}>
-            <Ionicons name="cloud-upload-outline" size={17} color={C.accentText} />
+            <Ionicons name="cloud-upload-outline" size={17} color={c.accentText} />
           </View>
           <Text style={styles.title}>导入 Markdown</Text>
         </View>
@@ -80,7 +81,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
 
         {notes.map((n) => (
           <View key={n} style={styles.noteRow}>
-            <Ionicons name="alert-circle-outline" size={13} color={C.amberText} />
+            <Ionicons name="alert-circle-outline" size={13} color={c.amberText} />
             <Text style={styles.noteText}>{n}</Text>
           </View>
         ))}
@@ -91,7 +92,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
 
         <View style={styles.actions}>
           <Pressable
-            style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: C.hairSoft }]}
+            style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
             onPress={onCancel}
             disabled={busy}
           >
@@ -108,7 +109,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
             disabled={busy || nothing}
           >
             {busy ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={c.onAccent} />
             ) : (
               <Text style={styles.okText}>{nothing ? '没有新内容' : `导入 ${preview.fresh.length} 条`}</Text>
             )}
@@ -119,7 +120,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   overlay: {
     position: 'absolute',
     top: 0,
@@ -135,10 +136,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.32)',
+    backgroundColor: c.scrim,
   },
   card: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card + 4,
     padding: 18,
   },
@@ -147,13 +148,13 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 8,
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 16, fontWeight: '600', color: C.text },
-  file: { marginTop: 12, fontSize: 13, color: C.text, fontWeight: '500' },
-  scope: { marginTop: 3, fontSize: 12, color: C.text3 },
+  title: { fontSize: 16, fontWeight: '600', color: c.text },
+  file: { marginTop: 12, fontSize: 13, color: c.text, fontWeight: '500' },
+  scope: { marginTop: 3, fontSize: 12, color: c.text3 },
 
   grid: {
     flexDirection: 'row',
@@ -162,20 +163,20 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
   cell: { flex: 1, alignItems: 'center' },
-  cellDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: C.hair },
-  cellNum: { fontSize: 20, fontWeight: '600', color: C.accentText },
-  cellNumMute: { color: C.text3 },
-  cellLabel: { marginTop: 2, fontSize: 11, color: C.text2 },
+  cellDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: c.hair },
+  cellNum: { fontSize: 20, fontWeight: '600', color: c.accentText },
+  cellNumMute: { color: c.text3 },
+  cellLabel: { marginTop: 2, fontSize: 11, color: c.text2 },
 
-  dupHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: C.text2 },
+  dupHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text2 },
 
   noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5, marginTop: 8 },
-  noteText: { flex: 1, fontSize: 12, lineHeight: 17, color: C.amberText },
+  noteText: { flex: 1, fontSize: 12, lineHeight: 17, color: c.amberText },
 
-  emptyHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: C.text3 },
+  emptyHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text3 },
 
   actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   cancelBtn: {
@@ -183,19 +184,19 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: R.btn,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: C.hair,
+    borderColor: c.hair,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelText: { fontSize: 14, color: C.text2 },
+  cancelText: { fontSize: 14, color: c.text2 },
   okBtn: {
     flex: 1.4,
     height: 42,
     borderRadius: R.btn,
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  okBtnOff: { backgroundColor: C.hair },
-  okText: { fontSize: 14, fontWeight: '600', color: '#FFFFFF' },
+  okBtnOff: { backgroundColor: c.hair },
+  okText: { fontSize: 14, fontWeight: '600', color: c.onAccent },
 });

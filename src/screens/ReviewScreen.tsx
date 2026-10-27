@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { DONE_TODO_KEEP } from '../types';
 import type { Note, Todo } from '../types';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NoteBody } from '../components/NoteBody';
@@ -27,6 +27,7 @@ function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | nu
 }
 
 export function ReviewScreen({ onClose, onChanged }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
@@ -96,7 +97,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator color={C.accent} />
+          <ActivityIndicator color={c.accent} />
         </View>
       ) : tab === 'todo' ? (
         <ScrollView contentContainerStyle={styles.content}>
@@ -120,11 +121,11 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                         style={({ pressed }) => [
                           styles.row,
                           i === pending.length - 1 && styles.rowLast,
-                          pressed && { backgroundColor: C.hairSoft },
+                          pressed && { backgroundColor: c.hairSoft },
                         ]}
                       >
                         <View style={styles.check}>
-                          <Ionicons name="ellipse-outline" size={20} color={C.text3} />
+                          <Ionicons name="ellipse-outline" size={20} color={c.text3} />
                         </View>
                         <Text style={styles.todoText}>{item.text}</Text>
                         {due && (
@@ -151,11 +152,11 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                         style={({ pressed }) => [
                           styles.row,
                           i === finished.length - 1 && styles.rowLast,
-                          pressed && { backgroundColor: C.hairSoft },
+                          pressed && { backgroundColor: c.hairSoft },
                         ]}
                       >
                         <View style={styles.check}>
-                          <Ionicons name="checkmark-circle" size={20} color={C.accent} />
+                          <Ionicons name="checkmark-circle" size={20} color={c.accent} />
                         </View>
                         <Text style={[styles.todoText, styles.doneText]}>{item.text}</Text>
                       </Pressable>
@@ -167,12 +168,12 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
               {merged.length > 0 && (
                 <>
                   <Pressable style={styles.mergedBar} onPress={() => setShowMerged((v) => !v)}>
-                    <Ionicons name="git-merge-outline" size={16} color={C.text3} />
+                    <Ionicons name="git-merge-outline" size={16} color={c.text3} />
                     <Text style={styles.mergedLabel}>已合并 {merged.length} 条</Text>
                     <Ionicons
                       name={showMerged ? 'chevron-up' : 'chevron-down'}
                       size={13}
-                      color={C.text3}
+                      color={c.text3}
                     />
                   </Pressable>
                   {showMerged && (
@@ -200,10 +201,10 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Pressable
-            style={({ pressed }) => [styles.genBtn, pressed && { backgroundColor: C.accentBg }]}
+            style={({ pressed }) => [styles.genBtn, pressed && { backgroundColor: c.accentBg }]}
             onPress={() => setSheetOpen(true)}
           >
-            <Ionicons name="sparkles-outline" size={17} color={C.accentText} />
+            <Ionicons name="sparkles-outline" size={17} color={c.accentText} />
             <Text style={styles.genText}>生成总结</Text>
             <Text style={styles.genHint}>日 / 周 / 月</Text>
           </Pressable>
@@ -269,8 +270,8 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.page },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
   tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
@@ -278,24 +279,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: R.pill,
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
   },
-  tabActive: { backgroundColor: C.accentBg },
-  tabText: { fontSize: 13.5, color: C.text2 },
-  tabTextActive: { color: C.accentText, fontWeight: '600' },
+  tabActive: { backgroundColor: c.accentBg },
+  tabText: { fontSize: 13.5, color: c.text2 },
+  tabTextActive: { color: c.accentText, fontWeight: '600' },
 
   content: { paddingHorizontal: 16, paddingBottom: 28 },
-  hint: { fontSize: 12, color: C.text3, marginTop: 18, marginBottom: 8 },
+  hint: { fontSize: 12, color: c.text3, marginTop: 18, marginBottom: 8 },
 
   empty: { alignItems: 'center', paddingTop: 90 },
-  emptyTitle: { fontSize: 15, color: C.text2, fontWeight: '500' },
-  emptyBody: { fontSize: 13, color: C.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
+  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
+  emptyBody: { fontSize: 13, color: c.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
 
   group: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     overflow: 'hidden',
   },
   row: {
@@ -305,13 +306,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 14,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
   rowLast: { borderBottomWidth: 0 },
   check: { width: 20, alignItems: 'center' },
-  todoText: { flex: 1, fontSize: 14, lineHeight: 21, color: C.text },
-  doneText: { color: C.text3, textDecorationLine: 'line-through' },
-  due: { fontSize: 11, color: C.text3 },
+  todoText: { flex: 1, fontSize: 14, lineHeight: 21, color: c.text },
+  doneText: { color: c.text3, textDecorationLine: 'line-through' },
+  due: { fontSize: 11, color: c.text3 },
 
   mergedBar: {
     flexDirection: 'row',
@@ -321,10 +322,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 4,
   },
-  mergedLabel: { flex: 1, fontSize: 12, color: C.text3 },
-  mergedText: { flex: 1, fontSize: 13, lineHeight: 20, color: C.text3 },
-  mergedUndo: { fontSize: 12, color: C.accent },
-  dueOverdue: { color: C.danger },
+  mergedLabel: { flex: 1, fontSize: 12, color: c.text3 },
+  mergedText: { flex: 1, fontSize: 13, lineHeight: 20, color: c.text3 },
+  mergedUndo: { fontSize: 12, color: c.accent },
+  dueOverdue: { color: c.danger },
 
   genBtn: {
     flexDirection: 'row',
@@ -333,11 +334,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderRadius: R.card,
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     marginBottom: 12,
   },
-  genText: { flex: 1, fontSize: 14, color: C.accentText, fontWeight: '500' },
-  genHint: { fontSize: 11, color: C.accentText, opacity: 0.7 },
+  genText: { flex: 1, fontSize: 14, color: c.accentText, fontWeight: '500' },
+  genHint: { fontSize: 11, color: c.accentText, opacity: 0.7 },
 
   noteGroupHead: {
     flexDirection: 'row',
@@ -347,20 +348,20 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 8,
   },
-  noteGroupTitle: { fontSize: 12, color: C.text2, fontWeight: '600' },
-  noteGroupCount: { fontSize: 11, color: C.text3 },
+  noteGroupTitle: { fontSize: 12, color: c.text2, fontWeight: '600' },
+  noteGroupCount: { fontSize: 11, color: c.text3 },
 
   noteCard: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     padding: 14,
     marginBottom: 10,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  noteKind: { fontSize: 11, color: C.accentText, fontWeight: '500' },
-  noteDate: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
-  noteBody: { fontSize: 14, lineHeight: 23, color: C.text },
-  noteToggle: { fontSize: 12, color: C.accent, marginTop: 9 },
+  noteKind: { fontSize: 11, color: c.accentText, fontWeight: '500' },
+  noteDate: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  noteBody: { fontSize: 14, lineHeight: 23, color: c.text },
+  noteToggle: { fontSize: 12, color: c.accent, marginTop: 9 },
 });

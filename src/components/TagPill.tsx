@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { R, tagColor } from '../theme';
+import { R, useThemedStyles, type Palette, tagColor } from '../theme';
 
 interface Props {
   label: string;
@@ -16,7 +16,8 @@ interface Props {
 }
 
 export function TagPill({ label, small, onPress }: Props) {
-  const { bg, fg } = tagColor(label);
+  const { c, styles } = useThemedStyles(makeStyles);
+  const { bg, fg } = tagColor(c, label);
   const pill = (
     <View style={[styles.pill, { backgroundColor: bg }, small && styles.pillSmall]}>
       <Text style={[styles.text, { color: fg }, small && styles.textSmall]} numberOfLines={1}>
@@ -40,7 +41,7 @@ export function TagPill({ label, small, onPress }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   pill: {
     borderRadius: R.pill,
     paddingHorizontal: 9,

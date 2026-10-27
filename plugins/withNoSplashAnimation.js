@@ -18,8 +18,10 @@ const fs = require('fs');
 const path = require('path');
 const { withAndroidColors, withAndroidStyles, withDangerousMod } = require('expo/config-plugins');
 
-/** 必须与 src/theme.ts 的 C.page 一致，否则启动窗和页面色之间会出现一道色差 */
+/** 必须与 src/theme.tsx 的 LIGHT.page 一致，否则启动窗和页面色之间会出现一道色差 */
 const PAGE_COLOR = '#FBFBF9';
+/** 同上，对应 DARK.page。写进 values-night，系统深色时自动生效 */
+const PAGE_COLOR_DARK = '#121211';
 
 /** API 31+ 的启动窗图标：透明形状，等于「不显示图标」 */
 const SPLASH_BLANK_DRAWABLE = `<?xml version="1.0" encoding="utf-8"?>
@@ -110,6 +112,29 @@ module.exports = function withNoSplashAnimation(config) {
       const v31Dir = path.join(resDir, 'values-v31');
       fs.mkdirSync(v31Dir, { recursive: true });
       fs.writeFileSync(path.join(v31Dir, 'styles.xml'), V31_STYLES);
+
+      // 深色：只在 values-night 里覆盖颜色，样式本身不用重复 ——
+      // AppTheme 的 parent 是 DayNight 主题，同一个 @color 引用会自动解析到这套值
+      const nightDir = path.join(resDir, 'values-night');
+      fs.mkdirSync(nightDir, { recursive: true });
+      const nightFile = path.join(nightDir, 'colors.xml');
+      const entry = `<color name="splashscreen_background">${PAGE_COLOR_DARK}</color>`;
+      if (fs.existsSync(nightFile)) {
+        const xml = fs.readFileSync(nightFile, 'utf8');
+        if (!xml.includes('splashscreen_background')) {
+          fs.writeFileSync(
+            nightFile,
+            xml.replace('<resources>', `<resources>\n  ${entry}`),
+            'utf8',
+          );
+        }
+      } else {
+        fs.writeFileSync(
+          nightFile,
+          `<?xml version="1.0" encoding="utf-8"?>\n<resources>\n  ${entry}\n</resources>\n`,
+          'utf8',
+        );
+      }
 
       return cfg;
     },

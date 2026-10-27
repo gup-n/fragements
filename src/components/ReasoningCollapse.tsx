@@ -11,7 +11,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 
 function fmtCount(n: number) {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
@@ -34,41 +34,42 @@ interface Props {
 const TAIL_CHARS = 8_000;
 
 export function ReasoningCollapse({ text, seconds }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [open, setOpen] = useState(false);
   const shown = text.length > TAIL_CHARS ? text.slice(-TAIL_CHARS) : text;
   const omitted = text.length - shown.length;
 
   return (
-    <View style={s.wrap}>
+    <View style={styles.wrap}>
       <Pressable
         onPress={() => setOpen((v) => !v)}
         hitSlop={6}
-        style={({ pressed }) => [s.head, pressed && { opacity: 0.6 }]}
+        style={({ pressed }) => [styles.head, pressed && { opacity: 0.6 }]}
       >
-        <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={13} color={C.text3} />
-        <Text style={s.title}>深度思考 {seconds} 秒</Text>
-        <Text style={s.meta}>{fmtCount(text.length)} 字</Text>
+        <Ionicons name={open ? 'chevron-down' : 'chevron-forward'} size={13} color={c.text3} />
+        <Text style={styles.title}>深度思考 {seconds} 秒</Text>
+        <Text style={styles.meta}>{fmtCount(text.length)} 字</Text>
       </Pressable>
 
       {open ? (
-        <ScrollView style={s.scroll} contentContainerStyle={s.body} nestedScrollEnabled>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.body} nestedScrollEnabled>
           {omitted > 0 ? (
-            <Text style={s.omitted}>… 前面 {fmtCount(omitted)} 字已省略，这里只留最后的推演</Text>
+            <Text style={styles.omitted}>… 前面 {fmtCount(omitted)} 字已省略，这里只留最后的推演</Text>
           ) : null}
-          <Text style={s.text}>{shown}</Text>
+          <Text style={styles.text}>{shown}</Text>
         </ScrollView>
       ) : null}
     </View>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   wrap: { marginTop: 10 },
   head: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 4 },
-  title: { flex: 1, fontSize: 12, color: C.text3 },
-  meta: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
-  scroll: { maxHeight: 260, marginTop: 4, backgroundColor: C.hairSoft, borderRadius: R.btn },
+  title: { flex: 1, fontSize: 12, color: c.text3 },
+  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  scroll: { maxHeight: 260, marginTop: 4, backgroundColor: c.hairSoft, borderRadius: R.btn },
   body: { padding: 10 },
-  omitted: { fontSize: 11, color: C.text3, marginBottom: 6, fontStyle: 'italic' },
-  text: { fontSize: 12, lineHeight: 19, color: C.text2 },
+  omitted: { fontSize: 11, color: c.text3, marginBottom: 6, fontStyle: 'italic' },
+  text: { fontSize: 12, lineHeight: 19, color: c.text2 },
 });

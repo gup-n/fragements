@@ -10,7 +10,7 @@
  */
 import React, { useMemo } from 'react';
 import { StyleSheet, Text, type StyleProp, type TextStyle } from 'react-native';
-import { C } from '../theme';
+import { useThemedStyles, type Palette } from '../theme';
 
 type Seg = { text: string; bold: boolean };
 type Block = { kind: 'h' | 'b' | 'p'; segs: Seg[] };
@@ -69,17 +69,18 @@ interface Props {
 }
 
 export function NoteBody({ text, numberOfLines, style }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const blocks = useMemo(() => toBlocks(text), [text]);
 
   return (
-    <Text style={[s.root, style]} numberOfLines={numberOfLines}>
+    <Text style={[styles.root, style]} numberOfLines={numberOfLines}>
       {blocks.map((b, i) => (
         <React.Fragment key={i}>
           {/* 小标题前面空一行，读起来才有分节感 */}
           {i === 0 ? '' : b.kind === 'h' ? '\n\n' : '\n'}
-          <Text style={b.kind === 'h' ? s.h : b.kind === 'b' ? s.b : s.p}>
+          <Text style={b.kind === 'h' ? styles.h : b.kind === 'b' ? styles.b : styles.p}>
             {b.segs.map((seg, j) => (
-              <Text key={j} style={seg.bold ? s.bold : undefined}>
+              <Text key={j} style={seg.bold ? styles.bold : undefined}>
                 {seg.text}
               </Text>
             ))}
@@ -90,11 +91,11 @@ export function NoteBody({ text, numberOfLines, style }: Props) {
   );
 }
 
-const s = StyleSheet.create({
-  root: { fontSize: 14, lineHeight: 23, color: C.text },
-  h: { fontSize: 12, lineHeight: 20, color: C.accentText, fontWeight: '600' },
-  b: { color: C.text },
-  p: { color: C.text },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { fontSize: 14, lineHeight: 23, color: c.text },
+  h: { fontSize: 12, lineHeight: 20, color: c.accentText, fontWeight: '600' },
+  b: { color: c.text },
+  p: { color: c.text },
   /** 加粗的关键词用正文色 + 稍重字重：强调要点，但不至于整段花花绿绿 */
-  bold: { fontWeight: '600', color: C.text },
+  bold: { fontWeight: '600', color: c.text },
 });

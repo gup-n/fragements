@@ -33,7 +33,7 @@ import type {
   TagStat,
   Todo,
 } from '../types';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { commitPlan, type CommitOutcome } from '../db/commit';
 import { loadAiConfig } from '../ai/config';
@@ -80,6 +80,7 @@ interface Failure {
 }
 
 export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSettings }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [phase, setPhase] = useState<Phase>('idle');
   const [scope, setScope] = useState<OrganizeScope>('inbox');
   const [session, setSession] = useState<OrganizeSession | null>(null);
@@ -416,7 +417,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                 <Ionicons
                   name="sparkles-outline"
                   size={14}
-                  color={scope === 'inbox' ? C.accentText : C.text3}
+                  color={scope === 'inbox' ? c.accentText : c.text3}
                 />
                 <Text style={[styles.segmentText, scope === 'inbox' && styles.segmentTextOn]}>
                   整理未读
@@ -429,7 +430,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
                 <Ionicons
                   name="sync-outline"
                   size={14}
-                  color={scope === 'all' ? C.accentText : C.text3}
+                  color={scope === 'all' ? c.accentText : c.text3}
                 />
                 <Text style={[styles.segmentText, scope === 'all' && styles.segmentTextOn]}>
                   全部重过
@@ -440,7 +441,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
             {resume && (
               <View style={styles.resumeCard}>
                 <View style={styles.resumeHead}>
-                  <Ionicons name="time-outline" size={15} color={C.amberText} />
+                  <Ionicons name="time-outline" size={15} color={c.amberText} />
                   <Text style={styles.resumeTitle}>
                     {resume.remaining > 0
                       ? `上次整理到 ${resume.session.pendingIds.length - resume.remaining} / ${resume.session.pendingIds.length}`
@@ -483,7 +484,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
               {errorMsg.includes('API Key') && (
                 <Pressable style={styles.linkRow} onPress={onOpenSettings}>
                   <Text style={styles.linkText}>去设置里填 API Key</Text>
-                  <Ionicons name="chevron-forward" size={13} color={C.accent} />
+                  <Ionicons name="chevron-forward" size={13} color={c.accent} />
                 </Pressable>
               )}
             </View>
@@ -567,7 +568,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
         {phase === 'running' && failure && (
           <View style={styles.heroCard}>
-            <Ionicons name="alert-circle-outline" size={30} color={C.danger} />
+            <Ionicons name="alert-circle-outline" size={30} color={c.danger} />
             <Text style={styles.failTitle}>
               第 {failure.round} / {failure.totalRounds} 批失败了
             </Text>
@@ -588,7 +589,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
             {failure.code === 'auth' && (
               <Pressable style={styles.linkRow} onPress={onOpenSettings}>
                 <Text style={styles.linkText}>检查 API Key 和 Base URL</Text>
-                <Ionicons name="chevron-forward" size={13} color={C.accent} />
+                <Ionicons name="chevron-forward" size={13} color={c.accent} />
               </Pressable>
             )}
           </View>
@@ -596,7 +597,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
         {phase === 'applying' && (
           <View style={styles.centerBox}>
-            <ActivityIndicator color={C.accent} />
+            <ActivityIndicator color={c.accent} />
             <Text style={styles.centerText}>正在写入…</Text>
           </View>
         )}
@@ -623,7 +624,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
             <View style={styles.quickRow}>
               <Pressable style={styles.quickBtn} onPress={selectSafe}>
-                <Ionicons name="shield-checkmark-outline" size={13} color={C.accentText} />
+                <Ionicons name="shield-checkmark-outline" size={13} color={c.accentText} />
                 <Text style={styles.quickBtnText}>全选安全项 {safe}</Text>
               </Pressable>
               <Pressable style={styles.quickBtnGhost} onPress={selectNone}>
@@ -644,7 +645,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
         {phase === 'done' && outcome && (
           <View style={styles.centerBox}>
-            <Ionicons name="checkmark-circle-outline" size={34} color={C.accent} />
+            <Ionicons name="checkmark-circle-outline" size={34} color={c.accent} />
             <Text style={styles.centerText}>已写入 {outcome.applied} 项</Text>
             <Text style={styles.doneMeta}>
               {[
@@ -698,6 +699,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 }
 
 function Stat({ label, value }: { label: string; value: string | number }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
     <View style={styles.stat}>
       <Text style={styles.statValue}>{value}</Text>
@@ -706,13 +708,13 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.page },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
 
   segment: {
     flexDirection: 'row',
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
     borderRadius: R.btn,
     padding: 3,
     marginBottom: 14,
@@ -726,91 +728,91 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: R.btn - 2,
   },
-  segmentItemOn: { backgroundColor: C.card },
-  segmentText: { fontSize: 13, color: C.text2 },
-  segmentTextOn: { color: C.text, fontWeight: '500' },
+  segmentItemOn: { backgroundColor: c.card },
+  segmentText: { fontSize: 13, color: c.text2 },
+  segmentTextOn: { color: c.text, fontWeight: '500' },
 
   resumeCard: {
-    backgroundColor: C.amberBg,
+    backgroundColor: c.amberBg,
     borderRadius: R.card,
     padding: 14,
     marginBottom: 14,
     gap: 6,
   },
   resumeHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  resumeTitle: { fontSize: 13, color: C.amberText, fontWeight: '500' },
-  resumeSub: { fontSize: 11.5, color: C.amberText, lineHeight: 17, opacity: 0.9 },
+  resumeTitle: { fontSize: 13, color: c.amberText, fontWeight: '500' },
+  resumeSub: { fontSize: 11.5, color: c.amberText, lineHeight: 17, opacity: 0.9 },
   resumeRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
   resumePrimary: {
-    backgroundColor: C.amberText,
+    backgroundColor: c.amberText,
     borderRadius: R.btn,
     paddingVertical: 8,
     paddingHorizontal: 16,
   },
-  resumePrimaryText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
+  resumePrimaryText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
   resumeGhost: {
     borderRadius: R.btn,
     paddingVertical: 8,
     paddingHorizontal: 14,
     borderWidth: 0.5,
-    borderColor: C.amberText,
+    borderColor: c.amberText,
   },
-  resumeGhostText: { fontSize: 13, color: C.amberText },
+  resumeGhostText: { fontSize: 13, color: c.amberText },
 
   heroCard: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     padding: 22,
     alignItems: 'center',
   },
-  heroNum: { fontSize: 40, color: C.text, fontWeight: '500', lineHeight: 46 },
-  heroLabel: { fontSize: 13, color: C.text2, marginTop: 2 },
+  heroNum: { fontSize: 40, color: c.text, fontWeight: '500', lineHeight: 46 },
+  heroLabel: { fontSize: 13, color: c.text2, marginTop: 2 },
 
   explainCard: {
     marginTop: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
     borderRadius: R.card,
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
     gap: 8,
   },
-  explainTitle: { fontSize: 12, color: C.text, fontWeight: '500' },
-  explainText: { fontSize: 11, color: C.text2, lineHeight: 18 },
-  explainWarn: { fontSize: 11, color: C.amberText, lineHeight: 18 },
+  explainTitle: { fontSize: 12, color: c.text, fontWeight: '500' },
+  explainText: { fontSize: 11, color: c.text2, lineHeight: 18 },
+  explainWarn: { fontSize: 11, color: c.amberText, lineHeight: 18 },
 
   progressCard: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     padding: 18,
     gap: 10,
   },
   progressTop: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' },
-  progressTitle: { fontSize: 14, color: C.text, fontWeight: '500' },
-  progressMeta: { fontSize: 12, color: C.text2 },
-  bar: { height: 6, borderRadius: 3, backgroundColor: C.hairSoft, overflow: 'hidden' },
-  barFill: { height: 6, borderRadius: 3, backgroundColor: C.accent },
-  progressSub: { fontSize: 11, color: C.text3 },
+  progressTitle: { fontSize: 14, color: c.text, fontWeight: '500' },
+  progressMeta: { fontSize: 12, color: c.text2 },
+  bar: { height: 6, borderRadius: 3, backgroundColor: c.hairSoft, overflow: 'hidden' },
+  barFill: { height: 6, borderRadius: 3, backgroundColor: c.accent },
+  progressSub: { fontSize: 11, color: c.text3 },
   stopBtn: {
     alignSelf: 'flex-start',
     borderRadius: R.btn,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingVertical: 7,
     paddingHorizontal: 14,
   },
   stopBtnOff: { opacity: 0.5 },
-  stopBtnText: { fontSize: 12, color: C.text2 },
+  stopBtnText: { fontSize: 12, color: c.text2 },
 
-  failTitle: { fontSize: 14, color: C.text, fontWeight: '500', marginTop: 10 },
-  failMsg: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 6 },
-  failHint: { fontSize: 11, color: C.text3, lineHeight: 17, textAlign: 'center', marginTop: 8 },
+  failTitle: { fontSize: 14, color: c.text, fontWeight: '500', marginTop: 10 },
+  failMsg: { fontSize: 12, color: c.danger, lineHeight: 19, textAlign: 'center', marginTop: 6 },
+  failHint: { fontSize: 11, color: c.text3, lineHeight: 17, textAlign: 'center', marginTop: 8 },
 
   primaryBtn: {
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     borderRadius: R.btn,
     paddingVertical: 11,
     paddingHorizontal: 22,
@@ -818,8 +820,8 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     alignItems: 'center',
   },
-  primaryBtnDisabled: { backgroundColor: C.hair },
-  primaryBtnText: { fontSize: 14, color: '#FFFFFF', fontWeight: '500' },
+  primaryBtnDisabled: { backgroundColor: c.hair },
+  primaryBtnText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
   secondaryBtn: {
     borderRadius: R.btn,
     paddingVertical: 10,
@@ -828,9 +830,9 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     alignItems: 'center',
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
-  secondaryBtnText: { fontSize: 13, color: C.text2 },
+  secondaryBtnText: { fontSize: 13, color: c.text2 },
   secondaryBtnFlex: {
     flex: 1,
     alignItems: 'center',
@@ -838,7 +840,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: R.btn,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
   primaryBtnFlex: {
     flex: 1.6,
@@ -846,7 +848,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 12,
     borderRadius: R.btn,
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
   },
 
   linkRow: {
@@ -857,66 +859,66 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingVertical: 8,
   },
-  linkText: { fontSize: 13, color: C.accent },
+  linkText: { fontSize: 13, color: c.accent },
 
   centerBox: { alignItems: 'center', justifyContent: 'center', paddingVertical: 70, gap: 10 },
-  centerText: { fontSize: 14, color: C.text2 },
-  doneMeta: { fontSize: 11.5, color: C.text3, textAlign: 'center', lineHeight: 18, paddingHorizontal: 20 },
+  centerText: { fontSize: 14, color: c.text2 },
+  doneMeta: { fontSize: 11.5, color: c.text3, textAlign: 'center', lineHeight: 18, paddingHorizontal: 20 },
   doneSub: {
     fontSize: 12,
-    color: C.text3,
+    color: c.text3,
     lineHeight: 19,
     textAlign: 'center',
     maxWidth: 320,
     marginBottom: 4,
   },
 
-  errText: { fontSize: 12, color: C.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
+  errText: { fontSize: 12, color: c.danger, lineHeight: 19, textAlign: 'center', marginTop: 12 },
   reviewErr: {
     fontSize: 12,
-    color: C.danger,
+    color: c.danger,
     lineHeight: 18,
-    backgroundColor: C.dangerBg,
+    backgroundColor: c.dangerBg,
     borderRadius: R.btn,
     padding: 10,
     marginBottom: 12,
   },
 
-  resultHint: { fontSize: 12, color: C.text3, marginBottom: 12, marginTop: 4, lineHeight: 18 },
+  resultHint: { fontSize: 12, color: c.text3, marginBottom: 12, marginTop: 4, lineHeight: 18 },
 
   summaryRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   stat: {
     flex: 1,
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingVertical: 10,
     alignItems: 'center',
     gap: 2,
   },
-  statValue: { fontSize: 15, color: C.text, fontWeight: '500' },
-  statLabel: { fontSize: 10.5, color: C.text3 },
+  statValue: { fontSize: 15, color: c.text, fontWeight: '500' },
+  statLabel: { fontSize: 10.5, color: c.text3 },
 
   quickRow: { flexDirection: 'row', gap: 8, marginBottom: 14 },
   quickBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     borderRadius: R.pill,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
-  quickBtnText: { fontSize: 12, color: C.accentText },
+  quickBtnText: { fontSize: 12, color: c.accentText },
   quickBtnGhost: {
     borderRadius: R.pill,
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
-  quickBtnGhostText: { fontSize: 12, color: C.text2 },
+  quickBtnGhostText: { fontSize: 12, color: c.text2 },
 
   footer: {
     flexDirection: 'row',
@@ -925,7 +927,7 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     paddingBottom: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
-    backgroundColor: C.page,
+    borderTopColor: c.hair,
+    backgroundColor: c.page,
   },
 });

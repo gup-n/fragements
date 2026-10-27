@@ -314,6 +314,40 @@ function indexFragment(
   ]);
 }
 
+/**
+ * FTS 检索的实现。抽成模块函数而不是对象方法，是为了让自检能直接调它 ——
+ * 走 `this` 在解构调用时会丢上下文。
+ */
+function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragment[] {
+  const match = buildFtsQuery(query);
+  if (match) {
+    try {
+      const rows = d.getAllSync<FragmentRow>(
+        `SELECT f.*, bm25(fragment_fts) AS rank FROM fragment_fts
+           JOIN fragments f ON f.id = fragment_fts.rowid
+          WHERE fragment_fts MATCH ? AND f.merged_into IS NULL
+          ORDER BY rank
+          LIMIT ?`,
+        [match, limit],
+      );
+      if (rows.length) return rows.map(toFragment);
+    } catch {
+      /* FTS 语法/扩展异常时退回 LIKE，不能让问答整条挂掉 */
+    }
+  }
+
+  const like = likeNeedle(query);
+  if (!like) return [];
+  const rows = d.getAllSync<FragmentRow>(
+    `SELECT * FROM fragments
+      WHERE merged_into IS NULL
+        AND (content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\')
+      ORDER BY created_at DESC LIMIT ?`,
+    [like, like, like, limit],
+  );
+  return rows.map(toFragment);
+}
+
 /** 按 200 条一页重建索引。迁移回填和设置页「重建索引」共用 */
 function rebuildIndex(d: SQLite.SQLiteDatabase): number {
   d.execSync('DELETE FROM fragment_fts');
@@ -492,34 +526,35 @@ export const repo: Repo = {
   },
 
   async searchFragments(query, limit = 40) {
-    const d = db();
-    const match = buildFtsQuery(query);
-    if (match) {
-      try {
-        const rows = d.getAllSync<FragmentRow>(
-          `SELECT f.*, bm25(fragment_fts) AS rank FROM fragment_fts
-             JOIN fragments f ON f.id = fragment_fts.rowid
-            WHERE fragment_fts MATCH ? AND f.merged_into IS NULL
-            ORDER BY rank
-            LIMIT ?`,
-          [match, limit],
-        );
-        if (rows.length) return rows.map(toFragment);
-      } catch {
-        /* FTS 语法/扩展异常时退回 LIKE，不能让问答整条挂掉 */
-      }
-    }
+    return searchIn(db(), query, limit);
+  },
 
-    const like = likeNeedle(query);
-    if (!like) return [];
-    const rows = d.getAllSync<FragmentRow>(
-      `SELECT * FROM fragments
-        WHERE merged_into IS NULL
-          AND (content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\')
-        ORDER BY created_at DESC LIMIT ?`,
-      [like, like, like, limit],
+  async searchIndexStats() {
+    const d = db();
+    return {
+      indexed: countOf(d, 'SELECT COUNT(*) AS n FROM fragment_fts'),
+      total: countOf(d, 'SELECT COUNT(*) AS n FROM fragments'),
+    };
+  },
+
+  async selfTestSearch(samples = 5) {
+    const d = db();
+    // 只抽够长的碎片：太短的话取不出 6 个字，测了也说明不了什么
+    const rows = d.getAllSync<{ id: number; content: string }>(
+      `SELECT id, content FROM fragments
+        WHERE merged_into IS NULL AND length(content) >= 14
+        ORDER BY id DESC LIMIT ?`,
+      [samples],
     );
-    return rows.map(toFragment);
+    let hit = 0;
+    for (const r of rows) {
+      // 从第 3 个字符往后取 6 个：跳过开头常见的「今天」「明天」这类泛词，
+      // 用 Array.from 切，避免把 emoji 的代理对劈成半个字
+      const needle = Array.from(r.content).slice(3, 9).join('').trim();
+      if (!needle) continue;
+      if (searchIn(d, needle, 20).some((f) => f.id === r.id)) hit++;
+    }
+    return { checked: rows.length, hit };
   },
 
   async listFragmentsByTag(tag, limit = 50) {

@@ -14,7 +14,7 @@ import React from 'react';
 import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { C } from '../theme';
+import { useThemedStyles, type Palette } from '../theme';
 
 export type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -34,7 +34,12 @@ interface Props {
   accessibilityLabel?: string;
 }
 
-const TONE_BG = { none: 'transparent', soft: C.hairSoft, accent: C.accentBg } as const;
+/** 底色依赖调色板，所以只能做成函数 —— 模块级常量拿不到切主题后的值 */
+function toneBg(c: Palette, tone: 'none' | 'soft' | 'accent') {
+  if (tone === 'soft') return c.hairSoft;
+  if (tone === 'accent') return c.accentBg;
+  return 'transparent';
+}
 
 export function IconButton({
   name,
@@ -47,7 +52,8 @@ export function IconButton({
   disabled,
   accessibilityLabel,
 }: Props) {
-  const bg = TONE_BG[tone];
+  const { c, styles } = useThemedStyles(makeStyles);
+  const bg = toneBg(c, tone);
   return (
     <Pressable
       onPress={onPress}
@@ -56,23 +62,23 @@ export function IconButton({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       style={({ pressed }) => [
-        s.base,
+        styles.base,
         { width: diameter, height: diameter, borderRadius: diameter / 2, backgroundColor: bg },
-        pressed && s.pressed,
-        disabled && s.disabled,
+        pressed && styles.pressed,
+        disabled && styles.disabled,
       ]}
     >
-      <Ionicons name={name} size={size} color={color ?? (tone === 'none' ? C.text2 : C.text)} />
+      <Ionicons name={name} size={size} color={color ?? (tone === 'none' ? c.text2 : c.text)} />
       {badge && badge > 0 ? (
-        <View style={s.badge}>
-          <Text style={s.badgeText}>{badge > 99 ? '99+' : badge}</Text>
+        <View style={styles.badge}>
+          <Text style={styles.badgeText}>{badge > 99 ? '99+' : badge}</Text>
         </View>
       ) : null}
     </Pressable>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   base: { alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.45 },
   disabled: { opacity: 0.35 },
@@ -84,12 +90,12 @@ const s = StyleSheet.create({
     height: 15,
     borderRadius: 8,
     paddingHorizontal: 3,
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     alignItems: 'center',
     justifyContent: 'center',
     // 和底色之间留一圈缝，压在浅灰底上也能看清边界
     borderWidth: 1.5,
-    borderColor: C.page,
+    borderColor: c.page,
   },
-  badgeText: { fontSize: 9, lineHeight: 11, color: '#FFFFFF', fontWeight: '600' },
+  badgeText: { fontSize: 9, lineHeight: 11, color: c.onAccent, fontWeight: '600' },
 });

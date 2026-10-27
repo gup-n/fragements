@@ -70,8 +70,19 @@ export interface Repo {
   deleteTag(name: string): Promise<{ changed: number }>;
   /** 合并：把 from 里的所有标签换成 to（to 已存在就是合并，不存在就是改名） */
   mergeTags(from: string[], to: string): Promise<{ changed: number }>;
-  /** 重建全文索引。迁移回填失败或数据异常时由设置页兜底 */
+  /**
+   * 重建全文索引。迁移回填失败或数据异常时由设置页兜底。
+   * 返回重建完的索引条数 —— 界面上要和库里总数对比，
+   * 只说「成功」等于没说，用户看不出它到底修了什么。
+   */
   rebuildSearchIndex(): Promise<{ indexed: number }>;
+  /** 索引健康度：fts 里有多少条 / 库里有多少条。两者不等就说明有碎片没进索引 */
+  searchIndexStats(): Promise<{ indexed: number; total: number }>;
+  /**
+   * 搜索自检：抽最近几条碎片，拿正文中间一小段去搜，看能不能搜回它自己。
+   * 索引建没建对，这是唯一能拿出来的证据。
+   */
+  selfTestSearch(samples?: number): Promise<{ checked: number; hit: number }>;
 
   insertTodo(input: { text: string; dueAt: string | null; sourceFragmentId: number | null }): Promise<number>;
   /** 只返回还在用的待办；被合并掉的（merged_into 非空）不在这里 */

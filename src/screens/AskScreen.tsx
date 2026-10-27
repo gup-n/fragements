@@ -26,7 +26,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { AiConfig, Fragment, QaTurn } from '../types';
-import { C, R, tagColor } from '../theme';
+import { R, useThemedStyles, type Palette, tagColor } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError } from '../ai/chat';
@@ -53,6 +53,7 @@ const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
 
 export function AskScreen({ onClose, onSaved, registerClose }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -267,7 +268,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
       >
         {!hasContent && !pendingQ && (
           <View style={styles.empty}>
-            <Ionicons name="chatbubble-ellipses-outline" size={30} color={C.text3} />
+            <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
             <Text style={styles.emptyTitle}>问点什么</Text>
             <Text style={styles.emptyBody}>
               它会先在你自己的碎片里找，再回答。{'\n'}
@@ -311,7 +312,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
                             {dayKey(f.createdAt)} {formatTime(f.createdAt)}
                           </Text>
                           {f.tags.slice(0, 2).map((tag) => {
-                            const col = tagColor(tag);
+                            const col = tagColor(c, tag);
                             return (
                               <View key={tag} style={[styles.tagPill, { backgroundColor: col.bg }]}>
                                 <Text style={[styles.tagText, { color: col.fg }]}>{tag}</Text>
@@ -345,7 +346,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
                 </Text>
               ) : (
                 <View style={styles.thinkingRow}>
-                  <ActivityIndicator size="small" color={C.text3} />
+                  <ActivityIndicator size="small" color={c.text3} />
                   <Text style={styles.thinkingText}>
                     {thinkingOn ? '在想…' : '在读你的记录…'}
                   </Text>
@@ -376,7 +377,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
             <Ionicons
               name="bulb-outline"
               size={13}
-              color={thinkingOn ? C.accentText : C.text3}
+              color={thinkingOn ? c.accentText : c.text3}
             />
             <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
           </Pressable>
@@ -384,7 +385,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
             <Ionicons
               name="globe-outline"
               size={13}
-              color={webOn ? C.accentText : C.text3}
+              color={webOn ? c.accentText : c.text3}
             />
             <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
           </Pressable>
@@ -396,7 +397,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
             value={input}
             onChangeText={setInput}
             placeholder="问点什么…"
-            placeholderTextColor={C.text3}
+            placeholderTextColor={c.text3}
             style={styles.input}
             multiline
             maxLength={500}
@@ -411,7 +412,7 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
             <Ionicons
               name="arrow-up"
               size={16}
-              color={input.trim() && !busy ? '#FFFFFF' : C.text3}
+              color={input.trim() && !busy ? c.onAccent : c.text3}
             />
           </Pressable>
         </View>
@@ -447,67 +448,67 @@ export function AskScreen({ onClose, onSaved, registerClose }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  root: { flex: 1, backgroundColor: c.page },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 20 },
 
   clearBtn: { paddingHorizontal: 8, paddingVertical: 6 },
-  clearText: { fontSize: 12, color: C.text3 },
+  clearText: { fontSize: 12, color: c.text3 },
 
   empty: { alignItems: 'center', paddingTop: 70, gap: 8 },
-  emptyTitle: { fontSize: 15, color: C.text2, fontWeight: '500', marginTop: 4 },
-  emptyBody: { fontSize: 12.5, color: C.text3, textAlign: 'center', lineHeight: 20 },
+  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500', marginTop: 4 },
+  emptyBody: { fontSize: 12.5, color: c.text3, textAlign: 'center', lineHeight: 20 },
   samples: { marginTop: 16, gap: 8, alignSelf: 'stretch' },
   sample: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
-  sampleText: { fontSize: 13, color: C.text2 },
+  sampleText: { fontSize: 13, color: c.text2 },
 
   qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16, marginBottom: 10 },
   qBubble: {
     maxWidth: '85%',
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     borderRadius: R.card,
     paddingHorizontal: 13,
     paddingVertical: 9,
   },
-  qText: { fontSize: 14, lineHeight: 21, color: C.accentText },
+  qText: { fontSize: 14, lineHeight: 21, color: c.accentText },
 
   aRow: { marginBottom: 6 },
-  aText: { fontSize: 14, lineHeight: 23, color: C.text },
+  aText: { fontSize: 14, lineHeight: 23, color: c.text },
 
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  thinkingText: { fontSize: 13, color: C.text3 },
+  thinkingText: { fontSize: 13, color: c.text3 },
 
   srcBlock: { marginTop: 12, gap: 6 },
-  srcLabel: { fontSize: 11, color: C.text3 },
+  srcLabel: { fontSize: 11, color: c.text3 },
   srcRow: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingHorizontal: 12,
     paddingVertical: 9,
     gap: 5,
   },
   srcHead: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  srcMeta: { fontSize: 10.5, color: C.text3, fontVariant: ['tabular-nums'] },
+  srcMeta: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
   tagPill: { borderRadius: R.pill, paddingHorizontal: 6, paddingVertical: 1 },
   tagText: { fontSize: 10, lineHeight: 14 },
-  srcBody: { fontSize: 12.5, lineHeight: 19, color: C.text2 },
+  srcBody: { fontSize: 12.5, lineHeight: 19, color: c.text2 },
 
-  webNote: { fontSize: 11, color: C.text3, lineHeight: 17, marginTop: 10 },
-  errText: { fontSize: 12, color: C.danger, lineHeight: 19, marginTop: 10 },
+  webNote: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 10 },
+  errText: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 10 },
 
   footer: {
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
-    backgroundColor: C.page,
+    borderTopColor: c.hair,
+    backgroundColor: c.page,
     paddingTop: 8,
   },
   toggleRow: {
@@ -523,14 +524,14 @@ const styles = StyleSheet.create({
     gap: 4,
     borderRadius: R.pill,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingHorizontal: 10,
     paddingVertical: 5,
   },
-  toggleOn: { backgroundColor: C.accentBg, borderColor: C.accentBg },
-  toggleText: { fontSize: 12, color: C.text3 },
-  toggleTextOn: { color: C.accentText },
-  busyHint: { fontSize: 11, color: C.text3, marginLeft: 'auto' },
+  toggleOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
+  toggleText: { fontSize: 12, color: c.text3 },
+  toggleTextOn: { color: c.accentText },
+  busyHint: { fontSize: 11, color: c.text3, marginLeft: 'auto' },
 
   inputRow: {
     flexDirection: 'row',
@@ -539,16 +540,16 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
   input: {
     flex: 1,
     fontSize: 14,
     lineHeight: 20,
-    color: C.text,
+    color: c.text,
     maxHeight: 96,
     paddingTop: 4,
     paddingBottom: 4,
@@ -560,9 +561,9 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
   },
-  sendOn: { backgroundColor: C.accent },
+  sendOn: { backgroundColor: c.accent },
 
   overlay: {
     position: 'absolute',
@@ -579,25 +580,25 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: c.scrim,
   },
   dialog: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     padding: 20,
     gap: 10,
   },
-  dialogTitle: { fontSize: 15, color: C.text, fontWeight: '600' },
-  dialogBody: { fontSize: 12, color: C.text2, lineHeight: 19 },
+  dialogTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
+  dialogBody: { fontSize: 12, color: c.text2, lineHeight: 19 },
   dialogPrimary: {
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     borderRadius: R.btn,
     paddingVertical: 11,
     alignItems: 'center',
     marginTop: 4,
   },
   dialogDisabled: { opacity: 0.6 },
-  dialogPrimaryText: { fontSize: 14, color: '#FFFFFF', fontWeight: '500' },
+  dialogPrimaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
   dialogGhost: { paddingVertical: 9, alignItems: 'center' },
-  dialogGhostText: { fontSize: 13, color: C.text2 },
+  dialogGhostText: { fontSize: 13, color: c.text2 },
 });

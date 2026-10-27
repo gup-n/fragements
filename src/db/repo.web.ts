@@ -258,6 +258,25 @@ export const repo: Repo = {
     return { indexed: active(load()).length };
   },
 
+  // 浏览器端没有独立索引：搜索是当场遍历，所以「索引条数」恒等于碎片条数。
+  // 界面上的自检在这儿仍然有意义 —— 它证明的是搜索这条路通不通。
+  async searchIndexStats() {
+    const list = active(load());
+    return { indexed: list.length, total: list.length };
+  },
+
+  async selfTestSearch(samples = 5) {
+    const list = active(load()).filter((f) => f.content.length >= 14);
+    const picked = list.slice(0, samples);
+    let hit = 0;
+    for (const f of picked) {
+      const needle = Array.from(f.content).slice(3, 9).join('').trim();
+      if (!needle) continue;
+      if ((await this.searchFragments(needle, 20)).some((x) => x.id === f.id)) hit++;
+    }
+    return { checked: picked.length, hit };
+  },
+
   async insertTodo(input) {
     const d = load();
     const id = nextId(d);

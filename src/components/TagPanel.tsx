@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { TagStat } from '../types';
-import { C, R, tagColor } from '../theme';
+import { R, useThemedStyles, type Palette, tagColor } from '../theme';
 import { repo } from '../db/repo';
 import { cleanTag, normalizeTag, sameTag } from '../util/tokenize';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -34,6 +34,7 @@ interface Props {
 }
 
 export function TagPanel({ onChanged }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const [tags, setTags] = useState<TagStat[]>([]);
   const [loading, setLoading] = useState(true);
   /** 正在编辑的标签原名 */
@@ -125,7 +126,7 @@ export function TagPanel({ onChanged }: Props) {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator color={C.accent} />
+        <ActivityIndicator color={c.accent} />
       </View>
     );
   }
@@ -151,7 +152,7 @@ export function TagPanel({ onChanged }: Props) {
 
           <View style={styles.group}>
             {tags.map((tag, i) => {
-              const col = tagColor(tag.name);
+              const col = tagColor(c, tag.name);
               const isOpen = editing === tag.name;
               return (
                 <View key={tag.name}>
@@ -160,7 +161,7 @@ export function TagPanel({ onChanged }: Props) {
                     style={({ pressed }) => [
                       styles.row,
                       i === tags.length - 1 && !isOpen && styles.rowLast,
-                      pressed && { backgroundColor: C.hairSoft },
+                      pressed && { backgroundColor: c.hairSoft },
                     ]}
                   >
                     <View style={[styles.pill, { backgroundColor: col.bg }]}>
@@ -170,7 +171,7 @@ export function TagPanel({ onChanged }: Props) {
                     <Ionicons
                       name={isOpen ? 'chevron-up' : 'chevron-down'}
                       size={13}
-                      color={C.text3}
+                      color={c.text3}
                     />
                   </Pressable>
 
@@ -183,7 +184,7 @@ export function TagPanel({ onChanged }: Props) {
                           setArmed(false);
                         }}
                         placeholder="改成什么？输入已有标签名就是合并"
-                        placeholderTextColor={C.text3}
+                        placeholderTextColor={c.text3}
                         style={styles.input}
                         maxLength={12}
                         autoFocus
@@ -235,20 +236,20 @@ export function TagPanel({ onChanged }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   center: { paddingVertical: 80, alignItems: 'center' },
   content: { paddingHorizontal: 16, paddingBottom: 28 },
-  hint: { fontSize: 12, color: C.text3, marginBottom: 10, lineHeight: 18 },
+  hint: { fontSize: 12, color: c.text3, marginBottom: 10, lineHeight: 18 },
 
   empty: { alignItems: 'center', paddingTop: 90 },
-  emptyTitle: { fontSize: 15, color: C.text2, fontWeight: '500' },
-  emptyBody: { fontSize: 13, color: C.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
+  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
+  emptyBody: { fontSize: 13, color: c.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
 
   group: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     overflow: 'hidden',
   },
   row: {
@@ -258,55 +259,55 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
   rowLast: { borderBottomWidth: 0 },
   pill: { borderRadius: R.pill, paddingHorizontal: 9, paddingVertical: 3 },
   pillText: { fontSize: 12.5, lineHeight: 17, fontWeight: '500' },
-  count: { flex: 1, fontSize: 12, color: C.text3, textAlign: 'right' },
+  count: { flex: 1, fontSize: 12, color: c.text3, textAlign: 'right' },
 
   editor: {
     paddingHorizontal: 14,
     paddingTop: 10,
     paddingBottom: 14,
     gap: 8,
-    backgroundColor: C.hairSoft,
+    backgroundColor: c.hairSoft,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
   input: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.btn,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
     paddingHorizontal: 12,
     paddingVertical: 8,
     fontSize: 14,
-    color: C.text,
+    color: c.text,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  editorHint: { fontSize: 11, color: C.text3, lineHeight: 16 },
+  editorHint: { fontSize: 11, color: c.text3, lineHeight: 16 },
   actionRow: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   saveBtn: {
-    backgroundColor: C.accent,
+    backgroundColor: c.accent,
     borderRadius: R.btn,
     paddingHorizontal: 16,
     paddingVertical: 8,
   },
-  saveText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
+  saveText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
   btnOff: { opacity: 0.6 },
   delBtn: {
     borderRadius: R.btn,
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderWidth: 0.5,
-    borderColor: C.hair,
+    borderColor: c.hair,
   },
-  delBtnArmed: { borderColor: C.danger, backgroundColor: C.dangerBg },
-  delText: { fontSize: 13, color: C.text2 },
-  delTextArmed: { color: C.danger, fontWeight: '500' },
+  delBtnArmed: { borderColor: c.danger, backgroundColor: c.dangerBg },
+  delText: { fontSize: 13, color: c.text2 },
+  delTextArmed: { color: c.danger, fontWeight: '500' },
   cancelBtn: { paddingHorizontal: 8, paddingVertical: 8 },
-  cancelText: { fontSize: 13, color: C.text3 },
+  cancelText: { fontSize: 13, color: c.text3 },
 
-  msg: { fontSize: 12, color: C.text2, lineHeight: 18, marginTop: 12, paddingHorizontal: 2 },
+  msg: { fontSize: 12, color: c.text2, lineHeight: 18, marginTop: 12, paddingHorizontal: 2 },
 });

@@ -20,7 +20,10 @@ type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
 ```bash
 npx tsc --noEmit                                  # 改完必跑，当前零错误
 npm run build:web                                 # Web 平台打一遍包再删产物，**只当编译校验，不许给用户看**
-npx expo install <pkg>                            # 装依赖用它，别用 npm install
+npm install <pkg>@<ver> --registry=https://registry.npmmirror.com
+                                                  # 装依赖用 npm，别用 npx expo install：
+                                                  # 本机跑它曾卡 9 分钟无输出（实际已装好）。
+                                                  # npm 也慢，超时先查 node_modules 和 package.json
 
 npm run test:md                                   # 导入/导出的 24 项回归断言（唯一留在仓库里的）
 
@@ -58,7 +61,7 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 产物在 `android/app/build/outputs/apk/release/app-release.apk`，
 复制成 `fragments-v<版本>.apk` 放项目根目录，把大小和 MD5 一并报给用户。增量约 2–3 分钟。
 
-## 八条硬规矩
+## 九条硬规矩
 
 1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。
 2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
@@ -72,6 +75,9 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 8. **全屏详情页的「正在看哪一个」只能存 id，不能存对象快照**。存对象的话上层刷新后它还是旧的，
    页面看起来「没变」，得关掉重进。碎片详情页（v0.4.2）栽过一次。
    正确做法：存 `id` / `ids[]`，内容用 `useMemo` 从当前 props 里实时查。
+9. **颜色一律从 `c` 来，不许写死**。`StyleSheet.create` 在模块加载时把色值固化，
+   所以带颜色的样式必须是 `const makeStyles = (c: Palette) => StyleSheet.create({...})`。
+   详见下面「主题」一节。
 
 ## 最容易搞错的概念
 
@@ -136,6 +142,28 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **一条碎片的标签全被取消时，直接跳过，不写空数组**。静默清空是那种「事后才发现、找不回来」的破坏。
 - 一个碎片可能同时属于多组标签，**先合并成一条 `labels` 再写一次**；
   逐组 `applyTags` 会让后一次覆盖前一次。
+
+## 主题：颜色不能静态定义（v0.8.0）
+
+两套调色板 + 三档模式（浅 / 深 / 跟随系统），`src/theme.tsx`。
+
+```ts
+const makeStyles = (c: Palette) => StyleSheet.create({ ... });
+
+export function Foo() {
+  const { c, styles } = useThemedStyles(makeStyles);   // 同时拿到色板和样式表
+  ...
+}
+```
+
+**为什么不能只改 `C` 的值**：`StyleSheet.create` 在模块加载那一刻就把色值注册进去了，
+之后改模块变量，旧样式表不会跟着变。所以整个项目没有 `C` 这个东西了，只有 `c`。
+
+三条必须守的：
+
+- JSX 内联颜色（`<Ionicons color={...}>`、`placeholderTextColor`）也要走 `c`
+- 模块级常量数组里不能放颜色（拿不到 `c`），要改成函数（`IconButton` 的 `toneBg`）
+- 实心按钮上的字用 `c.onAccent`，不是 `#FFFFFF` —— 深色的 `accent` 是亮蓝，压白字只有 2.5:1
 
 ## 全文检索（FTS5 + bigram）
 

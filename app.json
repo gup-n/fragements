@@ -2,22 +2,25 @@
   "expo": {
     "name": "碎片",
     "slug": "fragments",
-    "version": "0.7.4",
+    "version": "0.8.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "backgroundColor": "#FBFBF9"
+      "backgroundColor": "#FBFBF9",
+      "dark": {
+        "backgroundColor": "#121211"
+      }
     },
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "package": "com.local.fragments",
-      "versionCode": 26,
+      "versionCode": 27,
       "adaptiveIcon": {
-        "backgroundColor": "#FBFBF9",
+        "backgroundColor": "#185FA5",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },

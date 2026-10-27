@@ -9,7 +9,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.7.4（versionCode 26） |
+| 当前版本 | v0.8.0（versionCode 27） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
@@ -31,6 +31,9 @@
 | 改功能先改 SPEC 再改代码 | SPEC 是跨会话的唯一依据 |
 
 ## 现在能做什么
+
+**外观**：浅色 / 深色 / 跟随系统，设置页第一项，改完立刻生效。默认跟随系统 ——
+系统切深色界面跟着切，不用重启。启动屏也会跟着系统走，深色下点开不会先闪一下白。
 
 **记录**：时间轴流按日分组，默认只展开今天、往前的日期收成「日期 + 条数 + 首条摘要」，点一下展开。
 顶部搜索框直接过滤碎片原文 / 标签 / 事项，并告诉你其中多少条还没整理。长文超过 100 字或含换行自动折叠。
@@ -64,6 +67,10 @@
 走系统分享可直接存 NAS。导入反过来：**先预览再写库**——共读到多少条、跨哪几天、
 会导入多少、跳过多少重复，看清了才点确认。同一个文件导两遍不会翻倍（按「天 + 分钟 + 正文」判重）。
 
+**索引可见**：设置页常驻显示搜索索引的健康度 —— 「索引完整 · 132 条全部可搜」
+加一行抽样自检（抽最近 5 条，用正文中的一段往回搜，看能不能搜回自己）。
+只有当明明记过、却搜不出来时才需要点「重建」；重建后的结果就写在那个框里。
+
 **尚未实现**：通知栏常驻入口。见 [ROADMAP.md](./ROADMAP.md) P0-2。
 
 ## 技术栈
@@ -87,6 +94,7 @@ index.ts               RN 入口
 src/
   types.ts             领域类型（Fragment / Todo / Note / OrganizePlan / QaTurn …）
   theme.ts             颜色、圆角、标签哈希取色
+  theme.tsx            两套调色板 + ThemeProvider + useThemedStyles
   version.ts           版本号常量（与 app.json 手工同步）
   ai/                  配置、prompt、请求层、整理循环 / 单批整理 / 问答 / 小结 / 搜索、SSE 解析
   db/                  Repo 接口 + SQLite / localStorage 两个实现 + 写库逻辑 + Markdown 导入
@@ -111,7 +119,9 @@ npx expo start              # dev server，手机 Expo Go 扫码
 > **不做界面预览**（用户 2026-10-25 明确要求）。`build:web` 的产物落在 `.tmp-bundle/`
 > 并在同一次运行里删掉，根目录不会留下能起静态服务的东西；UI 只靠装 APK 真机反馈验证。
 
-新增依赖一律用 `npx expo install <pkg>`，它会解析与当前 SDK 匹配的版本，普通 `npm install` 可能装出不兼容版本。
+新增依赖用 `npm install <pkg>@<与 SDK 匹配的版本> --registry=https://registry.npmmirror.com`。
+`npx expo install` 在这台机器上曾卡 9 分钟无输出（其实已经装好了），所以不用它；
+版本号自己核对 `npm view <pkg> versions`，装完确认 `package.json` 里记上了 —— npm 超时被杀时可能只解包、不写清单。
 
 ## 构建 APK
 

@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, Note } from '../types';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 import { TagPill } from './TagPill';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
@@ -52,6 +52,7 @@ export function FragmentDetail({
   onSave,
   onDelete,
 }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   /**
    * 用实测容器宽度，不用 useWindowDimensions：桌面预览把 App 关在 420px 的壳里，
    * 窗口宽度和这一页的宽度不是一回事，用后者会让每页都宽出一大截、翻页还错位。
@@ -138,35 +139,35 @@ export function FragmentDetail({
   if (editing) {
     const canSave = draft.trim().length > 0 && !saving;
     return (
-      <View style={[s.root, { paddingBottom: keyboardHeight }]}>
-        <View style={s.topBar}>
+      <View style={[styles.root, { paddingBottom: keyboardHeight }]}>
+        <View style={styles.topBar}>
           {/* 和阅读态用同一个关闭钮，切进编辑时顶部不会整排跳位 */}
           <IconButton
             name="close"
             size={22}
-            color={C.text2}
+            color={c.text2}
             onPress={stopEdit}
             accessibilityLabel="取消编辑"
           />
-          <View style={s.topCenter}>
-            <Text style={s.topDate}>编辑碎片</Text>
-            <Text style={s.topTime}>{draft.length} 字</Text>
+          <View style={styles.topCenter}>
+            <Text style={styles.topDate}>编辑碎片</Text>
+            <Text style={styles.topTime}>{draft.length} 字</Text>
           </View>
           <Pressable
             onPress={save}
             disabled={!canSave}
             hitSlop={8}
             style={({ pressed }) => [
-              s.editBtn,
-              s.saveBtn,
-              !canSave && s.saveBtnOff,
+              styles.editBtn,
+              styles.saveBtn,
+              !canSave && styles.saveBtnOff,
               pressed && canSave && { opacity: 0.7 },
             ]}
           >
             {saving ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
+              <ActivityIndicator size="small" color={c.onAccent} />
             ) : (
-              <Text style={[s.saveText, !canSave && s.saveTextOff]}>保存</Text>
+              <Text style={[styles.saveText, !canSave && styles.saveTextOff]}>保存</Text>
             )}
           </Pressable>
         </View>
@@ -174,22 +175,22 @@ export function FragmentDetail({
         <TextInput
           value={draft}
           onChangeText={setDraft}
-          style={s.editInput}
+          style={styles.editInput}
           multiline
           autoFocus
           maxLength={20000}
           textAlignVertical="top"
           placeholder="写点什么…"
-          placeholderTextColor={C.text3}
+          placeholderTextColor={c.text3}
         />
 
-        <View style={s.editFoot}>
+        <View style={styles.editFoot}>
           <Pressable onPress={remove} hitSlop={8}>
-            <Text style={s.deleteText}>
+            <Text style={styles.deleteText}>
               {armedDelete ? '再点一次确认删除' : '删除这条碎片'}
             </Text>
           </Pressable>
-          <Text style={s.editHint}>返回键取消</Text>
+          <Text style={styles.editHint}>返回键取消</Text>
         </View>
       </View>
     );
@@ -199,17 +200,17 @@ export function FragmentDetail({
 
   return (
     <View
-      style={s.root}
+      style={styles.root}
       onLayout={(e) => {
         const w = Math.round(e.nativeEvent.layout.width);
         if (w > 0 && w !== width) setWidth(w);
       }}
     >
-      <View style={s.topBar}>
-        <IconButton name="close" size={22} color={C.text2} onPress={onClose} accessibilityLabel="关闭" />
-        <View style={s.topCenter}>
-          <Text style={s.topDate}>{daySubLabel(fragment.createdAt)}</Text>
-          <Text style={s.topTime}>
+      <View style={styles.topBar}>
+        <IconButton name="close" size={22} color={c.text2} onPress={onClose} accessibilityLabel="关闭" />
+        <View style={styles.topCenter}>
+          <Text style={styles.topDate}>{daySubLabel(fragment.createdAt)}</Text>
+          <Text style={styles.topTime}>
             {formatTime(fragment.createdAt)}
             {items.length > 1 ? ` · ${current + 1} / ${items.length}` : ''}
           </Text>
@@ -217,10 +218,10 @@ export function FragmentDetail({
         <Pressable
           onPress={startEdit}
           hitSlop={8}
-          style={({ pressed }) => [s.editBtn, pressed && { opacity: 0.6 }]}
+          style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.6 }]}
         >
-          <Ionicons name="create-outline" size={17} color={C.accentText} />
-          <Text style={s.editText}>编辑</Text>
+          <Ionicons name="create-outline" size={17} color={c.accentText} />
+          <Text style={styles.editText}>编辑</Text>
         </Pressable>
       </View>
 
@@ -257,23 +258,23 @@ export function FragmentDetail({
       ) : null}
 
       {items.length > 1 ? (
-        <View style={s.footer}>
+        <View style={styles.footer}>
           <Pressable
             onPress={() => jump(-1)}
             disabled={current === 0}
             hitSlop={12}
-            style={({ pressed }) => [s.navBtn, pressed && current > 0 && { opacity: 0.5 }]}
+            style={({ pressed }) => [styles.navBtn, pressed && current > 0 && { opacity: 0.5 }]}
           >
-            <Ionicons name="chevron-back" size={19} color={current === 0 ? C.hair : C.text2} />
+            <Ionicons name="chevron-back" size={19} color={current === 0 ? c.hair : c.text2} />
           </Pressable>
-          <Text style={s.hint}>左右滑动查看上一条</Text>
+          <Text style={styles.hint}>左右滑动查看上一条</Text>
           <Pressable
             onPress={() => jump(1)}
             disabled={atEnd}
             hitSlop={12}
-            style={({ pressed }) => [s.navBtn, pressed && !atEnd && { opacity: 0.5 }]}
+            style={({ pressed }) => [styles.navBtn, pressed && !atEnd && { opacity: 0.5 }]}
           >
-            <Ionicons name="chevron-forward" size={19} color={atEnd ? C.hair : C.text2} />
+            <Ionicons name="chevron-forward" size={19} color={atEnd ? c.hair : c.text2} />
           </Pressable>
         </View>
       ) : null}
@@ -310,6 +311,7 @@ function Page({
   done: boolean;
   notes: Note[];
 }) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const merged = fragment.mergedInto !== null;
   const hasMeta = fragment.tags.length > 0 || !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
@@ -317,40 +319,40 @@ function Page({
   return (
     <ScrollView
       style={{ width }}
-      contentContainerStyle={s.content}
+      contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
       {done || merged ? (
-        <View style={s.badges}>
+        <View style={styles.badges}>
           {done ? (
-            <View style={s.doneBadge}>
-              <Ionicons name="checkmark" size={11} color={C.tealText} />
-              <Text style={s.doneText}>已完成</Text>
+            <View style={styles.doneBadge}>
+              <Ionicons name="checkmark" size={11} color={c.tealText} />
+              <Text style={styles.doneText}>已完成</Text>
             </View>
           ) : null}
-          {merged ? <Text style={s.merged}>已合并到另一条</Text> : null}
+          {merged ? <Text style={styles.merged}>已合并到另一条</Text> : null}
         </View>
       ) : null}
 
       {/* selectable：只读页最常见的动作就是把某段复制出去 */}
-      <Text style={[s.body, merged && s.bodyMuted]} selectable>
+      <Text style={[styles.body, merged && styles.bodyMuted]} selectable>
         {fragment.content}
       </Text>
 
       {hasMeta ? (
-        <View style={s.meta}>
+        <View style={styles.meta}>
           {fragment.tags.map((t) => (
             <TagPill key={t} label={t} />
           ))}
-          {fragment.project ? <Text style={s.project}>{fragment.project}</Text> : null}
+          {fragment.project ? <Text style={styles.project}>{fragment.project}</Text> : null}
           {fragment.source !== 'app' ? (
-            <View style={s.source}>
+            <View style={styles.source}>
               <Ionicons
                 name={fragment.source === 'notif' ? 'notifications-outline' : 'share-outline'}
                 size={12.5}
-                color={C.text3}
+                color={c.text3}
               />
-              <Text style={s.sourceText}>
+              <Text style={styles.sourceText}>
                 {fragment.source === 'notif' ? '来自通知' : '来自分享'}
               </Text>
             </View>
@@ -358,7 +360,7 @@ function Page({
         </View>
       ) : null}
 
-      <Text style={s.count}>
+      <Text style={styles.count}>
         {fragment.content.length} 字 ·{' '}
         {new Date(fragment.createdAt).getFullYear()}-{String(new Date(fragment.createdAt).getMonth() + 1).padStart(2, '0')}-
         {String(new Date(fragment.createdAt).getDate()).padStart(2, '0')}
@@ -369,29 +371,29 @@ function Page({
         才不用退回时间轴再去找一遍。它和碎片是两种东西，所以用浅蓝卡片隔开。
       */}
       {dayNotes.map((n) => (
-        <View key={n.id} style={s.noteCard}>
-          <View style={s.noteHead}>
-            <Ionicons name="sparkles" size={13} color={C.accent} />
-            <Text style={s.noteKind}>
+        <View key={n.id} style={styles.noteCard}>
+          <View style={styles.noteHead}>
+            <Ionicons name="sparkles" size={13} color={c.accent} />
+            <Text style={styles.noteKind}>
               {n.type === 'daily' ? '当天小结' : n.type === 'weekly' ? '当周总结' : '当月总结'}
             </Text>
-            <Text style={s.notePeriod}>{periodLabel(n.period)}</Text>
+            <Text style={styles.notePeriod}>{periodLabel(n.period)}</Text>
           </View>
-          <NoteBody text={n.bodyMd} style={s.noteBody} />
+          <NoteBody text={n.bodyMd} style={styles.noteBody} />
         </View>
       ))}
     </ScrollView>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   root: {
     position: 'absolute',
     top: 0,
     right: 0,
     bottom: 0,
     left: 0,
-    backgroundColor: C.page,
+    backgroundColor: c.page,
   },
   topBar: {
     flexDirection: 'row',
@@ -399,21 +401,21 @@ const s = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: C.hair,
+    borderBottomColor: c.hair,
   },
   topCenter: { flex: 1, alignItems: 'center' },
-  topDate: { fontSize: 13.5, color: C.text, fontWeight: '600' },
-  topTime: { fontSize: 11, color: C.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
+  topDate: { fontSize: 13.5, color: c.text, fontWeight: '600' },
+  topTime: { fontSize: 11, color: c.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
   editBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: R.pill,
   },
-  editText: { fontSize: 12.5, color: C.accentText, fontWeight: '600' },
+  editText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
 
   content: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48 },
   badges: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
@@ -421,18 +423,18 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    backgroundColor: C.tealBg,
+    backgroundColor: c.tealBg,
     borderRadius: R.pill,
     paddingLeft: 5,
     paddingRight: 9,
     paddingVertical: 3,
   },
-  doneText: { fontSize: 10.5, lineHeight: 15, color: C.tealText },
-  merged: { fontSize: 11, color: C.text3 },
+  doneText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
+  merged: { fontSize: 11, color: c.text3 },
 
   /* 详情页是「阅读」场景，字号和行高都比列表放宽一档 */
-  body: { fontSize: 17, lineHeight: 30, color: C.text, letterSpacing: 0.2 },
-  bodyMuted: { color: C.text2 },
+  body: { fontSize: 17, lineHeight: 30, color: c.text, letterSpacing: 0.2 },
+  bodyMuted: { color: c.text2 },
 
   meta: {
     flexDirection: 'row',
@@ -442,38 +444,38 @@ const s = StyleSheet.create({
     marginTop: 26,
     paddingTop: 16,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
+    borderTopColor: c.hair,
   },
-  project: { fontSize: 12, color: C.text2 },
+  project: { fontSize: 12, color: c.text2 },
   source: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  sourceText: { fontSize: 11.5, color: C.text3 },
+  sourceText: { fontSize: 11.5, color: c.text3 },
 
-  count: { fontSize: 11, color: C.text3, marginTop: 14, fontVariant: ['tabular-nums'] },
+  count: { fontSize: 11, color: c.text3, marginTop: 14, fontVariant: ['tabular-nums'] },
 
   // 当天小结
   noteCard: {
     marginTop: 26,
-    backgroundColor: C.accentBg,
+    backgroundColor: c.accentBg,
     borderRadius: R.card,
     paddingHorizontal: 15,
     paddingVertical: 13,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  noteKind: { fontSize: 11.5, color: C.accentText, fontWeight: '600' },
-  notePeriod: { flex: 1, fontSize: 11, color: C.text3 },
-  noteBody: { fontSize: 14.5, lineHeight: 24, color: C.text },
+  noteKind: { fontSize: 11.5, color: c.accentText, fontWeight: '600' },
+  notePeriod: { flex: 1, fontSize: 11, color: c.text3 },
+  noteBody: { fontSize: 14.5, lineHeight: 24, color: c.text },
 
   // 编辑态：整屏输入，字号与阅读态一致
-  saveBtn: { backgroundColor: C.accent, minWidth: 62, justifyContent: 'center' },
-  saveBtnOff: { backgroundColor: C.hairSoft },
-  saveText: { fontSize: 12.5, color: '#FFFFFF', fontWeight: '600' },
-  saveTextOff: { color: C.text3 },
+  saveBtn: { backgroundColor: c.accent, minWidth: 62, justifyContent: 'center' },
+  saveBtnOff: { backgroundColor: c.hairSoft },
+  saveText: { fontSize: 12.5, color: c.onAccent, fontWeight: '600' },
+  saveTextOff: { color: c.text3 },
   editInput: {
     flex: 1,
     fontSize: 17,
     lineHeight: 30,
     letterSpacing: 0.2,
-    color: C.text,
+    color: c.text,
     paddingHorizontal: 22,
     paddingTop: 22,
     paddingBottom: 22,
@@ -486,10 +488,10 @@ const s = StyleSheet.create({
     paddingTop: 10,
     paddingBottom: 14,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
+    borderTopColor: c.hair,
   },
-  deleteText: { fontSize: 12.5, color: C.danger },
-  editHint: { fontSize: 11, color: C.text3 },
+  deleteText: { fontSize: 12.5, color: c.danger },
+  editHint: { fontSize: 11, color: c.text3 },
 
   footer: {
     flexDirection: 'row',
@@ -498,8 +500,8 @@ const s = StyleSheet.create({
     gap: 10,
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: C.hair,
+    borderTopColor: c.hair,
   },
   navBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  hint: { fontSize: 11.5, color: C.text3 },
+  hint: { fontSize: 11.5, color: c.text3 },
 });

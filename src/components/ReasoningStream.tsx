@@ -7,7 +7,7 @@
 import React, { useRef } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
-import { C, R } from '../theme';
+import { R, useThemedStyles, type Palette } from '../theme';
 
 function fmtCount(n: number) {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
@@ -29,57 +29,58 @@ interface Props {
 }
 
 export function ReasoningStream({ title, text, received, elapsed, thinking, height = 200 }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const scrollRef = useRef<ScrollViewInstance>(null);
   return (
-    <View style={s.card}>
-      <View style={s.head}>
-        <ActivityIndicator size="small" color={C.accent} />
-        <Text style={s.title} numberOfLines={1}>
+    <View style={styles.card}>
+      <View style={styles.head}>
+        <ActivityIndicator size="small" color={c.accent} />
+        <Text style={styles.title} numberOfLines={1}>
           {title}
         </Text>
-        <Text style={s.clock}>{elapsed}s</Text>
+        <Text style={styles.clock}>{elapsed}s</Text>
       </View>
 
       {text ? (
         <ScrollView
           ref={scrollRef}
-          style={[s.scroll, { maxHeight: height }]}
-          contentContainerStyle={s.scrollBody}
+          style={[styles.scroll, { maxHeight: height }]}
+          contentContainerStyle={styles.scrollBody}
           nestedScrollEnabled
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
         >
-          <Text style={s.text}>{text}</Text>
+          <Text style={styles.text}>{text}</Text>
         </ScrollView>
       ) : (
-        <Text style={s.empty}>
+        <Text style={styles.empty}>
           {thinking ? '模型正在通读这些碎片，还没开始落笔…' : '当前没开思考模式，只能等结果出来'}
         </Text>
       )}
 
-      <View style={s.foot}>
-        <Text style={s.meta}>{text ? `思考 ${fmtCount(text.length)} 字` : '等待首字'}</Text>
-        <Text style={s.meta}>{received ? `结果 ${fmtCount(received)} 字` : '结果未开始'}</Text>
+      <View style={styles.foot}>
+        <Text style={styles.meta}>{text ? `思考 ${fmtCount(text.length)} 字` : '等待首字'}</Text>
+        <Text style={styles.meta}>{received ? `结果 ${fmtCount(received)} 字` : '结果未开始'}</Text>
       </View>
     </View>
   );
 }
 
-const s = StyleSheet.create({
+const makeStyles = (c: Palette) => StyleSheet.create({
   card: {
-    backgroundColor: C.card,
+    backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: 0.5,
-    borderColor: C.accentBg,
+    borderColor: c.accentBg,
     padding: 12,
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title: { flex: 1, fontSize: 13, color: C.text, fontWeight: '500' },
-  clock: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
-  scroll: { marginTop: 9, backgroundColor: C.hairSoft, borderRadius: R.btn },
+  title: { flex: 1, fontSize: 13, color: c.text, fontWeight: '500' },
+  clock: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  scroll: { marginTop: 9, backgroundColor: c.hairSoft, borderRadius: R.btn },
   scrollBody: { padding: 10 },
-  text: { fontSize: 12, lineHeight: 19, color: C.text2 },
-  empty: { fontSize: 12, color: C.text3, lineHeight: 19, marginTop: 9 },
+  text: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  empty: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 9 },
   foot: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 },
-  meta: { fontSize: 11, color: C.text3, fontVariant: ['tabular-nums'] },
+  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
 });

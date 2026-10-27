@@ -1,9 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BackHandler, Platform, StyleSheet, View } from 'react-native';
+import { BackHandler, Platform, StyleSheet, useColorScheme, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Fragment, Note } from './src/types';
-import { C } from './src/theme';
+import {
+  normalizeThemeMode,
+  ThemeProvider,
+  useTheme,
+  useThemedStyles,
+  type Palette,
+  type ThemeMode,
+} from './src/theme';
 import { repo } from './src/db/repo';
 import { TimelineScreen } from './src/screens/TimelineScreen';
 import { OrganizeScreen } from './src/screens/OrganizeScreen';
@@ -16,7 +23,51 @@ type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
 
 const isWeb = Platform.OS === 'web';
 
+/** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
+const K_THEME = 'ui_theme';
+
+/**
+ * 外层只做两件事：把库打开、把外观偏好读出来，然后把整棵树包进 ThemeProvider。
+ *
+ * 拆出来是因为 ThemeProvider 必须在所有界面之上，而 `useTheme` 只能在
+ * Provider 内部调 —— 原来的 App 一个函数干完所有事，改造后只能让位给 Shell。
+ */
 export default function App() {
+  const system = useColorScheme();
+  const [mode, setMode] = useState<ThemeMode>('system');
+  const [booted, setBooted] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        await repo.init();
+        setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
+      } catch (e) {
+        console.warn('[fragments] 初始化失败', e);
+      } finally {
+        setBooted(true);
+      }
+    })();
+  }, []);
+
+  const changeMode = useCallback((next: ThemeMode) => {
+    setMode(next);
+    // 存盘失败不拦着切换：这次会话照常用新外观，下次启动退回跟随系统
+    repo.setSetting(K_THEME, next).catch(() => {});
+  }, []);
+
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider mode={mode} systemDark={system === 'dark'} onChangeMode={changeMode}>
+        <Shell booted={booted} />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function Shell({ booted }: { booted: boolean }) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const { dark } = useTheme();
   const [ready, setReady] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');
   /**
@@ -67,17 +118,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!booted) return;
     (async () => {
       try {
-        await repo.init();
         await reload();
       } catch (e) {
-        console.warn('[fragments] 初始化失败', e);
+        console.warn('[fragments] 读取数据失败', e);
       } finally {
         setReady(true);
       }
     })();
-  }, [reload]);
+  }, [booted, reload]);
 
   /**
    * 安卓返回键：在任何子页面都先回主界面，只有已经在主界面时才退出 App。
@@ -207,8 +258,8 @@ export default function App() {
   }, [reload]);
 
   return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
+    <>
+      <StatusBar style={dark ? 'light' : 'dark'} />
       <View style={[styles.outer, isWeb && styles.outerWeb]}>
         <View style={[styles.app, isWeb && styles.appWeb]}>
           {ready ? (
@@ -270,14 +321,14 @@ export default function App() {
           )}
         </View>
       </View>
-    </SafeAreaProvider>
+    </>
   );
 }
 
-const styles = StyleSheet.create({
-  outer: { flex: 1, backgroundColor: C.page },
-  outerWeb: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#EDEDE7' },
-  app: { flex: 1, alignSelf: 'stretch', backgroundColor: C.page },
+const makeStyles = (c: Palette) => StyleSheet.create({
+  outer: { flex: 1, backgroundColor: c.page },
+  outerWeb: { alignItems: 'center', justifyContent: 'center', backgroundColor: c.shell },
+  app: { flex: 1, alignSelf: 'stretch', backgroundColor: c.page },
   appWeb: {
     flex: 0,
     height: '100%',
@@ -287,9 +338,9 @@ const styles = StyleSheet.create({
     marginVertical: 16,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#DEDED6',
+    borderColor: c.shellBorder,
     overflow: 'hidden',
   },
-  safe: { flex: 1, backgroundColor: C.page },
-  splash: { flex: 1, backgroundColor: C.page },
+  safe: { flex: 1, backgroundColor: c.page },
+  splash: { flex: 1, backgroundColor: c.page },
 });
