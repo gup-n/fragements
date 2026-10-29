@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-27 更新到 v0.8.1**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.1（versionCode 28）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-29 更新到 v0.8.2**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.2（versionCode 29）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.8.1 / versionCode 28 |
+| 版本 | v0.8.2 / versionCode 29 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v7 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,9 +38,9 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.16 MiB，产物跑完即删） |
 | 自动化测试 | **没有**。只有纯函数层的临时 `assert` 脚本（跑完删） |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，32 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，35 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
-| 小结文风 | 事实/判断/计划分开、一条一个意思、句长随内容变（v0.8.1，见 `TEXTS.md`） |
+| 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏入口、导入） |
 | 数据迁移 | v7。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项 |
 
@@ -109,7 +109,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/ai/deepseek.ts` | 158 | 一次整理请求：`json:true`、`pickEffort`、只收敛形状 |
 | `src/ai/organizeRun.ts` | 293 | **整理循环**：id 快照、装箱、批循环、截断对半拆、每批落库 |
 | `src/ai/qa.ts` | 339 | 「问」：四路检索、预算装填、并行联网、引用反查 |
-| `src/ai/summarize.ts` | 294 | 日 / 周 / 月小结 prompt 与素材装填 |
+| `src/ai/summarize.ts` | 313 | 日 / 周 / 月小结 prompt 与素材装填 |
 | `src/ai/search.ts` | 162 | `/v1/tools/search`，退避重试、结果兜底 |
 
 ### 数据层
