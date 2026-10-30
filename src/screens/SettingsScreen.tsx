@@ -47,12 +47,6 @@ const EFFORT_LABEL: Record<ReasoningEffort, string> = {
   max: '深',
 };
 
-const EFFORT_HINT: Record<ReasoningEffort, string> = {
-  low: '想得快，适合碎片少、结构简单的时候',
-  high: '默认。绝大多数情况下够用',
-  max: '想得最细，慢一些、贵一些',
-};
-
 export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { mode, setMode } = useTheme();
@@ -337,11 +331,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               </Pressable>
             ))}
           </View>
-          <Text style={styles.note}>
-            {mode === 'system'
-              ? '跟着手机的深色模式走 —— 系统几点切深色，这里就几点换。'
-              : `固定用${THEME_MODE_LABEL[mode]}，手机怎么切都不变。`}
-          </Text>
         </View>
 
         <Text style={styles.groupTitle}>AI 接口</Text>
@@ -411,10 +400,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </Text>
           )}
 
-          <Text style={styles.note}>
-            Key 存在手机的安全存储里（Android Keystore），不会上传到任何服务器。换服务商只要改 Base
-            URL 和模型名，接口是 OpenAI 兼容格式。
-          </Text>
         </View>
 
         <Text style={styles.groupTitle}>整理行为</Text>
@@ -428,11 +413,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               >
                 <View style={styles.toggleKnob} />
               </Pressable>
-              <Text style={styles.toggleHint}>
-                {thinking
-                  ? '模型先推理再给结果，整理时能看到它在想什么'
-                  : '直接出结果，更快更省，但看不到过程'}
-              </Text>
             </View>
           </Field>
 
@@ -451,14 +431,9 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   </Pressable>
                 ))}
               </View>
-              <Text style={styles.fieldHint}>{EFFORT_HINT[effort]}</Text>
             </Field>
           )}
 
-          <Text style={styles.note}>
-            只有 DeepSeek 的 V4 系列（deepseek-flash / deepseek-v4-pro）认这两个设置。
-            换成别的兼容服务时不会发这些参数，免得对方直接报错。
-          </Text>
         </View>
 
         <Text style={styles.groupTitle}>数据</Text>
@@ -735,7 +710,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
-  toggleHint: { flex: 1, fontSize: 11, color: c.text3, lineHeight: 16 },
 
   chipRow: { flexDirection: 'row', gap: 7 },
   chip: {
@@ -748,7 +722,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
   chipText: { fontSize: 12, color: c.text2, lineHeight: 17 },
   chipTextOn: { color: c.accentText },
-  fieldHint: { fontSize: 11, color: c.text3, marginTop: 7, lineHeight: 16 },
 
   statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
   stat: {

@@ -2,7 +2,7 @@
   "expo": {
     "name": "碎片",
     "slug": "fragments",
-    "version": "0.8.5",
+    "version": "0.8.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.local.fragments",
-      "versionCode": 32,
+      "versionCode": 33,
       "adaptiveIcon": {
         "backgroundColor": "#185FA5",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -39,7 +39,8 @@
       "expo-secure-store",
       "expo-sharing",
       "./plugins/withNoSplashAnimation",
-      "./plugins/withBuildOptimizations"
+      "./plugins/withBuildOptimizations",
+      "expo-notifications"
     ]
   }
 }

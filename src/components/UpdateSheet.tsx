@@ -29,6 +29,7 @@ import {
   openInstallPermissionSettings,
   type DownloadProgress,
 } from '../update/download';
+import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { versionLabel } from '../util/semver';
@@ -49,12 +50,25 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     written: 0,
     total: release.apkSize,
   });
+  /** 瞬时速度（字节/秒），用移动平均平滑过 */
+  const [speed, setSpeed] = useState(0);
   const [error, setError] = useState('');
   const [skip, setSkip] = useState(false);
   const [installing, setInstalling] = useState(false);
 
   const cancelRef = useRef<(() => void) | null>(null);
   const fileRef = useRef<File | null>(null);
+  /**
+   * 测速用的上一次采样。
+   *
+   * 进度回调一秒能来几十次，直接拿相邻两次算会得到剧烈跳动的数字
+   * （尤其是 TCP 拥塞窗口刚放开的时候）。所以：
+   * - 两次采样至少隔 300ms 才算一次，太密的抖动没有参考价值
+   * - 用指数移动平均（新值占 30%），数字才读得下去
+   */
+  const rateRef = useRef({ at: 0, bytes: 0, ema: 0 });
+  /** 通知栏最多一秒刷一次：更密会让通知栏不停闪，而且没有信息增量 */
+  const notifyAtRef = useRef(0);
 
   const dismiss = useCallback(() => {
     if (skip) onSkipVersion();
@@ -73,35 +87,85 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   // 组件卸载（用户关掉弹窗）时把残包清掉，免得 22 MB 一直躺在缓存里
   useEffect(() => {
     return () => {
-      if (phase !== 'ready') clearDownload();
+      if (phase !== 'ready') {
+        clearDownload();
+        clearNotify();
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 收到一次进度：更新条，顺便算速度 */
+  const onProgress = useCallback(
+    (p: DownloadProgress) => {
+      setProgress(p);
+
+      const now = Date.now();
+
+      // 通知栏：一秒一次。后台时 JS 挂起，这个更新自然就停了 ——
+      // 通知会停在切走那一刻的数字，回到应用后立刻接上
+      if (now - notifyAtRef.current > 1000) {
+        notifyAtRef.current = now;
+        const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
+        const size = `${formatBytes(p.written)}${p.total > 0 ? ` / ${formatBytes(p.total)}` : ''}`;
+        notifyProgress(release.version, size, pct);
+      }
+
+      const r = rateRef.current;
+      if (r.at === 0) {
+        r.at = now;
+        r.bytes = p.written;
+        return;
+      }
+      const dt = now - r.at;
+      const db = p.written - r.bytes;
+      if (dt < 300 || db < 0) return;
+
+      const inst = (db / dt) * 1000;
+      r.ema = r.ema > 0 ? r.ema * 0.7 + inst * 0.3 : inst;
+      r.at = now;
+      r.bytes = p.written;
+      setSpeed(r.ema);
+    },
+    [release.version],
+  );
 
   async function startDownload() {
     setPhase('downloading');
     setError('');
     setProgress({ written: 0, total: release.apkSize });
+    setSpeed(0);
+    rateRef.current = { at: 0, bytes: 0, ema: 0 };
+    notifyAtRef.current = 0;
+
+    // 通知失败不影响下载：没授权就静默跳过
+    initNotify().then((ok) => {
+      if (ok) notifyProgress(release.version, formatBytes(0), 0);
+    });
     try {
       const file = await downloadApk(
         release,
-        (p) => setProgress(p),
+        onProgress,
         (cancel) => {
           cancelRef.current = cancel;
         },
       );
       fileRef.current = file;
       setPhase('ready');
+      notifyReady(release.version);
     } catch (e) {
       const msg = e instanceof Error ? e.message : '下载失败';
       // 主动取消不是错误，退回初始态让用户重新决定
       if (msg === '已取消下载') {
         setPhase('prompt');
         setProgress({ written: 0, total: release.apkSize });
+        setSpeed(0);
+        clearNotify();
         return;
       }
       setError(msg);
       setPhase('error');
+      clearNotify();
     } finally {
       cancelRef.current = null;
     }
@@ -115,6 +179,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     try {
       await installApk(file);
       // 系统安装器已经接管，这里静默收起
+      clearNotify();
       clearDownload();
       onClose();
     } catch (e) {
@@ -157,7 +222,12 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
               {phase === 'prompt'
                 ? `当前 ${versionLabel(APP_VERSION)} · 安装包 ${formatBytes(release.apkSize)}`
                 : phase === 'downloading'
-                  ? `${formatBytes(progress.written)}${unknownTotal ? '' : ` / ${formatBytes(progress.total)}`}`
+                  ? [
+                    `${formatBytes(progress.written)}${unknownTotal ? '' : ` / ${formatBytes(progress.total)}`}`,
+                    speed > 0 ? `${formatBytes(speed)}/s` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
                   : phase === 'ready'
                     ? `${formatBytes(release.apkSize)} · 点「立即安装」后系统会弹确认页`
                     : '下面是可以处理的具体原因'}

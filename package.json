@@ -1,6 +1,6 @@
 {
   "name": "fragments",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
@@ -10,6 +10,7 @@
     "expo-file-system": "~58.0.10",
     "expo-haptics": "~58.0.7",
     "expo-intent-launcher": "~58.0.3",
+    "expo-notifications": "^58.1.7",
     "expo-secure-store": "~58.0.2",
     "expo-sharing": "~58.0.19",
     "expo-sqlite": "~58.0.13",
