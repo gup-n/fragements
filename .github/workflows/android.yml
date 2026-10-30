@@ -43,12 +43,27 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - uses: android-actions/setup-android@v3
-
-      # compileSdk 36 / build-tools 36 与本地一致；版本写在 android 工程里，
-      # 换 SDK 时这里要一起改，否则 gradle 会自己去下另一个版本（慢且可能失败）
-      - name: 装 SDK 组件
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+      # 不用 android-actions/setup-android：ubuntu-latest 镜像本身已经预装 SDK
+      # （ANDROID_HOME=/usr/local/lib/android/sdk），它再去装一遍会和预装的抢目录，
+      # 第一次跑就是挂在这一步（run 40977928548，前 7 步全过，第 8 步失败）。
+      # 这里只补缺的组件，sdkmanager 路径按预装位置找，找不到再退回 PATH。
+      - name: 准备 Android SDK
+        run: |
+          set -u
+          echo "ANDROID_HOME=${ANDROID_HOME:-<未设置>}"
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(command -v sdkmanager || true)"
+          fi
+          if [ -z "$SDKMANAGER" ]; then
+            echo "找不到 sdkmanager，runner 镜像可能变了" >&2
+            ls -la "${ANDROID_HOME:-/usr/local/lib/android/sdk}" || true
+            exit 1
+          fi
+          echo "sdkmanager: $SDKMANAGER"
+          # 许可证要预先接受，否则下面装 platform 时会卡在交互提示
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
 
       # android/ 不入库（prebuild 产物）。不加 --no-install 会再跑一次 npm install，
       # 而我们上面已经 npm ci 过了
@@ -68,7 +83,12 @@ jobs:
             gradle-${{ runner.os }}-
 
       - name: 确保 gradlew 可执行
-        run: chmod +x android/gradlew
+        run: |
+          chmod +x android/gradlew
+          # 显式写一次 sdk.dir：runner 的 ANDROID_HOME 指向预装目录，
+          # 但 prebuild 生成的工程里没有 local.properties，gradle 有时找不到
+          echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
+          cat android/local.properties
 
       - name: 构建 release APK
         working-directory: android
