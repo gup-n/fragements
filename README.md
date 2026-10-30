@@ -55,9 +55,17 @@
 退出时问一句「要不要留下纪要」——存下来的是一条**普通碎片**，进时间轴、能被整理、也能被再次检索。
 纪要只保留最近 6 轮、每答前 3 句，是线索不是全文。
 
-**小结**：日 / 周 / 月三种粒度，AI 把该周期**全部**碎片读一遍写成 Markdown，
-**先预览再决定存不存**。格式是「一句话 + 短小节」，每条写成完整书面句子，正式、客观
-（日 150–250 / 周 300–500 / 月 500–700 字）。整理页会列出「N 个周期还没写小结」。
+**小结**：日 / 周 / 月三种粒度，AI 把该周期**全部**碎片读一遍写成 Markdown，**先预览再决定存不存**。
+三节固定为「重点 / 进展 / 待处理」，没有内容的整节省略；字数是**上限**不是目标
+（日 150 / 周 300 / 月 500），写得比上限短是正常的。
+
+能做的操作：
+
+- **筛选**：回顾 → 小结顶部切 全部 / 日 / 周 / 月，只有「全部」会把三种混在一起
+- **滑动读**：点开任意一篇进全屏阅读器，左右滑动在**当前筛选出来的那批**之间切换
+- **对照**：重新生成一个有旧稿的周期，预览页左旧右新并排，各标字数
+- **批量**：勾选「还没写的 N 个周期」排队跑，每篇仍然单独预览、单独确认
+
 存下后落在时间轴对应时间点：日/月小结排在那一天最前面，**周总结独占周级分区、固定在该周最上方**。
 
 **标签与待办**：整理时模型先看已有标签表再决定新建，代码层再按归一化键收敛一次，
@@ -81,7 +89,7 @@
 |---|---|
 | 框架 | React Native 0.88 + Expo SDK 58（新架构） |
 | 语言 | TypeScript 6.0 |
-| 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移到 v6） |
+| 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移到 v7） |
 | 检索 | SQLite FTS5 + **bigram 分词**（中文两字就能命中；`trigram` 对 <3 字查询不命中，别换） |
 | 密钥 | expo-secure-store（Android Keystore） |
 | AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，小结与问答走流式纯文本；联网走官方 `/v1/tools/search` |
@@ -95,17 +103,18 @@ App.tsx                应用入口、路由状态、数据加载
 index.ts               RN 入口
 src/
   types.ts             领域类型（Fragment / Todo / Note / OrganizePlan / QaTurn …）
-  theme.ts             颜色、圆角、标签哈希取色
-  theme.tsx            两套调色板 + ThemeProvider + useThemedStyles
+  theme.tsx            两套调色板 + ThemeProvider + useThemedStyles + 标签哈希取色
   version.ts           版本号常量（与 app.json 手工同步）
   ai/                  配置、prompt、请求层、整理循环 / 单批整理 / 问答 / 小结 / 搜索、SSE 解析
   db/                  Repo 接口 + SQLite / localStorage 两个实现 + 写库逻辑 + Markdown 导入
   screens/             五个页面（时间轴 / 整理 / 回顾 / 问 / 设置）
-  components/          覆盖层与可复用区块（详情页、结果确认、标签面板、小结面板）
+  components/          覆盖层与可复用区块（碎片详情、结果确认、标签面板、小结面板、小结阅读器）
   export/              Markdown 导出的 IO 部分（拼接在 util/mdBuild.ts）
   util/                纯函数：日期、整理计划合并与校验、结果元数据、分词、键盘、纪要、待补清单、Markdown 拼装与解析
 plugins/               config plugin（构建优化、启动窗去动画）
 scripts/               build_web.mjs（Web 编译校验，产物跑完即删）
+                      assert_md.cjs（导入导出往返断言，npm run test:md）
+                      make-icon.cjs（生成全部图标，SDF 自绘不依赖图形库）
 ```
 
 每个文件干什么、多少行，见 [HANDOFF.md 第 4 节](./HANDOFF.md)（那张表每次发版都会校正行数）。
@@ -199,3 +208,7 @@ API Key 存在 Android Keystore 加密区，不进源码、不进仓库、不上
 | [CHANGELOG.md](./CHANGELOG.md) | 每个版本改了什么、**为什么**、踩了什么坑 |
 | [ROADMAP.md](./ROADMAP.md) | 还没做的事、明确不做的事、待决问题 |
 | [AGENTS.md](./AGENTS.md) | AI 助手速查（硬规矩 + 最容易搞错的概念） |
+| [TEXTS.md](./TEXTS.md) | 三处模型提示词全文 + 全部界面文案的位置索引。**改文风先看它** |
+
+前五份是正式文档，各答一问：是什么 / 应该怎样 / 现在怎样 / 为什么 / 接下来。
+`TEXTS.md` 是查阅用的附录，改提示词时对着它找位置。

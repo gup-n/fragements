@@ -94,7 +94,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 604 | 「问」：聊天布局、两个开关、引用来源、退出存纪要 |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
-| `src/screens/SettingsScreen.tsx` | 646 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
+| `src/screens/SettingsScreen.tsx` | 653 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
 ### AI 层
@@ -116,9 +116,9 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/db/types.ts` | 146 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch` |
-| `src/db/repo.native.ts` | 782 | SQLite 实现 + 迁移 v1–v6 + FTS 索引维护 + 标签重写 |
-| `src/db/repo.web.ts` | 453 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
+| `src/db/types.ts` | 157 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch` |
+| `src/db/repo.native.ts` | 857 | SQLite 实现 + 迁移 v1–v6 + FTS 索引维护 + 标签重写 |
+| `src/db/repo.web.ts` | 501 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/commit.ts` | 192 | **应用**：按勾选写库，合并 → 标状态的顺序，真实计数 |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
@@ -136,35 +136,35 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/mdBuild.ts` | 103 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
 | `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
 | `src/util/date.ts` | 189 | 日 / 周 / 月键、`periodAnchor`、格式化 |
-| `src/util/digest.ts` | 97 | 待补小结清单（配额 daily 6 / weekly 2 / monthly 2） |
+| `src/util/digest.ts` | 139 | 待补小结清单（配额 daily 6 / weekly 2 / monthly 2） |
 | `src/util/keyboard.ts` | 39 | `useKeyboardHeight()`（替代 `KeyboardAvoidingView`） |
 
 ### 组件与类型
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/components/FragmentDetail.tsx` | 505 | 全屏详情：左右滑、整屏内联编辑、当天小结 |
+| `src/components/FragmentDetail.tsx` | 507 | 全屏详情：左右滑、整屏内联编辑、当天小结 |
 | `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
 | `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
-| `src/components/ResultSections.tsx` | 318 | 确认页六组结果渲染与勾选 |
-| `src/components/TagPanel.tsx` | 312 | 标签管理：改名 / 合并 / 删除 |
-| `src/components/ImportSheet.tsx` | 201 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 100 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`）。旧小结里还有加粗，不能删这条支持 |
-| `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 95 / 80 | 全项目唯一的图标按钮与页头 |
-| `src/components/Reasoning*.tsx` | 74 / 85 / 68 | 思维链实时流 / 折叠 / 轨迹 |
-| `src/components/BacklogCard.tsx` | 86 | 整理页的「待补小结」条目 |
-| `src/components/TagPill.tsx` | 63 | 标签胶囊（哈希取色） |
-| `src/types.ts` | 274 | 全部领域类型 |
+| `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
+| `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
+| `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
+| `src/components/NoteBody.tsx` | 103 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`）。旧小结里还有加粗，不能删这条支持 |
+| `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 80 | 全项目唯一的图标按钮与页头 |
+| `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 折叠 / 轨迹 |
+| `src/components/BacklogCard.tsx` | 87 | 整理页的「待补小结」条目 |
+| `src/components/TagPill.tsx` | 64 | 标签胶囊（哈希取色） |
+| `src/types.ts` | 288 | 全部领域类型 |
 | `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
-| `src/theme.ts` · `src/version.ts` | 52 / 8 | 颜色与版本常量 |
+| `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
 
 ---
 
-## 5. 数据模型（SQLite v6）
+## 5. 数据模型（SQLite v7）
 
 ```sql
 fragments         id, content, created_at, source, status, tags(JSON), project, merged_into, nature
-todos             id, text, due_at, done, source_fragment_id, created_at, merged_into
+todos             id, text, due_at, done, done_at, source_fragment_id, created_at, merged_into
 notes             id, type(daily|weekly|monthly|theme), title, body_md, period, created_at
 settings          key, value
 organize_runs     id, started_at, fragment_ids, model, result_json, applied   -- 历史表，v0.7 起不再写入
@@ -172,10 +172,17 @@ organize_sessions id, scope, pending_ids, cursor, plan_json, context_summary, fi
 fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
 ```
 
-索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、`idx_sessions_open(finished, updated_at DESC)`。
+索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、
+`idx_todos_done_at(done_at DESC)`、`idx_sessions_open(finished, updated_at DESC)`。
 
 **v6 迁移做了三件事**：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、
-建 `fragment_fts` 与 `organize_sessions`。前五段迁移原样保留（回滚就得重放）。
+建 `fragment_fts` 与 `organize_sessions`。
+
+**v7 只干一件事**：`todos` 加 `done_at`，并用 `created_at` 回填已有的已完成项。
+「已完成只保留最近 5 条」靠它排序 —— 没有完成时间，就只能按创建时间清，会把
+刚勾掉的旧待办先删掉。注意这一步**会物理删除**超出的条目（v0.7.3 升级时一次性收敛）。
+
+前六段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
 
 几个容易误解的点：
 
@@ -186,6 +193,8 @@ fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
   改名 / 合并 / 删除走 `rewriteTags`，全库重写 JSON 并重建索引。
 - **`notes` 的 `(type, period)` 唯一性由应用层保证**（`upsertNote` 先查后写）。
   period 可空，SQLite 的 UNIQUE 对 NULL 不去重。
+- **`done_at` 为空但有 `done = 1` 的是旧数据**（v7 迁移前完成的）。清理逻辑用
+  `COALESCE(done_at, created_at)` 兜底，别直接拿 `done_at` 排序，否则这些会全排到最后。
 - **`organize_runs` 目前是死数据**。v0.7 的循环用 `organize_sessions`；
   `Repo.saveRun` / `markRunApplied` 还在接口里，但**已经没有任何调用点**，别以为它在记录历史。
 
@@ -294,8 +303,8 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 ### 7.5 小结与导出
 
 - 小结：`SummarySheet` 取周期内全部碎片 → `summarize()` → 预览 → `upsertNote`。
-  固定小节「一句话 / 做了什么 / 想明白的 / 悬着的」等；每条 `- **关键词**：一句话`。
-  字数 150–250 / 300–500 / 500–700；素材预算 26k / 40k / 60k 字。
+  三节固定「重点 / 进展 / 待处理」，字数纯上限 150 / 300 / 500，素材预算 26k / 40k / 60k 字。
+  有旧稿时左右对照；缺口可勾选排队生成、逐篇确认。**完整规格见 SPEC §6.3，这里不重复。**
 - 导出：`# 碎片导出 · 日期` → `## 时间轴`（按天 `###`）→ `## 待办`（未完成 / 已完成）→ `## 标签索引`。
 
 ---
