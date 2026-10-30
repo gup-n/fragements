@@ -351,6 +351,20 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 
 ---
 
+### 8.7 CI（v0.8.3）
+
+仓库 `github.com/gup-n/fragements`（拼写就是 fragements）。推送 master 触发构建，
+8 分钟左右出 APK artifact。
+
+- **不要加 `android-actions/setup-android`**。runner 自带 SDK，再加会和预装目录抢。
+  用预装的 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` 补组件。
+- **`local.properties` 要手写**：prebuild 生成的工程里没有它，gradle 有时找不到 SDK。
+- **缓存 key 要在 prebuild 之后算**，否则 hash 的是还没生成的文件。
+- **`cancel-in-progress: true` 会在连推时取消上一次**。构建要 8 分钟，
+  短时间内推两次等于白跑第一次 —— 想每次都留产物就把它关掉。
+- 公开仓库的**构建日志要 admin 权限**才能通过 API 下载（403），
+  失败时只能靠 steps 状态反推，必要时去网页点开看。
+
 ### 8.6 主题（v0.8.0）
 
 - **`StyleSheet.create` 会在模块加载时把色值固化。** 所以「给 `C` 加个 setter 就行」

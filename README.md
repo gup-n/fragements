@@ -1,5 +1,7 @@
 # 碎片
 
+[![android](https://github.com/gup-n/fragements/actions/workflows/android.yml/badge.svg)](https://github.com/gup-n/fragements/actions/workflows/android.yml)
+
 > 随手扔一句，AI 分批帮你收拢，想不起来的时候还能问它。
 
 个人用、单机、Android 侧载的碎片记录工具。记录时不分类、不打断；整理时 AI 一批一批地过，
@@ -146,6 +148,23 @@ cd android && ./gradlew assembleRelease                         # 增量约 2~3 
 详细说明见 [SPEC.md 第 12 节](./SPEC.md#12-本地打包-apk)。首次全量约 45 分钟。
 
 体积对照：76 MB（v0.1.1，4 ABI）→ 22 MB（v0.2.0），减少 **71%**。
+
+### 自动构建（GitHub Actions）
+
+推到 `master` 或打 `v*` tag 会触发 [`.github/workflows/android.yml`](./.github/workflows/android.yml)：
+装依赖 → `tsc --noEmit` → `npm run test:md` → prebuild → `assembleRelease`，
+产物是名为 `fragments-apk` 的 artifact，挂在这次运行页面底部（保留 30 天）。
+
+实测一次约 **8 分钟**（Gradle 缓存命中后更快）。`release` 沿用 debug 签名，
+所以不需要任何 secret —— 仓库是公开的，签名密钥不该进 CI。
+
+改 workflow 时有两个坑：
+
+- **别加 `android-actions/setup-android`。** ubuntu-latest 镜像自带 SDK
+  （`/usr/local/lib/android/sdk`），它再去装一遍会和预装目录抢，v0.8.3 第一次 CI
+  就挂在这一步。
+- **Gradle 缓存要放在 prebuild 之后。** `gradle-wrapper.properties` 是 prebuild
+  生成的，提前取 `hashFiles` 永远是空字符串，等于每次换一把新锁。
 
 ## Android 平台约束（改 UI 前先看）
 
