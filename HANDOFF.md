@@ -378,6 +378,32 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 - 公开仓库的**构建日志要 admin 权限**才能通过 API 下载（403），
   失败时只能靠 steps 状态反推，必要时去网页点开看。
 
+### 8.8 发版流程（v0.8.4 起）
+
+```
+# 1. 改版本号三处：src/version.ts、package.json、app.json(version + versionCode)
+# 2. 写 CHANGELOG 的本版小节 —— Release 说明从这里抠，别另写一份
+# 3. prebuild + assembleRelease，本地验一遍
+# 4. 提交并推送 master
+git push origin master
+# 5. 打 tag 并推 —— 这一步才会建 Release
+git tag -a v0.8.5 -m "v0.8.5 xxx"
+git push origin v0.8.5
+```
+
+CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
+`fragments-v0.8.5.apk`，说明来自 `scripts/release_notes.mjs`（读 CHANGELOG）。
+
+**没打 tag 就不会有 Release**，App 也就查不到更新。反过来说，
+推 master 只跑构建、不发布，可以放心推。
+
+两个注意：
+
+- Release 需要 `permissions: contents: write`，workflow 里已经写了。
+  不加的话 `gh release create` 会 403，而且报错不明显。
+- asset 名要先 `cp` 再传，不要用 `gh` 的 `file#name` 语法 —— v0.8.4 试过，
+  没生效，落成了 `app-release.apk`。
+
 ### 8.6 主题（v0.8.0）
 
 - **`StyleSheet.create` 会在模块加载时把色值固化。** 所以「给 `C` 加个 setter 就行」

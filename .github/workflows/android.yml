@@ -128,11 +128,14 @@ jobs:
         run: |
           TAG="${{ steps.rel.outputs.tag }}"
           APK=android/app/build/outputs/apk/release/app-release.apk
-          # 同名 asset 用 fragments-<tag>.apk，和本地打包的文件名对得上
-          gh release create "$TAG" "$APK#fragments-$TAG.apk" \
+          # 先复制成想要的文件名再上传。
+          # 不用 gh 的 `file#name` 语法：v0.8.4 首次发版时它没生效，
+          # asset 落成了 app-release.apk。改源文件名没有歧义。
+          cp "$APK" "/tmp/fragments-$TAG.apk"
+          gh release create "$TAG" "/tmp/fragments-$TAG.apk" \
             --title "$TAG" \
             --notes-file /tmp/notes.md \
-          || gh release upload "$TAG" "$APK#fragments-$TAG.apk" --clobber
+          || gh release upload "$TAG" "/tmp/fragments-$TAG.apk" --clobber
 
       - name: 输出体积与校验值
         run: |

@@ -100,7 +100,16 @@ Android 7 起禁止把 `file://` 交给别的应用（`FileUriExposedException`�
 
 - `tsc --noEmit` 零错误、`test:md` 24 项、`build:web` 通过
 - 版本比较 9 项断言（含「字符串比较会答错」这条反例）
-- 首次发版实测：tag 触发 CI，Release 建成，App 能查到并下载
+- 首次发版实测：tag 触发 CI，Release 建成（asset 21.74 MiB + 1737 字说明），
+  用真实 API 响应走了一遍解析：`0.8.3 → 0.8.4 有更新`，apk 存在、大小已知
+- APK 下载链接 302 到签名地址、`Content-Type: application/vnd.android.package-archive`，匿名可下
+
+### 一个没料到的坑
+
+`gh release create "$APK#fragments-$TAG.apk"` 的 `file#name` 语法没生效，
+asset 落成了 `app-release.apk`。功能不受影响（应用侧只认 `.apk` 后缀），
+但名字难看。改成先 `cp` 成目标文件名再上传 —— 不依赖 gh 的语法细节。
+从 v0.8.5 起生效，v0.8.4 这个 Release 就保持 `app-release.apk` 了。
 
 ### 没做到
 
