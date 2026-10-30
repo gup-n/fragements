@@ -11,7 +11,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.8.3（versionCode 30） |
+| 当前版本 | v0.8.4（versionCode 31） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
@@ -81,6 +81,13 @@
 加一行抽样自检（抽最近 5 条，用正文中的一段往回搜，看能不能搜回自己）。
 只有当明明记过、却搜不出来时才需要点「重建」；重建后的结果就写在那个框里。
 
+**更新**：启动 3 秒后自动查一次 GitHub Release，有新版本弹窗提示；设置里可以关掉自动检查，
+也可以随时手动点「检查更新」。下载带进度条（已下载 / 总大小），下完交给系统安装器。
+支持「不再提示这个版本」——勾了之后要等下一个版本才会再问。
+
+> 更新源是 **GitHub Release**，不是 Actions 的 artifact —— 后者下载要登录。
+> 发版流程因此变成：`git tag v0.8.4 && git push --tags`，CI 自动建 Release 并挂 APK。
+
 **尚未实现**：通知栏常驻入口。见 [ROADMAP.md](./ROADMAP.md) P0-2。
 
 ## 技术栈
@@ -90,6 +97,7 @@
 | 框架 | React Native 0.88 + Expo SDK 58（新架构） |
 | 语言 | TypeScript 6.0 |
 | 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移到 v7） |
+| 自更新 | `expo-file-system`（下载任务）+ `expo-intent-launcher`（拉起系统安装器） |
 | 检索 | SQLite FTS5 + **bigram 分词**（中文两字就能命中；`trigram` 对 <3 字查询不命中，别换） |
 | 密钥 | expo-secure-store（Android Keystore） |
 | AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，小结与问答走流式纯文本；联网走官方 `/v1/tools/search` |

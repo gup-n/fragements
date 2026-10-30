@@ -14,6 +14,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# 建 Release 要写权限。默认 token 在新仓库里只有 read，不写这一行会 403。
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -103,6 +107,32 @@ jobs:
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
+
+      # ---- 打 tag 时才发 Release ----
+      # 应用侧只认 Release 的 asset：Actions 的 artifact 下载要登录，
+      # 手机端匿名访问会 403（和当初下不到 CI 日志是同一个限制）。
+      - name: 生成 Release 说明
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: rel
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          node scripts/release_notes.mjs "$TAG" > /tmp/notes.md
+          echo "----- 说明预览 -----"
+          head -30 /tmp/notes.md
+
+      - name: 创建 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.rel.outputs.tag }}"
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          # 同名 asset 用 fragments-<tag>.apk，和本地打包的文件名对得上
+          gh release create "$TAG" "$APK#fragments-$TAG.apk" \
+            --title "$TAG" \
+            --notes-file /tmp/notes.md \
+          || gh release upload "$TAG" "$APK#fragments-$TAG.apk" --clobber
 
       - name: 输出体积与校验值
         run: |

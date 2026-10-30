@@ -258,6 +258,32 @@ v0.7.3 只改了时间轴，用户翻回顾页看到的还是混排 —— 同�
 还是旧的，用它去查碎片会查到上一个周期 —— 表现是「勾了 3 个周期，生成的都是同一个」。
 同一条也适用于任何「点一次连跑多轮」的流程（v0.6.4 的分批游标栽在同类问题上）。
 
+## 自更新（v0.8.4）
+
+四件事全是硬约束，不是选择。
+
+**更新源只能是 GitHub Release。**
+Actions 的 artifact 下载要登录，手机端匿名访问 403 —— 和「CI 日志下不来」
+是同一个限制。所以发版必须打 tag，CI 建 Release 挂 APK。
+
+**版本比较不能比字符串。**
+`'0.10.0' > '0.9.9'` 在 JS 里是 **false**，正好反了；`parseFloat('0.10')` 又和
+`'0.1'` 撞成同一个数。用 `util/semver.ts`。解析不了一律判「相同」——
+宁可漏报，也不能因为 tag 格式怪就每天弹假更新。
+
+**安装必须走 content://。**
+Android 7+ 禁止把 `file://` 交给别的应用（FileUriExposedException），而安装器是
+另一个进程。`expo-file-system` 已注册 `FileSystemFileProvider`（paths 覆盖
+files 和 cache），所以要先 `getContentUriAsync` 再交给 `IntentLauncher`。
+**这是全项目唯一故意混用新旧 API 的地方**：下载用新 API（有进度），
+取 content URI 用 legacy（新 API 没这个方法）。
+
+**下载完必须校验字节数。**
+半包也能拉起安装器，但装到一半失败，用户只看到「应用未安装」，
+猜不到是没下全。比对 `file.info().size` 与 `asset.size`，差 >1 KB 就重下。
+
+部署相关的坑写在 `HANDOFF.md` 8.7。
+
 ## 「问」（v0.7.1）
 
 - **只给模型筛过的资料**，不是全库。18 条 / 单条 1200 字 / 总 36000 字，FTS 命中优先。

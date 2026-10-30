@@ -28,6 +28,9 @@ import { looksBinary } from '../util/mdParse';
 import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { UpdateSheet } from '../components/UpdateSheet';
+import { checkForUpdate, getAutoCheck, setAutoCheck, type ReleaseInfo } from '../update/check';
+import { versionLabel } from '../util/semver';
 import type { IoniconName } from '../components/IconButton';
 
 interface Props {
@@ -73,6 +76,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [indexMsg, setIndexMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 导出/导入的反馈，渲染在它们自己的按钮下方 */
   const [ioMsg, setIoMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 启动时自动检查更新（默认开，存在 settings 表） */
+  const [autoCheck, setAutoCheckOn] = useState(true);
+  const [checking, setChecking] = useState(false);
+  const [checkState, setCheckState] = useState<'idle' | 'latest' | 'update' | 'error'>('idle');
+  const [checkMsg, setCheckMsg] = useState('');
+  /** 设置页自己查到的更新，就地弹窗，不用回主界面 */
+  const [update, setUpdate] = useState<ReleaseInfo | null>(null);
   /** 索引健康度。null = 还没查出来 */
   const [indexState, setIndexState] = useState<{ indexed: number; total: number } | null>(null);
   /** 搜索自检结果。checked = 抽了几条，hit = 有几条能搜回来 */
@@ -88,6 +98,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setApiKey(cfg.apiKey);
       setThinking(cfg.thinking);
       setEffort(cfg.effort);
+      setAutoCheckOn(await getAutoCheck());
       setStats(await repo.stats());
       // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
       setIndexState(await repo.searchIndexStats());
@@ -213,6 +224,42 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setIoMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
     } finally {
       setBusy('idle');
+    }
+  }
+
+  /**
+   * 手动检查更新。force 绕过节流 —— 用户点了就说明他现在就想知道。
+   *
+   * 三种结果都要说清楚：已是最新（给出版本号，否则用户不知道"最新"是指哪个）、
+   * 有新版本（直接弹窗）、检查失败（把 GitHub 的具体原因带出来，
+   * 403 限流和 404 没发布是完全不同的两件事）。
+   */
+  async function handleCheckUpdate() {
+    if (checking) return;
+    setChecking(true);
+    setCheckState('idle');
+    setCheckMsg('');
+    try {
+      const r = await checkForUpdate({ force: true });
+      if (r.kind === 'update') {
+        setCheckState('update');
+        setCheckMsg(`发现 ${versionLabel(r.release.version)}`);
+        setUpdate(r.release);
+      } else if (r.kind === 'latest') {
+        setCheckState('latest');
+        setCheckMsg(`当前 ${versionLabel(r.current)} 已是最新`);
+      } else if (r.kind === 'none') {
+        setCheckState('error');
+        setCheckMsg('仓库还没发布过版本，暂时无处可查');
+      } else {
+        setCheckState('error');
+        setCheckMsg('刚检查过，过几分钟再试');
+      }
+    } catch (e) {
+      setCheckState('error');
+      setCheckMsg(e instanceof Error ? e.message : '检查失败');
+    } finally {
+      setChecking(false);
     }
   }
 
@@ -470,6 +517,59 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             <Text style={styles.aboutKey}>版本</Text>
             <Text style={styles.aboutVal}>{APP_VERSION}</Text>
           </View>
+
+          {/*
+            只有 Android 能装包，web 上不显示这两行 —— 摆一个点了没反应的
+            「检查更新」比不摆更让人困惑。
+          */}
+          {Platform.OS === 'android' ? (
+            <>
+              <Pressable
+                style={styles.aboutRow}
+                onPress={handleCheckUpdate}
+                disabled={checking}
+              >
+                <Text style={styles.aboutKey}>检查更新</Text>
+                <View style={styles.updateValue}>
+                  {checking ? (
+                    <ActivityIndicator size="small" color={c.text3} />
+                  ) : (
+                    <>
+                      <Text
+                        style={[
+                          styles.updateState,
+                          checkState === 'update' && styles.updateStateNew,
+                          checkState === 'error' && styles.updateStateErr,
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {checkMsg || '点这里检查'}
+                      </Text>
+                      <Ionicons name="chevron-forward" size={13} color={c.text3} />
+                    </>
+                  )}
+                </View>
+              </Pressable>
+
+              <View style={styles.aboutRow}>
+                <Text style={styles.aboutKey}>启动时自动检查</Text>
+                <Pressable
+                  style={[styles.toggle, autoCheck && styles.toggleOn]}
+                  onPress={() => {
+                    const next = !autoCheck;
+                    setAutoCheckOn(next);
+                    setAutoCheck(next).catch(() => undefined);
+                  }}
+                  hitSlop={6}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: autoCheck }}
+                >
+                  <View style={styles.toggleKnob} />
+                </Pressable>
+              </View>
+            </>
+          ) : null}
+
           <View style={styles.aboutRow}>
             <Text style={styles.aboutKey}>包名</Text>
             <Text style={styles.aboutVal}>com.local.fragments</Text>
@@ -487,6 +587,15 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
           busy={busy === 'importing'}
           onCancel={() => setImportPreview(null)}
           onConfirm={handleConfirmImport}
+        />
+      )}
+
+      {/* 设置页手动查到的更新就地弹，不用回主界面再等一次启动检查 */}
+      {update && (
+        <UpdateSheet
+          release={update}
+          onClose={() => setUpdate(null)}
+          onSkipVersion={() => undefined}
         />
       )}
     </View>
@@ -640,6 +749,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   indexHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   indexTitle: { flex: 1, fontSize: 12.5, fontWeight: '500', lineHeight: 18 },
   indexHint: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 4 },
+
+  updateValue: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  updateState: { fontSize: 12.5, color: c.text3, maxWidth: 210 },
+  updateStateNew: { color: c.accentText, fontWeight: '600' },
+  updateStateErr: { color: c.danger },
 
   aboutRow: {
     flexDirection: 'row',

@@ -3,7 +3,7 @@
 > 本文档是跨会话开发的**唯一设计依据**：数据模型、AI 契约、界面规范、构建环境。
 > 改功能先改这里，再改代码。**版本历史不写在这里** —— 那是 [CHANGELOG.md](./CHANGELOG.md) 的事。
 
-最后更新：2026-10-30（v0.8.3：小结加筛选/滑动/对照/批量，接上 GitHub Actions）
+最后更新：2026-10-30（v0.8.4：应用内更新，发版改成打 tag 自动建 Release）
 
 > 从 v0.7.2 起又改了几轮，本节以下凡是标了 `（vX.Y.Z）` 的地方都是后续修订。
 > **没标年份的段落默认是 v0.7 定的**，读的时候留意版本标注。
@@ -316,6 +316,20 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 - Markdown 导入：选文件 → 预览（新增 / 跳过）→ 确认后才写库，见第 7 节
 - 设置页：API 配置、连接测试、外观、索引健康度、数据统计、导出导入
 - 本地全文索引（FTS5 + bigram），启动时自动校验条数并回填
+
+**应用内更新（v0.8.4）**
+
+| 项 | 约定 |
+|---|---|
+| 来源 | `releases/latest`。**不能用 Actions artifact** —— 下载要登录，手机端 403 |
+| 比较 | 按 `.` 拆段逐段比数字（`util/semver.ts`）。解析不了一律判相同，宁可漏报 |
+| 自动检查 | 启动后 3 秒，6 小时节流，可关；失败静默 |
+| 手动检查 | 设置 → 关于 → 检查更新，`force` 绕过节流，结果要给出具体原因 |
+| 下载 | `File.createDownloadTask` 的 `onProgress`，可取消 |
+| 校验 | 下载完比对 `file.info().size` 与 asset.size，差 >1 KB 判失败 |
+| 安装 | `getContentUriAsync`（legacy）+ `IntentLauncher`。Android 7+ 不能传 `file://` |
+| 权限 | `REQUEST_INSTALL_PACKAGES`。缺授权时把「重试」换成「去授权」 |
+| 跳过 | 勾了「不再提示 x.y.z」就等到下个版本 |
 
 **索引可验证（v0.8.0）**
 

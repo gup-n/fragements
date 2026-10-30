@@ -3,6 +3,8 @@ import { BackHandler, Platform, StyleSheet, useColorScheme, View } from 'react-n
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Fragment, Note } from './src/types';
+import { checkForUpdate, getAutoCheck, setSkipVersion, type ReleaseInfo } from './src/update/check';
+import { UpdateSheet } from './src/components/UpdateSheet';
 import {
   normalizeThemeMode,
   ThemeProvider,
@@ -103,6 +105,40 @@ function Shell({ booted }: { booted: boolean }) {
   /** 已完成待办对应的碎片 id，用来打「已完成」标记 */
   const [doneIds, setDoneIds] = useState<Set<number>>(new Set());
   const [inboxCount, setInboxCount] = useState(0);
+  /**
+   * 待提示的新版本。null = 没有。
+   *
+   * 只在「启动自动检查」和「设置页手动检查」两处设置它。检查失败一律静默 ——
+   * 开机因为网络断了一下就弹个错误框，比不检查还烦人。
+   */
+  const [update, setUpdate] = useState<ReleaseInfo | null>(null);
+
+  /*
+   * 启动 3 秒后查一次新版本。
+   *
+   * 延迟不是偷懒：首屏要读库、渲染时间轴，这时候再打一次网络请求会抢主线程；
+   * 而且「一打开就被弹窗拦住」的观感很差。3 秒足够让用户先看到自己的内容。
+   *
+   * 三重静默：关掉了自动检查、节流窗口内、检查失败 —— 都不该有任何提示。
+   */
+  useEffect(() => {
+    if (isWeb) return;
+    let alive = true;
+    const timer = setTimeout(async () => {
+      try {
+        if (!(await getAutoCheck())) return;
+        const r = await checkForUpdate();
+        if (!alive || r.kind !== 'update' || r.skipped) return;
+        setUpdate(r.release);
+      } catch {
+        /* 启动检查失败不提示 */
+      }
+    }, 3000);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, []);
 
   const reload = useCallback(async () => {
     const [list, inbox, noteList, done] = await Promise.all([
@@ -315,6 +351,19 @@ function Shell({ booted }: { booted: boolean }) {
                   registerClose={registerAskClose}
                 />
               )}
+              {/*
+                更新弹窗放在所有页面之后：它是覆盖层，要盖在 route 内容之上。
+                放在 SafeAreaView 里面而不是外面，是为了让卡片居中时不被状态栏顶偏。
+              */}
+              {update ? (
+                <UpdateSheet
+                  release={update}
+                  onClose={() => setUpdate(null)}
+                  onSkipVersion={() => {
+                    setSkipVersion(update.version).catch(() => undefined);
+                  }}
+                />
+              ) : null}
             </SafeAreaView>
           ) : (
             <View style={styles.splash} />
