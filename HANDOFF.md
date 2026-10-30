@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-30 更新到 v0.8.6**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.6（versionCode 33）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-30 更新到 v0.8.7**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.7（versionCode 34）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.8.6 / versionCode 33 |
+| 版本 | v0.8.7 / versionCode 34 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v7 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -83,7 +83,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **13,445 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **15,154 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -153,7 +153,8 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
 | `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 103 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`）。旧小结里还有加粗，不能删这条支持 |
+| `src/components/NoteBody.tsx` | 234 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线。**表格用 View 排，不能靠空格对齐** |
+| `src/util/mdBlocks.ts` | 332 | Markdown 分块解析（纯函数，可断言）。渲染本地看不见，能验的都在这里 |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 80 | 全项目唯一的图标按钮与页头 |
 | `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 折叠 / 轨迹 |
 | `src/components/BacklogCard.tsx` | 87 | 整理页的「待补小结」条目 |
