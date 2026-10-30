@@ -1,0 +1,94 @@
+name: android
+
+# 只在 master 推、打 tag、手动触发时跑。
+# PR 也跑一遍：这个仓库没有 review 流程，PR 是唯一的「先看后合」入口。
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支连推两次时，取消上一次 —— 构建要十几分钟，没必要排队跑过时的提交
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # ---- 先做能秒级失败的检查，别等编译十分钟才发现类型错误 ----
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npx tsc --noEmit
+
+      - name: 导入导出往返断言
+        run: npm run test:md
+
+      # ---- Android ----
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: android-actions/setup-android@v3
+
+      # compileSdk 36 / build-tools 36 与本地一致；版本写在 android 工程里，
+      # 换 SDK 时这里要一起改，否则 gradle 会自己去下另一个版本（慢且可能失败）
+      - name: 装 SDK 组件
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+
+      # android/ 不入库（prebuild 产物）。不加 --no-install 会再跑一次 npm install，
+      # 而我们上面已经 npm ci 过了
+      - name: 生成原生工程
+        run: npx expo prebuild --platform android --no-install
+
+      # 缓存放在 prebuild 之后：gradle-wrapper.properties 是 prebuild 生成的，
+      # 提前做 key 会算成空字符串，等于每次都换一把新锁
+      - name: 缓存 Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties', 'android/**/*.gradle') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: 确保 gradlew 可执行
+        run: chmod +x android/gradlew
+
+      - name: 构建 release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon --console=plain
+
+      # 只在构建成功后才走到这里；if-no-files-found 会让「构建成功但没产物」也报错，
+      # 否则会出现绿色勾 + 空 artifact 这种最误导人的结果
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: fragments-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 输出体积与校验值
+        run: |
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          echo "### APK" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- 体积：$(du -h "$APK" | cut -f1)" >> $GITHUB_STEP_SUMMARY
+          echo "- MD5：\`$(md5sum "$APK" | cut -d' ' -f1)\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 提交：\`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
