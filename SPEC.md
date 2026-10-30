@@ -339,6 +339,9 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 | 自动检查 | 启动后 3 秒，6 小时节流，可关；失败静默 |
 | 手动检查 | 设置 → 关于 → 检查更新，`force` 绕过节流，结果要给出具体原因 |
 | 下载 | `File.createDownloadTask` 的 `onProgress`，可取消 |
+| 进度 | 显示「已下载 / 总大小 · 速度」。速度两次采样至少隔 300ms，再做指数移动平均（新值占 30%）—— 回调一秒几十次，直接求差会剧烈跳 |
+| 通知 | `expo-notifications`，LOW 渠道 + sticky。**没有前台服务**：切后台后传输继续但 JS 挂起，`onProgress` 不再回调，通知数字停在切走那一刻。要实时只能写原生 ForegroundService（不做） |
+| 通知失败 | 一律静默：没授权、渠道被禁、发不出去都不能影响下载 |
 | 校验 | 下载完比对 `file.info().size` 与 asset.size，差 >1 KB 判失败 |
 | 安装 | `getContentUriAsync`（legacy）+ `IntentLauncher`。Android 7+ 不能传 `file://` |
 | 权限 | `REQUEST_INSTALL_PACKAGES`。缺授权时把「重试」换成「去授权」 |

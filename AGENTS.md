@@ -25,19 +25,22 @@ npm install <pkg>@<ver> --registry=https://registry.npmmirror.com
                                                   # 本机跑它曾卡 9 分钟无输出（实际已装好）。
                                                   # npm 也慢，超时先查 node_modules 和 package.json
 
-npm run test:md                                   # 导入/导出的 24 项回归断言（唯一留在仓库里的）
+npm run test:md                                   # 导入/导出的 24 项回归断言
+npm run check:docs                                # 文档一致性（版本号 / 行数表 / 死链 / 提示词抄录）
 
 npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
 cd android && ./gradlew assembleRelease
 ```
 
-除了 `test:md`，项目**没有别的自动化测试**。其它纯函数层
+除了 `test:md` 和 `check:docs`，项目**没有别的自动化测试**。其它纯函数层
 （`util/organizePlan.ts`、`util/tokenize.ts`、`util/qaNote.ts`）改动时，用
 `npx tsc --ignoreConfig <files> --outDir .tmpassert --module commonjs --target es2020`
 编译到临时目录、写几条 `assert` 跑一遍，**跑完立刻删**。
 
-为什么导入导出是例外：**那是备份链路**。`test:md` 里有一条往返测试
-（碎片 → md → 碎片），导出格式和解析规则任何一边改了，它会立刻变红。
+为什么这两个是例外：**都是「改了一处漏了另一处」的高发区**。
+`test:md` 守着备份链路（碎片 → md → 碎片，任一边改了立刻红）；
+`check:docs` 守着文档（版本号三处、行数表、`TEXTS.md` 抄的提示词、死链、条数）。
+两者都在 CI 里跑，**别绕过它们发版**。
 
 ## 给用户看界面：**不做预览**（用户 2026-10-25 明确要求）
 
@@ -174,6 +177,7 @@ export function Foo() {
 | `ai/qa.ts` 的 `SYSTEM_PROMPT` | 问：怎么回答、怎么引用 | Markdown |
 
 **改文风先看 `TEXTS.md`** —— 那里有全部提示词的原文和行号，改完记得同步回去。
+`npm run check:docs` 会逐行比这两处提示词，改漏一个字就红。
 
 三条不能碰的契约（改了整条链路断，且 `tsc` 不会报）：
 

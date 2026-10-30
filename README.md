@@ -15,6 +15,22 @@
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
+## 第一次装上
+
+1. **下载安装包**：[Releases](https://github.com/gup-n/fragements/releases/latest) 里的 `fragments-v0.8.7.apk`。
+   首次安装系统会拦「未知来源」，允许一次即可（这也是 App 内更新的前提）。
+2. **填 API Key**：设置 → AI 接口。`Base URL` 和 `模型` 已经填好默认值
+   （`https://api.deepseek.com/v1` / `deepseek-flash`），只需要贴一个 Key；
+   Key 去 [DeepSeek 开放平台](https://platform.deepseek.com/api_keys) 建，存在手机的 Android Keystore 里。
+3. **记第一条**：回时间轴，底部输入框写一句就走。**不用分类、不用挑标签** —— 分类是整理时的事。
+4. **攒够十几条再整理**：一次几十条效果最好，三五条跑一趟只是多花钱。
+   跑完会出确认页，勾选后才写库。
+5. **马上做一次备份**：设置 → 数据 → 导出 Markdown，存到 NAS 或电脑。
+   数据只在手机本地，**卸载即全部丢失**，这个出口是唯一的。
+
+之后想更新：启动 3 秒会自己查新版本，也可以在设置 → 关于 → 检查更新里手动点。
+不装新包也能用，旧版本不会失效 —— 只有换模型、加原生能力这类改动才必须升级。
+
 ## 两条设计红线
 
 1. **记录摩擦必须极低**。打开即输入，输完即走。任何「先选分类再写」的设计都违背定位。
@@ -50,7 +66,8 @@
 会删内容的操作默认都不勾。点「应用」才写库，并回报真实写入条数。
 
 **问（v0.7.1 新增）**：像聊天一样问自己的记录。回答只依据检索到的碎片 / 小结 / 待办，
-引用写 `[F12]` 这种编号，点开能看原文。两个开关跟 DeepSeek 手机 App 一样：
+引用写 `[F12]` 这种编号，点开能看原文。回答里的表格、代码块、分隔线都会正常排版（v0.8.7）——
+说一句「列个表给我」，看到的是格子而不是一串竖线。两个开关跟 DeepSeek 手机 App 一样：
 **深度思考**（提高推理强度）、**联网搜索**（本地查不到就上网，与本地检索并行，失败不影响本地回答）。
 退出时问一句「要不要留下纪要」——存下来的是一条**普通碎片**，进时间轴、能被整理、也能被再次检索。
 纪要只保留最近 6 轮、每答前 3 句，是线索不是全文。
@@ -78,17 +95,23 @@
 会导入多少、跳过多少重复，看清了才点确认。同一个文件导两遍不会翻倍（按「天 + 分钟 + 正文」判重）。
 
 **索引可见**：设置页常驻显示搜索索引的健康度 —— 「索引完整 · 132 条全部可搜」
-加一行抽样自检（抽最近 5 条，用正文中的一段往回搜，看能不能搜回自己）。
-只有当明明记过、却搜不出来时才需要点「重建」；重建后的结果就写在那个框里。
+加一行抽样自检。自检取每条的**两段**正文往回搜，任一段能定位到自己就算通过
+（只取一段会撞上「明天上午」这类高频词，命中太多、自己排在后面，被误判成搜不回）。
+结论给三句话之一：「N 条全部搜回」/「N 条全部能搜到（其中 M 条内容重复，不影响搜索）」/「N 条里 M 条能搜回」，
+最后一种才会列出具体的 `#id` 和用过的检索词，并建议点「重建搜索索引」。
 
 **更新**：启动 3 秒后自动查一次 GitHub Release，有新版本弹窗提示；设置里可以关掉自动检查，
-也可以随时手动点「检查更新」。下载带进度条（已下载 / 总大小），下完交给系统安装器。
+也可以随时手动点「检查更新」。下载带进度条（**已下载 / 总大小 · 实时速度**），下完交给系统安装器。
 支持「不再提示这个版本」——勾了之后要等下一个版本才会再问。
 
-> 更新源是 **GitHub Release**，不是 Actions 的 artifact —— 后者下载要登录。
-> 发版流程因此变成：`git tag v0.8.4 && git push --tags`，CI 自动建 Release 并挂 APK。
+下载时通知栏有一条常驻通知「正在下载 v0.8.7 · 8.2 / 22.3 MB · 37%」。**这里有个必须知道的限制**：
+Android 上 Expo 没有前台服务，切到后台后传输会继续（进程不被杀就行），但 JS 线程被挂起，
+**通知里的百分比会停在切走那一刻**，回到应用才接上。所以它承诺的是「状态可见」，不是「数字实时」。
 
-**尚未实现**：通知栏常驻入口。见 [ROADMAP.md](./ROADMAP.md) P0-2。
+> 更新源是 **GitHub Release**，不是 Actions 的 artifact —— 后者下载要登录。
+> 发版流程因此变成：`git tag v0.8.7 && git push origin v0.8.7`，CI 自动建 Release 并挂 APK。
+
+**尚未实现**：通知栏常驻的「快速记录」入口（和上面那条下载通知是两件事）。见 [ROADMAP.md](./ROADMAP.md) P0-2。
 
 ## 技术栈
 
@@ -97,7 +120,7 @@
 | 框架 | React Native 0.88 + Expo SDK 58（新架构） |
 | 语言 | TypeScript 6.0 |
 | 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移到 v7） |
-| 自更新 | `expo-file-system`（下载任务）+ `expo-intent-launcher`（拉起系统安装器） |
+| 自更新 | `expo-file-system`（下载任务）+ `expo-intent-launcher`（拉起系统安装器）+ `expo-notifications`（下载进度通知） |
 | 检索 | SQLite FTS5 + **bigram 分词**（中文两字就能命中；`trigram` 对 <3 字查询不命中，别换） |
 | 密钥 | expo-secure-store（Android Keystore） |
 | AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，小结与问答走流式纯文本；联网走官方 `/v1/tools/search` |
@@ -122,7 +145,9 @@ src/
 plugins/               config plugin（构建优化、启动窗去动画）
 scripts/               build_web.mjs（Web 编译校验，产物跑完即删）
                       assert_md.cjs（导入导出往返断言，npm run test:md）
+                      check_docs.mjs（文档一致性检查，npm run check:docs）
                       make-icon.cjs（生成全部图标，SDF 自绘不依赖图形库）
+                      release_notes.mjs（从 CHANGELOG 抠 Release 说明）
 ```
 
 每个文件干什么、多少行，见 [HANDOFF.md 第 4 节](./HANDOFF.md)（那张表每次发版都会校正行数）。
@@ -131,6 +156,8 @@ scripts/               build_web.mjs（Web 编译校验，产物跑完即删）
 
 ```bash
 npm run typecheck           # tsc --noEmit，改完必跑（项目没有 lint、没有单测）
+npm run test:md             # 导入导出往返断言（碎片 → md → 碎片，两次必须一致）
+npm run check:docs          # 文档一致性：版本号 / 行数表 / 死链 / 提示词抄录
 npm run build:web           # Web 平台打一遍包，量完体积就删 —— 只当编译校验，不产出预览
 npx expo start              # dev server，手机 Expo Go 扫码
 ```
@@ -169,7 +196,7 @@ cd android && ./gradlew assembleRelease                         # 增量约 2~3 
 ### 自动构建（GitHub Actions）
 
 推到 `master` 或打 `v*` tag 会触发 [`.github/workflows/android.yml`](./.github/workflows/android.yml)：
-装依赖 → `tsc --noEmit` → `npm run test:md` → prebuild → `assembleRelease`，
+装依赖 → `tsc --noEmit` → `npm run test:md` → `npm run check:docs` → prebuild → `assembleRelease`，
 产物是名为 `fragments-apk` 的 artifact，挂在这次运行页面底部（保留 30 天）。
 
 实测一次约 **8 分钟**（Gradle 缓存命中后更快）。`release` 沿用 debug 签名，
@@ -182,6 +209,20 @@ cd android && ./gradlew assembleRelease                         # 增量约 2~3 
   就挂在这一步。
 - **Gradle 缓存要放在 prebuild 之后。** `gradle-wrapper.properties` 是 prebuild
   生成的，提前取 `hashFiles` 永远是空字符串，等于每次换一把新锁。
+
+### 文档一致性检查
+
+```bash
+npm run check:docs
+```
+
+七项机器可查的东西：三处版本号是否一致、HANDOFF 的文件行数表、相对链接是否有死链、
+引用的 `src/...` 路径是否存在、`文件:行号` 是否还落在有内容的行上、
+`TEXTS.md` 抄录的提示词是否与源码逐行相同、各文档写的「N 条清单」是否等于 ROADMAP 实际条数。
+
+写这个脚本的原因很直接：这之前每一版都靠人眼扫文档，而**看不出来的时候不知道自己看不出来**。
+v0.8.6 → v0.8.7 之间它一次就抓出 9 处行数漂移、2 处行号漂移、1 处版本没更。
+CI 里排在 `test:md` 之后，秒级完成。
 
 ## Android 平台约束（改 UI 前先看）
 

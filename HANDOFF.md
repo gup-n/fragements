@@ -36,12 +36,12 @@
 | 项 | 状态 |
 |---|---|
 | 编译 | `tsc --noEmit` 零错误 |
-| Web 编译校验 | `npm run build:web` 通过（约 1.16 MiB，产物跑完即删） |
-| 自动化测试 | **没有**。只有纯函数层的临时 `assert` 脚本（跑完删） |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，55 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
+| 自动化测试 | 没有单测框架，但有三道机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run check:docs`（文档一致性 7 项）、`npm run typecheck` |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，59 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
-| 已知阻塞 | 无。剩下的是「验」和「补」（通知栏入口、导入） |
+| 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
 | 数据迁移 | v7。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项 |
 
 **一句话：功能完整，但 v0.7 的重做还没经过真机检验。** 别在这之前继续叠功能。
@@ -89,12 +89,12 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `App.tsx` | 346 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom`、数据加载 |
+| `App.tsx` | 395 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom`、数据加载 |
 | `src/screens/TimelineScreen.tsx` | 1181 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口 |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 604 | 「问」：聊天布局、两个开关、引用来源、退出存纪要 |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
-| `src/screens/SettingsScreen.tsx` | 653 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
+| `src/screens/SettingsScreen.tsx` | 762 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
 ### AI 层
@@ -116,9 +116,9 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/db/types.ts` | 157 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch` |
-| `src/db/repo.native.ts` | 857 | SQLite 实现 + 迁移 v1–v6 + FTS 索引维护 + 标签重写 |
-| `src/db/repo.web.ts` | 501 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
+| `src/db/types.ts` | 183 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch` |
+| `src/db/repo.native.ts` | 901 | SQLite 实现 + 迁移 v1–v6 + FTS 索引维护 + 标签重写 |
+| `src/db/repo.web.ts` | 537 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/commit.ts` | 192 | **应用**：按勾选写库，合并 → 标状态的顺序，真实计数 |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
@@ -145,10 +145,11 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `src/components/FragmentDetail.tsx` | 507 | 全屏详情：左右滑、整屏内联编辑、当天小结 |
 | `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
-| `src/components/UpdateSheet.tsx` | 330 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态 |
-| `src/update/check.ts` | 175 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
-| `src/update/download.ts` | 175 | 下载（带进度、可取消、校验字节数）+ 拉起系统安装器 |
-| `src/util/semver.ts` | 78 | 版本号拆段比较（**不能比字符串**：`'0.10.0' < '0.9.9'`） |
+| `src/components/UpdateSheet.tsx` | 451 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态 |
+| `src/update/check.ts` | 161 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
+| `src/update/download.ts` | 166 | 下载（带进度、可取消、校验字节数）+ 拉起系统安装器 |
+| `src/update/notify.ts` | 142 | 下载进度通知（LOW 渠道、sticky）。**JS 在后台被挂起，通知数字会停在切走那刻** |
+| `src/util/semver.ts` | 62 | 版本号拆段比较（**不能比字符串**：`'0.10.0' < '0.9.9'`） |
 | `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
 | `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
@@ -378,6 +379,9 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
   短时间内推两次等于白跑第一次 —— 想每次都留产物就把它关掉。
 - 公开仓库的**构建日志要 admin 权限**才能通过 API 下载（403），
   失败时只能靠 steps 状态反推，必要时去网页点开看。
+- **CI 里有一道 `npm run check:docs`**（v0.8.7 起）。它挡的是「改了代码没改文档」：
+  版本号三处不一致、HANDOFF 行数表漂了、`TEXTS.md` 抄的提示词和源码不一样、
+  死链、路径写错、「N 条清单」和 ROADMAP 对不上。**这些不用人眼扫，别绕过它。**
 
 ### 8.8 发版流程（v0.8.4 起）
 
@@ -423,7 +427,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-26 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+59 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**
@@ -434,7 +438,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 7. 新生成一篇日小结，**读起来像不像 AI 写的** —— prompt 只能压形状，最终看语感
 
 v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在之前版本验过，
-但这版动了数据层（v6 / v7 迁移），升级路径必须验一次：**v0.6.6 直接升到 v0.7.4，旧数据要在**。
+但v7 迁移（`todos.done_at`）之后升级路径必须验一次：**从更早的版本直接升到最新，旧数据要在**。
 
 ---
 
@@ -457,10 +461,12 @@ v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在�
 
 ## 11. 下一步（按顺序）
 
-1. 用户装 `fragments-v0.7.4.apk`，按 ROADMAP 那 26 条验。**有问题先修，不要叠新功能。**
-2. 通知栏常驻入口（SPEC 第 10 节末尾有实现约束）。
-3. 更新分发方式（EAS Update / GitHub Release），等用户定 —— 装 APK 太麻烦这件事还没解决。
-4. 大库性能：几千条时时间轴全量读进内存会开始慢，等量真上来再动。
+1. **装 `fragments-v0.8.7.apk`，按 ROADMAP 那 59 条验。** 有问题先修，不要叠新功能。
+   如果手机已经是 v0.8.5 以上，直接打开 App 就能收到更新提示，不用手动装。
+2. 通知栏常驻的「快速记录」入口（ROADMAP P0-2）。通知库 v0.8.6 已经因为下载进度通知装好了，
+   剩下是 JS 改动，见 ROADMAP 里重估过的成本。
+3. 大库性能：几千条时时间轴全量读进内存会开始慢，等量真上来再动。
+4. OTA（EAS Update）要不要上，等用户定 —— GitHub Release 已经在用，装包这件事不疼了。
 
-> 「从 Markdown 导入」已在 v0.7.2 补上（数据只出不能回的那个黑洞堵住了）。
-> 它的回归测试是 `npm run test:md`，**改导出格式前后都要跑**。
+> 「从 Markdown 导入」已在 v0.7.2 补上，回归测试是 `npm run test:md`，**改导出格式前后都要跑**。
+> 发版流程见 8.8：改三处版本号 → 写 CHANGELOG → 打 tag。**没打 tag 就不会有 Release**。

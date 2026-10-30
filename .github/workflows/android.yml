@@ -41,6 +41,11 @@ jobs:
       - name: 导入导出往返断言
         run: npm run test:md
 
+      # 版本号 / 行数表 / 死链 / 提示词抄录 这些全是机器能比的，
+      # 放这一步是因为它秒级完成 —— 失败得越早越好定位
+      - name: 文档一致性检查
+        run: npm run check:docs
+
       # ---- Android ----
       - uses: actions/setup-java@v4
         with:

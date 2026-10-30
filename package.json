@@ -32,7 +32,8 @@
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
     "test:md": "tsc --ignoreConfig src/util/mdBuild.ts src/util/mdParse.ts src/util/text.ts src/util/date.ts --outDir .tmp-assert --module commonjs --target es2020 --moduleResolution node --skipLibCheck --esModuleInterop --ignoreDeprecations 6.0 && node scripts/assert_md.cjs",
-    "build:web": "node scripts/build_web.mjs"
+    "build:web": "node scripts/build_web.mjs",
+    "check:docs": "node scripts/check_docs.mjs"
   },
   "private": true
 }
