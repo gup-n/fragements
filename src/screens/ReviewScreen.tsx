@@ -7,10 +7,11 @@ import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NoteBody } from '../components/NoteBody';
+import { NoteViewer } from '../components/NoteViewer';
 import { SummarySheet } from '../components/SummarySheet';
 import { TagPanel } from '../components/TagPanel';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { groupNotes } from '../util/digest';
+import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
 
 interface Props {
   onClose: () => void;
@@ -19,6 +20,23 @@ interface Props {
 }
 
 type Tab = 'todo' | 'note' | 'tag';
+
+/**
+ * 小结的粒度筛选。
+ *
+ * 以前小结只有一种排法：按月→周→日分组全铺开。日小结攒到几十篇之后，
+ * 想找上个月的月总结得一直往下翻，而且「周总结压在日小结上面」这件事
+ * 在只有一种粒度的时候反而看不出来。
+ * 'all' 保留原来的分组混排，选具体粒度时就只留那一种、按时间倒序。
+ */
+type NoteFilter = 'all' | 'daily' | 'weekly' | 'monthly';
+
+const NOTE_FILTERS: { key: NoteFilter; label: string }[] = [
+  { key: 'all', label: '全部' },
+  { key: 'daily', label: '日' },
+  { key: 'weekly', label: '周' },
+  { key: 'monthly', label: '月' },
+];
 
 /** 到期日只显示月-日；早于今天标红 */
 function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | null {
@@ -35,7 +53,9 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
   const [merged, setMerged] = useState<Todo[]>([]);
   const [showMerged, setShowMerged] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [openNote, setOpenNote] = useState<number | null>(null);
+  const [noteFilter, setNoteFilter] = useState<NoteFilter>('all');
+  /** 阅读器停在第几篇。下标是**筛选后**的数组，不是 notes 的下标 */
+  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const reload = useCallback(async () => {
@@ -65,6 +85,37 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
     await repo.unmergeTodos(item.mergedInto);
     await reload();
   }
+
+  const shownNotes =
+    noteFilter === 'all' ? notes : notes.filter((n) => n.type === noteFilter);
+
+  /** 空态文案要用它。'all' 时兜底成「小结」，不然下标会拿到 undefined */
+  const filterLabel = noteFilter === 'all' ? '小结' : NOTE_GROUP_LABEL[noteFilter];
+
+  /*
+   * 阅读器开着的时候如果数据变了（保存了新小结、删了旧的），下标可能越过新长度。
+   * 不处理的话 NoteViewer 拿不到 note 会直接不渲染，用户看到一片空白且关不掉。
+   */
+  useEffect(() => {
+    if (viewerIndex !== null && viewerIndex >= shownNotes.length) setViewerIndex(null);
+  }, [viewerIndex, shownNotes.length]);
+
+  /*
+   * 'all' 走原来的分组（月 → 周 → 日 → 主题）；
+   * 选了具体粒度就只剩一种，再套一层组标题是废话，直接平铺。
+   */
+  const noteGroups =
+    noteFilter === 'all'
+      ? groupNotes(shownNotes)
+      : shownNotes.length
+        ? [
+            {
+              kind: noteFilter as Note['type'],
+              label: NOTE_GROUP_LABEL[noteFilter],
+              notes: shownNotes,
+            },
+          ]
+        : [];
 
   const pending = todos.filter((t) => !t.done);
   const finished = todos.filter((t) => t.done);
@@ -209,6 +260,34 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
             <Text style={styles.genHint}>日 / 周 / 月</Text>
           </Pressable>
 
+          {/*
+            粒度筛选。数量标在胶囊上，空的那档不标数字 ——
+            标个 0 只会让人想点进去看个空页面。
+          */}
+          <View style={styles.noteFilterRow}>
+            {NOTE_FILTERS.map((f) => {
+              const on = noteFilter === f.key;
+              const n =
+                f.key === 'all' ? notes.length : notes.filter((x) => x.type === f.key).length;
+              return (
+                <Pressable
+                  key={f.key}
+                  onPress={() => setNoteFilter(f.key)}
+                  style={[styles.noteFilterChip, on && styles.noteFilterChipOn]}
+                >
+                  <Text style={[styles.noteFilterText, on && styles.noteFilterTextOn]}>
+                    {f.label}
+                  </Text>
+                  {n > 0 ? (
+                    <Text style={[styles.noteFilterCount, on && styles.noteFilterCountOn]}>
+                      {n}
+                    </Text>
+                  ) : null}
+                </Pressable>
+              );
+            })}
+          </View>
+
           {notes.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>还没有小结</Text>
@@ -217,45 +296,61 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                 记下的东西压成一段，存进时间轴对应的时间点。
               </Text>
             </View>
+          ) : shownNotes.length === 0 ? (
+            <View style={styles.empty}>
+              <Text style={styles.emptyTitle}>还没有{filterLabel}</Text>
+              <Text style={styles.emptyBody}>
+                换个粒度看看，或者点上面的「生成总结」写一篇。
+              </Text>
+            </View>
           ) : (
-            /*
-             * 按粒度分组，不按时间一条条排。
-             * 混排时「昨天的日小结」会顶在「上周的周总结」上面，
-             * 一眼看不出哪篇是概括、哪篇是当天的流水。
-             */
-            groupNotes(notes).map((group) => (
+            noteGroups.map((group) => (
               <View key={group.kind}>
-                <View style={styles.noteGroupHead}>
-                  <Text style={styles.noteGroupTitle}>{group.label}</Text>
-                  <Text style={styles.noteGroupCount}>{group.notes.length} 篇</Text>
-                </View>
-                {group.notes.map((note) => {
-                  const open = openNote === note.id;
-                  return (
-                    <Pressable
-                      key={note.id}
-                      onPress={() => setOpenNote(open ? null : note.id)}
-                      style={styles.noteCard}
-                    >
-                      <View style={styles.noteHead}>
-                        <Text style={styles.noteDate}>
-                          {periodLabel(note.period) || dayKey(note.createdAt)}
-                        </Text>
-                      </View>
-                      <NoteBody
-                        text={note.bodyMd}
-                        numberOfLines={open ? undefined : 5}
-                        style={styles.noteBody}
-                      />
-                      <Text style={styles.noteToggle}>{open ? '收起' : '展开'}</Text>
-                    </Pressable>
-                  );
-                })}
+                {noteFilter === 'all' ? (
+                  <View style={styles.noteGroupHead}>
+                    <Text style={styles.noteGroupTitle}>{group.label}</Text>
+                    <Text style={styles.noteGroupCount}>{group.notes.length} 篇</Text>
+                  </View>
+                ) : null}
+                {group.notes.map((note) => (
+                  <Pressable
+                    key={note.id}
+                    onPress={() => setViewerIndex(shownNotes.indexOf(note))}
+                    style={({ pressed }) => [styles.noteCard, pressed && { opacity: 0.7 }]}
+                  >
+                    <View style={styles.noteHead}>
+                      <Text style={styles.noteKind}>{NOTE_GROUP_LABEL[note.type]}</Text>
+                      <Text style={styles.noteDate}>
+                        {periodLabel(note.period) || dayKey(note.createdAt)}
+                      </Text>
+                      <Text style={styles.noteChars}>
+                        {note.bodyMd.replace(/\s/g, '').length} 字
+                      </Text>
+                    </View>
+                    <NoteBody text={note.bodyMd} numberOfLines={4} style={styles.noteBody} />
+                    <View style={styles.noteOpenRow}>
+                      <Text style={styles.noteToggle}>点击查看全文</Text>
+                      <Ionicons name="chevron-forward" size={12} color={c.accent} />
+                    </View>
+                  </Pressable>
+                ))}
               </View>
             ))
           )}
         </ScrollView>
       )}
+
+      {/*
+        阅读器拿的是 shownNotes —— 滑动的范围必须和当前筛选一致。
+        传 notes 的话，在「月」筛选下左右滑会滑进日小结里。
+      */}
+      {viewerIndex !== null ? (
+        <NoteViewer
+          notes={shownNotes}
+          initialIndex={viewerIndex}
+          onClose={() => setViewerIndex(null)}
+        />
+      ) : null}
 
       {sheetOpen ? (
         <SummarySheet
@@ -340,6 +435,22 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   genText: { flex: 1, fontSize: 14, color: c.accentText, fontWeight: '500' },
   genHint: { fontSize: 11, color: c.accentText, opacity: 0.7 },
 
+  noteFilterRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  noteFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: R.pill,
+    backgroundColor: c.hairSoft,
+  },
+  noteFilterChipOn: { backgroundColor: c.accentBg },
+  noteFilterText: { fontSize: 12.5, color: c.text2 },
+  noteFilterTextOn: { color: c.accentText, fontWeight: '600' },
+  noteFilterCount: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
+  noteFilterCountOn: { color: c.accentText, opacity: 0.75 },
+
   noteGroupHead: {
     flexDirection: 'row',
     alignItems: 'baseline',
@@ -360,8 +471,10 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginBottom: 10,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  noteKind: { fontSize: 11, color: c.accentText, fontWeight: '500' },
+  noteKind: { flex: 1, fontSize: 11, color: c.accentText, fontWeight: '500' },
   noteDate: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  noteChars: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
   noteBody: { fontSize: 14, lineHeight: 23, color: c.text },
-  noteToggle: { fontSize: 12, color: c.accent, marginTop: 9 },
+  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 9 },
+  noteToggle: { fontSize: 12, color: c.accent },
 });

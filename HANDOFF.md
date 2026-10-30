@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-29 更新到 v0.8.2**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.2（versionCode 29）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-30 更新到 v0.8.3**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.3（versionCode 30）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.8.2 / versionCode 29 |
+| 版本 | v0.8.3 / versionCode 30 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v7 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,7 +38,7 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.16 MiB，产物跑完即删） |
 | 自动化测试 | **没有**。只有纯函数层的临时 `assert` 脚本（跑完删） |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，35 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，42 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏入口、导入） |
@@ -83,7 +83,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **12,784 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **13,445 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -93,7 +93,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/screens/TimelineScreen.tsx` | 1181 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口 |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 604 | 「问」：聊天布局、两个开关、引用来源、退出存纪要 |
-| `src/screens/ReviewScreen.tsx` | 367 | 回顾：待办 / 小结 / 标签三个 tab |
+| `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
 | `src/screens/SettingsScreen.tsx` | 646 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
@@ -144,11 +144,12 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | 文件 | 行 | 干什么 |
 |---|---|---|
 | `src/components/FragmentDetail.tsx` | 505 | 全屏详情：左右滑、整屏内联编辑、当天小结 |
-| `src/components/SummarySheet.tsx` | 486 | 小结面板：粒度 / 周期、预览、替换确认、保存 |
+| `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
+| `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
 | `src/components/ResultSections.tsx` | 318 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 312 | 标签管理：改名 / 合并 / 删除 |
 | `src/components/ImportSheet.tsx` | 201 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 100 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`） |
+| `src/components/NoteBody.tsx` | 100 | 小结正文渲染（`##` / `- ` / 行内 `**粗体**`）。旧小结里还有加粗，不能删这条支持 |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 95 / 80 | 全项目唯一的图标按钮与页头 |
 | `src/components/Reasoning*.tsx` | 74 / 85 / 68 | 思维链实时流 / 折叠 / 轨迹 |
 | `src/components/BacklogCard.tsx` | 86 | 整理页的「待补小结」条目 |
