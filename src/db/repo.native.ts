@@ -23,6 +23,7 @@ import {
   likeNeedle,
   normalizeTag,
   sameTag,
+  tokenizeText,
 } from '../util/tokenize';
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -539,22 +540,65 @@ export const repo: Repo = {
 
   async selfTestSearch(samples = 5) {
     const d = db();
-    // 只抽够长的碎片：太短的话取不出 6 个字，测了也说明不了什么
+    // 只抽够长的碎片：太短的话取不出两段，测了也说明不了什么
     const rows = d.getAllSync<{ id: number; content: string }>(
       `SELECT id, content FROM fragments
         WHERE merged_into IS NULL AND length(content) >= 14
         ORDER BY id DESC LIMIT ?`,
       [samples],
     );
+
+    let checked = 0;
     let hit = 0;
+    let viaDuplicate = 0;
+    const misses: { id: number; needle: string; foundIds: number[] }[] = [];
+
     for (const r of rows) {
-      // 从第 3 个字符往后取 6 个：跳过开头常见的「今天」「明天」这类泛词，
-      // 用 Array.from 切，避免把 emoji 的代理对劈成半个字
-      const needle = Array.from(r.content).slice(3, 9).join('').trim();
-      if (!needle) continue;
-      if (searchIn(d, needle, 20).some((f) => f.id === r.id)) hit++;
+      const chars = Array.from(r.content);
+      /*
+       * 取两段而不是一段。
+       *
+       * 单取第 4–9 字很容易撞上「明天上午」「这个事」这类高频词 —— 搜出来几十条，
+       * 自己排在 limit 之外，于是被判成「搜不回」。那不是索引坏了，是自检方法太脆。
+       * 第二段错开位置，只要有一段能定位到自己就说明索引是好的。
+       */
+      const needles = [chars.slice(3, 9).join(''), chars.slice(8, 14).join('')]
+        .map((x) => x.trim())
+        // 纯标点/emoji 的片段分词后是空的，搜不了 —— 这种不该算「能自检」
+        .filter((x) => x && tokenizeText(x).length > 0);
+
+      if (!needles.length) continue;
+      checked++;
+
+      let ok = false;
+      let dup = false;
+      let lastFound: number[] = [];
+
+      for (const needle of needles) {
+        // limit 给到 50：高频词在小库上也可能命中很多条
+        const found = searchIn(d, needle, 50);
+        if (found.some((f) => f.id === r.id)) {
+          ok = true;
+          break;
+        }
+        // 搜回了内容完全相同的另一条：这条内容确实进了索引，只是库里有两份一样的
+        if (found.some((f) => f.content === r.content)) {
+          ok = true;
+          dup = true;
+          break;
+        }
+        lastFound = found.slice(0, 3).map((f) => f.id);
+      }
+
+      if (ok) {
+        hit++;
+        if (dup) viaDuplicate++;
+      } else {
+        misses.push({ id: r.id, needle: needles[0], foundIds: lastFound });
+      }
     }
-    return { checked: rows.length, hit };
+
+    return { checked, hit, viaDuplicate, misses };
   },
 
   async listFragmentsByTag(tag, limit = 50) {

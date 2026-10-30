@@ -23,6 +23,29 @@ export interface OrganizeSessionPatch {
  * 存储层契约。native 走 SQLite，web 走 localStorage（仅供桌面编译校验）。
  * 上层业务代码只依赖这个接口，不感知具体实现。
  */
+/**
+ * 搜索自检的结果。
+ *
+ * 原来只返回 `{ checked, hit }`，界面只能说「N 条里 M 条能搜回」——
+ * 用户看到 4/5 完全不知道要不要管。现在把「为什么」也带出来。
+ */
+export interface SearchProbe {
+  /** 能自检的条数。纯标点/emoji 的片段分词后没有检索词，不计入 */
+  checked: number;
+  /** 搜回自己（或内容相同的另一条）的条数 */
+  hit: number;
+  /**
+   * 其中「搜回了内容完全相同的另一条」的条数。
+   *
+   * 这不算索引坏了：那条碎片的内容确实被索引了，只是库里有两份一样的。
+   * 单独计数是为了让界面能说清「5 条都能搜到，其中 1 条内容重复」，
+   * 而不是含糊地说「4/5，可能不准」。
+   */
+  viaDuplicate: number;
+  /** 真的搜不回的。有值才说明索引可能有问题 */
+  misses: { id: number; needle: string; foundIds: number[] }[];
+}
+
 export interface Repo {
   init(): Promise<void>;
 
@@ -81,8 +104,11 @@ export interface Repo {
   /**
    * 搜索自检：抽最近几条碎片，拿正文中间一小段去搜，看能不能搜回它自己。
    * 索引建没建对，这是唯一能拿出来的证据。
+   *
+   * 判定口径在 v0.8.5 收紧过一次，因为原来的「必须搜回同一条」会产生误报：
+   * 库里内容重复时搜回的是另一条，索引其实是好的。详见 `SearchProbe`。
    */
-  selfTestSearch(samples?: number): Promise<{ checked: number; hit: number }>;
+  selfTestSearch(samples?: number): Promise<SearchProbe>;
 
   insertTodo(input: { text: string; dueAt: string | null; sourceFragmentId: number | null }): Promise<number>;
   /** 只返回还在用的待办；被合并掉的（merged_into 非空）不在这里 */

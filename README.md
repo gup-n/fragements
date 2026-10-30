@@ -11,7 +11,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.8.4（versionCode 31） |
+| 当前版本 | v0.8.5（versionCode 32） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 

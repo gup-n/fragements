@@ -266,15 +266,51 @@ export const repo: Repo = {
   },
 
   async selfTestSearch(samples = 5) {
+    // 与 repo.native.ts 同一套口径，改一处必须同步另一处
     const list = active(load()).filter((f) => f.content.length >= 14);
     const picked = list.slice(0, samples);
+
+    let checked = 0;
     let hit = 0;
+    let viaDuplicate = 0;
+    const misses: { id: number; needle: string; foundIds: number[] }[] = [];
+
     for (const f of picked) {
-      const needle = Array.from(f.content).slice(3, 9).join('').trim();
-      if (!needle) continue;
-      if ((await this.searchFragments(needle, 20)).some((x) => x.id === f.id)) hit++;
+      const chars = Array.from(f.content);
+      const needles = [chars.slice(3, 9).join(''), chars.slice(8, 14).join('')]
+        .map((x) => x.trim())
+        .filter((x) => x && tokenizeText(x).length > 0);
+
+      if (!needles.length) continue;
+      checked++;
+
+      let ok = false;
+      let dup = false;
+      let lastFound: number[] = [];
+
+      for (const needle of needles) {
+        const found = await this.searchFragments(needle, 50);
+        if (found.some((x) => x.id === f.id)) {
+          ok = true;
+          break;
+        }
+        if (found.some((x) => x.content === f.content)) {
+          ok = true;
+          dup = true;
+          break;
+        }
+        lastFound = found.slice(0, 3).map((x) => x.id);
+      }
+
+      if (ok) {
+        hit++;
+        if (dup) viaDuplicate++;
+      } else {
+        misses.push({ id: f.id, needle: needles[0], foundIds: lastFound });
+      }
     }
-    return { checked: picked.length, hit };
+
+    return { checked, hit, viaDuplicate, misses };
   },
 
   async insertTodo(input) {

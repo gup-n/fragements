@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, ReasoningEffort } from '../types';
+import type { SearchProbe } from '../db/types';
 import {
   R,
   THEME_MODE_LABEL,
@@ -86,7 +87,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   /** 索引健康度。null = 还没查出来 */
   const [indexState, setIndexState] = useState<{ indexed: number; total: number } | null>(null);
   /** 搜索自检结果。checked = 抽了几条，hit = 有几条能搜回来 */
-  const [probe, setProbe] = useState<{ checked: number; hit: number } | null>(null);
+  const [probe, setProbe] = useState<SearchProbe | null>(null);
   /** 非空时弹导入确认页。选完文件先看预览，确认了才写库 */
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
@@ -266,7 +267,14 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   // 索引状态分两层说：条数对不对是「完整性」，自检命中率是「可用性」。
   // 只报完整可能是「全建了但搜不出来」，只报自检又看不出漏了哪几条。
   const indexOk = !!indexState && indexState.indexed === indexState.total;
-  const probeOk = !probe || probe.checked === 0 || probe.hit === probe.checked;
+  /*
+   * 只要没有 misses 就算健康。
+   *
+   * 「内容重复导致搜回另一条」不算问题 —— 那条内容确实在索引里，
+   * 只是库里有两条一样的。原来的判定把它算成失败，于是界面只能说
+   * 「4/5，搜索可能不准」，用户根本不知道要不要管。
+   */
+  const probeOk = !probe || probe.checked === 0 || probe.misses.length === 0;
   const indexHealthy = indexOk && probeOk;
   // 空库谈不上健康，别给它打绿勾
   const indexEmpty = !!indexState && indexState.total === 0;
@@ -292,9 +300,20 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       ? indexEmpty
         ? '空库没有可自检的碎片'
         : '能自检的碎片还不够（太短），先记几条长一点的'
-      : probe.hit === probe.checked
-        ? `抽样自检：拿正文中的一段往回搜，${probe.checked} 条全部搜回`
-        : `抽样自检：${probe.checked} 条里只有 ${probe.hit} 条能搜回，搜索可能不准`;
+      : probe.misses.length === 0
+        ? probe.viaDuplicate > 0
+          ? `抽样自检：${probe.checked} 条全部能搜到（其中 ${probe.viaDuplicate} 条内容与另一条重复，不影响搜索）`
+          : `抽样自检：拿正文中的一段往回搜，${probe.checked} 条全部搜回`
+        : `抽样自检：${probe.checked} 条里 ${probe.hit} 条能搜回，${probe.misses.length} 条搜不回`;
+
+  /** 真搜不回时才给具体条目，让用户知道不是随口一句「可能不准」 */
+  const probeDetail =
+    probe && probe.misses.length > 0
+      ? `搜不回的是 #${probe.misses
+          .slice(0, 3)
+          .map((m) => m.id)
+          .join('、#')}${probe.misses.length > 3 ? ' 等' : ''}（用「${probe.misses[0].needle}」去搜没命中自己）。建议点下面的「重建搜索索引」`
+      : '';
 
   return (
     <View style={styles.root}>
@@ -457,6 +476,9 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               <Text style={[styles.indexTitle, { color: indexColor }]}>{indexLine}</Text>
             </View>
             <Text style={styles.indexHint}>{probeLine}</Text>
+            {probeDetail ? (
+              <Text style={[styles.indexHint, styles.msgErr]}>{probeDetail}</Text>
+            ) : null}
             {indexMsg && (
               <Text
                 style={[styles.indexHint, indexMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}
