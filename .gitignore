@@ -54,5 +54,7 @@ expo-qr.png
 *.log
 err.txt
 
-# 纯函数断言脚本的编译产物
-.tmp-assert/
+# 纯函数断言脚本的编译产物。
+# 用通配而不是逐个列：断言一次建一个目录（.tmp-assert / .tmp-md / .tmp-sem…），
+# 列表赶不上新目录，v0.8.7 就把 .tmp-md 提交进去了。
+.tmp-*/
