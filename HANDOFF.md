@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-31 更新到 v0.8.8**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.8（versionCode 35）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-31 更新到 v0.8.9**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.9（versionCode 36）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.8.8 / versionCode 35 |
+| 版本 | v0.8.9 / versionCode 36 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v8 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,7 +38,7 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
 | 自动化测试 | 没有单测框架，但有三道机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run check:docs`（文档一致性 7 项）、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，67 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，70 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
@@ -56,6 +56,10 @@
 > **v0.8.8（2026-10-31）**：时间轴手势重排（长按复制 / 左滑删除 / 右滑问），
 > 去掉长按编辑小窗；问页改为历史会话自动落库 + 引用小标 + 左滑开历史；
 > 设置页删掉三段说明文字；SQLite v8 新增 `ask_sessions`。
+>
+> **v0.8.9（2026-10-31）**：修三个真机反馈 —— 深度思考答完不再消失（`QaTurn.reasoning`
+> + `ReasoningFold`）；会话转碎片改成完整 Markdown 转录（不再按 300 字截）；
+> 时间轴 / 碎片详情用 `NoteBody` 渲染 Markdown。版本 0.8.9 / code 36。
 
 ---
 
@@ -87,16 +91,16 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **16,846 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **17,052 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
 | `App.tsx` | 411 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1232 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问 |
+| `src/screens/TimelineScreen.tsx` | 1231 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；碎片正文走 NoteBody |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
-| `src/screens/AskScreen.tsx` | 1214 | 「问」：聊天布局、两个开关、引用小标、历史会话（归档 / 整理为碎片 / 删除）、左滑开历史 |
+| `src/screens/AskScreen.tsx` | 1233 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话（归档 / 整理为碎片 / 删除）、左滑开历史 |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
 | `src/screens/SettingsScreen.tsx` | 750 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
@@ -135,7 +139,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
 | `src/util/resultItems.ts` | 111 | 六组结果的 key、默认勾选、`isDestructiveKey` |
 | `src/util/batch.ts` | 41 | `packFragments`（条数 + 字数双上限，至少收一条）、`pendingOnly` |
-| `src/util/qaNote.ts` | 74 | 纪要压缩：最近 6 轮、每答前 3 句 / 300 字、剥 Markdown |
+| `src/util/qaNote.ts` | 67 | 会话转碎片：完整 Markdown 转录、去引用标记、参考来源清单（v0.8.9 起不截断） |
 | `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
 | `src/util/mdBuild.ts` | 103 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
 | `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
@@ -147,7 +151,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/components/FragmentDetail.tsx` | 507 | 全屏详情：左右滑、整屏内联编辑、当天小结 |
+| `src/components/FragmentDetail.tsx` | 510 | 全屏详情：左右滑、整屏内联编辑、当天小结；正文走 NoteBody 阅读态 |
 | `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
 | `src/components/UpdateSheet.tsx` | 451 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态 |
 | `src/update/check.ts` | 161 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
@@ -158,16 +162,17 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
 | `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 294 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标。**表格用 View 排，不能靠空格对齐** |
+| `src/components/NoteBody.tsx` | 398 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标；`variant` / `selectable` / `muted` 支持碎片与详情页。**表格用 View 排** |
 | `src/util/mdBlocks.ts` | 433 | Markdown 分块解析 + 引用标记识别（纯函数，可断言）。渲染本地看不见，能验的都在这里 |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 84 | 全项目唯一的图标按钮与页头；`ScreenHeader` 的左侧按钮可换成「历史」 |
 | `src/components/SwipeRow.tsx` | 279 | 时间轴行的手势：左滑露出删除、右滑直接进问。**不能加 `overflow:'hidden'`**，会切断时间轴竖线 |
 | `src/components/CitationSheet.tsx` | 193 | 点引用小标后从底部展开的来源面板；正文走快照，不回库查 |
 | `src/components/Toast.tsx` | 55 | 复制 / 归档 / 删除成功的轻提示；不自己计时 |
-| `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 折叠 / 轨迹 |
+| `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 整理页折叠 / 轨迹 |
+| `src/components/ReasoningFold.tsx` | 83 | 「问」页每轮答案上方的深度思考折叠块；最新一轮默认展开 |
 | `src/components/BacklogCard.tsx` | 87 | 整理页的「待补小结」条目 |
 | `src/components/TagPill.tsx` | 64 | 标签胶囊（哈希取色） |
-| `src/types.ts` | 323 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …） |
+| `src/types.ts` | 328 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9） |
 | `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
 | `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
 
@@ -318,13 +323,23 @@ v0.8.8 起不再在退出时弹确认。用户在历史会话的「…」里点*
 
 `buildQaNote(turns, startedAt)` → `repo.insertFragment(content)` → `repo.markAskSessionConverted`：
 
-```
-【问答纪要】2026-10-25 21:40 · 3 轮
-问1：换盘之后还要做什么
-答1：先确认重建跑起来了…
+```md
+## 问答纪要 · 2026-10-25 21:40 · 3 轮
+
+### 问 1
+换盘之后还要做什么
+
+### 答 1
+先确认重建跑起来了……
+
+### 问 2
+……
 ```
 
-最多 6 轮、每答前 3 句 / 300 字、剥掉 Markdown。**不另开表** —— 它要能被整理、被搜索、被再次提问。
+v0.8.9 起**保留全部轮次和完整答案，不再按 300 字截断**；答案里的列表、表格、代码块原样保留。
+只做两件事：去掉回答里的 `[F12]` / `[N3]` / `[T5]` / `[W1]`（代码块里的不动），
+末尾附「参考来源」清单。**不另开表** —— 它要能被整理、被搜索、被再次提问。
+代价是碎片会变长，整理时可能一条吃掉一批预算；这是用户明确选择的「宁可长，不要断」。
 
 ### 7.5 小结与导出
 
@@ -459,6 +474,12 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
   顺序反了会把示例命令变成可点来源。
 - **历史会话里的引用走快照，不回库查。** 碎片可删、待办可合并、小结会被覆盖；
   回查会得到空面板，而用户明明看到「按 [F3] 的做法」。
+- **思维链不能只在 `busy` 时渲染。** 答完 `busy` 变 false，组件一卸载就是「闪一下没了」；
+  现在 `QaTurn.reasoning` 持久化，`ReasoningFold` 在答案上方折叠，最新一轮默认展开。
+- **会话转碎片不要按字数截。** `buildQaNote` 保留全部轮次和完整答案；答案是 Markdown，
+  时间轴用 `NoteBody` 渲染。用户明确说过「宁可长，也不要断」。
+- **碎片正文也要走 `NoteBody`。** 会话转出来的碎片有 `##` / `- ` / 表格 / 代码；
+  时间轴和详情页都不能再拿 `<Text>` 原样显示。详情页传 `variant="reading"` + `selectable`。
 - **引用小标不能画成 `[F12]` 原文。** 用户不知道 F 是什么；渲染层只给序号，
   详情放到 `CitationSheet`。
 
@@ -479,7 +500,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-67 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+70 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**
@@ -513,7 +534,7 @@ v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在�
 
 ## 11. 下一步（按顺序）
 
-1. **装 `fragments-v0.8.8.apk`，按 ROADMAP 那 67 条验。** 有问题先修，不要叠新功能。
+1. **装 `fragments-v0.8.9.apk`，按 ROADMAP 那 70 条验。** 有问题先修，不要叠新功能。
    如果手机已经是 v0.8.5 以上，直接打开 App 就能收到更新提示，不用手动装。
 2. 通知栏常驻的「快速记录」入口（ROADMAP P0-2）。通知库 v0.8.6 已经因为下载进度通知装好了，
    剩下是 JS 改动，见 ROADMAP 里重估过的成本。

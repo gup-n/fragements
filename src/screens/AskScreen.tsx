@@ -40,6 +40,7 @@ import { dayKey, formatTime } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 import { collectCitations, type CiteRef } from '../util/mdBlocks';
 import { NoteBody } from '../components/NoteBody';
+import { ReasoningFold } from '../components/ReasoningFold';
 import { ReasoningStream } from '../components/ReasoningStream';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { IconButton } from '../components/IconButton';
@@ -186,6 +187,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   /** 正在回答的那个问题，先上屏让用户看到自己问了什么 */
   const [pendingQ, setPendingQ] = useState('');
   const [reasoning, setReasoning] = useState('');
+  /** 刚答完的那一轮默认展开思考过程；历史加载的轮次不自动展开 */
+  const [openReasoningKey, setOpenReasoningKey] = useState<string | null>(null);
   const [received, setReceived] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState('');
@@ -408,6 +411,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setWebNote('');
     setPendingQ('');
     setReasoning('');
+    setOpenReasoningKey(null);
     setReceived(0);
     setElapsed(0);
     setCite(null);
@@ -436,6 +440,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setWebNote('');
     setPendingQ('');
     setReasoning('');
+    setOpenReasoningKey(null);
     setReceived(0);
     setElapsed(0);
     setContext(null);
@@ -507,9 +512,12 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
         answer: run.answer,
         sourceIds: run.cited.map((f) => f.id),
         citations: run.citations,
+        reasoning: run.reasoning,
       };
       const next = [...turns, turn];
       setTurns(next);
+      // 这一轮的思维链默认摊开：否则用户看到的还是「闪一下就没了」
+      setOpenReasoningKey(`${turns.length}-${question.slice(0, 8)}`);
       dirtyRef.current = true;
       void persistSession(next);
 
@@ -550,8 +558,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   }
 
   /**
-   * 整理为碎片：走 `buildQaNote`，和旧的「退出存纪要」是同一份压缩规则
-   * （最近 6 轮、每答前几句）。这样时间轴里不会突然多出一篇几千字的原始聊天记录。
+   * 整理为碎片：v0.8.9 起 `buildQaNote` 保留**全部**问答，不再按字数截。
+   * 写进去的是一条 Markdown 转录，时间轴用 `NoteBody` 渲染标题 / 列表 / 表格 / 代码。
    */
   async function convertSession(s: AskSession) {
     if (working) return;
@@ -562,6 +570,11 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setWorking('convert');
     try {
       const text = buildQaNote(s.turns, s.createdAt);
+      if (!text) {
+        showToast('这场会话没有可整理的内容');
+        setWorking('');
+        return;
+      }
       const fragmentId = await repo.insertFragment(text, 'app', s.createdAt);
       await repo.markAskSessionConverted(s.id, fragmentId);
       try {
@@ -571,7 +584,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
       }
       await loadHistory();
       setActionSession(null);
-      showToast('已存为一条碎片');
+      showToast('已存为一条完整问答碎片');
     } catch {
       showToast('整理失败，再试一次');
     } finally {
@@ -715,6 +728,12 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
                 <Text style={styles.qText}>{t.question}</Text>
               </View>
             </View>
+            {t.reasoning ? (
+              <ReasoningFold
+                text={t.reasoning}
+                defaultOpen={openReasoningKey === `${i}-${t.question.slice(0, 8)}`}
+              />
+            ) : null}
             <TurnAnswer turn={t} onCite={setCite} />
           </View>
         ))}

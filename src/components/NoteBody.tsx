@@ -80,8 +80,15 @@ function group(blocks: Block[]): Group[] {
  * 引用段单独画成小标：正文里 `[F12]` 那种原文既占宽又打断句子，
  * 用户要的是「这里有个出处，点一下」。
  */
-function Inline({ segs, onCite, citeLabel }: { segs: Seg[] } & CiteProps) {
+function Inline({
+  segs,
+  onCite,
+  citeLabel,
+  variant = 'default',
+  selectable,
+}: { segs: Seg[] } & CiteProps & Pick<Props, 'variant' | 'selectable'>) {
   const { styles } = useThemedStyles(makeStyles);
+  const reading = variant === 'reading';
   return (
     <>
       {segs.map((seg, i) => {
@@ -104,7 +111,19 @@ function Inline({ segs, onCite, citeLabel }: { segs: Seg[] } & CiteProps) {
           );
         }
         return (
-          <Text key={i} style={seg.bold ? styles.bold : seg.code ? styles.code : undefined}>
+          <Text
+            key={i}
+            selectable={selectable && !seg.cite}
+            style={
+              seg.bold
+                ? styles.bold
+                : seg.code
+                  ? reading
+                    ? styles.codeReading
+                    : styles.code
+                  : undefined
+            }
+          >
             {seg.text}
           </Text>
         );
@@ -126,9 +145,18 @@ const ALIGN: Record<Align, 'left' | 'center' | 'right'> = {
  * 一样宽的话，一半屏幕就浪费在空白上了。窄屏列多时（≥5 列）整体缩字号，
  * 因为那时候再换行也读不出结构。
  */
-function Table({ block, onCite, citeLabel }: { block: TableBlock } & CiteProps) {
-  const { styles } = useThemedStyles(makeStyles);
+function Table({
+  block,
+  onCite,
+  citeLabel,
+  variant = 'default',
+  selectable,
+  muted,
+}: { block: TableBlock } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'muted'>) {
+  const { styles, c } = useThemedStyles(makeStyles);
   const dense = block.head.length >= 5;
+  const reading = variant === 'reading';
+  const mutedStyle = muted ? { color: c.text3 } : undefined;
 
   const cell = (segs: Seg[], col: number, head: boolean) => (
     <View
@@ -140,9 +168,22 @@ function Table({ block, onCite, citeLabel }: { block: TableBlock } & CiteProps) 
       ]}
     >
       <Text
-        style={[styles.tdText, dense && styles.tdTextDense, head && styles.thText, { textAlign: ALIGN[block.align[col] ?? 'left'] }]}
+        selectable={selectable}
+        style={[
+          reading ? styles.tdTextReading : styles.tdText,
+          dense && styles.tdTextDense,
+          head && styles.thText,
+          mutedStyle,
+          { textAlign: ALIGN[block.align[col] ?? 'left'] },
+        ]}
       >
-        <Inline segs={segs} onCite={onCite} citeLabel={citeLabel} />
+        <Inline
+          segs={segs}
+          onCite={onCite}
+          citeLabel={citeLabel}
+          variant={variant}
+          selectable={selectable}
+        />
       </Text>
     </View>
   );
@@ -177,10 +218,27 @@ interface Props {
   onCite?: (ref: CiteRef) => void;
   /** 引用显示成什么；不给或返回 null 就不画那枚小标 */
   citeLabel?: (ref: CiteRef) => string | null;
+  /** 阅读态：碎片的字号比小结大一档，标题和代码也要跟着放大 */
+  variant?: 'default' | 'reading';
+  /** 允许长按选择文字。碎片详情要开，卡片预览不要 */
+  selectable?: boolean;
+  /** 已合并的碎片置灰，标题以外整体降一档颜色 */
+  muted?: boolean;
 }
 
-export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Props) {
-  const { styles } = useThemedStyles(makeStyles);
+export function NoteBody({
+  text,
+  numberOfLines,
+  style,
+  onCite,
+  citeLabel,
+  variant = 'default',
+  selectable,
+  muted,
+}: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const reading = variant === 'reading';
+  const mutedStyle = muted ? { color: c.text3 } : undefined;
   // 两个 memo 都无条件调用：条件调用 hook 会破坏顺序，哪怕只有一个分支用得到
   const blocks = useMemo(() => parseBlocks(text), [text]);
   const flat = useMemo(() => flattenForPreview(blocks), [blocks]);
@@ -189,11 +247,21 @@ export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Prop
   // ---- 预览模式：一个 Text，靠 numberOfLines 截断 ----
   if (numberOfLines !== undefined) {
     return (
-      <Text style={[styles.root, style]} numberOfLines={numberOfLines}>
+      <Text
+        style={[styles.root, style, mutedStyle]}
+        numberOfLines={numberOfLines}
+        selectable={selectable}
+      >
         {flat.map((line, i) => (
           <React.Fragment key={i}>
             {i === 0 ? '' : line.newlineBefore ? '\n\n' : '\n'}
-            <Inline segs={line.segs} onCite={onCite} citeLabel={citeLabel} />
+            <Inline
+              segs={line.segs}
+              onCite={onCite}
+              citeLabel={citeLabel}
+              variant={variant}
+              selectable={selectable}
+            />
           </React.Fragment>
         ))}
       </Text>
@@ -204,12 +272,27 @@ export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Prop
   return (
     <View>
       {groups.map((g, gi) => {
-        if (g.type === 'table') return <Table key={gi} block={g.block} onCite={onCite} citeLabel={citeLabel} />;
+        if (g.type === 'table') {
+          return (
+            <Table
+              key={gi}
+              block={g.block}
+              onCite={onCite}
+              citeLabel={citeLabel}
+              variant={variant}
+              selectable={selectable}
+              muted={muted}
+            />
+          );
+        }
         if (g.type === 'hr') return <View key={gi} style={styles.hr} />;
         if (g.type === 'code') {
           return (
             <View key={gi} style={styles.codeBox}>
-              <Text style={styles.codeText} selectable>
+              <Text
+                style={[reading ? styles.codeTextReading : styles.codeText, mutedStyle]}
+                selectable
+              >
                 {g.text}
               </Text>
             </View>
@@ -217,13 +300,29 @@ export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Prop
         }
 
         return (
-          <Text key={gi} style={[styles.root, style]}>
+          <Text key={gi} style={[styles.root, style, mutedStyle]} selectable={selectable}>
             {g.blocks.map((b, i) => (
               <React.Fragment key={i}>
                 {/* 小标题前面空一行，读起来才有分节感 */}
                 {i === 0 ? '' : b.kind === 'h' ? '\n\n' : '\n'}
-                <Text style={b.kind === 'h' ? styles.h : b.kind === 'b' ? styles.b : styles.p}>
-                  <Inline segs={b.segs} onCite={onCite} citeLabel={citeLabel} />
+                <Text
+                  style={
+                    b.kind === 'h'
+                      ? reading
+                        ? styles.hReading
+                        : styles.h
+                      : b.kind === 'b'
+                        ? styles.b
+                        : styles.p
+                  }
+                >
+                  <Inline
+                    segs={b.segs}
+                    onCite={onCite}
+                    citeLabel={citeLabel}
+                    variant={variant}
+                    selectable={selectable}
+                  />
                 </Text>
               </React.Fragment>
             ))}
@@ -231,7 +330,7 @@ export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Prop
         );
       })}
       {/* 表格和代码块只设了上下边距，末尾多出来的那点空隙在这里收掉 */}
-      {groups.length === 0 ? <Text style={[styles.root, style]} /> : null}
+      {groups.length === 0 ? <Text style={[styles.root, style, mutedStyle]} selectable={selectable} /> : null}
     </View>
   );
 }
@@ -239,12 +338,15 @@ export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Prop
 const makeStyles = (c: Palette) => StyleSheet.create({
   root: { fontSize: 14, lineHeight: 23, color: c.text },
   h: { fontSize: 12, lineHeight: 20, color: c.accentText, fontWeight: '600' },
-  b: { color: c.text },
-  p: { color: c.text },
-  /** 加粗的关键词用正文色 + 稍重字重：强调要点，但不至于整段花花绿绿 */
-  bold: { fontWeight: '600', color: c.text },
+  /** 碎片详情是阅读态：标题要比正文大，不然会像一行小标签 */
+  hReading: { fontSize: 16, lineHeight: 25, color: c.accentText, fontWeight: '600' },
+  b: {},
+  p: {},
+  /** 加粗的关键词略重字重：颜色继承正文，已合并的碎片才能整体置灰 */
+  bold: { fontWeight: '600' },
   /** 行内代码只换字形加浅底，不加边框 —— 正文里到处是补丁框会更乱 */
   code: { fontFamily: MONO, fontSize: 13, color: c.text2 },
+  codeReading: { fontFamily: MONO, fontSize: 15, color: c.text2 },
   /**
    * 引用小标：浅蓝底 + 一个序号。
    *
@@ -273,6 +375,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginVertical: 8,
   },
   codeText: { fontFamily: MONO, fontSize: 12.5, lineHeight: 19, color: c.text2 },
+  codeTextReading: { fontFamily: MONO, fontSize: 14.5, lineHeight: 22, color: c.text2 },
 
   table: {
     marginVertical: 8,
@@ -288,6 +391,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   td: { paddingHorizontal: 9, paddingVertical: 7, justifyContent: 'center', minWidth: 0 },
   tdDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.hair },
   tdText: { fontSize: 12.5, lineHeight: 19, color: c.text },
+  tdTextReading: { fontSize: 14, lineHeight: 21, color: c.text },
   tdTextDense: { fontSize: 11.5, lineHeight: 17 },
   /** 表头压成正文色 + 稍重：小结和回答里的表通常是参考数据，不该抢视线 */
   thText: { fontWeight: '600', color: c.text2 },

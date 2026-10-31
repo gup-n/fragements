@@ -262,6 +262,11 @@ export interface QaTurn {
   sourceIds: number[];
   /** 本轮引用到的来源快照；旧数据可能没有 */
   citations?: QaCitation[];
+  /**
+   * 本轮思维链。v0.8.9 起随会话保存：
+   * 以前它只活在 `busy` 期间，答完就卸载，用户看到「闪一下没了」。
+   */
+  reasoning?: string;
 }
 
 /** 一次问答的结果 */

@@ -750,12 +750,12 @@ export function TimelineScreen({
                       const open = expandedIds.has(fragment.id);
                       return (
                         <>
-                          <Text
-                            style={[styles.content, merged && styles.contentMuted]}
+                          <NoteBody
+                            text={fragment.content}
                             numberOfLines={long && !open ? 3 : undefined}
-                          >
-                            {fragment.content}
-                          </Text>
+                            style={styles.content}
+                            muted={merged}
+                          />
                           {long ? (
                             <Pressable
                               onPress={() => toggleExpand(fragment.id)}
@@ -1045,7 +1045,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   dotMuted: { backgroundColor: c.hair },
   rowBody: { flex: 1, paddingBottom: 18, paddingLeft: 2 },
   content: { fontSize: 15, lineHeight: 23, color: c.text },
-  contentMuted: { color: c.text3 },
   expandBtn: { marginTop: 6, alignSelf: 'flex-start' },
   expandText: { fontSize: 12.5, color: c.accent },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },

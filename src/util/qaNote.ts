@@ -1,74 +1,67 @@
 /**
- * 把一次问答压成一条可以进时间轴的「问答纪要」碎片。
+ * 把一次问答会话整理成一条可以进时间轴的碎片。
  *
- * 为什么要压：原样存回答，一轮就是几百字，四轮下来是一条三四千字的长碎片，
- * 下次整理时要单独吃掉一整批的预算，而且里面大半是客套和重复。
+ * v0.8.9 起**不再按字数截断**。原来的规则是「最近 6 轮、每答前 3 句、最多 300 字」，
+ * 用户的实际感受是「按字数大小直接截」：答案断在半句，读起来像残稿。
+ * 现在保留全部问答，用 Markdown 分节，交给时间轴的 `NoteBody` 渲染。
  *
- * 压到什么程度：每答 1-3 句、最多 300 字，最多保留最近 6 轮。
- * 引用编号保留 —— 它指向的碎片 id 是稳定的，将来重新找回原文靠它。
+ * 三件仍然要做的事：
+ * - **去掉回答里的 `[F12]` / `[N3]` / `[T5]` / `[W1]`**：碎片脱离会话后这些编号
+ *   没有意义，留着只是特殊字符。代码块里的标记不动，那可能是示例。
+ * - **末尾附「参考来源」清单**：只列 label，不复制正文。需要回查时知道当时引了哪些东西。
+ * - **时间戳用会话开始时间**：这条碎片应该落在「你真正开始提问的那一刻」。
  */
 import type { QaTurn } from '../types';
 import { dayKey, formatTime } from './date';
 
-/** 一轮最多保留几轮 */
-const MAX_TURNS = 6;
-/** 单个回答最多多少字 */
-const MAX_ANSWER = 300;
-/** 单个问题最多多少字 */
-const MAX_QUESTION = 120;
-
-/** 去掉 Markdown 外壳，只留能读的文字 */
-function plain(text: string): string {
+/**
+ * 去掉正文里的引用标记，但保留代码围栏里的内容。
+ * `split` 带捕获组后，奇数下标就是代码块，正好跳过。
+ */
+function stripCiteMarkers(text: string): string {
   return text
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/^#{1,6}\s+/gm, '')
-    .replace(/\*\*(.+?)\*\*/g, '$1')
-    .replace(/`([^`]*)`/g, '$1')
-    .replace(/^[-*+]\s+/gm, '· ')
-    .replace(/\n{2,}/g, '\n')
+    .split(/(```[\s\S]*?```)/g)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/[ \t]*\[[FNTW]\d{1,6}\]/g, '')))
+    .join('')
+    .replace(/[ \t]+([，。；：！？、])/g, '$1')
     .trim();
 }
 
-/**
- * 取前几句。按中文句号/问号/感叹号断句，
- * 最多 3 句且不超过 300 字 —— 「第一句结论 + 一句依据」通常就够了。
- */
-function compress(text: string, max = MAX_ANSWER): string {
-  const body = plain(text).replace(/\n/g, ' ');
-  // 自己按标点断句，不用 lookbehind：Hermes 对零宽断言的兼容性不值得赌
-  const parts: string[] = [];
-  let cur = '';
-  for (const ch of body) {
-    cur += ch;
-    if ('。！？!?'.includes(ch)) {
-      parts.push(cur);
-      cur = '';
+/** 跨轮收集引用来源，按 kind+id 去重，保持首次出现顺序 */
+function collectSources(turns: QaTurn[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const turn of turns) {
+    for (const cite of turn.citations ?? []) {
+      const key = `${cite.kind}${cite.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(cite.kind === 'W' && cite.url ? `${cite.label}（${cite.url}）` : cite.label);
     }
   }
-  if (cur.trim()) parts.push(cur);
-  const out: string[] = [];
-  let len = 0;
-  for (const p of parts.slice(0, 3)) {
-    if (len + p.length > max) break;
-    out.push(p);
-    len += p.length;
-  }
-  const joined = out.join('').trim() || body.slice(0, max);
-  return joined.length > max ? `${joined.slice(0, max - 1)}…` : joined;
+  return out;
 }
 
 /**
- * 生成纪要正文。时间戳用**会话开始时间**，
- * 这样这条碎片在时间轴上落在「你真正提问的那一刻」，而不是退出时。
+ * 生成纪要正文。空会话返回空串，调用方要挡住（不要写一条空碎片）。
  */
 export function buildQaNote(turns: QaTurn[], startedAt: number): string {
-  const kept = turns.filter((t) => t.question.trim() && t.answer.trim()).slice(-MAX_TURNS);
-  const head = `【问答纪要】${dayKey(startedAt)} ${formatTime(startedAt)} · ${kept.length} 轮`;
+  const kept = turns.filter((t) => t.question.trim() && t.answer.trim());
+  if (!kept.length) return '';
+
+  const head = `## 问答纪要 · ${dayKey(startedAt)} ${formatTime(startedAt)} · ${kept.length} 轮`;
   const body = kept
     .map((t, i) => {
-      const q = t.question.replace(/\s+/g, ' ').trim().slice(0, MAX_QUESTION);
-      return `问${i + 1}：${q}\n答${i + 1}：${compress(t.answer)}`;
+      const question = t.question.trim();
+      const answer = stripCiteMarkers(t.answer);
+      return `### 问 ${i + 1}\n${question}\n\n### 答 ${i + 1}\n${answer}`;
     })
     .join('\n\n');
-  return `${head}\n\n${body}`;
+
+  const sources = collectSources(kept);
+  const sourceBlock = sources.length
+    ? `\n\n---\n\n**参考来源**\n${sources.map((s) => `- ${s}`).join('\n')}`
+    : '';
+
+  return `${head}\n\n${body}${sourceBlock}`;
 }

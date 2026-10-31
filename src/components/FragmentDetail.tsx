@@ -334,10 +334,14 @@ function Page({
         </View>
       ) : null}
 
-      {/* selectable：只读页最常见的动作就是把某段复制出去 */}
-      <Text style={[styles.body, merged && styles.bodyMuted]} selectable>
-        {fragment.content}
-      </Text>
+      {/* 碎片正文也走 Markdown 渲染：会话转出来的碎片有标题 / 列表 / 表格 / 代码 */}
+      <NoteBody
+        text={fragment.content}
+        style={styles.body}
+        variant="reading"
+        selectable
+        muted={merged}
+      />
 
       {hasMeta ? (
         <View style={styles.meta}>
@@ -434,7 +438,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 
   /* 详情页是「阅读」场景，字号和行高都比列表放宽一档 */
   body: { fontSize: 17, lineHeight: 30, color: c.text, letterSpacing: 0.2 },
-  bodyMuted: { color: c.text2 },
 
   meta: {
     flexDirection: 'row',
