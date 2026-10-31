@@ -89,9 +89,9 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 - **「整理」= 一批一批跑到完，最后统一确认**。不是「一次调用出十类结果」，也不是「让 AI 重写正文」。
   一次点击会跑 N 批（每批 40 条 / 16000 字），每批结果合并进同一个 `OrganizePlan`，
   **只有用户点「应用」才写库**（`db/commit.ts`）。
-- **「问」的纪要是普通碎片**，不是新表。v0.8.9 起存的是 `buildQaNote` 生成的
-  **完整 Markdown 问答转录**（全部轮次、完整答案，不再按 300 字截），
-  进时间轴、能被搜索、也能被下次整理打标签。
+- **「问」的纪要是普通碎片**，不是新表。v0.8.9 起主路径是 `summarizeQaSession`
+  调模型提炼 300-800 字精要，`buildQaFragment` 包装，**预览确认后才写库**；
+  AI 失败可用 `buildQaNote` 保存完整转录兜底。碎片进时间轴、能被搜索、也能被再次整理。
 - **会让内容消失的操作默认不勾**：合并碎片 / 删待办 / 合并待办。`todo_done`（标完成）**默认勾**。
   登记表只有一份：`src/util/resultItems.ts` 的 `GROUPS`，别在渲染代码里另写一份。
 - **小结只有一个写入路径**：`SummarySheet` → `repo.upsertNote`。整理流程不产出小结。
@@ -331,8 +331,10 @@ files 和 cache），所以要先 `getContentUriAsync` 再交给 `IntentLauncher
   用户是明确指着这条进来的，被合并过也得让模型看到，否则「就这条」会答成没有。
 - **思维链不能只在 `busy` 时渲染。** 答完 `busy` 变 false，组件一卸载就是「闪一下没了」。
   现在 `QaTurn.reasoning` 持久化，`ReasoningFold` 在答案上方折叠，最新一轮默认展开。
-- **会话转碎片不要按字数截。** `buildQaNote` 保留全部轮次和完整答案，生成 Markdown 转录；
-  用户明确说过「宁可长，也不要断」。代价是长会话碎片可能吃掉整理时的一大批预算。
+- **会话转碎片先 AI 提炼，再预览确认。** `summarizeQaSession` 出 300-800 字精要，
+  `buildQaFragment` 包装，用户点「存为碎片」才写库。不要直接存全文，也不要按字数硬截。
+- **AI 失败要留兜底。** 「保存全文」走 `buildQaNote`（完整转录、不截断），
+  否则没配 Key / 断网时用户会卡在预览页。
 
 ## 时间轴手势与问页历史（v0.8.8）
 

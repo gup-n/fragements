@@ -35,7 +35,8 @@ import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
-import { buildQaNote } from '../util/qaNote';
+import { summarizeQaSession } from '../ai/qaSummary';
+import { buildQaFragment, buildQaNote } from '../util/qaNote';
 import { dayKey, formatTime } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 import { collectCitations, type CiteRef } from '../util/mdBlocks';
@@ -62,6 +63,17 @@ interface Props {
 
 const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
+
+/** 「整理为碎片」的 AI 预览状态 */
+type SummaryState = {
+  session: AskSession;
+  /** 最终会写进 fragments 的完整文本；生成中/失败时为空 */
+  text: string;
+  error: string;
+  busy: boolean;
+  /** 输入太长时被丢掉的最早轮数 */
+  omitted: number;
+};
 
 function citeKey(kind: string, id: number) {
   return `${kind}${id}`;
@@ -219,7 +231,14 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   const [sessions, setSessions] = useState<AskSession[]>([]);
   const [actionSession, setActionSession] = useState<AskSession | null>(null);
   const [deleteSession, setDeleteSession] = useState<AskSession | null>(null);
-  const [working, setWorking] = useState<'' | 'archive' | 'convert' | 'delete'>('');
+  const [working, setWorking] = useState<'' | 'archive' | 'delete'>('');
+  /** AI 整理预览。null = 没开 */
+  const [summary, setSummary] = useState<SummaryState | null>(null);
+  const [summarySaving, setSummarySaving] = useState(false);
+  const [summaryReceived, setSummaryReceived] = useState(0);
+  const [summaryElapsed, setSummaryElapsed] = useState(0);
+  /** 生成的代次：关掉预览后，迟到的请求结果不能再改界面 */
+  const summaryGenRef = useRef(0);
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -235,7 +254,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   const overlayRef = useRef(false);
   busyRef.current = busy;
   historyRef.current = historyOpen;
-  overlayRef.current = historyOpen || !!actionSession || !!deleteSession || !!cite;
+  overlayRef.current =
+    historyOpen || !!actionSession || !!deleteSession || !!cite || !!summary;
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -278,6 +298,17 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     );
     return () => clearInterval(timer);
   }, [busy]);
+
+  // 整理预览自己的计时：请求可能跑几十秒，得让用户知道还在动
+  useEffect(() => {
+    if (!summary?.busy) return;
+    const started = Date.now();
+    const timer = setInterval(
+      () => setSummaryElapsed(Math.round((Date.now() - started) / 1000)),
+      500,
+    );
+    return () => clearInterval(timer);
+  }, [summary?.busy]);
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
@@ -345,6 +376,13 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
    * 会话已经每轮自动存过，这里不再问「要不要留纪要」。
    */
   const attemptClose = useCallback(() => {
+    if (summary) {
+      // 关掉预览就等于放弃这次生成；代次 +1，迟到的结果不再回写
+      summaryGenRef.current += 1;
+      setSummary(null);
+      setSummarySaving(false);
+      return;
+    }
     if (cite) {
       setCite(null);
       return;
@@ -364,7 +402,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     if (busy) return;
     if (dirtyRef.current) void persistSession(turns);
     onClose();
-  }, [actionSession, busy, cite, deleteSession, historyOpen, onClose, persistSession, turns]);
+  }, [actionSession, busy, cite, deleteSession, historyOpen, onClose, persistSession, summary, turns]);
 
   useEffect(() => {
     registerClose(attemptClose);
@@ -418,6 +456,9 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setHistoryOpen(false);
     setActionSession(null);
     setDeleteSession(null);
+    summaryGenRef.current += 1;
+    setSummary(null);
+    setSummarySaving(false);
     setContext(null);
   }
 
@@ -443,6 +484,9 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setOpenReasoningKey(null);
     setReceived(0);
     setElapsed(0);
+    summaryGenRef.current += 1;
+    setSummary(null);
+    setSummarySaving(false);
     setContext(null);
   }
 
@@ -558,38 +602,106 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   }
 
   /**
-   * 整理为碎片：v0.8.9 起 `buildQaNote` 保留**全部**问答，不再按字数截。
-   * 写进去的是一条 Markdown 转录，时间轴用 `NoteBody` 渲染标题 / 列表 / 表格 / 代码。
+   * 打开 AI 整理预览。
+   *
+   * 不直接写库：AI 结果是建议，必须让用户看到并确认。
+   * 生成期间 `summary.busy=true`；成功后才出预览和「存为碎片」。
    */
-  async function convertSession(s: AskSession) {
+  function openSummary(s: AskSession) {
     if (working) return;
     if (s.fragmentId) {
       showToast('这条会话已经整理过');
       return;
     }
-    setWorking('convert');
+    setActionSession(null);
+    setSummaryReceived(0);
+    setSummaryElapsed(0);
+    setSummary({ session: s, text: '', error: '', busy: true, omitted: 0 });
+    void runSummary(s);
+  }
+
+  /** 调一次模型，把会话提炼成精要；失败保留错误，让用户重试或存全文 */
+  async function runSummary(s: AskSession) {
+    const gen = ++summaryGenRef.current;
+    setSummaryReceived(0);
+    setSummaryElapsed(0);
+    setSummary({ session: s, text: '', error: '', busy: true, omitted: 0 });
     try {
-      const text = buildQaNote(s.turns, s.createdAt);
-      if (!text) {
-        showToast('这场会话没有可整理的内容');
-        setWorking('');
-        return;
-      }
-      const fragmentId = await repo.insertFragment(text, 'app', s.createdAt);
-      await repo.markAskSessionConverted(s.id, fragmentId);
+      const config = await loadAiConfig();
+      const result = await summarizeQaSession({
+        turns: s.turns,
+        config,
+        thinking: thinkingOn,
+        onProgress: (patch) => {
+          if (summaryGenRef.current !== gen) return;
+          if (patch.content !== undefined) setSummaryReceived(patch.content.length);
+        },
+      });
+      if (summaryGenRef.current !== gen) return;
+      const text = buildQaFragment(s.turns, s.createdAt, result.summary);
+      if (!text) throw new Error('整理结果为空');
+      setSummary({
+        session: s,
+        text,
+        error: '',
+        busy: false,
+        omitted: result.omittedTurns,
+      });
+    } catch (e) {
+      if (summaryGenRef.current !== gen) return;
+      setSummary({
+        session: s,
+        text: '',
+        error: e instanceof Error ? e.message : '整理失败，再试一次',
+        busy: false,
+        omitted: 0,
+      });
+    }
+  }
+
+  function closeSummary() {
+    summaryGenRef.current += 1;
+    setSummary(null);
+    setSummarySaving(false);
+  }
+
+  /** AI 摘要和「保存全文」共用的写库路径 */
+  async function writeSummaryFragment(session: AskSession, text: string, okText: string) {
+    if (summarySaving) return;
+    setSummarySaving(true);
+    try {
+      const fragmentId = await repo.insertFragment(text, 'app', session.createdAt);
+      await repo.markAskSessionConverted(session.id, fragmentId);
       try {
         await onSaved();
       } catch {
         /* 刷新失败不影响已经写进去的碎片 */
       }
       await loadHistory();
-      setActionSession(null);
-      showToast('已存为一条完整问答碎片');
+      summaryGenRef.current += 1;
+      setSummary(null);
+      showToast(okText);
     } catch {
-      showToast('整理失败，再试一次');
+      showToast('写入失败，再试一次');
     } finally {
-      setWorking('');
+      setSummarySaving(false);
     }
+  }
+
+  async function saveSummary() {
+    if (!summary || summary.busy || summary.error || !summary.text) return;
+    await writeSummaryFragment(summary.session, summary.text, '已存为一条整理后的碎片');
+  }
+
+  /** AI 失败时的兜底：不提炼，完整保存，至少不丢内容 */
+  async function saveFullTranscript() {
+    if (!summary || summarySaving) return;
+    const text = buildQaNote(summary.session.turns, summary.session.createdAt);
+    if (!text) {
+      showToast('这场会话没有可整理的内容');
+      return;
+    }
+    await writeSummaryFragment(summary.session, text, '已保存完整问答（未使用 AI 整理）');
   }
 
   async function confirmDeleteSession() {
@@ -920,7 +1032,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
 
             <Pressable
               style={styles.sheetAction}
-              onPress={() => convertSession(actionSession)}
+              onPress={() => openSummary(actionSession)}
               disabled={!!actionSession.fragmentId || working !== ''}
             >
               <Ionicons
@@ -934,7 +1046,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
                   !!actionSession.fragmentId && { color: c.text3 },
                 ]}
               >
-                {actionSession.fragmentId ? '已整理为碎片' : '整理为碎片'}
+                {actionSession.fragmentId ? '已整理为碎片' : '整理为碎片（AI 提炼）'}
               </Text>
             </Pressable>
 
@@ -978,6 +1090,92 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
               </Pressable>
             </View>
           </View>
+        </View>
+      ) : null}
+
+      {/* ---------------- AI 整理预览 ---------------- */}
+      {summary ? (
+        <View style={styles.summaryPage}>
+          <ScreenHeader
+            title="整理为碎片"
+            subtitle={`${summary.session.turns.length} 轮 · ${
+              summary.busy ? 'AI 提炼中' : summary.error ? '生成失败' : '确认后写库'
+            }`}
+            onBack={closeSummary}
+          />
+
+          {summary.busy ? (
+            <View style={styles.summaryCenter}>
+              <ActivityIndicator size="large" color={c.accent} />
+              <Text style={styles.summaryBusyTitle}>正在提炼这场会话的要点…</Text>
+              <Text style={styles.summaryBusyBody}>
+                会调用一次 AI 请求，结果先给你看，确认后才写进时间轴。
+              </Text>
+              <Text style={styles.summaryMeta}>
+                {summaryElapsed}s
+                {summaryReceived > 0 ? ` · 已收到 ${summaryReceived} 字` : ''}
+              </Text>
+            </View>
+          ) : summary.error ? (
+            <View style={styles.summaryCenter}>
+              <Ionicons name="alert-circle-outline" size={30} color={c.danger} />
+              <Text style={styles.summaryError}>{summary.error}</Text>
+              <View style={styles.summaryButtons}>
+                <Pressable
+                  style={styles.ghostBtn}
+                  onPress={() => runSummary(summary.session)}
+                  disabled={summarySaving}
+                >
+                  <Text style={styles.ghostBtnText}>重试</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.ghostBtn}
+                  onPress={saveFullTranscript}
+                  disabled={summarySaving}
+                >
+                  <Text style={styles.ghostBtnText}>
+                    {summarySaving ? '保存中…' : '保存全文'}
+                  </Text>
+                </Pressable>
+              </View>
+              <Pressable style={styles.summaryCancel} onPress={closeSummary}>
+                <Text style={styles.muted}>取消</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <>
+              <ScrollView contentContainerStyle={styles.summaryContent}>
+                <Text style={styles.summaryHint}>
+                  AI 提炼的版本，确认后才写进时间轴；原始会话仍在历史里。
+                </Text>
+                {summary.omitted > 0 ? (
+                  <Text style={styles.summaryOmitted}>
+                    对话较长，只提炼了最近 {summary.session.turns.length - summary.omitted} 轮
+                    （更早 {summary.omitted} 轮未放入）。
+                  </Text>
+                ) : null}
+                <NoteBody text={summary.text} style={styles.summaryBody} />
+              </ScrollView>
+              <View style={styles.summaryFooter}>
+                <Pressable
+                  style={styles.ghostBtn}
+                  onPress={() => runSummary(summary.session)}
+                  disabled={summarySaving}
+                >
+                  <Text style={styles.ghostBtnText}>重新生成</Text>
+                </Pressable>
+                <Pressable
+                  style={styles.solidBtn}
+                  onPress={saveSummary}
+                  disabled={summarySaving}
+                >
+                  <Text style={styles.solidBtnText}>
+                    {summarySaving ? '正在保存…' : '存为碎片'}
+                  </Text>
+                </Pressable>
+              </View>
+            </>
+          )}
         </View>
       ) : null}
 
@@ -1230,4 +1428,64 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   danger: { fontSize: 13, color: c.danger },
   muted: { fontSize: 13, color: c.text2 },
+
+  /* ---- AI 整理预览 ---- */
+  summaryPage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: c.page,
+  },
+  summaryCenter: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    paddingHorizontal: 28,
+    paddingBottom: 40,
+  },
+  summaryBusyTitle: { fontSize: 15, color: c.text, fontWeight: '600', marginTop: 6 },
+  summaryBusyBody: {
+    fontSize: 12.5,
+    color: c.text2,
+    lineHeight: 20,
+    textAlign: 'center',
+  },
+  summaryMeta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'], marginTop: 4 },
+  summaryError: { fontSize: 13, color: c.danger, lineHeight: 20, textAlign: 'center' },
+  summaryButtons: { flexDirection: 'row', gap: 10, marginTop: 8, alignSelf: 'stretch' },
+  summaryCancel: { paddingVertical: 10, paddingHorizontal: 18 },
+
+  summaryContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
+  summaryHint: { fontSize: 11.5, color: c.text3, lineHeight: 18 },
+  summaryOmitted: { fontSize: 11.5, color: c.danger, lineHeight: 18, marginTop: 6 },
+  summaryBody: { fontSize: 14.5, lineHeight: 23, color: c.text, marginTop: 12 },
+  summaryFooter: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 16,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hair,
+  },
+  ghostBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: R.btn,
+    borderWidth: 0.5,
+    borderColor: c.hair,
+  },
+  ghostBtnText: { fontSize: 13, color: c.text },
+  solidBtn: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: 11,
+    borderRadius: R.btn,
+    backgroundColor: c.accent,
+  },
+  solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },
 });

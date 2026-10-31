@@ -18,7 +18,7 @@ import { dayKey, formatTime } from './date';
  * 去掉正文里的引用标记，但保留代码围栏里的内容。
  * `split` 带捕获组后，奇数下标就是代码块，正好跳过。
  */
-function stripCiteMarkers(text: string): string {
+export function stripCiteMarkers(text: string): string {
   return text
     .split(/(```[\s\S]*?```)/g)
     .map((part, i) => (i % 2 === 1 ? part : part.replace(/[ \t]*\[[FNTW]\d{1,6}\]/g, '')))
@@ -28,7 +28,7 @@ function stripCiteMarkers(text: string): string {
 }
 
 /** 跨轮收集引用来源，按 kind+id 去重，保持首次出现顺序 */
-function collectSources(turns: QaTurn[]): string[] {
+export function collectSources(turns: QaTurn[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const turn of turns) {
@@ -42,14 +42,27 @@ function collectSources(turns: QaTurn[]): string[] {
   return out;
 }
 
+function sourceSection(turns: QaTurn[]): string {
+  const sources = collectSources(turns);
+  return sources.length
+    ? `\n\n---\n\n**参考来源**\n${sources.map((s) => `- ${s}`).join('\n')}`
+    : '';
+}
+
+function headOf(turns: QaTurn[], startedAt: number): string {
+  return `## 问答纪要 · ${dayKey(startedAt)} ${formatTime(startedAt)} · ${turns.length} 轮`;
+}
+
 /**
- * 生成纪要正文。空会话返回空串，调用方要挡住（不要写一条空碎片）。
+ * 完整转录（兜底用）。
+ *
+ * 主路径是 `buildQaFragment` + AI 提炼；这里保留全文，给「AI 失败 / 没配 Key」
+ * 时一个不截断的出口。空会话返回空串，调用方要挡住。
  */
 export function buildQaNote(turns: QaTurn[], startedAt: number): string {
   const kept = turns.filter((t) => t.question.trim() && t.answer.trim());
   if (!kept.length) return '';
 
-  const head = `## 问答纪要 · ${dayKey(startedAt)} ${formatTime(startedAt)} · ${kept.length} 轮`;
   const body = kept
     .map((t, i) => {
       const question = t.question.trim();
@@ -58,10 +71,18 @@ export function buildQaNote(turns: QaTurn[], startedAt: number): string {
     })
     .join('\n\n');
 
-  const sources = collectSources(kept);
-  const sourceBlock = sources.length
-    ? `\n\n---\n\n**参考来源**\n${sources.map((s) => `- ${s}`).join('\n')}`
-    : '';
+  return `${headOf(kept, startedAt)}\n\n${body}${sourceSection(kept)}`;
+}
 
-  return `${head}\n\n${body}${sourceBlock}`;
+/**
+ * 主路径：把 AI 提炼的摘要装进碎片头部和参考来源。
+ *
+ * 摘要本身由 `ai/qaSummary.ts` 生成；这里只做确定性的包装，
+ * 保证格式、轮数和来源清单不依赖模型。
+ */
+export function buildQaFragment(turns: QaTurn[], startedAt: number, summary: string): string {
+  const kept = turns.filter((t) => t.question.trim() && t.answer.trim());
+  const body = stripCiteMarkers(summary).trim();
+  if (!kept.length || !body) return '';
+  return `${headOf(kept, startedAt)}\n\n${body}${sourceSection(kept)}`;
 }

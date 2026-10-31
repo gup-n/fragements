@@ -58,7 +58,8 @@
 > 设置页删掉三段说明文字；SQLite v8 新增 `ask_sessions`。
 >
 > **v0.8.9（2026-10-31）**：修三个真机反馈 —— 深度思考答完不再消失（`QaTurn.reasoning`
-> + `ReasoningFold`）；会话转碎片改成完整 Markdown 转录（不再按 300 字截）；
+> + `ReasoningFold`）；「整理为碎片」改为**先调 AI 提炼精要、预览确认后写库**
+> （`ai/qaSummary.ts` + `buildQaFragment`，失败退回 `buildQaNote` 完整转录兜底）；
 > 时间轴 / 碎片详情用 `NoteBody` 渲染 Markdown。版本 0.8.9 / code 36。
 
 ---
@@ -91,7 +92,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **17,052 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **17,455 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -100,7 +101,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `App.tsx` | 411 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
 | `src/screens/TimelineScreen.tsx` | 1231 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；碎片正文走 NoteBody |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
-| `src/screens/AskScreen.tsx` | 1233 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话（归档 / 整理为碎片 / 删除）、左滑开历史 |
+| `src/screens/AskScreen.tsx` | 1491 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话、AI 整理预览（重试 / 保存全文 / 确认写库） |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
 | `src/screens/SettingsScreen.tsx` | 750 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
@@ -117,6 +118,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/ai/deepseek.ts` | 158 | 一次整理请求：`json:true`、`pickEffort`、只收敛形状 |
 | `src/ai/organizeRun.ts` | 293 | **整理循环**：id 快照、装箱、批循环、截断对半拆、每批落库 |
 | `src/ai/qa.ts` | 434 | 「问」：四路检索 + 上下文碎片、预算装填、并行联网、引用反查与快照 |
+| `src/ai/qaSummary.ts` | 124 | 会话转碎片：48k 字预算装填、AI 提炼 300-800 字精要、输入超长报告丢了几轮 |
 | `src/ai/summarize.ts` | 313 | 日 / 周 / 月小结 prompt 与素材装填 |
 | `src/ai/search.ts` | 162 | `/v1/tools/search`，退避重试、结果兜底 |
 
@@ -139,7 +141,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
 | `src/util/resultItems.ts` | 111 | 六组结果的 key、默认勾选、`isDestructiveKey` |
 | `src/util/batch.ts` | 41 | `packFragments`（条数 + 字数双上限，至少收一条）、`pendingOnly` |
-| `src/util/qaNote.ts` | 67 | 会话转碎片：完整 Markdown 转录、去引用标记、参考来源清单（v0.8.9 起不截断） |
+| `src/util/qaNote.ts` | 88 | 会话转碎片：AI 精要包装 `buildQaFragment` + 完整转录兜底 `buildQaNote` + 来源清单 |
 | `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
 | `src/util/mdBuild.ts` | 103 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
 | `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
@@ -317,29 +319,46 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 - 每答完一轮 `AskScreen` 立刻 `repo.saveAskSession`；失败只静默，不拦回答。
   保存带**会话代次**（`sessionGenRef`）：切换/新建会话后，旧请求回来不能再改新会话的标题和 id。
 
-### 7.4 纪要：一条普通碎片（历史里主动整理）
+### 7.4 纪要：AI 提炼 + 预览确认（历史里主动整理）
 
-v0.8.8 起不再在退出时弹确认。用户在历史会话的「…」里点**整理为碎片**：
+v0.8.8 起不再在退出时弹确认。用户在历史会话的「…」里点**整理为碎片（AI 提炼）**：
 
-`buildQaNote(turns, startedAt)` → `repo.insertFragment(content)` → `repo.markAskSessionConverted`：
+```
+summarizeQaSession({turns, config, thinking})
+  ├─ buildTranscript：总预算 48k 字，超了优先保留最近轮次
+  ├─ requestChat({json:false, effort: thinking ? 'high' : undefined})
+  └─ 300-800 字 Markdown 精要，去掉 [F12] 等引用编号
+        ↓
+buildQaFragment(turns, startedAt, summary)
+  ├─ ## 问答纪要 · 日期 · N 轮
+  ├─ AI 精要
+  └─ 「参考来源」清单
+        ↓
+预览页：用户点「存为碎片」才 insertFragment → markAskSessionConverted
+```
+
+- **AI 只出建议，预览确认后才写库**。不要绕过预览直接 insert。
+- **失败兜底**：重试，或「保存全文」走 `buildQaNote`（完整转录、不截断）。
+- **输入超预算**：`summarizeQaSession` 返回 `omittedTurns`，预览页要如实提示。
+- **不另开表**：碎片进 `fragments`，能被整理、被搜索、被再次提问。
+- **关闭预览 = 放弃本次生成**：`summaryGenRef` +1，迟到的请求结果不能回写界面。
+
+示例（AI 精要版）：
 
 ```md
 ## 问答纪要 · 2026-10-25 21:40 · 3 轮
 
-### 问 1
-换盘之后还要做什么
+RAID5 降级后先确认重建状态，别急着拔盘。
 
-### 答 1
-先确认重建跑起来了……
+- 先看存储池状态，确认哪块盘真正故障、哪块是热备
+- 新盘插入前跑一次 SMART 长检
+- 重建跑完再换盘
 
-### 问 2
-……
+---
+
+**参考来源**
+- 2026-10-20 21:40 · 碎片
 ```
-
-v0.8.9 起**保留全部轮次和完整答案，不再按 300 字截断**；答案里的列表、表格、代码块原样保留。
-只做两件事：去掉回答里的 `[F12]` / `[N3]` / `[T5]` / `[W1]`（代码块里的不动），
-末尾附「参考来源」清单。**不另开表** —— 它要能被整理、被搜索、被再次提问。
-代价是碎片会变长，整理时可能一条吃掉一批预算；这是用户明确选择的「宁可长，不要断」。
 
 ### 7.5 小结与导出
 
@@ -476,8 +495,10 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
   回查会得到空面板，而用户明明看到「按 [F3] 的做法」。
 - **思维链不能只在 `busy` 时渲染。** 答完 `busy` 变 false，组件一卸载就是「闪一下没了」；
   现在 `QaTurn.reasoning` 持久化，`ReasoningFold` 在答案上方折叠，最新一轮默认展开。
-- **会话转碎片不要按字数截。** `buildQaNote` 保留全部轮次和完整答案；答案是 Markdown，
-  时间轴用 `NoteBody` 渲染。用户明确说过「宁可长，也不要断」。
+- **会话转碎片先 AI 提炼，再预览确认。** `summarizeQaSession` 出 300-800 字精要，
+  `buildQaFragment` 包装，用户点「存为碎片」才写库。不要直接存全文，也不要按字数硬截。
+- **AI 失败要留兜底。** 「保存全文」走 `buildQaNote`（完整转录、不截断），
+  否则没配 Key / 断网时用户会卡在预览页。
 - **碎片正文也要走 `NoteBody`。** 会话转出来的碎片有 `##` / `- ` / 表格 / 代码；
   时间轴和详情页都不能再拿 `<Text>` 原样显示。详情页传 `variant="reading"` + `selectable`。
 - **引用小标不能画成 `[F12]` 原文。** 用户不知道 F 是什么；渲染层只给序号，
