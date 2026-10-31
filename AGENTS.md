@@ -293,6 +293,12 @@ v0.7.3 只改了时间轴，用户翻回顾页看到的还是混排 —— 同�
 Actions 的 artifact 下载要登录，手机端匿名访问 403 —— 和「CI 日志下不来」
 是同一个限制。所以发版必须打 tag，CI 建 Release 挂 APK。
 
+**下载走多源回退（v0.9.0）。**
+GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，大陆直连极慢，
+VPN 分流模式也不覆盖它。所以 `download.ts` 按「自定义地址 → 内置加速镜像 → GitHub 官方」
+逐个尝试（候选在 `update/mirror.ts` 的 `buildCandidates`）。改回退链别碰顺序：
+官方必须是最后一站，保证至少有源可下；自定义地址最前，有 NAS 的用户才吃得满带宽。
+
 **版本比较不能比字符串。**
 `'0.10.0' > '0.9.9'` 在 JS 里是 **false**，正好反了；`parseFloat('0.10')` 又和
 `'0.1'` 撞成同一个数。用 `util/semver.ts`。解析不了一律判「相同」——

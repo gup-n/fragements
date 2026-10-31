@@ -28,6 +28,7 @@ import {
   installApk,
   openInstallPermissionSettings,
   type DownloadProgress,
+  type DownloadSourceReport,
 } from '../update/download';
 import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
@@ -52,6 +53,8 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   });
   /** 瞬时速度（字节/秒），用移动平均平滑过 */
   const [speed, setSpeed] = useState(0);
+  /** 当前在试第几个下载源（自定义地址 / 加速镜像 / GitHub 官方） */
+  const [source, setSource] = useState<DownloadSourceReport | null>(null);
   const [error, setError] = useState('');
   const [skip, setSkip] = useState(false);
   const [installing, setInstalling] = useState(false);
@@ -135,6 +138,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     setError('');
     setProgress({ written: 0, total: release.apkSize });
     setSpeed(0);
+    setSource(null);
     rateRef.current = { at: 0, bytes: 0, ema: 0 };
     notifyAtRef.current = 0;
 
@@ -148,6 +152,12 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
         onProgress,
         (cancel) => {
           cancelRef.current = cancel;
+        },
+        (s) => {
+          setSource(s);
+          // 换源时把速度统计清零，别把上个源的瞬时速度带过来
+          rateRef.current = { at: 0, bytes: 0, ema: 0 };
+          setSpeed(0);
         },
       );
       fileRef.current = file;
@@ -223,6 +233,9 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
                 ? `当前 ${versionLabel(APP_VERSION)} · 安装包 ${formatBytes(release.apkSize)}`
                 : phase === 'downloading'
                   ? [
+                    source && source.total > 1
+                      ? `${source.label} ${source.index}/${source.total}`
+                      : source?.label,
                     `${formatBytes(progress.written)}${unknownTotal ? '' : ` / ${formatBytes(progress.total)}`}`,
                     speed > 0 ? `${formatBytes(speed)}/s` : '',
                   ]

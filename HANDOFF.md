@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-31 更新到 v0.8.9**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.8.9（versionCode 36）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-31 更新到 v0.9.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.9.0（versionCode 37）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.8.9 / versionCode 36 |
+| 版本 | v0.9.0 / versionCode 37 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v8 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,7 +38,7 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
 | 自动化测试 | 没有单测框架，但有三道机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run check:docs`（文档一致性 7 项）、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，70 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，71 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
@@ -61,6 +61,11 @@
 > + `ReasoningFold`）；「整理为碎片」改为**先调 AI 提炼精要、预览确认后写库**
 > （`ai/qaSummary.ts` + `buildQaFragment`，失败退回 `buildQaNote` 完整转录兜底）；
 > 时间轴 / 碎片详情用 `NoteBody` 渲染 Markdown。版本 0.8.9 / code 36。
+>
+> **v0.9.0（2026-10-31）**：更新下载改多源回退 —— 自定义地址（NAS / 自建）→
+> 内置加速镜像（ghproxy 系）→ GitHub 官方，逐个尝试、失败换下一个。
+> 新增 `update/mirror.ts`（候选地址构建 + 下载地址设置），设置页「关于」加「下载地址」输入。
+> 版本 0.9.0 / code 37。
 
 ---
 
@@ -92,7 +97,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **17,455 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **17,622 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -103,7 +108,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 1491 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话、AI 整理预览（重试 / 保存全文 / 确认写库） |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
-| `src/screens/SettingsScreen.tsx` | 750 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计 |
+| `src/screens/SettingsScreen.tsx` | 792 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
 ### AI 层
@@ -155,9 +160,10 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `src/components/FragmentDetail.tsx` | 510 | 全屏详情：左右滑、整屏内联编辑、当天小结；正文走 NoteBody 阅读态 |
 | `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
-| `src/components/UpdateSheet.tsx` | 451 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态 |
+| `src/components/UpdateSheet.tsx` | 464 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态；下载中显示当前源 |
 | `src/update/check.ts` | 161 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
-| `src/update/download.ts` | 166 | 下载（带进度、可取消、校验字节数）+ 拉起系统安装器 |
+| `src/update/mirror.ts` | 65 | 下载源：自定义地址 / 内置加速镜像 / 官方 的候选构建 + 下载地址设置 |
+| `src/update/download.ts` | 213 | 多源回退下载（带进度、可取消、校验字节数）+ 拉起系统安装器 |
 | `src/update/notify.ts` | 142 | 下载进度通知（LOW 渠道、sticky）。**JS 在后台被挂起，通知数字会停在切走那刻** |
 | `src/util/semver.ts` | 62 | 版本号拆段比较（**不能比字符串**：`'0.10.0' < '0.9.9'`） |
 | `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
@@ -521,7 +527,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-70 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+71 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**
@@ -555,7 +561,7 @@ v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在�
 
 ## 11. 下一步（按顺序）
 
-1. **装 `fragments-v0.8.9.apk`，按 ROADMAP 那 70 条验。** 有问题先修，不要叠新功能。
+1. **装 `fragments-v0.9.0.apk`，按 ROADMAP 那 71 条验。** 有问题先修，不要叠新功能。
    如果手机已经是 v0.8.5 以上，直接打开 App 就能收到更新提示，不用手动装。
 2. 通知栏常驻的「快速记录」入口（ROADMAP P0-2）。通知库 v0.8.6 已经因为下载进度通知装好了，
    剩下是 JS 改动，见 ROADMAP 里重估过的成本。

@@ -11,13 +11,13 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.8.9（versionCode 36） |
+| 当前版本 | v0.9.0（versionCode 37） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
 ## 第一次装上
 
-1. **下载安装包**：[Releases](https://github.com/gup-n/fragements/releases/latest) 里的 `fragments-v0.8.9.apk`。
+1. **下载安装包**：[Releases](https://github.com/gup-n/fragements/releases/latest) 里的 `fragments-v0.9.0.apk`。
    首次安装系统会拦「未知来源」，允许一次即可（这也是 App 内更新的前提）。
 2. **填 API Key**：设置 → AI 接口。`Base URL` 和 `模型` 已经填好默认值
    （`https://api.deepseek.com/v1` / `deepseek-flash`），只需要贴一个 Key；
@@ -111,15 +111,20 @@ AI 失败时可以重试，或选「保存全文」不提炼直接存。
 最后一种才会列出具体的 `#id` 和用过的检索词，并建议点「重建搜索索引」。
 
 **更新**：启动 3 秒后自动查一次 GitHub Release，有新版本弹窗提示；设置里可以关掉自动检查，
-也可以随时手动点「检查更新」。下载带进度条（**已下载 / 总大小 · 实时速度**），下完交给系统安装器。
+也可以随时手动点「检查更新」。下载带进度条（**下载源 · 已下载 / 总大小 · 实时速度**），下完交给系统安装器。
 支持「不再提示这个版本」——勾了之后要等下一个版本才会再问。
 
-下载时通知栏有一条常驻通知「正在下载 v0.8.9 · 8.2 / 22.3 MB · 37%」。**这里有个必须知道的限制**：
+**下载走多源回退（v0.9.0）**：GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，
+大陆直连极慢，很多 VPN 的分流模式也不覆盖它。所以下载按「**自定义地址 → 加速镜像 → GitHub 官方**」
+依次尝试，哪个先通走哪个，全程失败才报错。设置 → 关于 → 「下载地址」可以填你自己的 NAS / 自建基础地址
+（以 `/` 结尾，下载时拼上 APK 文件名），留空就用内置加速镜像 + 官方兜底。
+
+下载时通知栏有一条常驻通知「正在下载 v0.9.0 · 8.2 / 22.3 MB · 37%」。**这里有个必须知道的限制**：
 Android 上 Expo 没有前台服务，切到后台后传输会继续（进程不被杀就行），但 JS 线程被挂起，
 **通知里的百分比会停在切走那一刻**，回到应用才接上。所以它承诺的是「状态可见」，不是「数字实时」。
 
 > 更新源是 **GitHub Release**，不是 Actions 的 artifact —— 后者下载要登录。
-> 发版流程因此变成：`git tag v0.8.9 && git push origin v0.8.9`，CI 自动建 Release 并挂 APK。
+> 发版流程因此变成：`git tag v0.9.0 && git push origin v0.9.0`，CI 自动建 Release 并挂 APK。
 
 **尚未实现**：通知栏常驻的「快速记录」入口（和上面那条下载通知是两件事）。见 [ROADMAP.md](./ROADMAP.md) P0-2。
 

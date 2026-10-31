@@ -31,6 +31,7 @@ import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { UpdateSheet } from '../components/UpdateSheet';
 import { checkForUpdate, getAutoCheck, setAutoCheck, type ReleaseInfo } from '../update/check';
+import { getDownloadBase, setDownloadBase } from '../update/mirror';
 import { versionLabel } from '../util/semver';
 import type { IoniconName } from '../components/IconButton';
 
@@ -73,6 +74,9 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [ioMsg, setIoMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 启动时自动检查更新（默认开，存在 settings 表） */
   const [autoCheck, setAutoCheckOn] = useState(true);
+  /** 自定义下载基础地址（NAS / 自建），空串 = 用加速镜像 + 官方 */
+  const [downloadBase, setDownloadBaseOn] = useState('');
+  const [baseMsg, setBaseMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkState, setCheckState] = useState<'idle' | 'latest' | 'update' | 'error'>('idle');
   const [checkMsg, setCheckMsg] = useState('');
@@ -94,6 +98,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setThinking(cfg.thinking);
       setEffort(cfg.effort);
       setAutoCheckOn(await getAutoCheck());
+      setDownloadBaseOn(await getDownloadBase());
       setStats(await repo.stats());
       // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
       setIndexState(await repo.searchIndexStats());
@@ -219,6 +224,17 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setIoMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
     } finally {
       setBusy('idle');
+    }
+  }
+
+  /** 保存自定义下载地址。空串 = 清掉，退回「加速镜像 + 官方」的回退链 */
+  async function saveDownloadBase() {
+    setBaseMsg(null);
+    try {
+      await setDownloadBase(downloadBase);
+      setBaseMsg({ kind: 'ok', text: '已保存' });
+    } catch (e) {
+      setBaseMsg({ kind: 'err', text: (e as Error).message });
     }
   }
 
@@ -553,6 +569,29 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   <View style={styles.toggleKnob} />
                 </Pressable>
               </View>
+
+              <Field label="下载地址">
+                <TextInput
+                  value={downloadBase}
+                  onChangeText={setDownloadBaseOn}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder="留空 = 加速镜像 + GitHub"
+                  placeholderTextColor={c.text3}
+                  style={styles.input}
+                  returnKeyType="done"
+                  onSubmitEditing={saveDownloadBase}
+                  onEndEditing={saveDownloadBase}
+                />
+                <Text style={styles.fieldHint}>
+                  填 NAS / 自建的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则按「加速镜像 → GitHub」回退。
+                </Text>
+                {baseMsg ? (
+                  <Text style={baseMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
+                    {baseMsg.text}
+                  </Text>
+                ) : null}
+              </Field>
             </>
           ) : null}
 
@@ -642,6 +681,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderBottomColor: c.hair,
   },
   fieldLabel: { fontSize: 11, color: c.text3, marginBottom: 5 },
+  fieldHint: { fontSize: 11, color: c.text3, lineHeight: 16, marginTop: 4 },
+  hintOk: { fontSize: 11, color: c.accentText, marginTop: 4 },
+  hintErr: { fontSize: 11, color: c.danger, marginTop: 4 },
   input: {
     fontSize: 14.5,
     color: c.text,
