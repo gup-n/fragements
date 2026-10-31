@@ -12,7 +12,16 @@
  *   「你记过」的事，这比答错更难发现。
  * - **检索失败不阻断回答**：本地没检索到就直说没有；联网失败只提示失败，不影响本地部分。
  */
-import type { AiConfig, Fragment, Note, QaOutcome, QaTurn, Todo, WebHit } from '../types';
+import type {
+  AiConfig,
+  Fragment,
+  Note,
+  QaCitation,
+  QaOutcome,
+  QaTurn,
+  Todo,
+  WebHit,
+} from '../types';
 import { dayKey, formatTime, monthStart, weekStart } from '../util/date';
 import { tokenizeText } from '../util/tokenize';
 import { repo } from '../db/repo';
@@ -83,7 +92,11 @@ export interface Retrieval {
  *
  * 顺序就是优先级：FTS 命中的排前面，其余按时间倒序补进去。
  */
-export async function retrieveLocal(question: string, turns: QaTurn[] = []): Promise<Retrieval> {
+export async function retrieveLocal(
+  question: string,
+  turns: QaTurn[] = [],
+  contextIds: number[] = [],
+): Promise<Retrieval> {
   const picked: Fragment[] = [];
   const seen = new Set<number>();
   const push = (list: Fragment[]) => {
@@ -93,6 +106,22 @@ export async function retrieveLocal(question: string, turns: QaTurn[] = []): Pro
       picked.push(f);
     }
   };
+
+  // 从某条碎片左滑进来时，它是这一场的起点：先放它，再让检索补其余资料。
+  // 不放进「上一轮引用」里，是因为它可能和问题毫无字面重叠，FTS 根本搜不到。
+  if (contextIds.length) {
+    try {
+      // 这里不走 push：用户是**明确指着这一条**进来的，
+      // 即使它被合并过（merged_into 非空）也该让模型看到，否则「就这条」会答成没有。
+      for (const f of await repo.listFragmentsByIds(contextIds)) {
+        if (seen.has(f.id)) continue;
+        seen.add(f.id);
+        picked.push(f);
+      }
+    } catch {
+      /* 取不到就当没有上下文 */
+    }
+  }
 
   let scanned = 0;
   try {
@@ -243,6 +272,68 @@ export function buildMaterials(r: Retrieval, web: WebHit[]): string {
   return out.join('\n').trim();
 }
 
+/** 引用正文要保留换行，不能像 clip 那样压成一行 */
+function citeBody(text: string, max: number): string {
+  const s = text.trim();
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+}
+
+/**
+ * 把回答里真正出现的引用做成可持久化的快照。
+ *
+ * 为什么连正文一起存：历史会话重开时，当时的检索结果早就没了；
+ * 只存 id 的话，点开引用还得再查库，而待办被删、小结被替换之后就查不到了。
+ * 存快照的代价是会话 JSON 大一点，换的是「历史就是当时看到的样子」。
+ */
+function buildCitations(answer: string, r: Retrieval, web: WebHit[]): QaCitation[] {
+  const out: QaCitation[] = [];
+
+  for (const f of r.fragments) {
+    if (!answer.includes(`[F${f.id}]`)) continue;
+    const tags = f.tags.length ? ` · ${f.tags.slice(0, 3).join(' / ')}` : '';
+    out.push({
+      kind: 'F',
+      id: f.id,
+      label: `${dayKey(f.createdAt)} ${formatTime(f.createdAt)} · 碎片${tags}`,
+      body: citeBody(f.content, 2_000),
+    });
+  }
+
+  for (const n of r.notes) {
+    if (!answer.includes(`[N${n.id}]`)) continue;
+    const kind = n.type === 'daily' ? '日小结' : n.type === 'weekly' ? '周总结' : '月总结';
+    out.push({
+      kind: 'N',
+      id: n.id,
+      label: `${n.period ? `${n.period} · ` : ''}${kind}`,
+      body: citeBody(n.bodyMd, 2_500),
+    });
+  }
+
+  for (const t of r.todos) {
+    if (!answer.includes(`[T${t.id}]`)) continue;
+    out.push({
+      kind: 'T',
+      id: t.id,
+      label: t.done ? '待办 · 已完成' : '待办',
+      body: `${t.text}${t.dueAt ? `\n截止：${t.dueAt}` : ''}`,
+    });
+  }
+
+  web.forEach((h, i) => {
+    if (!answer.includes(`[W${i + 1}]`)) return;
+    out.push({
+      kind: 'W',
+      id: i + 1,
+      label: h.title || h.url,
+      body: citeBody(h.summary, 1_200),
+      url: h.url,
+    });
+  });
+
+  return out;
+}
+
 const SYSTEM_PROMPT = `你是一个私人记录问答助手。用户把平时的想法、待办、事件随手记成一条条「碎片」存在手机本地。你这次回答的**唯一事实来源**是下面给出的资料。
 
 【怎么答】
@@ -264,6 +355,8 @@ export interface QaOptions {
   thinking: boolean;
   /** 联网搜索开关 */
   useWeb: boolean;
+  /** 从某条碎片左滑进来时的上下文碎片 id，优先装进资料 */
+  contextIds?: number[];
   onProgress?: (patch: ChatProgress) => void;
 }
 
@@ -279,12 +372,12 @@ export interface QaRun extends QaOutcome {
  * 反过来本地很快时也不该被搜索卡住。
  */
 export async function askQuestion(options: QaOptions): Promise<QaRun> {
-  const { question, turns, config, thinking, useWeb, onProgress } = options;
+  const { question, turns, config, thinking, useWeb, contextIds, onProgress } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   const q = question.trim();
   if (!q) throw new AiError('format', '问点什么吧');
 
-  const retrieval = await retrieveLocal(q, turns);
+  const retrieval = await retrieveLocal(q, turns, contextIds);
 
   let web: WebHit[] = [];
   let webError: string | null = null;
@@ -322,12 +415,14 @@ export async function askQuestion(options: QaOptions): Promise<QaRun> {
 
   // 只有本轮真的给了资料的编号才算引用，避免模型编一个 [F999] 出来
   const cited = retrieval.fragments.filter((f) => answer.includes(`[F${f.id}]`));
+  const citations = buildCitations(answer, retrieval, web);
 
   return {
     answer,
     reasoning: outcome.reasoning,
     fragments: retrieval.fragments,
     cited,
+    citations,
     notes: retrieval.notes,
     todos: retrieval.todos,
     web,

@@ -236,11 +236,32 @@ export interface WebHit {
   score: number;
 }
 
+/** 问答引用类型：碎片 / 小结 / 待办 / 网页 */
+export type QaCiteKind = 'F' | 'N' | 'T' | 'W';
+
+/**
+ * 一条可展开的引用。
+ * 历史会话重开时不能依赖「当时检索到的内存数据」，所以正文一起存快照。
+ * W 的 id 是第几条网页资料（1 起），不是数据库 id。
+ */
+export interface QaCitation {
+  kind: QaCiteKind;
+  id: number;
+  /** 列表里显示的一行标题，例如「2026-10-20 21:40 · 碎片」 */
+  label: string;
+  /** 展开后看到的正文，已裁剪到合理长度 */
+  body: string;
+  /** 仅 W：原文链接 */
+  url?: string;
+}
+
 /** 问答会话里的一轮。sourceIds 只用于把上一轮引用过的碎片带进下一轮 */
 export interface QaTurn {
   question: string;
   answer: string;
   sourceIds: number[];
+  /** 本轮引用到的来源快照；旧数据可能没有 */
+  citations?: QaCitation[];
 }
 
 /** 一次问答的结果 */
@@ -259,12 +280,26 @@ export interface QaOutcome {
   todos: Todo[];
   /** 本轮网络资料，没联网就是空数组 */
   web: WebHit[];
+  /** 本轮引用到的全部来源，按 F→N→T→W 顺序 */
+  citations: QaCitation[];
   /** 回答被输出上限截断 */
   truncated: boolean;
   /** 联网搜失败的原因；没开联网或搜成功就是 null */
   webError: string | null;
   /** 实际读了几条碎片 */
   scanned: number;
+}
+
+/** 「问」页的一条持久化会话 */
+export interface AskSession {
+  id: number;
+  title: string;
+  turns: QaTurn[];
+  archived: boolean;
+  /** 已整理成碎片后的 fragment id；null 表示还没整理 */
+  fragmentId: number | null;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**

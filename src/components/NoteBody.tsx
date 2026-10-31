@@ -22,12 +22,25 @@ import {
   parseBlocks,
   type Align,
   type Block,
+  type CiteRef,
   type Seg,
   type TableBlock,
   type TextBlock,
 } from '../util/mdBlocks';
 
 const MONO = Platform.select({ android: 'monospace', ios: 'Menlo', default: 'monospace' });
+
+/** 引用标记的点击回调与「这枚引用显示成几号」。两者都由调用方决定 */
+type CiteProps = {
+  onCite?: (ref: CiteRef) => void;
+  /**
+   * 返回 null 表示这枚引用不显示。
+   *
+   * 之所以不在这里编号：序号要按「本轮哪些引用真的被解答了」排，
+   * 只有持有 citation 列表的页面知道，渲染层自己数会和面板对不上。
+   */
+  citeLabel?: (ref: CiteRef) => string | null;
+};
 
 /** 连续的文字块合成一组，交给一个 Text 渲染 —— 否则每行都是独立 Text，行距会散 */
 type Group = { type: 'text'; blocks: TextBlock[] } | { type: 'table'; block: TableBlock } | { type: 'code'; text: string } | { type: 'hr' };
@@ -61,15 +74,41 @@ function group(blocks: Block[]): Group[] {
   return out;
 }
 
-function Inline({ segs }: { segs: Seg[] }) {
+/**
+ * 行内片段。
+ *
+ * 引用段单独画成小标：正文里 `[F12]` 那种原文既占宽又打断句子，
+ * 用户要的是「这里有个出处，点一下」。
+ */
+function Inline({ segs, onCite, citeLabel }: { segs: Seg[] } & CiteProps) {
   const { styles } = useThemedStyles(makeStyles);
   return (
     <>
-      {segs.map((seg, i) => (
-        <Text key={i} style={seg.bold ? styles.bold : seg.code ? styles.code : undefined}>
-          {seg.text}
-        </Text>
-      ))}
+      {segs.map((seg, i) => {
+        if (seg.cite) {
+          const ref = seg.cite;
+          const label = citeLabel?.(ref) ?? null;
+          // 拿不到序号就不显示 —— 画一个点不开的编号比不画更让人困惑
+          if (!label) return null;
+          return (
+            <Text
+              key={i}
+              style={styles.cite}
+              suppressHighlighting
+              accessibilityRole="button"
+              accessibilityLabel={`查看引用 ${label}`}
+              onPress={onCite ? () => onCite(ref) : undefined}
+            >
+              {label}
+            </Text>
+          );
+        }
+        return (
+          <Text key={i} style={seg.bold ? styles.bold : seg.code ? styles.code : undefined}>
+            {seg.text}
+          </Text>
+        );
+      })}
     </>
   );
 }
@@ -87,7 +126,7 @@ const ALIGN: Record<Align, 'left' | 'center' | 'right'> = {
  * 一样宽的话，一半屏幕就浪费在空白上了。窄屏列多时（≥5 列）整体缩字号，
  * 因为那时候再换行也读不出结构。
  */
-function Table({ block }: { block: TableBlock }) {
+function Table({ block, onCite, citeLabel }: { block: TableBlock } & CiteProps) {
   const { styles } = useThemedStyles(makeStyles);
   const dense = block.head.length >= 5;
 
@@ -103,7 +142,7 @@ function Table({ block }: { block: TableBlock }) {
       <Text
         style={[styles.tdText, dense && styles.tdTextDense, head && styles.thText, { textAlign: ALIGN[block.align[col] ?? 'left'] }]}
       >
-        <Inline segs={segs} />
+        <Inline segs={segs} onCite={onCite} citeLabel={citeLabel} />
       </Text>
     </View>
   );
@@ -134,9 +173,13 @@ interface Props {
   /** 折叠行数；不给表示全展开。给了就用单 Text 平铺（表格降级成一行） */
   numberOfLines?: number;
   style?: StyleProp<TextStyle>;
+  /** 点引用。不给就是纯阅读（卡片预览、碎片详情） */
+  onCite?: (ref: CiteRef) => void;
+  /** 引用显示成什么；不给或返回 null 就不画那枚小标 */
+  citeLabel?: (ref: CiteRef) => string | null;
 }
 
-export function NoteBody({ text, numberOfLines, style }: Props) {
+export function NoteBody({ text, numberOfLines, style, onCite, citeLabel }: Props) {
   const { styles } = useThemedStyles(makeStyles);
   // 两个 memo 都无条件调用：条件调用 hook 会破坏顺序，哪怕只有一个分支用得到
   const blocks = useMemo(() => parseBlocks(text), [text]);
@@ -150,7 +193,7 @@ export function NoteBody({ text, numberOfLines, style }: Props) {
         {flat.map((line, i) => (
           <React.Fragment key={i}>
             {i === 0 ? '' : line.newlineBefore ? '\n\n' : '\n'}
-            <Inline segs={line.segs} />
+            <Inline segs={line.segs} onCite={onCite} citeLabel={citeLabel} />
           </React.Fragment>
         ))}
       </Text>
@@ -161,7 +204,7 @@ export function NoteBody({ text, numberOfLines, style }: Props) {
   return (
     <View>
       {groups.map((g, gi) => {
-        if (g.type === 'table') return <Table key={gi} block={g.block} />;
+        if (g.type === 'table') return <Table key={gi} block={g.block} onCite={onCite} citeLabel={citeLabel} />;
         if (g.type === 'hr') return <View key={gi} style={styles.hr} />;
         if (g.type === 'code') {
           return (
@@ -180,7 +223,7 @@ export function NoteBody({ text, numberOfLines, style }: Props) {
                 {/* 小标题前面空一行，读起来才有分节感 */}
                 {i === 0 ? '' : b.kind === 'h' ? '\n\n' : '\n'}
                 <Text style={b.kind === 'h' ? styles.h : b.kind === 'b' ? styles.b : styles.p}>
-                  <Inline segs={b.segs} />
+                  <Inline segs={b.segs} onCite={onCite} citeLabel={citeLabel} />
                 </Text>
               </React.Fragment>
             ))}
@@ -202,6 +245,23 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   bold: { fontWeight: '600', color: c.text },
   /** 行内代码只换字形加浅底，不加边框 —— 正文里到处是补丁框会更乱 */
   code: { fontFamily: MONO, fontSize: 13, color: c.text2 },
+  /**
+   * 引用小标：浅蓝底 + 一个序号。
+   *
+   * 字号压到 11 是因为它必须能嵌在 14px 的正文行里不把行高顶开；
+   * 颜色走 accent 系，和正文拉开但不抢视线 —— 它是辅助信息，不是内容。
+   */
+  cite: {
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: c.accentText,
+    backgroundColor: c.accentBg,
+    borderRadius: 4,
+    paddingHorizontal: 3.5,
+    marginHorizontal: 1,
+    overflow: 'hidden',
+  },
 
   hr: { height: StyleSheet.hairlineWidth, backgroundColor: c.hair, marginVertical: 12 },
 

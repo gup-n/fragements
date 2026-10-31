@@ -1,4 +1,5 @@
 import type {
+  AskSession,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -7,6 +8,7 @@ import type {
   OrganizePlan,
   OrganizeScope,
   OrganizeSession,
+  QaTurn,
   TagStat,
   Todo,
 } from '../types';
@@ -161,6 +163,25 @@ export interface Repo {
   findUnfinishedOrganizeSession(): Promise<OrganizeSession | null>;
   finishOrganizeSession(id: number): Promise<void>;
   deleteOrganizeSession(id: number): Promise<void>;
+
+  /** 历史会话。默认只返回未归档的，按 updatedAt 倒序 */
+  listAskSessions(includeArchived?: boolean): Promise<AskSession[]>;
+  findAskSession(id: number): Promise<AskSession | null>;
+  /**
+   * 新建或更新一个会话。id 为空就 INSERT；有 id 就 UPDATE。
+   * 返回会话 id。turns 变化时 updatedAt 自动更新。
+   */
+  saveAskSession(input: {
+    id?: number;
+    title: string;
+    turns: QaTurn[];
+    createdAt: number;
+    archived?: boolean;
+    fragmentId?: number | null;
+  }): Promise<number>;
+  setAskSessionArchived(id: number, archived: boolean): Promise<void>;
+  markAskSessionConverted(id: number, fragmentId: number): Promise<void>;
+  deleteAskSession(id: number): Promise<void>;
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
   markRunApplied(id: number): Promise<void>;

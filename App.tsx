@@ -88,6 +88,11 @@ function Shell({ booted }: { booted: boolean }) {
    */
   const [draft, setDraft] = useState('');
   /**
+   * 从时间轴左滑一条碎片进「问」时，带上的那条碎片 id。
+   * 从页头聊天按钮进来时是 null —— 两种入口共用同一个页面，但上下文不一样。
+   */
+  const [askContextId, setAskContextId] = useState<number | null>(null);
+  /**
    * 「问」页的关闭动作。
    *
    * 安卓返回键由这里的 BackHandler 统一接（它是后注册的，页面自己抢不过），
@@ -317,7 +322,10 @@ function Shell({ booted }: { booted: boolean }) {
                     setSettingsFrom('timeline');
                     setRoute('settings');
                   }}
-                  onOpenAsk={() => setRoute('ask')}
+                  onOpenAsk={(fragmentId) => {
+                    setAskContextId(fragmentId ?? null);
+                    setRoute('ask');
+                  }}
                   onOpenReview={() => setRoute('review')}
                   onSeed={isWeb ? handleSeed : undefined}
                 />
@@ -346,9 +354,17 @@ function Shell({ booted }: { booted: boolean }) {
               )}
               {route === 'ask' && (
                 <AskScreen
-                  onClose={() => setRoute('timeline')}
+                  onClose={() => {
+                    setRoute('timeline');
+                    setAskContextId(null);
+                  }}
                   onSaved={reload}
                   registerClose={registerAskClose}
+                  contextFragment={
+                    askContextId === null
+                      ? null
+                      : fragments.find((f) => f.id === askContextId) ?? null
+                  }
                 />
               )}
               {/*

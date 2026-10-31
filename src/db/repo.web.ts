@@ -1,6 +1,7 @@
 import type { Repo } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
+  AskSession,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -31,10 +32,20 @@ interface WebDb {
   runs: { id: number; startedAt: number; fragmentIds: number[]; model: string; resultJson: string; applied: number }[];
   settings: Record<string, string>;
   sessions: OrganizeSession[];
+  askSessions: AskSession[];
 }
 
 function empty(): WebDb {
-  return { seq: 1, fragments: [], todos: [], notes: [], runs: [], settings: {}, sessions: [] };
+  return {
+    seq: 1,
+    fragments: [],
+    todos: [],
+    notes: [],
+    runs: [],
+    settings: {},
+    sessions: [],
+    askSessions: [],
+  };
 }
 
 /** 已完成待办保留上限，与 native 版保持一致 */
@@ -64,6 +75,11 @@ function load(): WebDb {
     cache!.todos = (cache!.todos ?? []).map((t) => ({
       ...t,
       doneAt: t.doneAt ?? (t.done ? t.createdAt : null),
+    }));
+    // 旧版本没有 askSessions；顺便兜住 turns 缺失的脏数据
+    cache!.askSessions = (cache!.askSessions ?? []).map((s) => ({
+      ...s,
+      turns: Array.isArray(s.turns) ? s.turns : [],
     }));
     pruneDone(cache!);
   } catch {
@@ -473,6 +489,68 @@ export const repo: Repo = {
   async deleteOrganizeSession(id) {
     const d = load();
     d.sessions = d.sessions.filter((s) => s.id !== id);
+    persist();
+  },
+
+  async listAskSessions(includeArchived = false) {
+    return load()
+      .askSessions.filter((s) => includeArchived || !s.archived)
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  },
+
+  async findAskSession(id) {
+    return load().askSessions.find((s) => s.id === id) ?? null;
+  },
+
+  async saveAskSession(input) {
+    const d = load();
+    const now = Date.now();
+
+    if (input.id !== undefined) {
+      const s = d.askSessions.find((x) => x.id === input.id);
+      if (!s) return input.id;
+      // 与 native 一致：只改传进来的字段，undefined 保持原值
+      s.title = input.title;
+      s.turns = input.turns;
+      s.updatedAt = now;
+      if (input.archived !== undefined) s.archived = input.archived;
+      if (input.fragmentId !== undefined) s.fragmentId = input.fragmentId;
+      persist();
+      return s.id;
+    }
+
+    const id = nextId(d);
+    d.askSessions.push({
+      id,
+      title: input.title,
+      turns: input.turns,
+      archived: input.archived ?? false,
+      fragmentId: input.fragmentId ?? null,
+      createdAt: input.createdAt,
+      updatedAt: now,
+    });
+    persist();
+    return id;
+  },
+
+  async setAskSessionArchived(id, archived) {
+    const d = load();
+    const s = d.askSessions.find((x) => x.id === id);
+    if (s) s.archived = archived;
+    // 不动 updatedAt，理由同 repo.native.ts
+    persist();
+  },
+
+  async markAskSessionConverted(id, fragmentId) {
+    const d = load();
+    const s = d.askSessions.find((x) => x.id === id);
+    if (s) s.fragmentId = fragmentId;
+    persist();
+  },
+
+  async deleteAskSession(id) {
+    const d = load();
+    d.askSessions = d.askSessions.filter((s) => s.id !== id);
     persist();
   },
 

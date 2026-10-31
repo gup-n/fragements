@@ -473,9 +473,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               {busy === 'indexing' ? '正在重建…' : '重建搜索索引'}
             </Text>
           </Pressable>
-          <Text style={styles.note}>
-            搜索和「问」的检索都走这张索引。平时不用点 —— 只有明明记过、却搜不出来的时候才需要重来一遍。
-          </Text>
 
           <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
             <Ionicons name="download-outline" size={15} color={c.text} />
@@ -498,14 +495,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               {ioMsg.text}
             </Text>
           )}
-          <Text style={styles.note}>
-            导出成一个 .md 文件，按天分节，标签写成 #tag。放到 NAS 或者 Obsidian
-            里都能直接读，也是一份逃生舱。
-          </Text>
-          <Text style={styles.note}>
-            导入认的就是这个格式：日期标题下面的 `- 21:40 正文 #标签`。库里已经有的
-            内容会按「同一天、同一分钟、同样正文」自动跳过，重复导同一个文件不会翻倍。
-          </Text>
         </View>
 
         <Text style={styles.groupTitle}>关于</Text>
@@ -696,7 +685,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   msg: { fontSize: 12, lineHeight: 19, marginTop: 12 },
   msgOk: { color: c.tealText },
   msgErr: { color: c.danger },
-  note: { fontSize: 11, color: c.text3, lineHeight: 18, marginTop: 12 },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   toggle: {

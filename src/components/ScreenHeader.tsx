@@ -18,6 +18,8 @@ interface Props {
   subtitle?: string;
   onBack?: () => void;
   backIcon?: IoniconName;
+  /** 左侧按钮的无障碍说明。问页把它当「历史会话」用，不再是返回 */
+  backLabel?: string;
   /** 右侧动作区，通常是几个 IconButton */
   right?: React.ReactNode;
   /** 底部细分隔线。内容会滚动时建议开，避免标题和列表黏在一起 */
@@ -29,6 +31,7 @@ export function ScreenHeader({
   subtitle,
   onBack,
   backIcon = 'chevron-back',
+  backLabel = '返回',
   right,
   bordered = true,
 }: Props) {
@@ -42,7 +45,7 @@ export function ScreenHeader({
             onPress={onBack}
             size={22}
             tone="soft"
-            accessibilityLabel="返回"
+            accessibilityLabel={backLabel}
           />
         ) : null}
       </View>

@@ -3,7 +3,7 @@
  *
  * 只服务一件事：把模型吐出来的文字拆成「能画的东西」。不追求 CommonMark 兼容，
  * 覆盖模型实际会用的范围：标题 / 列表 / 段落 / 引用 / 表格 / 代码块 / 分隔线，
- * 行内只认 `**加粗**` 和 `` `代码` ``。
+ * 行内只认 `**加粗**`、`` `代码` `` 和引用标记 `[F12]` / `[N3]` / `[T5]` / `[W1]`。
  *
  * **为什么单独一个文件：**解析是纯函数，可以拿 node 跑断言；
  * 渲染在 `components/NoteBody.tsx` 里，本地看不见。把能验的部分圈出来，
@@ -14,12 +14,34 @@
  * 它占着空间却读不成表。
  */
 
+import type { QaCiteKind } from '../types';
+
+/**
+ * 引用标记的来源种类：F = 碎片、N = 小结、T = 待办、W = 网络资料。
+ *
+ * 直接借 `types.ts` 的定义，不在这里另写一份字面量联合 —— 这两处一旦
+ * 走岔（比如以后加 `D`），`parseInline` 认得出、`qa.ts` 反查不到，
+ * 表现是「引用点了没反应」，而且 `tsc` 一声不响。
+ */
+export type CiteKind = QaCiteKind;
+
+export interface CiteRef {
+  kind: CiteKind;
+  id: number;
+}
+
 /** 行内片段。`code` 单独标出来是为了给等宽字体和浅底，不是为了好看 ——
  *  路径、命令、型号混在正文里，不分字形很难扫。 */
 export interface Seg {
   text: string;
   bold: boolean;
   code: boolean;
+  /**
+   * 引用标记 `[F12]` / `[N3]` / `[T5]` / `[W1]`。
+   * 有 cite 时 `text` 为空 —— 屏幕上画成什么样（序号、小标、能不能点）
+   * 由渲染层决定，解析层只管认出它是引用。
+   */
+  cite?: CiteRef;
 }
 
 export type Align = 'left' | 'center' | 'right';
@@ -84,27 +106,106 @@ function visualLen(s: string): number {
   return n;
 }
 
+/** 代码或加粗，一次扫完。两者互斥：先剥代码再找加粗会把 `` `**a**` `` 的星号当加粗 */
+const INLINE_RE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/;
+
+/**
+ * 引用标记。
+ *
+ * 数字限制 1-6 位：模型只会在本轮资料条数范围内编号（碎片 18 条、待办 60 条），
+ * 六位已经远远够；不设上限的话 `[F0000000001]` 这种也能匹上，纯属噪音。
+ */
+const CITE_RE = /\[([FNTW])(\d{1,6})\]/g;
+
+/** 拆普通文字里的引用标记。`bold` 透传，因为加粗里的引用也得是粗的 */
+function pushText(text: string, bold: boolean, out: Seg[]) {
+  if (!text) return;
+  CITE_RE.lastIndex = 0;
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = CITE_RE.exec(text))) {
+    if (m.index > last) out.push({ text: text.slice(last, m.index), bold, code: false });
+    out.push({ text: '', bold, code: false, cite: { kind: m[1] as CiteKind, id: Number(m[2]) } });
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push({ text: text.slice(last), bold, code: false });
+}
+
+/**
+ * 真正的扫描器，`bold` 表示当前处在几个星号里面。
+ *
+ * 加粗内部递归一次：`**结论[F12]**` 里的引用不能整段当普通文字，
+ * 否则用户点不到它、序号也标不上。内层正则不许含 `*`（`[^*\n]+`），
+ * 所以递归最多一层，不会自激。
+ */
+function scanInline(text: string, bold: boolean, out: Seg[]) {
+  // 每次新建带 g 的正则：共用一个会带着上次的 lastIndex
+  const re = new RegExp(INLINE_RE.source, 'g');
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text))) {
+    if (m.index > last) pushText(text.slice(last, m.index), bold, out);
+    if (m[1]) {
+      // 代码优先：代码里的 [F12] 是字符，不是引用
+      out.push({ text: m[1].slice(1, -1), bold, code: true });
+    } else {
+      scanInline(m[2].slice(2, -2), true, out);
+    }
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) pushText(text.slice(last), bold, out);
+}
+
 /**
  * 拆行内片段。
  *
  * 加粗和代码在**同一个正则**里扫，不是先剥代码再找加粗 —— 后者会把
  * `` `**a**` `` 里的星号当成加粗。两者互斥，一次过。
+ * 引用标记在普通文字（含加粗内部）里再切一刀，代码里的不动。
  */
 export function parseInline(raw: string): Seg[] {
   const text = raw.replace(/^>\s?/, '');
   const segs: Seg[] = [];
-  const re = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-
-  while ((m = re.exec(text))) {
-    if (m.index > last) segs.push({ text: text.slice(last, m.index), bold: false, code: false });
-    if (m[1]) segs.push({ text: m[1].slice(1, -1), bold: false, code: true });
-    else segs.push({ text: m[2].slice(2, -2), bold: true, code: false });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) segs.push({ text: text.slice(last), bold: false, code: false });
+  scanInline(text, false, segs);
+  // 空的 `**` 之类会产出零个片段，渲染层按约定至少给一个
   return segs.length ? segs : [{ text: '', bold: false, code: false }];
+}
+
+/**
+ * 按正文出现顺序收集引用，去重。
+ *
+ * 代码块和行内代码里的标记不算 —— 那是用户贴的命令或示例，
+ * 把它当引用会让「点开看来源」跳到一个跟回答无关的碎片上。
+ * 表格的表头和单元格都要走，模型经常把「出处」单独列一列。
+ */
+export function collectCitations(text: string): CiteRef[] {
+  const out: CiteRef[] = [];
+  const seen = new Set<string>();
+
+  const take = (segs: Seg[]) => {
+    for (const seg of segs) {
+      if (!seg.cite) continue;
+      const key = `${seg.cite.kind}${seg.cite.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(seg.cite);
+    }
+  };
+
+  for (const b of parseBlocks(text)) {
+    if (b.kind === 'table') {
+      for (const cell of b.head) take(cell);
+      for (const row of b.rows) for (const cell of row) take(cell);
+    } else if (b.kind === 'code' || b.kind === 'hr') {
+      continue;
+    } else {
+      take(b.segs);
+    }
+  }
+
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

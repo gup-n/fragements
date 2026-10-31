@@ -3,6 +3,7 @@ import type { Repo, OrganizeSessionPatch } from './types';
 import { parseTags } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
+  AskSession,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -11,6 +12,7 @@ import type {
   OrganizePlan,
   OrganizeScope,
   OrganizeSession,
+  QaTurn,
   TagStat,
   Todo,
 } from '../types';
@@ -161,6 +163,21 @@ const MIGRATIONS: string[] = [
      );
   CREATE INDEX IF NOT EXISTS idx_todos_done_at ON todos(done_at DESC);
   `,
+  // v8：「问」页的会话持久化。
+  //     回答里引用的来源正文随轮次存快照 —— 碎片可删、小结会被覆盖、待办会合并，
+  //     只存 id 的话历史会话点开引用就查不到东西了。
+  `
+  CREATE TABLE IF NOT EXISTS ask_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT    NOT NULL,
+    turns_json  TEXT    NOT NULL DEFAULT '[]',
+    archived    INTEGER NOT NULL DEFAULT 0,
+    fragment_id INTEGER,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_ask_sessions_updated ON ask_sessions(archived, updated_at DESC);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -298,6 +315,30 @@ function parseJson(raw: unknown, fallback: unknown): unknown {
   } catch {
     return fallback;
   }
+}
+
+interface AskSessionRow {
+  id: number;
+  title: string;
+  turns_json: string;
+  archived: number;
+  fragment_id: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 会话行 → 领域对象。turns_json 坏掉时退回空数组，不要让一条脏数据拖垮整个历史列表 */
+function toAskSession(r: AskSessionRow): AskSession {
+  const turns = parseJson(r.turns_json, []);
+  return {
+    id: r.id,
+    title: r.title,
+    turns: Array.isArray(turns) ? (turns as QaTurn[]) : [],
+    archived: r.archived === 1,
+    fragmentId: r.fragment_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
 }
 
 /** 把一条碎片写进 FTS。先删后插，更新/打标签都走它 */
@@ -820,6 +861,72 @@ export const repo: Repo = {
 
   async deleteOrganizeSession(id) {
     db().runSync('DELETE FROM organize_sessions WHERE id = ?', [id]);
+  },
+
+  async listAskSessions(includeArchived = false) {
+    const rows = includeArchived
+      ? db().getAllSync<AskSessionRow>(
+          'SELECT * FROM ask_sessions ORDER BY updated_at DESC',
+        )
+      : db().getAllSync<AskSessionRow>(
+          'SELECT * FROM ask_sessions WHERE archived = 0 ORDER BY updated_at DESC',
+        );
+    return rows.map(toAskSession);
+  },
+
+  async findAskSession(id) {
+    const row = db().getFirstSync<AskSessionRow>('SELECT * FROM ask_sessions WHERE id = ?', [id]);
+    return row ? toAskSession(row) : null;
+  },
+
+  async saveAskSession(input) {
+    const now = Date.now();
+    const turnsJson = JSON.stringify(input.turns);
+
+    if (input.id !== undefined) {
+      // 只改传进来的字段：archived / fragmentId 为 undefined 时保持原值，
+      // 否则「保存一下对话」会把归档状态和已整理标记一起抹掉。
+      const sets = ['title = ?', 'turns_json = ?', 'updated_at = ?'];
+      const params: (string | number | null)[] = [input.title, turnsJson, now];
+      if (input.archived !== undefined) {
+        sets.push('archived = ?');
+        params.push(input.archived ? 1 : 0);
+      }
+      if (input.fragmentId !== undefined) {
+        sets.push('fragment_id = ?');
+        params.push(input.fragmentId);
+      }
+      params.push(input.id);
+      db().runSync(`UPDATE ask_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
+      return input.id;
+    }
+
+    const res = db().runSync(
+      `INSERT INTO ask_sessions (title, turns_json, archived, fragment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        input.title,
+        turnsJson,
+        input.archived ? 1 : 0,
+        input.fragmentId ?? null,
+        input.createdAt,
+        now,
+      ],
+    );
+    return Number(res.lastInsertRowId);
+  },
+
+  async setAskSessionArchived(id, archived) {
+    // 故意不动 updated_at：归档一下会话就跳到列表最前面，用户会以为顺序乱了
+    db().runSync('UPDATE ask_sessions SET archived = ? WHERE id = ?', [archived ? 1 : 0, id]);
+  },
+
+  async markAskSessionConverted(id, fragmentId) {
+    db().runSync('UPDATE ask_sessions SET fragment_id = ? WHERE id = ?', [fragmentId, id]);
+  },
+
+  async deleteAskSession(id) {
+    db().runSync('DELETE FROM ask_sessions WHERE id = ?', [id]);
   },
 
   async saveRun(input) {

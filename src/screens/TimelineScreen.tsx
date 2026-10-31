@@ -10,12 +10,15 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as Clipboard from 'expo-clipboard';
 import type { Fragment, Note } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { TagPill } from '../components/TagPill';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
 import { FragmentDetail } from '../components/FragmentDetail';
+import { SwipeRow } from '../components/SwipeRow';
+import { Toast } from '../components/Toast';
 import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 
@@ -75,7 +78,8 @@ interface Props {
   onDeleteNote: (id: number) => Promise<void>;
   onOpenOrganize: () => void;
   onOpenSettings: () => void;
-  onOpenAsk: () => void;
+  /** 带上碎片 id 时，「问」页会把这它作为上下文 */
+  onOpenAsk: (fragmentId?: number) => void;
   onOpenReview: () => void;
   onSeed?: () => Promise<void>;
 }
@@ -99,9 +103,15 @@ export function TimelineScreen({
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [sending, setSending] = useState(false);
-  const [editing, setEditing] = useState<Fragment | null>(null);
-  const [editText, setEditText] = useState('');
-  const [armedDelete, setArmedDelete] = useState(false);
+  /**
+   * 当前滑开的那一行。存 id 而不是布尔值 —— 父级统一持有才能保证同时只开一行。
+   * 展开状态放在父级还有个好处：列表一滚动就能整片收起。
+   */
+  const [openRow, setOpenRow] = useState<{ id: number; side: 'left' | 'right' } | null>(null);
+  /** 等着二次确认的删除目标。null = 没弹层 */
+  const [deleteTarget, setDeleteTarget] = useState<Fragment | null>(null);
+  /** 底部轻提示，复制成功 / 删除成功都走它 */
+  const [toast, setToast] = useState('');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
@@ -128,6 +138,8 @@ export function TimelineScreen({
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const listRef = useRef<SectionList<TimelineItem, DisplaySection>>(null);
+  /** 轻提示的定时器，连着操作两次时要把上一次的清掉，不然第一条会提前消失 */
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardHeight = useKeyboardHeight();
 
   // 冷启动即聚焦：记录工具打开就该能打字，不该先点一下输入框
@@ -138,16 +150,22 @@ export function TimelineScreen({
     return () => clearTimeout(timer);
   }, []);
 
-  // 长文编辑是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App
+  // 长文记录是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App。
+  // 顺序是「先关最上面那层」：确认弹层压在长文编辑之上。
   useEffect(() => {
-    if (!editing && !fullEdit) return;
+    if (!deleteTarget && !fullEdit) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (editing) setEditing(null);
-      if (fullEdit) setFullEdit(false);
+      if (deleteTarget) setDeleteTarget(null);
+      else if (fullEdit) setFullEdit(false);
       return true;
     });
     return () => sub.remove();
-  }, [editing, fullEdit]);
+  }, [deleteTarget, fullEdit]);
+
+  // 卸载时把还没到点的定时器清掉，否则回调落在已卸载的组件上
+  useEffect(() => () => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+  }, []);
 
   // 覆盖层里的输入框不会因为 autoFocus 稳定抢到焦点（下面那个输入框还聚焦着），
   // 挂载后主动聚焦一次更确定
@@ -368,16 +386,45 @@ export function TimelineScreen({
     }, 140);
   }
 
-  function openEdit(item: Fragment) {
-    inputRef.current?.blur();
-    setEditing(item);
-    setEditText(item.content);
-    setArmedDelete(false);
+  /** 底部轻提示。1.8 秒够读完一行字，又不至于一直杵在那儿 */
+  function showToast(text: string) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast(text);
+    toastTimer.current = setTimeout(() => setToast(''), 1800);
+  }
+
+  /**
+   * 长按 = 复制正文。以前长按是打开编辑小窗，但那件事在详情页里做得更好；
+   * 而在时间轴上，「把这句话拿到别处去」比「就地改」常见得多。
+   */
+  async function copyFragment(f: Fragment) {
+    await Clipboard.setStringAsync(f.content);
+    if (Platform.OS !== 'web') {
+      try {
+        const Haptics = require('expo-haptics');
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      } catch {
+        /* 震动失败不影响复制 */
+      }
+    }
+    setOpenRow(null);
+    showToast('已复制这条碎片');
+  }
+
+  /** 二次确认之后才真删 —— 滑动露出按钮太容易误触，不能一步到位 */
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    const id = deleteTarget.id;
+    setDeleteTarget(null);
+    setOpenRow(null);
+    await onDelete(id);
+    showToast('已删除');
   }
 
   /** 点一条碎片先读，不直接进编辑 —— 想通读长文时不该先得到一个光标 */
   function openDetail(f: Fragment) {
     inputRef.current?.blur();
+    setOpenRow(null);
     const i = flat.findIndex((x) => x.id === f.id);
     setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i });
   }
@@ -428,24 +475,6 @@ export function TimelineScreen({
     });
   }
 
-  async function saveEdit() {
-    if (!editing) return;
-    const text = editText.trim();
-    if (!text) return;
-    await onEdit(editing.id, text);
-    setEditing(null);
-  }
-
-  async function removeEditing() {
-    if (!editing) return;
-    if (!armedDelete) {
-      setArmedDelete(true);
-      return;
-    }
-    await onDelete(editing.id);
-    setEditing(null);
-  }
-
   return (
     <View style={styles.root}>
       <View style={styles.header}>
@@ -465,7 +494,7 @@ export function TimelineScreen({
             tone="soft"
             color={c.text2}
             diameter={34}
-            onPress={onOpenAsk}
+            onPress={() => onOpenAsk()}
             accessibilityLabel="问：查自己的记录"
           />
           <IconButton
@@ -591,6 +620,8 @@ export function TimelineScreen({
             stickySectionHeadersEnabled
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
+            // 一滚动就把滑开的操作区收起来：敞着一行往下翻，看着像忘了关
+            onScrollBeginDrag={() => setOpenRow(null)}
             renderSectionHeader={({ section }) => {
               const closed = collapsedKeys.has(section.key);
               return (
@@ -677,12 +708,34 @@ export function TimelineScreen({
               const merged = fragment.mergedInto !== null;
               const done = doneIds.has(fragment.id);
               return (
-                <Pressable
+                <SwipeRow
+                  open={openRow?.id === fragment.id ? openRow.side : null}
+                  onOpen={(side) => setOpenRow({ id: fragment.id, side })}
+                  onClose={() => setOpenRow(null)}
                   onPress={() => openDetail(fragment)}
-                  // 长按直接进编辑：看是主路径，改是熟练用户的捷径，不用每次先进详情页
-                  onLongPress={() => openEdit(fragment)}
-                  delayLongPress={400}
-                  style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+                  onLongPress={() => copyFragment(fragment)}
+                  leftAction={{
+                    label: '删除',
+                    icon: 'trash-outline',
+                    bg: c.danger,
+                    // 红底上的字只能是白的，深色主题下 c.onAccent 是深蓝，压不住
+                    fg: '#FFFFFF',
+                    // 先收起操作区再弹确认：取消之后不该留一条敞开着的红条
+                    onPress: () => {
+                      setOpenRow(null);
+                      setDeleteTarget(fragment);
+                    },
+                  }}
+                  rightAction={{
+                    label: '问',
+                    icon: 'chatbubble-ellipses-outline',
+                    bg: c.accent,
+                    fg: c.onAccent,
+                    onPress: () => onOpenAsk(fragment.id),
+                  }}
+                  rightInstant
+                  style={styles.row}
+                  pressedStyle={styles.rowPressed}
                 >
                   <Text style={styles.time}>{formatTime(fragment.createdAt)}</Text>
                   <View style={styles.rail}>
@@ -758,7 +811,7 @@ export function TimelineScreen({
                       </View>
                     )}
                   </View>
-                </Pressable>
+                </SwipeRow>
               );
             }}
             ListFooterComponent={<View style={{ height: 12 }} />}
@@ -795,9 +848,12 @@ export function TimelineScreen({
         </View>
       </View>
 
+      {/* 轻提示排在覆盖层之前：它只该压在列表上，不该盖住确认弹层 */}
+      <Toast text={toast} bottom={80 + keyboardHeight} />
+
       {/*
-        详情页必须排在编辑面板之前渲染 —— 两者都是 absolute 全屏覆盖层，
-        JSX 顺序就是层叠顺序。存活的详情页留在下面，编辑完关掉能回到原来那一条。
+        详情页是全屏覆盖层，JSX 顺序就是层叠顺序，必须排在列表之后。
+        这里只存 id —— 存快照的话编辑保存后它还是旧内容。
       */}
       {detail && detailItems.length > 0 ? (
         <FragmentDetail
@@ -813,40 +869,38 @@ export function TimelineScreen({
       ) : null}
 
       {/*
-        编辑面板与长文输入都用覆盖层，不再用 Modal。
-        Modal 在 Android 上是一个独立窗口：拿到的是窗口级 inset，长文页顶部会直接顶到
-        状态栏底下和通知栏重合；键盘事件也不会从 Activity 根视图冒上来，躲不开输入法。
-        覆盖层留在同一棵 React 树里，安全区已经由外层 SafeAreaView 让出来了。
+        删除确认。仍然不用 Modal：滑开才露出按钮，误触概率不低，
+        所以必须有个明确的第二道门；但 Modal 在安卓上是独立窗口，
+        会画到状态栏底下、也收不到键盘事件，覆盖层 + BackHandler 才稳。
       */}
-      {editing ? (
-        <View style={[styles.overlay, styles.sheetOverlay, { paddingBottom: keyboardHeight }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setEditing(null)} />
-          <View style={styles.sheet}>
-            <Text style={styles.sheetTitle}>编辑碎片</Text>
-            <TextInput
-              value={editText}
-              onChangeText={setEditText}
-              style={styles.sheetInput}
-              multiline
-              autoFocus
-              maxLength={2000}
-            />
-            <View style={styles.sheetActions}>
-              <Pressable onPress={removeEditing} hitSlop={8}>
-                <Text style={styles.danger}>{armedDelete ? '再点一次确认删除' : '删除'}</Text>
-              </Pressable>
-              <View style={styles.flex} />
-              <Pressable onPress={() => setEditing(null)} hitSlop={8}>
+      {deleteTarget ? (
+        // paddingBottom 让卡片落在键盘上方 —— 记完一条顺手滑掉它时，键盘往往还开着
+        <View style={[styles.overlay, styles.dialogOverlay, { paddingBottom: keyboardHeight }]}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteTarget(null)} />
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>删除这条碎片？</Text>
+            <Text style={styles.dialogBody} numberOfLines={3}>
+              {deleteTarget.content}
+            </Text>
+            <Text style={styles.dialogHint}>删除后无法恢复。已整理出的标签和事项不会跟着消失。</Text>
+            <View style={styles.dialogActions}>
+              <Pressable onPress={() => setDeleteTarget(null)} hitSlop={8}>
                 <Text style={styles.muted}>取消</Text>
               </Pressable>
-              <Pressable onPress={saveEdit} hitSlop={8}>
-                <Text style={styles.primary}>保存</Text>
+              <Pressable onPress={confirmDelete} hitSlop={8}>
+                <Text style={styles.dangerText}>删除</Text>
               </Pressable>
             </View>
           </View>
         </View>
       ) : null}
 
+      {/*
+        长文记录用覆盖层，不用 Modal。
+        Modal 在 Android 上是一个独立窗口：拿到的是窗口级 inset，长文页顶部会直接顶到
+        状态栏底下和通知栏重合；键盘事件也不会从 Activity 根视图冒上来，躲不开输入法。
+        覆盖层留在同一棵 React 树里，安全区已经由外层 SafeAreaView 让出来了。
+      */}
       {fullEdit ? (
         <View style={[styles.overlay, styles.fullOverlay, { paddingBottom: keyboardHeight }]}>
           <View style={styles.fullHeader}>
@@ -1147,35 +1201,31 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     left: 0,
     backgroundColor: c.page,
   },
-  sheetOverlay: {
+  fullOverlay: { paddingTop: 12 },
+
+  // 删除确认：压在列表正中的一块卡片，底色比 scrim 亮，一眼能分出「这是要你决定」的层
+  dialogOverlay: {
     backgroundColor: c.scrim,
     justifyContent: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 26,
   },
-  fullOverlay: { paddingTop: 12 },
-  sheet: {
+  dialog: {
     backgroundColor: c.card,
     borderRadius: R.card,
-    padding: 18,
-    borderWidth: 0.5,
-    borderColor: c.hair,
+    padding: 20,
+    gap: 10,
   },
-  sheetTitle: { fontSize: 14, color: c.text, fontWeight: '500', marginBottom: 12 },
-  sheetInput: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: c.text,
-    minHeight: 88,
-    maxHeight: 220,
-    borderWidth: 0.5,
-    borderColor: c.hair,
-    borderRadius: R.btn,
-    padding: 12,
-    textAlignVertical: 'top',
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
+  dialogTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
+  dialogBody: { fontSize: 12.5, color: c.text2, lineHeight: 19 },
+  dialogHint: { fontSize: 11.5, color: c.text3, lineHeight: 17 },
+  dialogActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 26,
+    marginTop: 4,
   },
-  sheetActions: { flexDirection: 'row', alignItems: 'center', gap: 18, marginTop: 16 },
-  danger: { fontSize: 13, color: c.danger },
+  dangerText: { fontSize: 13, color: c.danger, fontWeight: '500' },
   muted: { fontSize: 13, color: c.text2 },
   primary: { fontSize: 13, color: c.accent, fontWeight: '500' },
 });
