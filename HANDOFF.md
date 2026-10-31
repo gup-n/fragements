@@ -53,7 +53,7 @@
 > 月 → 周 → 日 → 主题，组内才按时间倒序；summary prompt 的禁令写具体（禁排比、禁空泛动词、
 > 允许省略小节）。只动展示与 prompt。
 >
-> **v0.8.8（2026-10-31）**：时间轴手势重排（长按复制 / 右滑删除 / 左滑问），
+> **v0.8.8（2026-10-31）**：时间轴手势重排（长按复制 / 左滑删除 / 右滑问），
 > 去掉长按编辑小窗；问页改为历史会话自动落库 + 引用小标 + 左滑开历史；
 > 设置页删掉三段说明文字；SQLite v8 新增 `ask_sessions`。
 
@@ -87,14 +87,14 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **16,813 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **16,846 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
 | `App.tsx` | 411 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1231 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 右滑删除 / 左滑问 |
+| `src/screens/TimelineScreen.tsx` | 1232 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问 |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 1214 | 「问」：聊天布局、两个开关、引用小标、历史会话（归档 / 整理为碎片 / 删除）、左滑开历史 |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
@@ -161,7 +161,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/NoteBody.tsx` | 294 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标。**表格用 View 排，不能靠空格对齐** |
 | `src/util/mdBlocks.ts` | 433 | Markdown 分块解析 + 引用标记识别（纯函数，可断言）。渲染本地看不见，能验的都在这里 |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 84 | 全项目唯一的图标按钮与页头；`ScreenHeader` 的左侧按钮可换成「历史」 |
-| `src/components/SwipeRow.tsx` | 247 | 时间轴行的手势：右滑露出删除、左滑直接执行。**不能加 `overflow:'hidden'`**，会切断时间轴竖线 |
+| `src/components/SwipeRow.tsx` | 279 | 时间轴行的手势：左滑露出删除、右滑直接进问。**不能加 `overflow:'hidden'`**，会切断时间轴竖线 |
 | `src/components/CitationSheet.tsx` | 193 | 点引用小标后从底部展开的来源面板；正文走快照，不回库查 |
 | `src/components/Toast.tsx` | 55 | 复制 / 归档 / 删除成功的轻提示；不自己计时 |
 | `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 折叠 / 轨迹 |
@@ -294,7 +294,7 @@ commitPlan({plan, existingTags, accepted, processedIds})  只有这一步写库
 
 ```
 retrieveLocal(question, turns, contextIds)
-  ├─ contextIds（左滑带入的那条，绕过 merged 过滤）  ⭐ v0.8.8
+  ├─ contextIds（右滑带入的那条，绕过 merged 过滤）  ⭐ v0.8.8
   ├─ repo.searchFragments(question, 40)          FTS5 + LIKE 兜底
   ├─ timeRange(question) → listFragmentsBetween  今天/上周/最近 N 天…
   ├─ 提到的标签名（≥2 字，最多 2 个）→ listFragmentsByTag
@@ -464,6 +464,9 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ### 8.10 时间轴手势（v0.8.8）
 
+- **方向是用户定的：左滑 → 右侧「删除」；右滑 → 左侧「问」。** 别再按直觉反过来写。
+  `SwipeRow` 的 `leftAction` 由右滑露出（`leftInstant` 时直接执行），
+  `rightAction` 由左滑露出。
 - **SwipeRow 不能加 `overflow:'hidden'`。** 时间轴竖线靠 `bottom:-8` 伸到下一行，
   裁了每行底部会缺 8px，整条线变成虚线。横向滑出的内容本来就在屏幕外，不需要裁。
 - **回弹动画必须 `useNativeDriver: false`。** 拖动时用 `tx.setValue()` 逐帧写值，

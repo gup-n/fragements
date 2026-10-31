@@ -39,7 +39,9 @@ interface Props {
   leftAction?: SwipeAction;
   /** 左滑露出的操作（在右边） */
   rightAction?: SwipeAction;
-  /** true：左滑过阈值直接触发 rightAction.onPress，不保持展开（用于「进入问」） */
+  /** true：右滑过阈值直接触发 leftAction.onPress，不保持展开（用于「进入问」） */
+  leftInstant?: boolean;
+  /** true：左滑过阈值直接触发 rightAction.onPress，不保持展开 */
   rightInstant?: boolean;
   style?: any;
   pressedStyle?: any;
@@ -71,6 +73,7 @@ export function SwipeRow({
   onLongPress,
   leftAction,
   rightAction,
+  leftInstant,
   rightInstant,
   style,
   pressedStyle,
@@ -88,8 +91,24 @@ export function SwipeRow({
    * PanResponder 只创建一次，闭包里拿不到最新 props，
    * 所以每次渲染把最新的回调和操作区写进 ref。
    */
-  const latest = useRef({ open, onOpen, onClose, leftAction, rightAction, rightInstant });
-  latest.current = { open, onOpen, onClose, leftAction, rightAction, rightInstant };
+  const latest = useRef({
+    open,
+    onOpen,
+    onClose,
+    leftAction,
+    rightAction,
+    leftInstant,
+    rightInstant,
+  });
+  latest.current = {
+    open,
+    onOpen,
+    onClose,
+    leftAction,
+    rightAction,
+    leftInstant,
+    rightInstant,
+  };
 
   useEffect(() => {
     if (dragging.current) return;
@@ -126,16 +145,22 @@ export function SwipeRow({
         onPanResponderRelease: (_e, g) => {
           dragging.current = false;
           const at = base.current + g.dx;
-          const { leftAction: l, rightAction: r, rightInstant: instant, onOpen: openRow, onClose: closeRow } =
-            latest.current;
+          const {
+            leftAction: l,
+            rightAction: r,
+            leftInstant: lInstant,
+            rightInstant: rInstant,
+            onOpen: openRow,
+            onClose: closeRow,
+          } = latest.current;
           const snap = (target: number) => {
             pos.current = target;
             Animated.spring(tx, { toValue: target, ...SPRING }).start();
           };
 
           if (at <= -THRESHOLD && r) {
-            // 「问」是一次性动作：滑过去就执行，不停在半开的位置
-            if (instant) {
+            // 左滑到阈值：右侧操作。默认停留展开，等用户点一下
+            if (rInstant) {
               snap(0);
               closeRow();
               r.onPress();
@@ -146,6 +171,13 @@ export function SwipeRow({
             return;
           }
           if (at >= THRESHOLD && l) {
+            // 右滑到阈值：左侧操作。「问」是一次性动作，滑过去就执行
+            if (lInstant) {
+              snap(0);
+              closeRow();
+              l.onPress();
+              return;
+            }
             snap(ACTION_W);
             openRow('left');
             return;

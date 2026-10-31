@@ -107,7 +107,7 @@ export async function retrieveLocal(
     }
   };
 
-  // 从某条碎片左滑进来时，它是这一场的起点：先放它，再让检索补其余资料。
+  // 从某条碎片右滑进来时，它是这一场的起点：先放它，再让检索补其余资料。
   // 不放进「上一轮引用」里，是因为它可能和问题毫无字面重叠，FTS 根本搜不到。
   if (contextIds.length) {
     try {
@@ -355,7 +355,7 @@ export interface QaOptions {
   thinking: boolean;
   /** 联网搜索开关 */
   useWeb: boolean;
-  /** 从某条碎片左滑进来时的上下文碎片 id，优先装进资料 */
+  /** 从某条碎片右滑进来时的上下文碎片 id，优先装进资料 */
   contextIds?: number[];
   onProgress?: (patch: ChatProgress) => void;
 }

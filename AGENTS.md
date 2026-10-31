@@ -321,7 +321,7 @@ files 和 cache），所以要先 `getContentUriAsync` 再交给 `IntentLauncher
 - **返回键由 `App` 转发**。`AskScreen` 关闭时要按层关闭引用面板 / 删除确认 /
   会话菜单 / 历史列表，所以通过 `registerClose` 把 `attemptClose` 交给 App；
   `registerClose` 必须 `useCallback` 固定身份。
-- **左滑带入的上下文碎片优先装填**，而且**绕过 `merged_into` 过滤** ——
+- **右滑带入的上下文碎片优先装填**，而且**绕过 `merged_into` 过滤** ——
   用户是明确指着这条进来的，被合并过也得让模型看到，否则「就这条」会答成没有。
 
 ## 时间轴手势与问页历史（v0.8.8）
@@ -331,10 +331,12 @@ files 和 cache），所以要先 `getContentUriAsync` 再交给 `IntentLauncher
 | 手势 | 结果 | 实现 |
 |---|---|---|
 | 长按 | 复制正文 | `expo-clipboard` + `Toast`；不要抢滑动手势 |
-| 右滑 | 露出「删除」，点了再二次确认 | `SwipeRow` 的 `leftAction` |
-| 左滑 | 直接进「问」并带上下文 | `SwipeRow` 的 `rightInstant` |
+| 左滑 | 露出「删除」，点了再二次确认 | `SwipeRow` 的 `rightAction` |
+| 右滑 | 直接进「问」并带上下文 | `SwipeRow` 的 `leftAction` + `leftInstant` |
 | 点击 | 进详情页 | 编辑仍在详情页做 |
 
+- **方向是用户定的：左滑 → 右侧删除，右滑 → 左侧问。** 别按直觉反过来写。
+  `leftAction` 是右滑露出的那块，`rightAction` 是左滑露出的那块。
 - **`SwipeRow` 不能加 `overflow:'hidden'`**。时间轴竖线用 `bottom:-8` 伸到下一行，
   裁了每行底部会缺 8px，整条线变虚线。横向滑出的内容本来就在屏幕外。
 - **回弹动画必须 `useNativeDriver: false`**。拖动时用 `tx.setValue()` 逐帧写值；

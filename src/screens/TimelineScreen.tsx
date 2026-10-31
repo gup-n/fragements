@@ -714,7 +714,16 @@ export function TimelineScreen({
                   onClose={() => setOpenRow(null)}
                   onPress={() => openDetail(fragment)}
                   onLongPress={() => copyFragment(fragment)}
+                  // 方向由用户 2026-10-31 明确：右滑 → 左侧「问」，左滑 → 右侧「删除」
                   leftAction={{
+                    label: '问',
+                    icon: 'chatbubble-ellipses-outline',
+                    bg: c.accent,
+                    fg: c.onAccent,
+                    onPress: () => onOpenAsk(fragment.id),
+                  }}
+                  leftInstant
+                  rightAction={{
                     label: '删除',
                     icon: 'trash-outline',
                     bg: c.danger,
@@ -726,14 +735,6 @@ export function TimelineScreen({
                       setDeleteTarget(fragment);
                     },
                   }}
-                  rightAction={{
-                    label: '问',
-                    icon: 'chatbubble-ellipses-outline',
-                    bg: c.accent,
-                    fg: c.onAccent,
-                    onPress: () => onOpenAsk(fragment.id),
-                  }}
-                  rightInstant
                   style={styles.row}
                   pressedStyle={styles.rowPressed}
                 >

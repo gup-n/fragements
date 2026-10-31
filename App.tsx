@@ -88,7 +88,7 @@ function Shell({ booted }: { booted: boolean }) {
    */
   const [draft, setDraft] = useState('');
   /**
-   * 从时间轴左滑一条碎片进「问」时，带上的那条碎片 id。
+   * 从时间轴右滑一条碎片进「问」时，带上的那条碎片 id。
    * 从页头聊天按钮进来时是 null —— 两种入口共用同一个页面，但上下文不一样。
    */
   const [askContextId, setAskContextId] = useState<number | null>(null);

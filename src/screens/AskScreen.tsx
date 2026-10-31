@@ -55,7 +55,7 @@ interface Props {
    * 天然抢不过），所以这里必须是 App 主动转发，而不是自己再挂一个监听。
    */
   registerClose: (fn: (() => void) | null) => void;
-  /** 从时间轴左滑进来时带上的那条碎片 */
+  /** 从时间轴右滑进来时带上的那条碎片 */
   contextFragment?: Fragment | null;
 }
 
