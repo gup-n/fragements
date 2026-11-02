@@ -23,11 +23,12 @@ import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { deleteOriginal, openOriginal, readPlainText } from '../db/docFiles';
 import {
+  getMineruToken,
   mineruMessage,
-  parseWithMineru,
   stageText,
   type MineruStage,
 } from '../ai/mineru';
+import { isLocalText, parseDocFile } from '../util/docSupport';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
 
@@ -51,10 +52,6 @@ interface Props {
 }
 
 type Busy = 'idle' | 'opening' | 'retrying' | 'deleting';
-
-function isPlainText(ext: string): boolean {
-  return ext === 'txt' || ext === 'md' || ext === 'markdown';
-}
 
 /** 头部第二行。解析中的阶段跟着上层实时变，不需要轮询 */
 function statusLine(doc: Document, stage?: MineruStage): string {
@@ -152,7 +149,7 @@ export function DocViewer({
     setMsg(null);
     setStage(null);
     setBusy('retrying');
-    const plain = isPlainText(doc.ext);
+    const plain = isLocalText(doc.ext);
     // 建任务也要几秒；先把阶段亮起来，否则这期间关掉再进来会被当成「上次没跑完」
     if (!plain) onStage('uploading');
 
@@ -175,12 +172,19 @@ export function DocViewer({
         body = await readPlainText(doc.fileUri);
         nextState = 'local';
       } else {
-        body = await parseWithMineru(
+        // 重试也走同一个通道判据：填了 Token 且需要大文件通道时，
+        // 这里会自动换成精准接口，不会又把同一个文件重新走一遍轻量
+        const token = await getMineruToken();
+        body = await parseDocFile(
           { name: doc.name, ext: doc.ext, size: doc.size, uri: doc.fileUri },
+          token,
           (s) => {
             if (alive.current) setStage(s);
             onStage(s);
           },
+          // 重试就是「上次没成功」：有 Token 就直接用更强的通道。
+          // 页数超限在本地看不出来，只按大小判断会再撞一次同一堵墙
+          { preferPro: !!token.trim() },
         );
       }
       if (!body.trim()) throw new Error('解析结果是空的，请稍后重试');

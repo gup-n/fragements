@@ -269,7 +269,7 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 | 密钥 | expo-secure-store（Android Keystore 加密） | API Key 不落明文 |
 | 文件导出 | expo-file-system + expo-sharing | 生成 md 后走系统分享，可直接存到电脑或网盘 |
 | 导航 | 自实现轻量页面栈（6 个页面：时间轴 / 整理 / 回顾 / 问 / 设置 / 文档） | 不引入 react-navigation，减少依赖与配置成本 |
-| 文档解析 | MinerU 轻量 Agent 接口（免 Token） | 手机端跑不了版面分析模型；轻量接口直接返回 Markdown 直链，不需要解压 zip，也不涉及付费与配额 |
+| 文档解析 | MinerU 两条通道：轻量 Agent 接口（免 Token，≤10 MB / 20 页）+ 精准 `/api/v4`（Token，≤200 MB / 200 页，每天 1000 页） | 手机端跑不了版面分析模型。轻量免 Token 且不耗额度，先用它；精准接口换 20 倍体积和旧版 Office 格式。它返回 zip，用 `fflate` 只解 `full.md`（全解会内存雪崩） |
 | Web | react-native-web + localStorage 驱动 | **只用来跑编译校验**（`npm run build:web` 打一遍包即删），不做交付、不做界面预览 |
 
 **包名**：`com.local.fragments`（固定）
@@ -290,10 +290,15 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 - 碎片编辑 / 删除
 - **时间轴手势（v0.8.8）**：长按复制正文；左滑露出「删除」（二次确认）；右滑直接进「问」并带上这条碎片
 
-**文档（v0.10.0）**
+**文档（v0.10.0 起，v0.11.0 加精准通道）**
 
-- 上传 PDF / Word / PPT / Excel / 图片 / txt / md，**原文件留在手机本地**
-- txt / md 直接读文本；其余走 MinerU 轻量解析接口转 Markdown（免 Token，单文件 ≤10 MB、≤20 页）
+- 上传 PDF / 图片 / docx / pptx / xlsx / doc / ppt / xls / txt / md，**原文件留在手机本地**
+- txt / md 直接读文本；其余走 MinerU 转 Markdown，两条通道按文件情况自动选：
+  - **轻量**（免 Token，≤10 MB / ≤20 页）：PDF、图片、docx、pptx、xlsx
+  - **精准**（需 Token，≤200 MB / ≤200 页，每天 1000 页）：以上全部 + doc / ppt / xls
+- 分派判据只有一份：`util/docSupport.ts` 的 `planForDoc(ext, size, hasToken)`。
+  上传预判、确认卡文案、失败重试都走它，不允许页面里另写一套 if
+- 重试一律 `preferPro`（有 Token 时）：页数在本地看不出来，只看大小会再撞同一堵墙
 - 列表显示状态（解析中 / 已解析 N 字 / 失败 / 本地文本），失败可重试或删除
 - 阅读器复用 `NoteBody`，支持打开原文件（系统查看器）
 - 一期**不进全文索引、不进「问」**；接入检索是二期，索引口径等那时再定
@@ -381,7 +386,9 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 | 自动检查 | 启动后 3 秒，6 小时节流，可关；失败静默 |
 | 手动检查 | 设置 → 关于 → 检查更新，`force` 绕过节流，结果要给出具体原因 |
 | 下载 | `File.createDownloadTask` 的 `onProgress`，可取消 |
-| 下载源（v0.9.0） | **多源回退**：自定义地址（设置 → 关于 → 下载地址，拼 `{base}/{apkName}`）→ 内置加速镜像（ghproxy 系，拼 `{proxy}{apkUrl}`）→ GitHub 官方。逐个尝试、失败换下一个、取消不换源、全失败报合并错误。候选构建在 `update/mirror.ts` 的 `buildCandidates` |
+| 下载源（v0.11.0 调整顺序） | **多源回退**：自定义地址（设置 → 关于 → 下载地址，拼 `{base}/{apkName}`）→ GitHub 官方直连 → 内置加速镜像（只留 ghproxy 一个，拼 `{proxy}{apkUrl}`）兜底。官方排在镜像前是实测结论：镜像时快时慢，而卡住的连接既不报错也不出字节。候选构建在 `update/mirror.ts` 的 `buildCandidates` |
+| 切源判据（v0.11.0） | 巡检每 3s 读一次 `bytesWritten`：**15s 没有新字节**（停滞）就掐掉换源；跑满 60s 且平均 < 25 KB/s 且进度未过 30%（低速）也换，**但仅当后面还有源**（掐最后一个只会变成全失败）。判据必须是「字节数有没有变」，不能看回调有没有来 —— 卡死的连接照样按频率回调。掐源文案里**不能出现 abort/cancel**，上层拿这两个词判断用户取消 |
+| 进度节流（v0.11.0） | `setProgress` 至少间隔 250ms；`written === 0`（换源归零）与跑满 100% 两点必须立即生效，否则进度条会停在 99%。不节流时进度条自己就卡 |
 | 进度 | 显示「当前源 i/N · 已下载 / 总大小 · 速度」。速度两次采样至少隔 300ms，再做指数移动平均（新值占 30%）—— 回调一秒几十次，直接求差会剧烈跳 |
 | 通知 | `expo-notifications`，LOW 渠道 + sticky。**没有前台服务**：切后台后传输继续但 JS 挂起，`onProgress` 不再回调，通知数字停在切走那一刻。要实时只能写原生 ForegroundService（不做） |
 | 通知失败 | 一律静默：没授权、渠道被禁、发不出去都不能影响下载 |
@@ -996,7 +1003,7 @@ Dialog 窗口也拿不到 Activity 根视图的键盘事件，躲不开输入法
 关闭预览等于放弃这次生成；`summaryGenRef` 让迟到的请求结果不再回写界面。
 点「存为碎片」才 `insertFragment`，写成功后回历史列表并弹「已存为一条整理后的碎片」。
 
-### 8.3 搜索命中与文档（v0.10.0）
+### 8.3 搜索命中与文档（v0.10.0，文档在 v0.11.0 扩了精准通道）
 
 **搜索命中**
 
@@ -1034,13 +1041,23 @@ Dialog 窗口也拿不到 Activity 根视图的键盘事件，躲不开输入法
 └──────────────────────────────┘
 ```
 
-- 上传前有确认卡：文件名、大小、**「会上传到 mineru.net」**、取消 / 开始解析。
-  这段说明是产品要求，不是可选文案。
+- 上传前有确认卡：文件名、大小、**走哪条通道**（轻量 / 精准，带各自上限）、
+  **「会上传到 mineru.net」**、取消 / 开始解析。这段说明是产品要求，不是可选文案。
 - 原文件复制进 `Paths.document/documents/`，选择器给的临时 URI 不作长期引用。
-- txt / md 本地读文本（`state: 'local'`）；其余走 MinerU 轻量接口
-  （`POST /api/v1/agent/parse/file` → `PUT` 原始字节 → 轮询 → 下载 `markdown_url`），
-  `state` 走 `parsing → done | failed`。上传不带 `Content-Type`，否则预签名校验失败。
-- 失败保留记录与原文件，阅读器给「重新解析」；删除是记录 + 原文件一起删，删除要二次确认。
+- txt / md 本地读文本（`state: 'local'`）；其余走 MinerU，`state` 走 `parsing → done | failed`。
+- 两条通道，按 `planForDoc(ext, size, hasToken)` 选：
+
+  | 通道 | 端点 | 上限 | 认的格式 |
+  |---|---|---|---|
+  | 轻量 | `POST /api/v1/agent/parse/file` → `PUT` → 轮询 → `markdown_url` | 10 MB / 20 页，免 Token | pdf、图片、docx、pptx、xlsx |
+  | 精准 | `POST /api/v4/file-urls/batch` → `PUT` → 轮询 `extract-results/batch` → 下 zip | 200 MB / 200 页，要 Token，每天 1000 页 | 上面全部 + doc、ppt、xls |
+
+- 两条通道的上传**都不带 `Content-Type`**，否则预签名校验失败。
+- 精准接口返回 zip，用 `unzipSync(buf, { filter })` **只解 `full.md`**：包里还有 `layout.json`、
+  `*_content_list.json` 和抽出的图片，大文档全解会 OOM。
+- 分派判据只有一份 `util/docSupport.ts`，页面里不允许再写「这个后缀算不算文本」之类的判断。
+- 失败保留记录与原文件，阅读器给「重新解析」；重试时有 Token 就 `preferPro`。
+  删除是记录 + 原文件一起删，删除要二次确认。
 - 一期**不写 `fragment_fts`、不进「问」**。
 
 ## 9. 代码结构与分层
@@ -1098,6 +1115,8 @@ util/         纯函数：整理计划、分词、日期、结果元数据、纪
 - [x] SQLite 迁移到 v9（`todos.done_at` / `ask_sessions` / `documents`）、FTS5 索引与重建入口
 - [x] **搜索命中**（v0.10.0）：正文描底色、每条「N 处」、详情页逐处跳转（段落实测 y）
 - [x] **文档库**（v0.10.0）：上传 / 原文件留存 / MinerU 轻量解析 / 阅读 / 重新解析 / 删除
+- [x] **精准解析通道**（v0.11.0）：Token、200 MB / 200 页、doc/ppt/xls；支持矩阵收敛到 `util/docSupport.ts`
+- [x] **下载不再干等**（v0.11.0）：官方直连优先、停滞 15s / 低速 60s 自动切源、进度 250ms 节流
 - [x] **更新公告精简**（v0.10.0）：弹窗只留摘要 + GitHub 链接，设置页加仓库与更新记录入口
 - [x] Web 平台编译校验（`npm run build:web` 打一遍包确认能过，产物跑完即删，**不做界面预览**）
 
@@ -1120,9 +1139,13 @@ util/         纯函数：整理计划、分词、日期、结果元数据、纪
 - **Web 端用 localStorage，与 Android 的 SQLite 是两套数据**，**不能用来验证真实数据流** ——
   它唯一的作用是让 `tsc` 之外的打包错误暴露出来。
 - **整理会话没有历史列表。** 只有「最近一个未完成的」能续跑；放弃即删。
-- **文档解析会把文件发到外网**（mineru.net 轻量接口），且限制 10 MB / 20 页。
+- **文档解析会把文件发到外网**（mineru.net），轻量通道限制 10 MB / 20 页、精准通道 200 MB / 200 页。
   这是全项目唯一离开手机的内容；txt / md 不上传。解析任务不做后台持久化 ——
   离开页面仍在跑，**杀掉 App 就得重新解析**（记录与原文件都还在）。
+- **精准通道的 Token 存在 `settings` 表里，不是 secure-store。** 它和 AI 的 API Key 不同：
+  两者都能花钱，但 MinerU Token 只消耗每日页数、不能转账。真要加密再迁也不迟。
+- **页数在本地看不出来。** 判断「会不会超 20 页」要解 PDF，所以只能在服务端返回 -30003 之后再引导用户填 Token。
+  这也是重试一律 `preferPro` 的原因。
 
 ### 待办：通知栏入口的实现约束
 

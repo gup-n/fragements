@@ -96,6 +96,8 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   const rateRef = useRef({ at: 0, bytes: 0, ema: 0 });
   /** 通知栏最多一秒刷一次：更密会让通知栏不停闪，而且没有信息增量 */
   const notifyAtRef = useRef(0);
+  /** 进度条上次真正 setState 的时刻，节流用 */
+  const pushRef = useRef(0);
 
   const dismiss = useCallback(() => {
     if (skip) onSkipVersion();
@@ -131,9 +133,24 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   /** 收到一次进度：更新条，顺便算速度 */
   const onProgress = useCallback(
     (p: DownloadProgress) => {
-      setProgress(p);
-
       const now = Date.now();
+
+      /**
+       * 进度必须节流。
+       *
+       * 原生下载任务的回调非常密（每读一个数据块就回调一次），每次都 setState 会把
+       * JS 线程压满 —— 表现就是「下载时界面卡」，进度条一顿一顿，甚至按不动取消。
+       * 250ms 一次人眼已经看不出差别，还能把线程留给渲染。
+       *
+       * 两个点必须立刻生效，不能等节流窗口：
+       * - `written === 0`：换源了，进度要马上归零，否则还显示上个源的进度；
+       * - 跑满：最后一次回调要是被节流吞掉，进度条就永远停在 99%。
+       */
+      const done = p.total > 0 && p.written >= p.total;
+      if (p.written === 0 || done || now - pushRef.current >= 250) {
+        pushRef.current = now;
+        setProgress(p);
+      }
 
       // 通知栏：一秒一次。后台时 JS 挂起，这个更新自然就停了 ——
       // 通知会停在切走那一刻的数字，回到应用后立刻接上
@@ -171,6 +188,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     setSource(null);
     rateRef.current = { at: 0, bytes: 0, ema: 0 };
     notifyAtRef.current = 0;
+    pushRef.current = 0;
 
     // 通知失败不影响下载：没授权就静默跳过
     initNotify().then((ok) => {

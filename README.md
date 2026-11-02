@@ -11,13 +11,13 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.10.0（versionCode 38） |
+| 当前版本 | v0.11.0（versionCode 39） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
 ## 第一次装上
 
-1. **下载安装包**：[Releases](https://github.com/gup-n/fragements/releases/latest) 里的 `fragments-v0.10.0.apk`。
+1. **下载安装包**：[Releases](https://github.com/gup-n/fragements/releases/latest) 里的 `fragments-v0.11.0.apk`。
    首次安装系统会拦「未知来源」，允许一次即可（这也是 App 内更新的前提）。
 2. **填 API Key**：设置 → AI 接口。`Base URL` 和 `模型` 已经填好默认值
    （`https://api.deepseek.com/v1` / `deepseek-flash`），只需要贴一个 Key；
@@ -84,12 +84,21 @@
 AI 失败时可以重试，或选「保存全文」不提炼直接存。
 右上角「+」开新会话，「×」退出；安卓返回键同样回到主界面。
 
-**文档（v0.10.0）**：页头「问」左边的文件图标。上传 PDF / Word / PPT / Excel / 图片 / txt / md，
+**文档（v0.10.0 起）**：页头「问」左边的文件图标。上传 PDF / 图片 / docx / pptx / xlsx / txt / md，
 **原文件留在手机上**，解析出来的 Markdown 在应用内直接读。
-txt / md 本地直读；其余格式走 [MinerU](https://mineru.net) 的轻量解析接口
-（免 Token、不涉及付费，单文件 ≤10 MB、≤20 页），确认卡上会写明「文件会上传到 mineru.net」——
-点「开始解析」才会发出去。解析失败保留记录和原文件，可以重试或删掉。
-一期**不进搜索、不进「问」**：先把「能读」做对，检索等二期。
+txt / md 本地直读；其余格式走 [MinerU](https://mineru.net) 解析，确认卡上会写明「文件会上传到 mineru.net」，
+点「开始解析」才会发出去。
+
+解析有两条通道，默认走免费的那条：
+
+| 通道 | 要 Token | 上限 | 认的格式 |
+|---|---|---|---|
+| 轻量（默认） | 不要 | 10 MB / 20 页 | PDF、图片、docx、pptx、**xlsx** |
+| 精准 | 要 | 200 MB / 200 页，每天 1000 页 | 上面全部 + doc / ppt / xls |
+
+精准通道的 Token 在 设置 → 文档解析 里填，填了之后**超大文件和旧版 Office 格式**才传得进去；
+不填也能正常用，只是撞上限时会提示你去填。CSV 两个接口都不认，先另存为 txt 或 xlsx。
+解析失败保留记录和原文件，可以重试或删掉。一期**不进搜索、不进「问」**。
 
 **小结**：日 / 周 / 月三种粒度，AI 把该周期**全部**碎片读一遍写成 Markdown，**先预览再决定存不存**。
 三节固定为「重点 / 进展 / 待处理」，没有内容的整节省略；字数是**上限**不是目标
@@ -123,10 +132,12 @@ txt / md 本地直读；其余格式走 [MinerU](https://mineru.net) 的轻量�
 也可以随时手动点「检查更新」。下载带进度条（**下载源 · 已下载 / 总大小 · 实时速度**），下完交给系统安装器。
 支持「不再提示这个版本」——勾了之后要等下一个版本才会再问。
 
-**下载走多源回退（v0.9.0）**：GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，
-大陆直连极慢，很多 VPN 的分流模式也不覆盖它。所以下载按「**自定义地址 → 加速镜像 → GitHub 官方**」
-依次尝试，哪个先通走哪个，全程失败才报错。设置 → 关于 → 「下载地址」可以填自建或镜像的基础地址
-（以 `/` 结尾，下载时拼上 APK 文件名），留空就用内置加速镜像 + 官方兜底。
+**下载（v0.11.0 改了顺序）**：GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，
+大陆直连可能极慢。所以下载按「**自定义地址 → GitHub 官方 → 内置加速镜像**」尝试，哪个先通走哪个。
+**官方排在镜像前面**是实测的结果：镜像时快时慢，而「时快时慢」比「一直慢」更难受。
+每个源都有停滞检测——15 秒没有新字节、或者跑满 60 秒平均低于 25 KB/s 且进度没过三成，
+就自动掐掉换下一个，不会让你对着一个不动的进度条等。
+设置 → 关于 → 「下载地址」可以填自建或镜像的基础地址（以 `/` 结尾，下载时拼上 APK 文件名）。
 
 下载时通知栏有一条常驻通知「正在下载 v0.9.0 · 8.2 / 22.3 MB · 37%」。**这里有个必须知道的限制**：
 Android 上 Expo 没有前台服务，切到后台后传输会继续（进程不被杀就行），但 JS 线程被挂起，
@@ -144,7 +155,7 @@ Android 上 Expo 没有前台服务，切到后台后传输会继续（进程不
 | 框架 | React Native 0.88 + Expo SDK 58（新架构） |
 | 语言 | TypeScript 6.0 |
 | 存储 | expo-sqlite（本地 SQLite，`PRAGMA user_version` 迁移到 v9） |
-| 文档解析 | MinerU 轻量 Agent 接口（免 Token，≤10 MB / 20 页）；原文件用 `expo-document-picker` + `expo-file-system` 留在私有目录 |
+| 文档解析 | MinerU 两条通道：轻量 Agent 接口（免 Token，≤10 MB / 20 页）+ 精准 `/api/v4`（Token，≤200 MB / 200 页）；zip 用 `fflate` 只解出 `full.md`；原文件用 `expo-document-picker` + `expo-file-system` 留在私有目录 |
 | 自更新 | `expo-file-system`（下载任务）+ `expo-intent-launcher`（拉起系统安装器）+ `expo-notifications`（下载进度通知） |
 | 检索 | SQLite FTS5 + **bigram 分词**（中文两字就能命中；`trigram` 对 <3 字查询不命中，别换） |
 | 密钥 | expo-secure-store（Android Keystore） |
@@ -163,13 +174,14 @@ src/
   theme.tsx            两套调色板 + ThemeProvider + useThemedStyles + 标签哈希取色
   version.ts           版本号常量（与 app.json 手工同步）
   ai/                  配置、prompt、请求层、整理循环 / 单批整理 / 问答 / 小结 / 搜索、SSE 解析、
-                       文档解析（MinerU 轻量接口）
+                       文档解析（MinerU 轻量与精准两条通道）
   db/                  Repo 接口 + SQLite / localStorage 两个实现 + 写库逻辑 + Markdown 导入 + 文档文件层
   screens/             六个页面（时间轴 / 整理 / 回顾 / 问 / 设置 / 文档）
   components/          覆盖层与可复用区块（碎片详情、文档阅读器、结果确认、标签面板、小结面板、
                        滑动行、引用面板、轻提示）
   export/              Markdown 导出的 IO 部分（拼接在 util/mdBuild.ts）
-  util/                纯函数：日期、整理计划合并与校验、结果元数据、分词、搜索命中、键盘、纪要、待补清单、Markdown 拼装与解析
+  util/                纯函数：日期、整理计划合并与校验、结果元数据、分词、搜索命中、键盘、纪要、
+                       待补清单、Markdown 拼装与解析、文档格式支持矩阵与通道判据
 plugins/               config plugin（构建优化、启动窗去动画）
 scripts/               build_web.mjs（Web 编译校验，产物跑完即删）
                       assert_md.cjs（导入导出往返断言，npm run test:md）

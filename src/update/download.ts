@@ -45,6 +45,34 @@ export interface DownloadSourceReport {
 /** 下载/安装阶段的可读错误。message 直接上屏，不套「更新失败」 */
 export class UpdateError extends Error {}
 
+/** 单源下载的入参。参数多了之后用对象，免得调用处一长串位置参数看串 */
+interface DownloadOneOptions {
+  url: string;
+  dest: File;
+  expectedSize: number;
+  onProgress: (p: DownloadProgress) => void;
+  onCancelReady?: (cancel: () => void) => void;
+  /** 后面还有别的源可试：慢到没指望时允许主动放弃这个源 */
+  hasFallback: boolean;
+}
+
+/**
+ * 停滞判据：**多久没有新字节**就放弃这个源。
+ *
+ * 必须按「字节数变没变」判，不能按「有没有进度回调」判 —— 卡死的连接照样会
+ * 按固定频率回调，只是 `bytesWritten` 不动。之前没有这条，所以镜像卡住时
+ * 界面能一直停在「加速镜像 1/5」不动，用户以为死机了。
+ */
+const STALL_MS = 15_000;
+/** 低速观察窗口：跑够这么久，平均速度才有意义 */
+const SLOW_WINDOW_MS = 60_000;
+/** 低于这个平均速度就算没指望（22 MB 在 25 KB/s 要下 15 分钟） */
+const SLOW_BYTES_PER_SEC = 25 * 1024;
+/** 进度过三成就不再因为慢而放弃，免得快到终点又从头下 */
+const SLOW_GIVE_UP_MAX_RATIO = 0.3;
+/** 巡检间隔 */
+const WATCH_INTERVAL_MS = 3_000;
+
 /** `23347200` → `22.3 MB` */
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '—';
@@ -59,14 +87,13 @@ export function formatBytes(n: number): string {
  *
  * 每个源都是独立的：上个源下了一半，这个源要从 0 开始，所以残包在这里删。
  * 失败抛 `UpdateError`，让上层的多源循环决定换不换源。
+ *
+ * 下载期间挂一个巡检：**卡住或慢到没指望就自己掐掉这个源**，让上层换下一个。
+ * 不这么做的话，用户只能看着一个不动的进度条，既没有进度也不会自动换源。
  */
-async function downloadOne(
-  url: string,
-  dest: File,
-  expectedSize: number,
-  onProgress: (p: DownloadProgress) => void,
-  onCancelReady?: (cancel: () => void) => void,
-): Promise<File> {
+async function downloadOne(o: DownloadOneOptions): Promise<File> {
+  const { url, dest, expectedSize, onProgress, onCancelReady, hasFallback } = o;
+
   // 上一轮没下完的残包必须先删：createDownloadTask 对已存在的目标会报错，
   // 而且残包大小对不上时会让人以为下载成功了
   if (dest.exists) {
@@ -77,11 +104,73 @@ async function downloadOne(
     }
   }
 
+  /** 巡检读的字节数：由 onProgress 持续刷新 */
+  let written = 0;
+
   const task = File.createDownloadTask(url, dest, {
     onProgress: (p) => {
+      written = p.bytesWritten;
       onProgress({ written: p.bytesWritten, total: p.totalBytes });
     },
   });
+
+  /** 被自己掐掉的原因。用户主动取消时保持 null，两条路径不能混 */
+  let aborted: 'stall' | 'slow' | null = null;
+
+  /**
+   * 巡检掐源时的失败出口。
+   *
+   * 为什么要 `Promise.race` 而不是只靠 `cancel()`：`cancel()` 之后
+   * `downloadAsync` 不一定立刻 reject，万一它挂着，整个更新流程就永远不返回。
+   * 两条路都走，只要有一条能结束就行。
+   */
+  let rejectOnAbort: ((e: Error) => void) | null = null;
+  const abortSignal = new Promise<never>((_, reject) => {
+    rejectOnAbort = reject;
+  });
+
+  const startedAt = Date.now();
+  let lastGrowthAt = startedAt;
+  let lastSeen = 0;
+
+  const watch = setInterval(() => {
+    const now = Date.now();
+
+    // 有进展就重新计时
+    if (written > lastSeen) {
+      lastSeen = written;
+      lastGrowthAt = now;
+      return;
+    }
+
+    if (now - lastGrowthAt >= STALL_MS) {
+      aborted = 'stall';
+      try {
+        task.cancel();
+      } catch {
+        /* 已经结束的任务取消会抛，忽略 */
+      }
+      rejectOnAbort?.(new UpdateError(`这个源 ${STALL_MS / 1000} 秒没有进展，换下一个`));
+      return;
+    }
+
+    // 没有后续源可换时，慢也让它慢慢下完 —— 掐掉只会变成「全失败」
+    if (!hasFallback) return;
+
+    const elapsed = now - startedAt;
+    if (elapsed < SLOW_WINDOW_MS) return;
+    const avg = written / (elapsed / 1000);
+    const ratio = expectedSize > 0 ? written / expectedSize : 0;
+    if (avg < SLOW_BYTES_PER_SEC && ratio < SLOW_GIVE_UP_MAX_RATIO) {
+      aborted = 'slow';
+      try {
+        task.cancel();
+      } catch {
+        /* 同上 */
+      }
+      rejectOnAbort?.(new UpdateError('这个源太慢，换下一个'));
+    }
+  }, WATCH_INTERVAL_MS);
 
   onCancelReady?.(() => {
     try {
@@ -93,13 +182,19 @@ async function downloadOne(
 
   let file: File | null;
   try {
-    file = await task.downloadAsync();
+    file = await Promise.race([task.downloadAsync(), abortSignal]);
   } catch (e) {
+    // 巡检掐的：这两句文案里**不能出现 abort / cancel** ——
+    // 上层拿这两个词判断「用户主动取消」，混了就会把换源当成取消而停下
+    if (aborted === 'stall') throw new UpdateError(`这个源 ${STALL_MS / 1000} 秒没有进展，换下一个`);
+    if (aborted === 'slow') throw new UpdateError('这个源太慢，换下一个');
+
     const msg = e instanceof Error ? e.message : String(e);
     // 用户主动取消会以 AbortError / cancelled 的形式抛出来，不该当成失败弹错
     if (/abort|cancel/i.test(msg)) throw new UpdateError('已取消下载');
     throw new UpdateError(`下载失败：${msg}`);
   } finally {
+    clearInterval(watch);
     try {
       task.release();
     } catch {
@@ -128,7 +223,8 @@ async function downloadOne(
 /**
  * 下载到缓存目录，返回本地文件。
  *
- * 多源回退：自定义地址 → 加速镜像 → GitHub 官方，哪个先成功用哪个。
+ * 多源回退：自定义地址 → GitHub 官方 → 加速镜像，哪个先成功用哪个。
+ * 卡住或慢到没指望的源会被巡检掐掉，自动落到下一个。
  * 取消（不是失败）立即中断，不换源。全部失败抛合并错误。
  *
  * `onCancelReady` 把取消句柄交出去 —— 调用方需要在界面上放一个「取消」，
@@ -151,7 +247,14 @@ export async function downloadApk(
     // 切源时进度归零，别让上个源下了一半的数字误导进度条
     onProgress({ written: 0, total: release.apkSize });
     try {
-      return await downloadOne(src.url, dest, release.apkSize, onProgress, onCancelReady);
+      return await downloadOne({
+        url: src.url,
+        dest,
+        expectedSize: release.apkSize,
+        onProgress,
+        onCancelReady,
+        hasFallback: i < candidates.length - 1,
+      });
     } catch (e) {
       // 主动取消不该换源，原样抛出
       if (/已取消下载|abort|cancel/i.test(e instanceof Error ? e.message : String(e))) throw e;

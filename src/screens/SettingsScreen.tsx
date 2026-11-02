@@ -40,6 +40,7 @@ import {
   type ReleaseInfo,
 } from '../update/check';
 import { getDownloadBase, setDownloadBase } from '../update/mirror';
+import { getMineruToken, setMineruToken } from '../ai/mineru';
 import { versionLabel } from '../util/semver';
 import type { IoniconName } from '../components/IconButton';
 
@@ -82,9 +83,12 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [ioMsg, setIoMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 启动时自动检查更新（默认开，存在 settings 表） */
   const [autoCheck, setAutoCheckOn] = useState(true);
-  /** 自定义下载基础地址（自建 / 镜像），空串 = 用加速镜像 + 官方 */
+  /** 自定义下载基础地址（自建 / 镜像），空串 = 走官方直连 + 镜像兜底 */
   const [downloadBase, setDownloadBaseOn] = useState('');
   const [baseMsg, setBaseMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** MinerU Token。填了才能解 >10 MB / >20 页 / .doc/.ppt/.xls */
+  const [mineruToken, setMineruTokenOn] = useState('');
+  const [tokenMsg, setTokenMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
   const [checkState, setCheckState] = useState<'idle' | 'latest' | 'update' | 'error'>('idle');
   const [checkMsg, setCheckMsg] = useState('');
@@ -107,6 +111,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setEffort(cfg.effort);
       setAutoCheckOn(await getAutoCheck());
       setDownloadBaseOn(await getDownloadBase());
+      setMineruTokenOn(await getMineruToken());
       setStats(await repo.stats());
       // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
       setIndexState(await repo.searchIndexStats());
@@ -235,7 +240,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
     }
   }
 
-  /** 保存自定义下载地址。空串 = 清掉，退回「加速镜像 + 官方」的回退链 */
+  /** 保存自定义下载地址。空串 = 清掉，退回「官方直连 → 镜像兜底」 */
   async function saveDownloadBase() {
     setBaseMsg(null);
     try {
@@ -243,6 +248,20 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setBaseMsg({ kind: 'ok', text: '已保存' });
     } catch (e) {
       setBaseMsg({ kind: 'err', text: (e as Error).message });
+    }
+  }
+
+  /** 保存 MinerU Token。空串 = 清掉，只剩免 Token 的轻量通道 */
+  async function saveMineruToken() {
+    setTokenMsg(null);
+    try {
+      await setMineruToken(mineruToken);
+      setTokenMsg({
+        kind: 'ok',
+        text: mineruToken.trim() ? '已保存，文档页可上传更大的文件' : '已清空，只用轻量接口',
+      });
+    } catch (e) {
+      setTokenMsg({ kind: 'err', text: (e as Error).message });
     }
   }
 
@@ -460,6 +479,33 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
         </View>
 
+        <Text style={styles.groupTitle}>文档解析</Text>
+        <View style={styles.card}>
+          <Field label="MinerU Token" last>
+            <TextInput
+              value={mineruToken}
+              onChangeText={setMineruTokenOn}
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder="留空 = 只用免 Token 的轻量解析"
+              placeholderTextColor={c.text3}
+              style={styles.input}
+              returnKeyType="done"
+              onSubmitEditing={saveMineruToken}
+              onEndEditing={saveMineruToken}
+            />
+            <Text style={styles.fieldHint}>
+              填了才能解超过 10 MB / 20 页的文件，以及 doc / ppt / xls。Token 在
+              mineru.net 的「API 管理」里创建，每天 1000 页额度。
+            </Text>
+            {tokenMsg ? (
+              <Text style={tokenMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
+                {tokenMsg.text}
+              </Text>
+            ) : null}
+          </Field>
+        </View>
+
         <Text style={styles.groupTitle}>数据</Text>
         <View style={styles.card}>
           <View style={styles.statRow}>
@@ -614,7 +660,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   onChangeText={setDownloadBaseOn}
                   autoCapitalize="none"
                   autoCorrect={false}
-                  placeholder="留空 = 加速镜像 + GitHub"
+                  placeholder="留空 = GitHub 官方直连"
                   placeholderTextColor={c.text3}
                   style={styles.input}
                   returnKeyType="done"
@@ -622,7 +668,8 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   onEndEditing={saveDownloadBase}
                 />
                 <Text style={styles.fieldHint}>
-                  填自建或镜像的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则按「加速镜像 → GitHub」回退。
+                  填自建或镜像的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则先连
+                  GitHub 官方，连不上或卡住才退到内置镜像。
                 </Text>
                 {baseMsg ? (
                   <Text style={baseMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>

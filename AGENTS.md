@@ -236,16 +236,24 @@ export function Foo() {
 - **`numberOfLines` 预览分支不测位置**：View 截不了行，卡片预览必须退回单 Text。
 - 换页时命中下标归零（`useEffect` 依赖 `current`），否则上一页的「3/5」会带到下一屏。
 
-## 文档（v0.10.0）
+## 文档（v0.10.0 起，v0.11.0 加精准通道）
 
-- **全项目唯一把用户内容发到外网的地方**。调用点只有一个：`ai/mineru.ts` 的 `parseWithMineru`，
-  且必须经过上传确认卡（写明「会上传到 mineru.net」）。不要在任何自动流程里偷偷上传。
-- **上传不带 `Content-Type`**。`file_url` 是预签名地址，多一个头就签名对不上；
+- **全项目唯一把用户内容发到外网的地方**。调用点只有 `ai/mineru.ts` 的两条通道
+  （`parseWithMineru` 轻量 / `parseWithMineruPro` 精准），且必须经过上传确认卡
+  （写明「会上传到 mineru.net」）。不要在任何自动流程里偷偷上传。
+- **通道选择只有一份判据**：`util/docSupport.ts` 的 `planForDoc(ext, size, hasToken)`。
+  上传预判、确认卡文案、失败重试全走它。**页面里不许再写「这个后缀算不算文本」** ——
+  v0.10.0 时 `isPlainText` 在列表页和阅读器里各有一份，加第二条通道必然分叉。
+- **上传不带 `Content-Type`**，两条通道都是预签名地址，多一个头就签名对不上；
   用 `FileSystem.uploadAsync(..., {httpMethod:'PUT', uploadType: BINARY_CONTENT})`。
 - **原文件必须复制进私有目录**（`Paths.document/documents/`）。文档选择器给的是临时 URI，
   不复制的话下次「打开原文件」就找不到。
-- **轻量接口上限 10 MB / 20 页**，错误码 -30001 大小、-30002 类型、-30003 页数、-30004 参数。
-  本地先拦大小，页数只能等服务端判。
+- **上限不同**：轻量 10 MB / 20 页（免 Token），精准 200 MB / 200 页（要 Token，每天 1000 页）。
+  错误码 -30001 大小、-30002 类型、-30003 页数、-30004 参数；精准另有 -60018 额度用尽。
+- **精准接口返回 zip，只解 `full.md`**：`unzipSync(buf, { filter })`。
+  包里还有 `layout.json`、`*_content_list.json` 和图片，大文档全解开直接 OOM。
+- **页数在本地看不出来**，所以只按大小判断会在 20 页这堵墙上反复撞。重试一律 `preferPro`
+  （有 Token 时直接走精准），这是唯一能在不解析 PDF 的前提下绕过去的办法。
 - **`documents.body_md` 不参与列表查询**。几十万字的正文每次都读，首屏会明显卡；
   列表只查元数据列（`listDocuments` 返回 `DocumentMeta`）。
 - **失败保留记录与原文件**，给「重新解析」；删除是记录 + 文件一起删，且二次确认。
@@ -318,11 +326,18 @@ v0.7.3 只改了时间轴，用户翻回顾页看到的还是混排 —— 同�
 Actions 的 artifact 下载要登录，手机端匿名访问 403 —— 和「CI 日志下不来」
 是同一个限制。所以发版必须打 tag，CI 建 Release 挂 APK。
 
-**下载走多源回退（v0.9.0）。**
-GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，大陆直连极慢，
-VPN 分流模式也不覆盖它。所以 `download.ts` 按「自定义地址 → 内置加速镜像 → GitHub 官方」
-逐个尝试（候选在 `update/mirror.ts` 的 `buildCandidates`）。改回退链别碰顺序：
-官方必须是最后一站，保证至少有源可下；自定义地址最前，有 NAS 的用户才吃得满带宽。
+**下载走多源回退（v0.9.0，v0.11.0 反转顺序）。**
+GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，大陆直连可能极慢。
+所以 `download.ts` 按「自定义地址 → **GitHub 官方** → 内置加速镜像」逐个尝试
+（候选在 `update/mirror.ts` 的 `buildCandidates`）。**官方必须排在镜像前面**，
+这是实测的结论：镜像时快时慢，而「卡住的连接」既不报错也不出字节。
+自定义地址最前，有自己服务器的用户才吃得满带宽。
+
+**每个源都必须能被掐掉（v0.11.0）。**
+巡检每 3s 读 `bytesWritten`：15s 没有新字节、或跑满 60s 平均 < 25 KB/s 且进度未过 30%
+（**且后面还有源**）就 `cancel()` 换下一个。判据必须是「字节数有没有变」，
+**不能看进度回调有没有来** —— 卡死的连接照样按频率回调。
+掐源文案里**不能出现 abort / cancel**：上层拿这两个词判断「用户主动取消」，混了就把换源当取消。
 
 **版本比较不能比字符串。**
 `'0.10.0' > '0.9.9'` 在 JS 里是 **false**，正好反了；`parseFloat('0.10')` 又和

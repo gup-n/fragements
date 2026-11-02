@@ -1,6 +1,6 @@
 {
   "name": "fragments",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
@@ -17,6 +17,7 @@
     "expo-sqlite": "~58.0.13",
     "expo-status-bar": "~58.0.3",
     "expo-system-ui": "~58.0.6",
+    "fflate": "^0.8.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.0",

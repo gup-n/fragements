@@ -1,18 +1,29 @@
 /**
- * MinerU 轻量 Agent 接口（免 Token，按 IP 限频）。
+ * MinerU 解析。两条通道，不是重复实现：
+ *
+ * - **轻量 Agent 接口**（`/api/v1/agent/parse`）：免 Token、按 IP 限频，
+ *   但只吃 ≤10 MB / ≤20 页。默认走这条，因为不花用户一分钱也不用配置。
+ * - **精准接口**（`/api/v4`）：要 Token，≤200 MB / ≤200 页，每天 1000 页额度，
+ *   还支持轻量不认的 `.doc` / `.ppt` / `.xls`。只在「轻量放不下」时才走。
+ *
+ * 为什么不干脆都用精准的：它消耗每日额度，而轻量完全免费。能用免费的先用。
  *
  * 为什么要单独一层：
  * - 这是**唯一会把用户文件发到外网**的地方，调用点必须能一眼看清「发了什么、发到哪」；
- * - 「建任务 → PUT 上传 → 轮询 → 下载 Markdown」四步里每一步的失败说法都不一样，
+ * - 「建任务 → PUT 上传 → 轮询 → 下载结果」四步里每一步的失败说法都不一样，
  *   散在页面里就只剩一句「解析失败」。
  *
- * 两条不能改的实现细节：
+ * 三条不能改的实现细节：
  * 1. **上传不能自己设 Content-Type。** 接口给的是预签名地址，多一个头会让签名对不上。
  * 2. **轮询状态要映射成四个阶段**，界面上只显示「上传 / 排队 / 解析 / 下载结果」。
  *    把 `converting` 这种原样端给用户，没人看得懂。
+ * 3. **精准接口返回的是 zip**，只有里面那个 `full.md` 有用。解压时按文件名过滤，
+ *    不要把整包解开 —— 200 MB 的文档连中间产物一起解会直接把内存吃穿。
  */
 import { fetch as expoFetch } from 'expo/fetch';
 import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
+import { strFromU8, unzipSync } from 'fflate';
+import { repo } from '../db/repo';
 
 const API_BASE = 'https://mineru.net/api/v1/agent/parse';
 const CREATE_URL = `${API_BASE}/file`;
@@ -21,13 +32,24 @@ const CREATE_URL = `${API_BASE}/file`;
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_FILE_LABEL = '10 MB';
 
+/** 精准接口（/api/v4）：Token、200 MB、200 页 */
+const PRO_API_BASE = 'https://mineru.net/api/v4';
+export const PRO_MAX_FILE_BYTES = 200 * 1024 * 1024;
+export const PRO_MAX_FILE_LABEL = '200 MB';
+export const PRO_MAX_PAGES = 200;
+
 /** 轮询间隔与总时长。解析大文件时 3 秒一次对服务端压力也不大 */
 const POLL_INTERVAL = 3000;
 const MAX_WAIT = 10 * 60 * 1000;
+/** 精准接口处理 200 页要排队更久，给它 20 分钟 */
+const PRO_MAX_WAIT = 20 * 60 * 1000;
 /** 单次 HTTP 请求超时。轮询出错会重试，建任务/上传超时就直接报错 */
 const REQUEST_TIMEOUT = 30_000;
 /** 轮询连续失败几次就放弃。断网时不要空转到 10 分钟 */
 const MAX_POLL_FAILURES = 3;
+
+/** MinerU Token 的 settings key。空 = 只有轻量通道可用 */
+const K_TOKEN = 'mineru_token';
 
 export type MineruStage = 'uploading' | 'queued' | 'parsing' | 'downloading';
 
@@ -41,6 +63,15 @@ export const STAGE_LABEL: Record<MineruStage, string> = {
 /** 一句话进度。拼在「解析中 ·」后面会出现「解析中 · 下载结果」这种病句，所以单独给一句 */
 export function stageText(stage: MineruStage): string {
   return `正在${STAGE_LABEL[stage]}`;
+}
+
+/** 用户填的精准接口 Token，空串表示没填 */
+export async function getMineruToken(): Promise<string> {
+  return ((await repo.getSetting(K_TOKEN).catch(() => null)) ?? '').trim();
+}
+
+export async function setMineruToken(token: string): Promise<void> {
+  await repo.setSetting(K_TOKEN, token.trim());
 }
 
 export interface MineruFile {
@@ -79,14 +110,34 @@ export function mineruMessage(e: unknown): string {
  * 这几类重试都没用，必须直接告诉用户该怎么办。
  */
 const SERVER_ERRORS: Record<string, string> = {
-  '-30001': `文件太大，轻量解析接口最多支持 ${MAX_FILE_LABEL}`,
+  // 这两条必须带上「怎么办」：撞到上限时只说「最多 10 MB」等于把用户堵死，
+  // 而填个 Token 就能解到 200 MB —— 出路要写在错误里，不能指望用户自己想到
+  '-30001': `文件太大，轻量解析接口最多支持 ${MAX_FILE_LABEL}（填 MinerU Token 可解到 ${PRO_MAX_FILE_LABEL}）`,
   '-30002': '这个格式解析不了，支持 PDF / Word / PPT / Excel / 图片和纯文本',
-  '-30003': '文件页数太多，轻量解析接口最多支持 20 页',
+  '-30003': `文件页数太多，轻量解析接口最多支持 20 页（填 MinerU Token 可解到 ${PRO_MAX_PAGES} 页）`,
   '-30004': '请求参数不被接受，换一个文件再试',
 };
 
-function serverMessage(code: string, fallback?: string): string {
-  return SERVER_ERRORS[code] ?? (fallback || '解析服务返回了错误，请稍后重试');
+/**
+ * 精准接口的错误码。和轻量接口**不是一套**，混用会显示文不对题的提示。
+ *
+ * -60018 / -60019 是额度类：重试没用，只能等明天，必须说清楚。
+ */
+const PRO_SERVER_ERRORS: Record<string, string> = {
+  '-30001': `文件太大，精准接口最多支持 ${PRO_MAX_FILE_LABEL}`,
+  '-30002': '这个格式解析不了',
+  '-30003': `文件页数太多，精准接口最多支持 ${PRO_MAX_PAGES} 页`,
+  '-30004': '请求参数不被接受，换一个文件再试',
+  '-60018': '今天的解析额度用完了（每天 1000 页），明天再试',
+  '-60019': 'HTML 解析额度不足，明天再试',
+};
+
+function serverMessage(
+  code: string,
+  fallback?: string,
+  table: Record<string, string> = SERVER_ERRORS,
+): string {
+  return table[code] ?? (fallback || '解析服务返回了错误，请稍后重试');
 }
 
 function asErrorCode(v: unknown): string {
@@ -108,7 +159,11 @@ function sleep(ms: number) {
  * 超时用 AbortController 自己控，不用 Promise.race —— race 之后请求还在跑，
  * 轮询会越积越多。
  */
-async function requestJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
+async function requestJson(
+  url: string,
+  init: RequestInit,
+  table: Record<string, string> = SERVER_ERRORS,
+): Promise<Record<string, unknown>> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
   let res: Response;
@@ -140,14 +195,17 @@ async function requestJson(url: string, init: RequestInit): Promise<Record<strin
 
   const code = asErrorCode(json?.code);
   if (json && code && code !== '0' && code !== '200') {
-    throw new MineruError(code, serverMessage(code, asText(json.msg)));
+    throw new MineruError(code, serverMessage(code, asText(json.msg), table));
   }
   if (!res.ok) {
     if (res.status === 413) {
       throw new MineruError('too-large', `文件超过 ${MAX_FILE_LABEL}，轻量解析接口不支持`);
     }
     if (res.status === 429) {
-      throw new MineruError('rate-limit', SERVER_ERRORS['-30004']);
+      throw new MineruError('rate-limit', '请求太密了，等一分钟再试');
+    }
+    if (res.status === 401 || res.status === 403) {
+      throw new MineruError('bad-token', 'Token 无效或已过期，去 MinerU 网站重新复制一个');
     }
     throw new MineruError('server', `解析服务暂时不可用（HTTP ${res.status}），请稍后重试`);
   }
@@ -307,4 +365,186 @@ export async function parseWithMineru(
 
   onProgress('downloading');
   return downloadMarkdown(markdownUrl);
+}
+
+/* ------------------------------------------------------------------ *
+ * 精准接口（/api/v4）：要 Token，换 200 MB / 200 页和 .doc/.ppt/.xls
+ * ------------------------------------------------------------------ */
+
+/** 建任务：拿 batch_id 和预签名上传地址 */
+async function createProTask(
+  file: MineruFile,
+  token: string,
+): Promise<{ batchId: string; fileUrl: string }> {
+  const data = await requestJson(
+    `${PRO_API_BASE}/file-urls/batch`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        // data_id 只能用字母数字和 _ - .，且 ≤128 字符
+        files: [{ name: file.name, data_id: `frag-${Date.now()}` }],
+        // pipeline 比 vlm 便宜也够用；vlm 更适合复杂版式，但慢
+        model_version: 'pipeline',
+        language: 'ch',
+        enable_table: true,
+        enable_formula: true,
+      }),
+    },
+    PRO_SERVER_ERRORS,
+  );
+
+  const batchId = asText(data.batch_id);
+  const urls = Array.isArray(data.file_urls) ? data.file_urls : [];
+  const fileUrl = asText(urls[0]);
+  if (!batchId || !fileUrl) {
+    throw new MineruError('server', '解析服务没有返回上传地址，请稍后重试');
+  }
+  return { batchId, fileUrl };
+}
+
+/**
+ * 轮询批量任务到 `done`，返回结果 zip 的地址。
+ *
+ * 这里比轻量接口多一步：解析中能读到 `extract_progress`，所以能把
+ * 「第 3 / 20 页」显示出来。大文档要跑几分钟，没这个数字用户会以为卡死。
+ */
+async function waitForProTask(
+  batchId: string,
+  token: string,
+  onProgress: (stage: MineruStage, detail?: string) => void,
+): Promise<string> {
+  const deadline = Date.now() + PRO_MAX_WAIT;
+  let failures = 0;
+  let lastStage: MineruStage | null = null;
+  let lastDetail = '';
+
+  while (Date.now() < deadline) {
+    await sleep(POLL_INTERVAL);
+
+    let data: Record<string, unknown>;
+    try {
+      data = await requestJson(
+        `${PRO_API_BASE}/extract-results/batch/${encodeURIComponent(batchId)}`,
+        { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+        PRO_SERVER_ERRORS,
+      );
+      failures = 0;
+    } catch (e) {
+      if (e instanceof MineruError && e.code === 'network' && ++failures < MAX_POLL_FAILURES) {
+        continue;
+      }
+      throw e;
+    }
+
+    const list = Array.isArray(data.extract_result) ? data.extract_result : [];
+    const item = list.find((x) => x && typeof x === 'object') as
+      | Record<string, unknown>
+      | undefined;
+    // 刚传完时列表可能还是空的，继续等，别当失败
+    if (!item) continue;
+
+    const state = asText(item.state).toLowerCase();
+
+    if (state === 'done') {
+      const url = asText(item.full_zip_url);
+      if (!url) throw new MineruError('server', '解析完成了，但没拿到结果地址，请重新解析');
+      return url;
+    }
+    if (state === 'failed') {
+      const msg = asText(item.err_msg);
+      throw new MineruError('failed', msg || '解析失败，请稍后重试');
+    }
+
+    const prog = item.extract_progress;
+    const box = prog && typeof prog === 'object' ? (prog as Record<string, unknown>) : null;
+    const total = Number(box?.total_pages ?? 0);
+    const donePages = Number(box?.extracted_pages ?? 0);
+    const detail = total > 0 ? `第 ${Math.min(donePages + 1, total)} / ${total} 页` : '';
+
+    const stage: MineruStage = state === 'running' ? 'parsing' : 'queued';
+    if (stage !== lastStage || detail !== lastDetail) {
+      lastStage = stage;
+      lastDetail = detail;
+      onProgress(stage, detail || undefined);
+    }
+  }
+
+  throw new MineruError('timeout', '解析超过 20 分钟还没完成，可以稍后重试，或换个小一点的文件');
+}
+
+/**
+ * 下载结果 zip，只取出里面的 `full.md`。
+ *
+ * 用 `filter` 只解一个文件是必须的：包里还有 `layout.json`、`*_content_list.json`、
+ * 抽出来的图片，200 MB 的文档这些中间产物加起来比原文件还大，全解开就是内存雪崩。
+ */
+async function downloadZipMarkdown(url: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await expoFetch(url);
+  } catch {
+    throw new MineruError('download', '下载解析结果失败，请检查网络后重试');
+  }
+  if (!res.ok) {
+    throw new MineruError('download', `下载解析结果失败（HTTP ${res.status}），请稍后重试`);
+  }
+
+  let buf: Uint8Array;
+  try {
+    buf = new Uint8Array(await res.arrayBuffer());
+  } catch {
+    throw new MineruError('download', '读取解析结果失败，请重新解析');
+  }
+
+  const isFullMd = (name: string) => /(^|\/)full\.md$/i.test(name);
+
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(buf, { filter: (f) => isFullMd(f.name) });
+  } catch {
+    throw new MineruError('download', '解析结果压缩包读不出来，请重新解析');
+  }
+
+  const key = Object.keys(files).find(isFullMd);
+  if (!key) throw new MineruError('download', '压缩包里没有 Markdown 结果，请重新解析');
+
+  const md = strFromU8(files[key]);
+  if (!md.trim()) throw new MineruError('download', '解析结果是空的，请重新解析');
+  return md;
+}
+
+/**
+ * 精准通道：上传 + 解析 + 下载，一步到位。
+ *
+ * 只在轻量接口放不下时才该被调用（超 10 MB、超 20 页、或者 .doc/.ppt/.xls）。
+ * 它消耗每日 1000 页额度，能走轻量就别走这里。
+ */
+export async function parseWithMineruPro(
+  file: MineruFile,
+  token: string,
+  onProgress: (stage: MineruStage, detail?: string) => void,
+): Promise<string> {
+  const t = token.trim();
+  if (!t) throw new MineruError('no-token', '还没填 MinerU Token，填了才能用精准解析');
+  if (file.size > PRO_MAX_FILE_BYTES) {
+    throw new MineruError('too-large', `文件超过 ${PRO_MAX_FILE_LABEL}，精准接口也放不下`);
+  }
+  if (!file.uri) {
+    throw new MineruError('no-file', '原文件已经不在手机上了，没法解析');
+  }
+
+  const { batchId, fileUrl } = await createProTask(file, t);
+
+  onProgress('uploading');
+  await uploadFile(fileUrl, file.uri);
+
+  onProgress('queued');
+  const zipUrl = await waitForProTask(batchId, t, onProgress);
+
+  onProgress('downloading');
+  return downloadZipMarkdown(zipUrl);
 }

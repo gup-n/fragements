@@ -35,13 +35,15 @@ import {
   type PickedDocument,
 } from '../db/docFiles';
 import {
-  MAX_FILE_BYTES,
   MAX_FILE_LABEL,
+  PRO_MAX_FILE_LABEL,
+  PRO_MAX_PAGES,
+  getMineruToken,
   mineruMessage,
-  parseWithMineru,
   stageText,
   type MineruStage,
 } from '../ai/mineru';
+import { SUPPORT_HINT, isLocalText, parseDocFile, planForDoc } from '../util/docSupport';
 import { dayLabel, formatTime } from '../util/date';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { DocViewer } from '../components/DocViewer';
@@ -58,10 +60,6 @@ function sizeText(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return '大小未知';
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function isPlainText(ext: string): boolean {
-  return ext === 'txt' || ext === 'md' || ext === 'markdown';
 }
 
 function statusText(doc: DocumentMeta, stage?: MineruStage): string {
@@ -90,6 +88,13 @@ export function DocsScreen({ onClose }: Props) {
   /** 写完库就 +1，让打开着的阅读器重新取一次 */
   const [docVersion, setDocVersion] = useState(0);
   const alive = useRef(true);
+  /**
+   * 当前填的 MinerU Token。空串 = 只有轻量通道（10 MB / 20 页）。
+   *
+   * 页面每次进入都会重新挂载（路由是 state 切换），所以填完 Token 从设置页
+   * 回来时这里会重新读一次 —— 不需要额外的「刷新配置」时机。
+   */
+  const [token, setToken] = useState('');
 
   useEffect(() => {
     alive.current = true;
@@ -97,6 +102,14 @@ export function DocsScreen({ onClose }: Props) {
       alive.current = false;
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
+  }, []);
+
+  useEffect(() => {
+    getMineruToken()
+      .then((t) => {
+        if (alive.current) setToken(t);
+      })
+      .catch(() => undefined);
   }, []);
 
   /** Toast 自己不做定时器，谁触发谁清 —— 连续两次时后一次不能被前一次提前清掉 */
@@ -161,12 +174,10 @@ export function DocsScreen({ onClose }: Props) {
     try {
       const file = await pickDocumentFile();
       if (!file) return;
-      // 纯文本不走上传，10 MB 的限制只针对要发给 MinerU 的格式
-      if (!isPlainText(file.ext) && file.size > MAX_FILE_BYTES) {
-        setNotice({
-          kind: 'err',
-          text: `「${file.name}」超过 ${MAX_FILE_LABEL}，轻量解析接口不支持`,
-        });
+      // 能不能进来、走哪条通道，全部由 planForDoc 决定。这里不再自己判断大小和扩展名
+      const plan = planForDoc(file.ext, file.size, !!token);
+      if (plan.channel === 'none') {
+        setNotice({ kind: 'err', text: `「${file.name}」${plan.reason}` });
         return;
       }
       setConfirm(file);
@@ -220,7 +231,7 @@ export function DocsScreen({ onClose }: Props) {
     // 记录已经在列表里了，进度交给条目自己显示；这句「正在保存」再多留一会儿就是误导
     if (alive.current) setNotice(null);
 
-    const plain = isPlainText(file.ext);
+    const plain = isLocalText(file.ext);
     try {
       if (plain) {
         const text = await readPlainText(fileUri);
@@ -228,7 +239,7 @@ export function DocsScreen({ onClose }: Props) {
         await repo.updateDocument(id, { bodyMd: text, state: 'local', pages: null, error: null });
         if (alive.current) setNotice({ kind: 'ok', text: `「${file.name}」已保存` });
       } else {
-        const md = await parseWithMineru({ ...file, uri: fileUri }, (stage) => {
+        const md = await parseDocFile({ ...file, uri: fileUri }, token, (stage) => {
           if (alive.current) setProgress((prev) => ({ ...prev, [id]: stage }));
         });
         await repo.updateDocument(id, { bodyMd: md, state: 'done', pages: null, error: null });
@@ -318,8 +329,10 @@ export function DocsScreen({ onClose }: Props) {
             )}
 
             <Text style={styles.limitText}>
-              PDF / Word / PPT / 图片会解析成 Markdown；txt、md 直接读文本。
-              要上云的单个文件 ≤ {MAX_FILE_LABEL}、≤ 20 页，txt / md 不受此限。
+              {SUPPORT_HINT}。
+              {token
+                ? '已填 Token，超过轻量的文件会自动走精准接口（≤200 MB / 200 页）。'
+                : `没填 Token，超过 ${MAX_FILE_LABEL} 或 20 页、以及 doc / ppt / xls 都解不了，可在设置里填。`}
             </Text>
 
             {notice ? (
@@ -341,7 +354,7 @@ export function DocsScreen({ onClose }: Props) {
             <View style={styles.empty}>
               <Ionicons name="documents-outline" size={32} color={c.text3} />
               <Text style={styles.emptyTitle}>
-                把 PDF、Word、PPT 拖进来，解析成可读的 Markdown
+                把 PDF、Word、PPT、Excel 放进来，解析成可读的 Markdown
               </Text>
               <Text style={styles.emptyHint}>
                 解析会把文件上传到 mineru.net；原文件同时保留在手机上。
@@ -418,7 +431,8 @@ export function DocsScreen({ onClose }: Props) {
       {confirm ? (
         <UploadConfirm
           file={confirm}
-          uploads={!isPlainText(confirm.ext)}
+          uploads={!isLocalText(confirm.ext)}
+          pro={planForDoc(confirm.ext, confirm.size, !!token).channel === 'pro'}
           onCancel={() => setConfirm(null)}
           onStart={() => startImport(confirm)}
         />
@@ -460,12 +474,15 @@ export function DocsScreen({ onClose }: Props) {
 function UploadConfirm({
   file,
   uploads,
+  pro,
   onCancel,
   onStart,
 }: {
   file: PickedDocument;
   /** 是否会真的发给 MinerU。txt / md 只在本机读，不能也写「会上传」 */
   uploads: boolean;
+  /** 走精准接口（已填 Token）。限制不一样，得让用户在点下去之前就知道消耗的是哪条通道 */
+  pro: boolean;
   onCancel: () => void;
   onStart: () => void;
 }) {
@@ -513,9 +530,11 @@ function UploadConfirm({
         </View>
 
         <Text style={styles.sheetHint}>
-          {uploads
-            ? `轻量接口限制单文件 ${MAX_FILE_LABEL}、20 页。解析通常要几十秒到几分钟，这段时间可以离开这一页。`
-            : '原文件会复制进 App 私有目录，之后可以随时打开。'}
+          {!uploads
+            ? '原文件会复制进 App 私有目录，之后可以随时打开。'
+            : pro
+              ? `走精准接口（已填 Token）：≤ ${PRO_MAX_FILE_LABEL}、${PRO_MAX_PAGES} 页，每天 1000 页额度。解析通常要几分钟，这段时间可以离开这一页。`
+              : `走轻量接口：≤ ${MAX_FILE_LABEL}、20 页。解析通常要几十秒到几分钟，这段时间可以离开这一页。`}
         </Text>
 
         <View style={styles.sheetActions}>
