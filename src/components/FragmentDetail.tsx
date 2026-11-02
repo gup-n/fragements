@@ -9,7 +9,7 @@
  * `windowSize=3` 自带窗口化，几百条也只挂三页；分页吸附、惯性、回弹全是系统原生。
  * 自己维护 contentOffset 的写法在安卓上尤其容易抖。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
@@ -28,7 +28,15 @@ import { TagPill } from './TagPill';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
 import { dayKey, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
+import { countHits } from '../util/highlight';
+import { parseBlocks } from '../util/mdBlocks';
 import { useKeyboardHeight } from '../util/keyboard';
+
+/**
+ * ScrollView 的实例类型。RN 0.88 里 `typeof ScrollView` 是组件本身，
+ * 不能当实例用（`scrollTo` 不在上面）—— 取 ref 的类型才拿到实例。
+ */
+type ScrollViewInstance = React.ComponentRef<typeof ScrollView>;
 
 interface Props {
   /** 进入时的上下文序列。时间轴进入就是时间轴顺序，搜索进入就是搜索结果顺序 */
@@ -37,6 +45,13 @@ interface Props {
   doneIds: Set<number>;
   /** 全部周期总结，详情页自己挑出落在这一天的那些 */
   notes: Note[];
+  /**
+   * 从搜索进来时带上的查询词。
+   *
+   * 给了就做两件事：正文里描出命中，顶部多一组「第 i / N 处」上下跳。
+   * 不给时整页与以前完全一致（不多挂 onLayout，也不多一行工具栏）。
+   */
+  highlightQuery?: string;
   onClose: () => void;
   /** 保存正文。父组件负责写库并刷新，这里拿 Promise 是为了显示保存中状态 */
   onSave: (id: number, text: string) => Promise<void>;
@@ -48,6 +63,7 @@ export function FragmentDetail({
   initialIndex,
   doneIds,
   notes,
+  highlightQuery,
   onClose,
   onSave,
   onDelete,
@@ -104,6 +120,86 @@ export function FragmentDetail({
       listRef.current?.scrollToIndex({ index: next, animated: true });
     },
     [current, items.length],
+  );
+
+  /* ---------------- 搜索命中：高亮 + 逐处跳转 ---------------- */
+
+  /** 当前停在第几处。换页归零，否则上一页的 3/5 会带到下一屏 */
+  const [hitIndex, setHitIndex] = useState(0);
+  /**
+   * 每页各自的「文字块下标 → 实测 y」，按碎片 id 分开存。
+   *
+   * 不共用一份：横向 FlatList 会同时挂着相邻几页，共用的话后挂载的那页
+   * 会把当前页的 y 覆盖掉，跳转就跳到别人的高度上。
+   */
+  const blockY = useRef(new Map<number, Map<number, number>>());
+  /** 每页的 ScrollView，跳转时按碎片 id 取当前这一页的 */
+  const pageRefs = useRef(new Map<number, ScrollViewInstance>());
+
+  /**
+   * 第 i 处落在哪个块。数组长度就是命中总数。
+   *
+   * 口径必须和 NoteBody 对得上：同一个 parseBlocks、同一批 seg、同一个 countHits。
+   * 不按字符比例估位置 —— 中文一行约 18 字、英文能塞 40 个，估出来的 y 常常差半屏。
+   */
+  const hitBlocks = useMemo(() => {
+    const q = highlightQuery?.trim() ?? '';
+    const at: number[] = [];
+    if (!q) return at;
+    parseBlocks(fragment?.content ?? '').forEach((b, bi) => {
+      // 分隔线没有文字；表格和代码块有，而且 NoteBody 现在也给它们量位置，
+      // 漏掉的话「共 5 处」只能跳到 3 处，编号和正文对不上
+      let n = 0;
+      if (b.kind === 'table') {
+        for (const seg of b.head.flat()) n += countHits(seg.text, q);
+        for (const row of b.rows) for (const seg of row.flat()) n += countHits(seg.text, q);
+      } else if (b.kind === 'code') {
+        n = countHits(b.text, q);
+      } else if (b.kind !== 'hr') {
+        for (const seg of b.segs) n += countHits(seg.text, q);
+      }
+      for (let k = 0; k < n; k++) at.push(bi);
+    });
+    return at;
+  }, [fragment?.content, highlightQuery]);
+
+  const hitTotal = hitBlocks.length;
+  /** 换页那一帧 hitIndex 可能还落在旧的范围内，读的时候夹一下，不会显示「第 4 / 2 处」 */
+  const shownHit = hitTotal > 0 ? Math.min(hitIndex, hitTotal - 1) : 0;
+
+  useEffect(() => {
+    setHitIndex(0);
+  }, [current, highlightQuery]);
+
+  const registerScroll = useCallback((id: number, view: ScrollViewInstance | null) => {
+    if (view) pageRefs.current.set(id, view);
+    else pageRefs.current.delete(id);
+  }, []);
+
+  const registerBlock = useCallback((id: number, blockIndex: number, y: number) => {
+    let m = blockY.current.get(id);
+    if (!m) {
+      m = new Map();
+      blockY.current.set(id, m);
+    }
+    m.set(blockIndex, y);
+  }, []);
+
+  const goHit = useCallback(
+    (delta: number) => {
+      const last = hitTotal - 1;
+      if (last < 0 || !fragment) return;
+      const next = Math.min(Math.max(shownHit + delta, 0), last);
+      if (next === shownHit) return;
+      setHitIndex(next);
+      const y = blockY.current.get(fragment.id)?.get(hitBlocks[next]);
+      // 还没量到这一块（刚换页的那一帧）就不滚：高亮本身已经在屏幕上，
+      // 按 undefined 硬滚一下反而会跳回顶部
+      if (y !== undefined) {
+        pageRefs.current.get(fragment.id)?.scrollTo({ y: Math.max(0, y - 16), animated: true });
+      }
+    },
+    [fragment, hitBlocks, hitTotal, shownHit],
   );
 
   async function save() {
@@ -226,6 +322,41 @@ export function FragmentDetail({
       </View>
 
       {/*
+        「第 i / N 处」只在有命中时出现。单独占一行而不是塞进标题栏：
+        一行里已经有关闭、日期、编辑三样，再挤两个箭头，日期会被压成「10月2…」。
+        禁用态降透明度而不是隐藏 —— 按钮位置来回变比灰一点更难受。
+      */}
+      {hitTotal > 0 ? (
+        <View style={styles.hitBar}>
+          <Text style={styles.hitBarText}>
+            第 {shownHit + 1} / {hitTotal} 处
+          </Text>
+          <View style={styles.hitBarBtns}>
+            <IconButton
+              name="chevron-up"
+              size={16}
+              tone="soft"
+              color={c.text2}
+              diameter={34}
+              disabled={shownHit <= 0}
+              onPress={() => goHit(-1)}
+              accessibilityLabel="上一处命中"
+            />
+            <IconButton
+              name="chevron-down"
+              size={16}
+              tone="soft"
+              color={c.text2}
+              diameter={34}
+              disabled={shownHit >= hitTotal - 1}
+              onPress={() => goHit(1)}
+              accessibilityLabel="下一处命中"
+            />
+          </View>
+        </View>
+      ) : null}
+
+      {/*
         必须等实测宽度到手再挂 FlatList：initialScrollIndex 和 getItemLayout 都按
         每页宽度算偏移，宽度还是 0 的时候挂上去会停在第一页，跳到第 5 条就失效了。
       */}
@@ -252,6 +383,9 @@ export function FragmentDetail({
               width={width}
               done={doneIds.has(item.id)}
               notes={notes}
+              highlight={highlightQuery}
+              registerScroll={registerScroll}
+              registerBlock={registerBlock}
             />
           )}
         />
@@ -305,19 +439,31 @@ function Page({
   width,
   done,
   notes,
+  highlight,
+  registerScroll,
+  registerBlock,
 }: {
   fragment: Fragment;
   width: number;
   done: boolean;
   notes: Note[];
+  highlight?: string;
+  registerScroll: (id: number, view: ScrollViewInstance | null) => void;
+  registerBlock: (id: number, blockIndex: number, y: number) => void;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   const merged = fragment.mergedInto !== null;
   const hasMeta = fragment.tags.length > 0 || !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
+  // 身份要稳：内联箭头每次渲染都会换新，React 会把 ref 先置 null 再挂回去
+  const setScrollRef = useCallback(
+    (view: ScrollViewInstance | null) => registerScroll(fragment.id, view),
+    [fragment.id, registerScroll],
+  );
 
   return (
     <ScrollView
+      ref={setScrollRef}
       style={{ width }}
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
@@ -341,6 +487,9 @@ function Page({
         variant="reading"
         selectable
         muted={merged}
+        highlight={highlight}
+        // 只有搜索进来才逐块渲染：平时合并成一个大 Text，行距更连贯
+        onBlockLayout={highlight ? (bi, y) => registerBlock(fragment.id, bi, y) : undefined}
       />
 
       {hasMeta ? (
@@ -420,6 +569,24 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderRadius: R.pill,
   },
   editText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
+
+  /**
+   * 命中跳转条。底色用 amberBg —— 和正文里的高亮块是同一个颜色，
+   * 「这条在这里」和「正文里描的那几段」一眼就是同一件事。
+   */
+  hitBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingLeft: 20,
+    paddingRight: 12,
+    paddingVertical: 3,
+    backgroundColor: c.amberBg,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.hair,
+  },
+  hitBarText: { fontSize: 11.5, color: c.amberText, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   content: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48 },
   badges: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },

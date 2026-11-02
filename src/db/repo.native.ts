@@ -4,6 +4,8 @@ import { parseTags } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
+  Document,
+  DocumentMeta,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -178,6 +180,27 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_ask_sessions_updated ON ask_sessions(archived, updated_at DESC);
   `,
+  // v9：文档库（v0.10.0）。
+  //     正文单独存一列 body_md，列表查询不取它 —— 一篇文档解析出来可能几十万字，
+  //     每次打开列表都读一遍会让首屏明显变卡。
+  //     原文件不进库，只存路径；文件本身放在 App 私有目录里。
+  `
+  CREATE TABLE IF NOT EXISTS documents (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL,
+    ext        TEXT    NOT NULL DEFAULT '',
+    size       INTEGER NOT NULL DEFAULT 0,
+    file_uri   TEXT,
+    body_md    TEXT    NOT NULL DEFAULT '',
+    pages      INTEGER,
+    char_count INTEGER NOT NULL DEFAULT 0,
+    state      TEXT    NOT NULL DEFAULT 'parsing',
+    error      TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at DESC);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -339,6 +362,42 @@ function toAskSession(r: AskSessionRow): AskSession {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
+}
+
+interface DocumentRow {
+  id: number;
+  name: string;
+  ext: string;
+  size: number;
+  file_uri: string | null;
+  body_md: string;
+  pages: number | null;
+  char_count: number;
+  state: string;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** 列表用的映射：**故意丢掉 body_md**，只有 findDocument 才读正文 */
+function toDocumentMeta(r: DocumentRow): DocumentMeta {
+  return {
+    id: r.id,
+    name: r.name,
+    ext: r.ext,
+    size: r.size,
+    fileUri: r.file_uri,
+    pages: r.pages,
+    charCount: r.char_count,
+    state: (r.state as DocumentMeta['state']) ?? 'parsing',
+    error: r.error,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+function toDocument(r: DocumentRow): Document {
+  return { ...toDocumentMeta(r), bodyMd: r.body_md ?? '' };
 }
 
 /** 把一条碎片写进 FTS。先删后插，更新/打标签都走它 */
@@ -927,6 +986,59 @@ export const repo: Repo = {
 
   async deleteAskSession(id) {
     db().runSync('DELETE FROM ask_sessions WHERE id = ?', [id]);
+  },
+
+  async listDocuments() {
+    // 不取 body_md：列表只需要标题和状态
+    const rows = db().getAllSync<DocumentRow>(
+      `SELECT id, name, ext, size, file_uri, pages, char_count, state, error, created_at, updated_at
+         FROM documents ORDER BY updated_at DESC`,
+    );
+    return rows.map((r) => toDocumentMeta(r));
+  },
+
+  async findDocument(id) {
+    const row = db().getFirstSync<DocumentRow>('SELECT * FROM documents WHERE id = ?', [id]);
+    return row ? toDocument(row) : null;
+  },
+
+  async insertDocument(input) {
+    const now = Date.now();
+    const res = db().runSync(
+      `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '', NULL, 0, ?, NULL, ?, ?)`,
+      [input.name, input.ext, input.size, input.fileUri, input.state, now, now],
+    );
+    return Number(res.lastInsertRowId);
+  },
+
+  async updateDocument(id, patch) {
+    const sets: string[] = [];
+    const params: (string | number | null)[] = [];
+    if (patch.bodyMd !== undefined) {
+      sets.push('body_md = ?', 'char_count = ?');
+      params.push(patch.bodyMd, patch.bodyMd.length);
+    }
+    if (patch.pages !== undefined) {
+      sets.push('pages = ?');
+      params.push(patch.pages);
+    }
+    if (patch.state !== undefined) {
+      sets.push('state = ?');
+      params.push(patch.state);
+    }
+    if (patch.error !== undefined) {
+      sets.push('error = ?');
+      params.push(patch.error);
+    }
+    if (!sets.length) return;
+    sets.push('updated_at = ?');
+    params.push(Date.now(), id);
+    db().runSync(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`, params);
+  },
+
+  async deleteDocument(id) {
+    db().runSync('DELETE FROM documents WHERE id = ?', [id]);
   },
 
   async saveRun(input) {

@@ -1,5 +1,7 @@
 import type {
   AskSession,
+  Document,
+  DocumentMeta,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -185,6 +187,30 @@ export interface Repo {
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
   markRunApplied(id: number): Promise<void>;
+
+  /* ---- 文档（v0.10.0） ---- */
+  /** 列表，按更新时间倒序。**不含正文** —— 文档的 Markdown 可能几十万字 */
+  listDocuments(): Promise<DocumentMeta[]>;
+  /** 取一篇文档的完整内容。不存在返回 null */
+  findDocument(id: number): Promise<Document | null>;
+  /** 新建一条文档记录（原文件已经复制好），返回 id */
+  insertDocument(input: {
+    name: string;
+    ext: string;
+    size: number;
+    fileUri: string | null;
+    state: DocumentMeta['state'];
+  }): Promise<number>;
+  /**
+   * 更新解析结果。只传要改的字段。
+   * `charCount` 由实现自己按 bodyMd 算，调用方不要传 —— 两处各算一次迟早对不上。
+   */
+  updateDocument(
+    id: number,
+    patch: { bodyMd?: string; pages?: number | null; state?: DocumentMeta['state']; error?: string | null },
+  ): Promise<void>;
+  /** 删除文档记录。原文件由调用方删，repo 不碰文件系统 */
+  deleteDocument(id: number): Promise<void>;
 
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;

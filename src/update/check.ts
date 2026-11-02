@@ -19,6 +19,11 @@ const OWNER = 'gup-n';
 const REPO = 'fragements';
 const API = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
+/** 仓库主页。设置页「GitHub 仓库」指向它，弹窗里的说明链接也从这里派生 */
+export const REPO_WEB = `https://github.com/${OWNER}/${REPO}`;
+/** Release 列表页。设置页「更新记录」指向它 */
+export const RELEASES_WEB = `${REPO_WEB}/releases`;
+
 /** 自动检查的节流窗口（前端手动检查不受限） */
 const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
 /** 单次请求超时 */
@@ -33,8 +38,14 @@ export interface ReleaseInfo {
   version: string;
   /** 原始 tag，如 `v0.8.4` */
   tag: string;
-  /** Release 说明（通常是 CHANGELOG 里那一版的内容） */
+  /**
+   * Release 说明（CHANGELOG 里那一版的极简条目）。
+   * App 内只拿它做一行摘要，长文一律去 GitHub 看 —— 弹窗里塞几百字，
+   * 用户既读不完也找不到重点。
+   */
   notes: string;
+  /** Release 页面地址。接口没给就用 tag 拼一条，保证永远有地方可点 */
+  htmlUrl: string;
   apkUrl: string;
   apkName: string;
   /** 字节数；接口没给就是 0 */
@@ -89,6 +100,7 @@ async function fetchLatest(): Promise<ReleaseInfo | null> {
   const data = (await res.json()) as {
     tag_name?: string;
     body?: string;
+    html_url?: string;
     assets?: { name?: string; browser_download_url?: string; size?: number }[];
   };
 
@@ -102,6 +114,9 @@ async function fetchLatest(): Promise<ReleaseInfo | null> {
     version: tag.replace(/^[vV]/, ''),
     tag,
     notes: (data.body ?? '').trim(),
+    // 少数镜像 / 缓存会把 html_url 抹掉，这时按 tag 拼一条规范地址；
+    // 拼出来的链接至少能落到 Release 页，不会让「查看更新说明」变成死按钮
+    htmlUrl: (data.html_url ?? '').trim() || `${RELEASES_WEB}/tag/${encodeURIComponent(tag)}`,
     apkUrl: apk.browser_download_url,
     apkName: apk.name ?? 'fragments.apk',
     apkSize: apk.size ?? 0,

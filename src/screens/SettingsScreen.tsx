@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -30,7 +31,14 @@ import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { UpdateSheet } from '../components/UpdateSheet';
-import { checkForUpdate, getAutoCheck, setAutoCheck, type ReleaseInfo } from '../update/check';
+import {
+  RELEASES_WEB,
+  REPO_WEB,
+  checkForUpdate,
+  getAutoCheck,
+  setAutoCheck,
+  type ReleaseInfo,
+} from '../update/check';
 import { getDownloadBase, setDownloadBase } from '../update/mirror';
 import { versionLabel } from '../util/semver';
 import type { IoniconName } from '../components/IconButton';
@@ -74,7 +82,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [ioMsg, setIoMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 启动时自动检查更新（默认开，存在 settings 表） */
   const [autoCheck, setAutoCheckOn] = useState(true);
-  /** 自定义下载基础地址（NAS / 自建），空串 = 用加速镜像 + 官方 */
+  /** 自定义下载基础地址（自建 / 镜像），空串 = 用加速镜像 + 官方 */
   const [downloadBase, setDownloadBaseOn] = useState('');
   const [baseMsg, setBaseMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [checking, setChecking] = useState(false);
@@ -521,6 +529,36 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
           </View>
 
           {/*
+            两行纯网页链接，安卓之外也显示 —— 没有安装包可下，但「这个 App 从哪来、
+            改过什么」在浏览器里一样能看。更新说明本体在 GitHub，App 内不再排一遍。
+          */}
+          <Pressable
+            style={styles.aboutRow}
+            onPress={() => {
+              Linking.openURL(REPO_WEB).catch(() => undefined);
+            }}
+          >
+            <Text style={styles.aboutKey}>GitHub 仓库</Text>
+            <View style={styles.updateValue}>
+              <Text style={styles.aboutVal}>gup-n/fragements</Text>
+              <Ionicons name="chevron-forward" size={13} color={c.text3} />
+            </View>
+          </Pressable>
+
+          <Pressable
+            style={styles.aboutRow}
+            onPress={() => {
+              Linking.openURL(RELEASES_WEB).catch(() => undefined);
+            }}
+          >
+            <Text style={styles.aboutKey}>更新记录</Text>
+            <View style={styles.updateValue}>
+              <Text style={styles.aboutVal}>全部版本</Text>
+              <Ionicons name="chevron-forward" size={13} color={c.text3} />
+            </View>
+          </Pressable>
+
+          {/*
             只有 Android 能装包，web 上不显示这两行 —— 摆一个点了没反应的
             「检查更新」比不摆更让人困惑。
           */}
@@ -584,7 +622,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   onEndEditing={saveDownloadBase}
                 />
                 <Text style={styles.fieldHint}>
-                  填 NAS / 自建的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则按「加速镜像 → GitHub」回退。
+                  填自建或镜像的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则按「加速镜像 → GitHub」回退。
                 </Text>
                 {baseMsg ? (
                   <Text style={baseMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>

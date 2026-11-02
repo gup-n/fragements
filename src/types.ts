@@ -307,6 +307,46 @@ export interface AskSession {
   updatedAt: number;
 }
 
+/* ------------------------------------------------------------------ */
+/* 文档（v0.10.0）                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 文档的解析状态。
+ *
+ * `local` 是「不需要解析」：txt / md 直接读文本，不走 MinerU。
+ * 其余三个都是 MinerU 任务的状态映射，界面上只显示文案，不直接展示这些值。
+ */
+export type DocState = 'local' | 'parsing' | 'done' | 'failed';
+
+/** 列表用的轻量文档条目：不带正文，避免一次把几 MB 的 Markdown 全读进内存 */
+export interface DocumentMeta {
+  id: number;
+  /** 原文件名，含扩展名 */
+  name: string;
+  /** 小写扩展名，不含点。空串表示没有扩展名 */
+  ext: string;
+  /** 原文件字节数 */
+  size: number;
+  /**
+   * 原文件的本地 URI（App 私有目录）。
+   * 解析失败或用户删了文件时可能指向不存在的位置，读写前都要判空。
+   */
+  fileUri: string | null;
+  pages: number | null;
+  charCount: number;
+  state: DocState;
+  /** 失败原因。state !== 'failed' 时为 null */
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 详情用：带解析出来的 Markdown 正文 */
+export interface Document extends DocumentMeta {
+  bodyMd: string;
+}
+
 /**
  * 默认模型是 `deepseek-flash`（DeepSeek-V4.1-Flash）。
  *

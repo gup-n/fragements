@@ -6,13 +6,17 @@
  *
  * 下载中**故意拦返回键**。22 MB 的包下到一半被返回键打断，用户看到的
  * 是弹窗消失、什么也没发生 —— 比让他多点一次「取消」更糟。
+ *
+ * 更新说明只给一行摘要 + 一个跳 GitHub 的按钮，不再把 Release 正文铺进弹窗。
+ * 弹窗的职责是「要不要装」，不是「读一篇变更记录」；正文在 GitHub 上本来就有，
+ * 在这里再排一遍只会把按钮挤到很下面。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   BackHandler,
+  Linking,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -37,6 +41,24 @@ import { versionLabel } from '../util/semver';
 
 type Phase = 'prompt' | 'downloading' | 'ready' | 'error';
 
+/**
+ * 摘要上限。超过这个长度就一个字都不显示 ——
+ * 截断会在半句话上断开（「改成多源回退，下载依次试：1. 自定义地址…」），
+ * 读起来比没有摘要更像 bug。链接反正就在下面一行。
+ */
+const BRIEF_MAX = 120;
+
+/** 把极简版 Release 说明压成一行；压不进一行就返回空串 */
+function noteBrief(notes: string): string {
+  const lines = notes
+    .split('\n')
+    .map((l) => l.replace(/^[-*]\s+/, '').trim())
+    // 极简版第一行是版本号，弹窗标题里已经有了
+    .filter((l) => l && !/^v?\d+(\.\d+)+$/i.test(l));
+  const one = lines.join(' · ');
+  return one.length > 0 && one.length <= BRIEF_MAX ? one : '';
+}
+
 interface Props {
   release: ReleaseInfo;
   onClose: () => void;
@@ -58,6 +80,8 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   const [error, setError] = useState('');
   const [skip, setSkip] = useState(false);
   const [installing, setInstalling] = useState(false);
+  /** 跳转失败的原因。手机上没有浏览器 / 链接被拦时 openURL 会 reject，不能当没点过 */
+  const [linkErr, setLinkErr] = useState('');
 
   const cancelRef = useRef<(() => void) | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -77,6 +101,12 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     if (skip) onSkipVersion();
     onClose();
   }, [skip, onSkipVersion, onClose]);
+
+  /** 更新说明在 GitHub 上读，App 内不再排一遍正文 */
+  const openNotes = useCallback(() => {
+    setLinkErr('');
+    Linking.openURL(release.htmlUrl).catch(() => setLinkErr('打不开链接'));
+  }, [release.htmlUrl]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
@@ -205,6 +235,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   const unknownTotal = progress.total <= 0;
   /** 权限问题要额外给一个「去授权」入口，否则用户卡在这不知道怎么办 */
   const needPermission = /未知应用|授权/.test(error);
+  const brief = noteBrief(release.notes);
 
   return (
     <View style={styles.overlay}>
@@ -250,13 +281,14 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
 
         {phase === 'prompt' ? (
           <>
-            {release.notes ? (
-              <ScrollView style={styles.notes} contentContainerStyle={styles.notesInner}>
-                <Text style={styles.notesText}>{release.notes}</Text>
-              </ScrollView>
-            ) : (
-              <Text style={styles.noNotes}>这个版本没有写更新说明。</Text>
-            )}
+            <View style={styles.notesBox}>
+              {brief ? <Text style={styles.notesBrief}>{brief}</Text> : null}
+              <Pressable style={styles.linkBtn} onPress={openNotes} hitSlop={4}>
+                <Ionicons name="open-outline" size={13} color={c.accentText} />
+                <Text style={styles.linkText}>查看更新说明</Text>
+              </Pressable>
+              {linkErr ? <Text style={styles.linkErr}>{linkErr}</Text> : null}
+            </View>
 
             <Pressable style={styles.skipRow} onPress={() => setSkip((v) => !v)}>
               <View style={[styles.checkBox, skip && styles.checkBoxOn]}>
@@ -391,15 +423,21 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   title: { fontSize: 15.5, color: c.text, fontWeight: '600' },
   sub: { fontSize: 11.5, color: c.text3, marginTop: 4, lineHeight: 17 },
 
-  notes: {
-    marginTop: 14,
-    maxHeight: 200,
-    backgroundColor: c.hairSoft,
+  notesBox: { marginTop: 14, alignItems: 'flex-start' },
+  notesBrief: { fontSize: 12, color: c.text2, lineHeight: 19 },
+  linkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 2,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
     borderRadius: R.btn,
+    borderWidth: 0.5,
+    borderColor: c.hair,
   },
-  notesInner: { padding: 12 },
-  notesText: { fontSize: 12, color: c.text2, lineHeight: 19 },
-  noNotes: { fontSize: 12, color: c.text3, marginTop: 14 },
+  linkText: { fontSize: 12.5, color: c.accentText },
+  linkErr: { fontSize: 11.5, color: c.danger, marginTop: 6 },
 
   skipRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
   checkBox: {

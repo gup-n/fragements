@@ -265,10 +265,11 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 |---|---|---|
 | 框架 | React Native + Expo SDK 58 | 复用已有 TypeScript/React 经验；prebuild 后直接出 APK 装机，不依赖 Expo Go |
 | 语言 | TypeScript | — |
-| 存储 | expo-sqlite（本地 SQLite，迁移到 v7）+ FTS5 全文索引 | 结构化查询、索引、事务；中文用 bigram 分词才能搜两个字 |
+| 存储 | expo-sqlite（本地 SQLite，迁移到 v9）+ FTS5 全文索引 | 结构化查询、索引、事务；中文用 bigram 分词才能搜两个字 |
 | 密钥 | expo-secure-store（Android Keystore 加密） | API Key 不落明文 |
-| 文件导出 | expo-file-system + expo-sharing | 生成 md 后走系统分享，可直接存 NAS |
-| 导航 | 自实现轻量页面栈（5 个页面：时间轴 / 整理 / 回顾 / 问 / 设置） | 不引入 react-navigation，减少依赖与配置成本 |
+| 文件导出 | expo-file-system + expo-sharing | 生成 md 后走系统分享，可直接存到电脑或网盘 |
+| 导航 | 自实现轻量页面栈（6 个页面：时间轴 / 整理 / 回顾 / 问 / 设置 / 文档） | 不引入 react-navigation，减少依赖与配置成本 |
+| 文档解析 | MinerU 轻量 Agent 接口（免 Token） | 手机端跑不了版面分析模型；轻量接口直接返回 Markdown 直链，不需要解压 zip，也不涉及付费与配额 |
 | Web | react-native-web + localStorage 驱动 | **只用来跑编译校验**（`npm run build:web` 打一遍包即删），不做交付、不做界面预览 |
 
 **包名**：`com.local.fragments`（固定）
@@ -283,9 +284,19 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 - 应用内极简输入（打开即写），输入框自动增高，可一键转全屏编辑
 - 时间轴按日分组、按日折叠（默认只展开今天），长文超 3 行折叠；周总结独占周级分区，固定在该周最上方
 - 首页搜索（原文 / 标签 / 事项，内存过滤）+ 标签胶囊筛选，两者叠乘
+- **搜索命中可见（v0.10.0）**：命中文字描底色；每条标「N 处」；详情页「第 i / N 处」逐处跳转，
+  按段落实测位置滚动，不按字符比例估算
 - 碎片详情页：左右滑动切换、整屏内联编辑、正文下方接当天小结
 - 碎片编辑 / 删除
 - **时间轴手势（v0.8.8）**：长按复制正文；左滑露出「删除」（二次确认）；右滑直接进「问」并带上这条碎片
+
+**文档（v0.10.0）**
+
+- 上传 PDF / Word / PPT / Excel / 图片 / txt / md，**原文件留在手机本地**
+- txt / md 直接读文本；其余走 MinerU 轻量解析接口转 Markdown（免 Token，单文件 ≤10 MB、≤20 页）
+- 列表显示状态（解析中 / 已解析 N 字 / 失败 / 本地文本），失败可重试或删除
+- 阅读器复用 `NoteBody`，支持打开原文件（系统查看器）
+- 一期**不进全文索引、不进「问」**；接入检索是二期，索引口径等那时再定
 
 **整理（v0.7 重做）**
 
@@ -408,10 +419,13 @@ limit 50（高频词在小库上也可能命中很多条）；内容完全相同
 ### 4.2 属于范围但还没做
 
 - **通知栏常驻入口**。技术约束见第 10 节末尾，排期见 [ROADMAP.md](./ROADMAP.md) P0-2。
+- **文档接入搜索与「问」**（v0.10.0 只做了阅读库）。索引口径还没定：整篇进 FTS 会让结果全是同一篇，
+  按段切才能把引用落到位置。见 [ROADMAP.md](./ROADMAP.md) P1-7。
 
 ### 4.3 明确不做
 
-桌面小组件 · 语音转文字 · 定时自动整理 · NAS 自动备份 · 多端同步 · 密码锁 · 图片/链接附件 ·
+桌面小组件 · 语音转文字 · 定时自动整理 · 自建服务器自动备份 · 多端同步 · 密码锁 ·
+图片/链接附件（v0.10.0 起支持整份文档上传，但图文混排里的图片不落地）·
 **知识卡 / 主题 / 卡片详情页**（v0.7 已整层删除）· 向量检索 / embedding · 真 tool calls 的整理 agent
 
 架构上为这些预留：`fragments.source` 字段可扩展、`repo` 接口隔离存储实现。
@@ -498,15 +512,35 @@ CREATE TABLE ask_sessions (
   updated_at  INTEGER NOT NULL
 );
 CREATE INDEX idx_ask_sessions_updated ON ask_sessions(archived, updated_at DESC);
+
+-- 文档库（v9）。原文件不进库，只存路径；正文单独一列，列表查询不取它
+CREATE TABLE documents (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL,             -- 原文件名，含扩展名
+  ext        TEXT    NOT NULL DEFAULT '',  -- 小写扩展名，不含点
+  size       INTEGER NOT NULL DEFAULT 0,   -- 原文件字节数
+  file_uri   TEXT,                         -- App 私有目录里的原文件；失败/被删时为 null
+  body_md    TEXT    NOT NULL DEFAULT '',  -- 解析出来的 Markdown
+  pages      INTEGER,                      -- 页数；解析接口没给就是 NULL
+  char_count INTEGER NOT NULL DEFAULT 0,   -- 由 body_md.length 写入，供列表显示
+  state      TEXT    NOT NULL DEFAULT 'parsing', -- local | parsing | done | failed
+  error      TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_documents_updated ON documents(updated_at DESC);
 ```
 
 索引：`fragments(created_at DESC)`、`todos(done)`、`todos(done_at DESC)`、`todos(merged_into)`、
-`organize_sessions(finished, updated_at DESC)`、`ask_sessions(archived, updated_at DESC)`。
+`organize_sessions(finished, updated_at DESC)`、`ask_sessions(archived, updated_at DESC)`、
+`documents(updated_at DESC)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v8。**
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v9。**
 v6 做三件事：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、建 `fragment_fts` 与 `organize_sessions`。
 v7 给 `todos` 加 `done_at`，用 `created_at` 回填旧完成项，并物理清理超过 5 条的旧完成项。
 v8 建 `ask_sessions`：会话正文与引用快照一起存，历史重开不依赖当时的检索结果。
+v9 建 `documents`：文档列表与解析结果。**正文不进 `fragment_fts`** —— 一期文档只做阅读库，不参与搜索与「问」，
+等接入检索时再决定索引口径（全文索引还是按页/段切片），避免现在先按碎片的方式切一遍、以后又推翻。
 
 **几条刻意的结构决定：**
 
@@ -962,6 +996,53 @@ Dialog 窗口也拿不到 Activity 根视图的键盘事件，躲不开输入法
 关闭预览等于放弃这次生成；`summaryGenRef` 让迟到的请求结果不再回写界面。
 点「存为碎片」才 `insertFragment`，写成功后回历史列表并弹「已存为一条整理后的碎片」。
 
+### 8.3 搜索命中与文档（v0.10.0）
+
+**搜索命中**
+
+```
+┌ 搜索框 ──────────────────────────┐
+│ 找到 5 条 · 12 处                 │
+├──────────────────────────────────┤
+│ 11:40  老张说 [NAS] 4号盘有异响   │
+│        [设备] [NAS]      3 处     │  ← 徽标在 meta 行末尾
+└──────────────────────────────────┘
+```
+
+- 命中文字描底色（`c.amberBg`），**不改字色**：深色主题的正文是浅灰，改色会变成深色压深色。
+- 计数与高亮共用 `util/highlight.ts` 的 `findHits`。两套实现会出现「徽标 3 处、正文描 2 段」。
+- 统计行三种说法：`找到 N 条 · K 处`（有正文命中）/ `找到 N 条 · 正文无命中`（只命中标签或事项）/
+  `没有匹配的碎片`。**不要在有条目时报「0 处」**。
+- 详情页顶部第二行「第 i / N 处」+ 上/下按钮；跳转按 `NoteBody.onBlockLayout` 实测的块 y 滚，
+  块含表格与代码块。禁用态降透明度，不隐藏。
+- 换页（`current` 变）时命中下标归零。`numberOfLines` 预览分支不参与测量。
+
+**文档**
+
+入口在页头「问」的左边（`documents-outline`）。页头动作固定为
+`[文档][问][回顾][设置]` + `整理`；窗口宽度 <380 时隐藏品牌副标题。
+
+```
+┌──────────────────────────────┐
+│ ‹  文档                      │
+├──────────────────────────────┤
+│        [ 上传文档 ]           │
+│  PDF/Word/PPT/图片 → Markdown │
+├──────────────────────────────┤
+│ 方案.pdf   PDF · 2.1 MB  ✕   │
+│ 已解析 18,240 字 · 今天 14:20 │
+└──────────────────────────────┘
+```
+
+- 上传前有确认卡：文件名、大小、**「会上传到 mineru.net」**、取消 / 开始解析。
+  这段说明是产品要求，不是可选文案。
+- 原文件复制进 `Paths.document/documents/`，选择器给的临时 URI 不作长期引用。
+- txt / md 本地读文本（`state: 'local'`）；其余走 MinerU 轻量接口
+  （`POST /api/v1/agent/parse/file` → `PUT` 原始字节 → 轮询 → 下载 `markdown_url`），
+  `state` 走 `parsing → done | failed`。上传不带 `Content-Type`，否则预签名校验失败。
+- 失败保留记录与原文件，阅读器给「重新解析」；删除是记录 + 原文件一起删，删除要二次确认。
+- 一期**不写 `fragment_fts`、不进「问」**。
+
 ## 9. 代码结构与分层
 
 文件级清单（含行数）只在 [HANDOFF.md 第 4 节](./HANDOFF.md) 维护 —— 那里是给接手的人看的，
@@ -1014,13 +1095,17 @@ util/         纯函数：整理计划、分词、日期、结果元数据、纪
       右滑带入上下文、历史会话（归档 / 整理为碎片 / 删除）
 - [x] 待办：回顾页、完成标记、合并可撤回
 - [x] Markdown 导出（时间轴 + 待办 + 标签索引）与**导入**（判重 + 预览确认）、AI 配置与连接测试
-- [x] SQLite 迁移到 v7（`todos.done_at`）、FTS5 索引与重建入口
+- [x] SQLite 迁移到 v9（`todos.done_at` / `ask_sessions` / `documents`）、FTS5 索引与重建入口
+- [x] **搜索命中**（v0.10.0）：正文描底色、每条「N 处」、详情页逐处跳转（段落实测 y）
+- [x] **文档库**（v0.10.0）：上传 / 原文件留存 / MinerU 轻量解析 / 阅读 / 重新解析 / 删除
+- [x] **更新公告精简**（v0.10.0）：弹窗只留摘要 + GitHub 链接，设置页加仓库与更新记录入口
 - [x] Web 平台编译校验（`npm run build:web` 打一遍包确认能过，产物跑完即删，**不做界面预览**）
 
 ### 未完成
 
 - [ ] **通知栏常驻入口**（技术约束见本节末尾）
-- [ ] **真机回归**：ROADMAP P0-1 列了 71 条，v0.7 的重做与 v0.8.8 的新交互基本没验过
+- [ ] **真机回归**：ROADMAP P0-1 列了 71 条（另有 v0.10.0 的 10 条分组），v0.7 的重做与 v0.8.8 的新交互基本没验过
+- [ ] **文档接入检索与「问」**（见 4.2 与 ROADMAP P1-7）
 
 ### 已知限制
 
@@ -1035,6 +1120,9 @@ util/         纯函数：整理计划、分词、日期、结果元数据、纪
 - **Web 端用 localStorage，与 Android 的 SQLite 是两套数据**，**不能用来验证真实数据流** ——
   它唯一的作用是让 `tsc` 之外的打包错误暴露出来。
 - **整理会话没有历史列表。** 只有「最近一个未完成的」能续跑；放弃即删。
+- **文档解析会把文件发到外网**（mineru.net 轻量接口），且限制 10 MB / 20 页。
+  这是全项目唯一离开手机的内容；txt / md 不上传。解析任务不做后台持久化 ——
+  离开页面仍在跑，**杀掉 App 就得重新解析**（记录与原文件都还在）。
 
 ### 待办：通知栏入口的实现约束
 

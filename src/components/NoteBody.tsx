@@ -17,6 +17,7 @@
 import React, { useMemo } from 'react';
 import { Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
 import { useThemedStyles, type Palette } from '../theme';
+import { findHits } from '../util/highlight';
 import {
   flattenForPreview,
   parseBlocks,
@@ -86,9 +87,37 @@ function Inline({
   citeLabel,
   variant = 'default',
   selectable,
-}: { segs: Seg[] } & CiteProps & Pick<Props, 'variant' | 'selectable'>) {
+  highlight,
+}: { segs: Seg[] } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'highlight'>) {
   const { styles } = useThemedStyles(makeStyles);
   const reading = variant === 'reading';
+
+  /**
+   * 按命中切开一段文字，命中的那几截套一层带底色的 Text。
+   *
+   * 嵌套的 Text 继承父级样式，所以加粗、等宽、阅读态字号都还在 ——
+   * 只在外面描一层底色，不动字色：深色主题下正文是浅色，amberBg 是深底，
+   * 硬改字色反而会让高亮的地方读不出来。
+   */
+  const withHits = (text: string) => {
+    if (!highlight || !text) return text;
+    const hits = findHits(text, highlight);
+    if (!hits.length) return text;
+    const parts: React.ReactNode[] = [];
+    let last = 0;
+    hits.forEach((h, i) => {
+      if (h.start > last) parts.push(text.slice(last, h.start));
+      parts.push(
+        <Text key={i} style={styles.hit}>
+          {text.slice(h.start, h.end)}
+        </Text>,
+      );
+      last = h.end;
+    });
+    if (last < text.length) parts.push(text.slice(last));
+    return parts;
+  };
+
   return (
     <>
       {segs.map((seg, i) => {
@@ -124,7 +153,7 @@ function Inline({
                   : undefined
             }
           >
-            {seg.text}
+            {withHits(seg.text)}
           </Text>
         );
       })}
@@ -152,7 +181,8 @@ function Table({
   variant = 'default',
   selectable,
   muted,
-}: { block: TableBlock } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'muted'>) {
+  highlight,
+}: { block: TableBlock } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'muted' | 'highlight'>) {
   const { styles, c } = useThemedStyles(makeStyles);
   const dense = block.head.length >= 5;
   const reading = variant === 'reading';
@@ -183,6 +213,7 @@ function Table({
           citeLabel={citeLabel}
           variant={variant}
           selectable={selectable}
+          highlight={highlight}
         />
       </Text>
     </View>
@@ -224,6 +255,19 @@ interface Props {
   selectable?: boolean;
   /** 已合并的碎片置灰，标题以外整体降一档颜色 */
   muted?: boolean;
+  /**
+   * 命中的搜索词。给了就把正文里命中的片段描一层底色（详情页从搜索进来时用）。
+   * 引用小标不参与高亮 —— 那是我方编号，不是正文。
+   */
+  highlight?: string;
+  /**
+   * 每个文字块的实测 y（相对本组件内容的顶端）。
+   *
+   * 给了它才逐块渲染：一个块一个 `<View onLayout>`。合并成一个大 Text 时
+   * 量不出「第 3 块在哪」—— Text 只报整体高度，详情页要按块滚到命中处就没法做。
+   * 不给时保持原来的合并渲染（连续文字块共用一行距，视觉更连贯）。
+   */
+  onBlockLayout?: (blockIndex: number, y: number) => void;
 }
 
 export function NoteBody({
@@ -235,6 +279,8 @@ export function NoteBody({
   variant = 'default',
   selectable,
   muted,
+  highlight,
+  onBlockLayout,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const reading = variant === 'reading';
@@ -244,7 +290,79 @@ export function NoteBody({
   const flat = useMemo(() => flattenForPreview(blocks), [blocks]);
   const groups = useMemo(() => group(blocks), [blocks]);
 
+  /** 文字块的内层：标题 / 列表 / 段落，样式按块种类定 */
+  const blockInner = (b: TextBlock) => (
+    <Text
+      style={
+        b.kind === 'h'
+          ? reading
+            ? styles.hReading
+            : styles.h
+          : b.kind === 'b'
+            ? styles.b
+            : styles.p
+      }
+    >
+      <Inline
+        segs={b.segs}
+        onCite={onCite}
+        citeLabel={citeLabel}
+        variant={variant}
+        selectable={selectable}
+        highlight={highlight}
+      />
+    </Text>
+  );
+
+  /**
+   * 代码块里的命中。
+   *
+   * 代码不认加粗/引用，但**该高亮的还得高亮** —— 用户搜一个命令，
+   * 结果落在代码块里却什么都不描，会以为「搜到了但没找到」。
+   * 行内样式继承外层 Text，等宽字体不会丢。
+   */
+  const hitParts = (text: string) => {
+    if (!highlight || !text) return text;
+    const hits = findHits(text, highlight);
+    if (!hits.length) return text;
+    const out: React.ReactNode[] = [];
+    let last = 0;
+    hits.forEach((h, i) => {
+      if (h.start > last) out.push(text.slice(last, h.start));
+      out.push(
+        <Text key={i} style={styles.hit}>
+          {text.slice(h.start, h.end)}
+        </Text>,
+      );
+      last = h.end;
+    });
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+  };
+
+  const codeView = (code: string, key: React.Key) => (
+    <View key={key} style={styles.codeBox}>
+      <Text style={[reading ? styles.codeTextReading : styles.codeText, mutedStyle]} selectable>
+        {hitParts(code)}
+      </Text>
+    </View>
+  );
+
+  const tableView = (block: TableBlock, key: React.Key) => (
+    <Table
+      key={key}
+      block={block}
+      onCite={onCite}
+      citeLabel={citeLabel}
+      variant={variant}
+      selectable={selectable}
+      muted={muted}
+      highlight={highlight}
+    />
+  );
+
   // ---- 预览模式：一个 Text，靠 numberOfLines 截断 ----
+  // 逐块渲染在这里没有意义：View 截不了行，卡片预览会被撑破
   if (numberOfLines !== undefined) {
     return (
       <Text
@@ -261,6 +379,7 @@ export function NoteBody({
               citeLabel={citeLabel}
               variant={variant}
               selectable={selectable}
+              highlight={highlight}
             />
           </React.Fragment>
         ))}
@@ -268,36 +387,54 @@ export function NoteBody({
     );
   }
 
+  /*
+   * ---- 逐块模式：详情页要按块滚动到命中处，所以不合并 ----
+   *
+   * 每块单独一个 View 只是为了拿到 y，不给它加 margin：块与块之间本来就只有
+   * 行高本身那点间距，加东西就会比合并渲染时松一截。
+   * 表格 / 代码块也要回调：命中可能落在表格单元格或代码里，只量文字块的话
+   * 「第 4 / 7 处」会跳到别的段落上去。
+   */
+  if (onBlockLayout) {
+    return (
+      <View>
+        {blocks.map((b, bi) => {
+          const measure = (e: { nativeEvent: { layout: { y: number } } }) =>
+            onBlockLayout(bi, e.nativeEvent.layout.y);
+          if (b.kind === 'table') {
+            return (
+              <View key={bi} onLayout={measure}>
+                {tableView(b, bi)}
+              </View>
+            );
+          }
+          if (b.kind === 'hr') return <View key={bi} style={styles.hr} />;
+          if (b.kind === 'code') {
+            return (
+              <View key={bi} onLayout={measure}>
+                {codeView(b.text, bi)}
+              </View>
+            );
+          }
+          return (
+            <View key={bi} onLayout={measure}>
+              <Text style={[styles.root, style, mutedStyle]} selectable={selectable}>
+                {blockInner(b)}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+    );
+  }
+
   // ---- 全量模式：文字走 Text，表格和代码块走 View ----
   return (
     <View>
       {groups.map((g, gi) => {
-        if (g.type === 'table') {
-          return (
-            <Table
-              key={gi}
-              block={g.block}
-              onCite={onCite}
-              citeLabel={citeLabel}
-              variant={variant}
-              selectable={selectable}
-              muted={muted}
-            />
-          );
-        }
+        if (g.type === 'table') return tableView(g.block, gi);
         if (g.type === 'hr') return <View key={gi} style={styles.hr} />;
-        if (g.type === 'code') {
-          return (
-            <View key={gi} style={styles.codeBox}>
-              <Text
-                style={[reading ? styles.codeTextReading : styles.codeText, mutedStyle]}
-                selectable
-              >
-                {g.text}
-              </Text>
-            </View>
-          );
-        }
+        if (g.type === 'code') return codeView(g.text, gi);
 
         return (
           <Text key={gi} style={[styles.root, style, mutedStyle]} selectable={selectable}>
@@ -305,25 +442,7 @@ export function NoteBody({
               <React.Fragment key={i}>
                 {/* 小标题前面空一行，读起来才有分节感 */}
                 {i === 0 ? '' : b.kind === 'h' ? '\n\n' : '\n'}
-                <Text
-                  style={
-                    b.kind === 'h'
-                      ? reading
-                        ? styles.hReading
-                        : styles.h
-                      : b.kind === 'b'
-                        ? styles.b
-                        : styles.p
-                  }
-                >
-                  <Inline
-                    segs={b.segs}
-                    onCite={onCite}
-                    citeLabel={citeLabel}
-                    variant={variant}
-                    selectable={selectable}
-                  />
-                </Text>
+                {blockInner(b)}
               </React.Fragment>
             ))}
           </Text>
@@ -344,6 +463,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   p: {},
   /** 加粗的关键词略重字重：颜色继承正文，已合并的碎片才能整体置灰 */
   bold: { fontWeight: '600' },
+  /**
+   * 搜索命中：只描底色，不动字色。
+   *
+   * 深色主题的正文是浅灰，amberBg 是深琥珀底 —— 改字色反而可能变成「深色压深色」。
+   * 底色加圆角就够它从段落里跳出来了，加粗和等宽的既有样式也不受影响。
+   */
+  hit: { backgroundColor: c.amberBg, borderRadius: 3 },
   /** 行内代码只换字形加浅底，不加边框 —— 正文里到处是补丁框会更乱 */
   code: { fontFamily: MONO, fontSize: 13, color: c.text2 },
   codeReading: { fontFamily: MONO, fontSize: 15, color: c.text2 },

@@ -19,9 +19,10 @@ import { OrganizeScreen } from './src/screens/OrganizeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
 import { AskScreen } from './src/screens/AskScreen';
+import { DocsScreen } from './src/screens/DocsScreen';
 import { dayKey } from './src/util/date';
 
-type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
+type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask' | 'docs';
 
 const isWeb = Platform.OS === 'web';
 
@@ -327,6 +328,7 @@ function Shell({ booted }: { booted: boolean }) {
                     setRoute('ask');
                   }}
                   onOpenReview={() => setRoute('review')}
+                  onOpenDocs={() => setRoute('docs')}
                   onSeed={isWeb ? handleSeed : undefined}
                 />
               )}
@@ -352,6 +354,7 @@ function Shell({ booted }: { booted: boolean }) {
               {route === 'review' && (
                 <ReviewScreen onClose={() => setRoute('timeline')} onChanged={reload} />
               )}
+              {route === 'docs' && <DocsScreen onClose={() => setRoute('timeline')} />}
               {route === 'ask' && (
                 <AskScreen
                   onClose={() => {

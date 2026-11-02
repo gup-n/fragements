@@ -7,6 +7,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -20,6 +21,7 @@ import { FragmentDetail } from '../components/FragmentDetail';
 import { SwipeRow } from '../components/SwipeRow';
 import { Toast } from '../components/Toast';
 import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
+import { countHits } from '../util/highlight';
 import { useKeyboardHeight } from '../util/keyboard';
 
 /**
@@ -81,6 +83,8 @@ interface Props {
   /** 带上碎片 id 时，「问」页会把这它作为上下文 */
   onOpenAsk: (fragmentId?: number) => void;
   onOpenReview: () => void;
+  /** 文档库（v0.10.0）。入口在页头「问」的左边 */
+  onOpenDocs: () => void;
   onSeed?: () => Promise<void>;
 }
 
@@ -99,9 +103,13 @@ export function TimelineScreen({
   onOpenSettings,
   onOpenAsk,
   onOpenReview,
+  onOpenDocs,
   onSeed,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { width } = useWindowDimensions();
+  /** 页头现在有 4 个图标 + 整理按钮。窄屏先让副标题让路，不要把品牌名压成省略号 */
+  const tightHeader = width < 380;
   const [sending, setSending] = useState(false);
   /**
    * 当前滑开的那一行。存 id 而不是布尔值 —— 父级统一持有才能保证同时只开一行。
@@ -134,7 +142,7 @@ export function TimelineScreen({
    * 存快照的话编辑保存后这里还是旧内容，详情页看起来「没变」，得关掉重开才刷新。
    * 用 id 序列而不是直接读 flat：id 顺序固定，翻到第几条不会因为列表重排而错位。
    */
-  const [detail, setDetail] = useState<{ ids: number[]; index: number } | null>(null);
+  const [detail, setDetail] = useState<{ ids: number[]; index: number; query?: string } | null>(null);
   const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const fullInputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const listRef = useRef<SectionList<TimelineItem, DisplaySection>>(null);
@@ -343,6 +351,26 @@ export function TimelineScreen({
     };
   }, [narrowed, visibleFragments]);
 
+  /**
+   * 每条碎片正文里命中几处。只算 `visibleFragments` —— 列表里没有的东西数了也没人看。
+   *
+   * 依赖写 visibleFragments 而不是 fragments：筛选变化时它会变，而 fragments / query 都没变；
+   * 只挂前两个的话，从「全部」切到一个标签下，徽标上的数还是旧的那批。
+   */
+  const hitCounts = useMemo(() => {
+    const map = new Map<number, number>();
+    if (!query.trim()) return map;
+    for (const f of visibleFragments) map.set(f.id, countHits(f.content, query));
+    return map;
+  }, [visibleFragments, query]);
+
+  /** 命中总数，给统计行用 */
+  const hitTotal = useMemo(() => {
+    let n = 0;
+    for (const v of hitCounts.values()) n += v;
+    return n;
+  }, [hitCounts]);
+
   const canSend = draft.trim().length > 0 && !sending;
 
   async function submit() {
@@ -422,11 +450,11 @@ export function TimelineScreen({
   }
 
   /** 点一条碎片先读，不直接进编辑 —— 想通读长文时不该先得到一个光标 */
-  function openDetail(f: Fragment) {
+  function openDetail(f: Fragment, q?: string) {
     inputRef.current?.blur();
     setOpenRow(null);
     const i = flat.findIndex((x) => x.id === f.id);
-    setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i });
+    setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i, query: q });
   }
 
   /** 再点同一个标签就取消 —— 否则筛选开了没法用同一个手势关掉 */
@@ -482,12 +510,24 @@ export function TimelineScreen({
           <Text style={styles.brand} numberOfLines={1}>
             碎片
           </Text>
-          <Text style={styles.brandSub} numberOfLines={1}>
-            {todayCount > 0 ? `今天记了 ${todayCount} 条` : '今天还没记东西'}
-          </Text>
+          {tightHeader ? null : (
+            <Text style={styles.brandSub} numberOfLines={1}>
+              {todayCount > 0 ? `今天记了 ${todayCount} 条` : '今天还没记东西'}
+            </Text>
+          )}
         </View>
 
         <View style={styles.headerActions}>
+          {/* 文档入口在「问」左边：两种都是「翻已有内容」，摆在一起才不会来回找 */}
+          <IconButton
+            name="documents-outline"
+            size={19}
+            tone="soft"
+            color={c.text2}
+            diameter={34}
+            onPress={onOpenDocs}
+            accessibilityLabel="文档：上传并阅读文档"
+          />
           <IconButton
             name="chatbubble-ellipses-outline"
             size={19}
@@ -579,7 +619,13 @@ export function TimelineScreen({
           <Text style={styles.searchStat}>
             {searchStat.total === 0
               ? '没有匹配的碎片'
-              : `找到 ${searchStat.total} 条${searchStat.inbox > 0 ? ` · ${searchStat.inbox} 条还没整理` : ''}`}
+              : !searching
+                ? `找到 ${searchStat.total} 条${searchStat.inbox > 0 ? ` · ${searchStat.inbox} 条还没整理` : ''}`
+                : hitTotal > 0
+                  ? // 有正文命中就报处数：用户搜「NAS」，想知道的是「一共有几处用得上」
+                    `找到 ${searchStat.total} 条 · ${hitTotal} 处`
+                  : // 只命中了标签 / 事项。报「0 处」会让人以为搜错了，得说清是正文没有
+                    `找到 ${searchStat.total} 条 · 正文无命中`}
           </Text>
         ) : null}
       </View>
@@ -707,12 +753,16 @@ export function TimelineScreen({
               const fragment = item.fragment;
               const merged = fragment.mergedInto !== null;
               const done = doneIds.has(fragment.id);
+              /** 正文里命中几处。进了搜索才有值，普通浏览时是 undefined */
+              const hitCount = hitCounts.get(fragment.id) ?? 0;
+              /** 搜索时把词带进详情页，正文才描得出高亮、也才有「第 i / N 处」可跳 */
+              const hitQuery = searching ? query.trim() : undefined;
               return (
                 <SwipeRow
                   open={openRow?.id === fragment.id ? openRow.side : null}
                   onOpen={(side) => setOpenRow({ id: fragment.id, side })}
                   onClose={() => setOpenRow(null)}
-                  onPress={() => openDetail(fragment)}
+                  onPress={() => openDetail(fragment, hitQuery)}
                   onLongPress={() => copyFragment(fragment)}
                   // 方向由用户 2026-10-31 明确：右滑 → 左侧「问」，左滑 → 右侧「删除」
                   leftAction={{
@@ -770,12 +820,28 @@ export function TimelineScreen({
                         </>
                       );
                     })()}
-                    {(fragment.tags.length > 0 ||
+                    {(hitCount > 0 ||
+                      fragment.tags.length > 0 ||
                       fragment.project ||
                       fragment.source !== 'app' ||
                       merged ||
                       done) && (
                       <View style={styles.metaRow}>
+                        {/* 命中处数。点它进详情并从第一处开始跳 —— 正文长的时候，
+                            「找到了但不知道在哪」比搜不到更难受 */}
+                        {hitCount > 0 ? (
+                          <Pressable
+                            onPress={() => openDetail(fragment, hitQuery)}
+                            hitSlop={4}
+                            accessibilityRole="button"
+                            accessibilityLabel={`正文命中 ${hitCount} 处，点开查看`}
+                            style={({ pressed }) => pressed && { opacity: 0.55 }}
+                          >
+                            <View style={styles.hitBadge}>
+                              <Text style={styles.hitBadgeText}>{hitCount} 处</Text>
+                            </View>
+                          </Pressable>
+                        ) : null}
                         {done ? (
                           <View style={styles.doneBadge}>
                             <Ionicons name="checkmark" size={11} color={c.tealText} />
@@ -863,6 +929,7 @@ export function TimelineScreen({
           initialIndex={Math.min(detail.index, detailItems.length - 1)}
           doneIds={doneIds}
           notes={notes}
+          highlightQuery={detail.query}
           onClose={() => setDetail(null)}
           onSave={onEdit}
           onDelete={onDelete}
@@ -1063,6 +1130,17 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingVertical: 2,
   },
   doneBadgeText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
+  /**
+   * 命中处数徽标。观感贴着小号 TagPill，但颜色固定走 amber 系 ——
+   * 标签色是按标签名算的，命中数是系统信息，不该跟着标签的配色跑。
+   */
+  hitBadge: {
+    backgroundColor: c.amberBg,
+    borderRadius: R.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  hitBadgeText: { fontSize: 11, lineHeight: 15, color: c.amberText, fontWeight: '500' },
 
   // 周期总结条目
   noteRow: { flexDirection: 'row', paddingHorizontal: 20 },

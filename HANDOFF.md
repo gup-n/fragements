@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-10-31 更新到 v0.9.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.9.0（versionCode 37）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-02 更新到 v0.10.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.10.0（versionCode 38）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,8 +21,8 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.9.0 / versionCode 37 |
-| 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v8 |
+| 版本 | v0.10.0 / versionCode 38 |
+| 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
 
@@ -42,7 +42,7 @@
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
-| 数据迁移 | v8。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项；v8 新建 `ask_sessions` |
+| 数据迁移 | v9。从 v0.6.x 直接升，碎片 / 待办 / 小结全部保留；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项；v8 新建 `ask_sessions`；v9 新建 `documents` |
 
 **一句话：功能完整，但 v0.7 的重做还没经过真机检验。** 别在这之前继续叠功能。
 
@@ -66,6 +66,13 @@
 > 内置加速镜像（ghproxy 系）→ GitHub 官方，逐个尝试、失败换下一个。
 > 新增 `update/mirror.ts`（候选地址构建 + 下载地址设置），设置页「关于」加「下载地址」输入。
 > 版本 0.9.0 / code 37。
+>
+> **v0.10.0（2026-11-02）**：三件事。① 搜索命中可视化：正文描底色、每条标「N 处」、
+> 详情页「第 i / N 处」逐处跳转（段落实测 y，不按字符比例估）。② 新增文档库：
+> 上传 PDF / Word / PPT / Excel / 图片 / txt / md，原文件留在手机，正文走 MinerU
+> 轻量接口转 Markdown（免 Token，≤10 MB / 20 页）；SQLite v9 新增 `documents`。
+> ③ 更新公告改成「一行摘要 + GitHub 链接」，设置页加仓库与更新记录入口，
+> 线上历史 Release 说明一并压到要点。版本 0.10.0 / code 38。
 
 ---
 
@@ -103,12 +110,13 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `App.tsx` | 411 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1231 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；碎片正文走 NoteBody |
+| `App.tsx` | 414 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
+| `src/screens/TimelineScreen.tsx` | 1309 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；碎片正文走 NoteBody |
 | `src/screens/OrganizeScreen.tsx` | 933 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
 | `src/screens/AskScreen.tsx` | 1491 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话、AI 整理预览（重试 / 保存全文 / 确认写库） |
 | `src/screens/ReviewScreen.tsx` | 480 | 回顾：待办 / 小结 / 标签三个 tab；小结有全部/日/周/月筛选 |
-| `src/screens/SettingsScreen.tsx` | 792 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
+| `src/screens/DocsScreen.tsx` | 754 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
+| `src/screens/SettingsScreen.tsx` | 830 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
 ### AI 层
@@ -126,17 +134,19 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/ai/qaSummary.ts` | 124 | 会话转碎片：48k 字预算装填、AI 提炼 300-800 字精要、输入超长报告丢了几轮 |
 | `src/ai/summarize.ts` | 313 | 日 / 周 / 月小结 prompt 与素材装填 |
 | `src/ai/search.ts` | 162 | `/v1/tools/search`，退避重试、结果兜底 |
+| `src/ai/mineru.ts` | 310 | 文档解析：MinerU 轻量接口（免 Token）、签名上传 PUT、状态轮询、错误码映射 |
 
 ### 数据层
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/db/types.ts` | 204 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
-| `src/db/repo.native.ts` | 1008 | SQLite 实现 + 迁移 v1–v8 + FTS 索引维护 + 标签重写 + 问答会话 |
-| `src/db/repo.web.ts` | 615 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
+| `src/db/types.ts` | 230 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
+| `src/db/repo.native.ts` | 1120 | SQLite 实现 + 迁移 v1–v8 + FTS 索引维护 + 标签重写 + 问答会话 |
+| `src/db/repo.web.ts` | 677 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/commit.ts` | 192 | **应用**：按勾选写库，合并 → 标状态的顺序，真实计数 |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
+| `src/db/docFiles.ts` | 252 | 文档文件层：选文件、复制进私有目录、读纯文本、`content://` 交给系统打开 |
 
 ### 纯函数层（改动时最好写断言）
 
@@ -153,15 +163,17 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/date.ts` | 189 | 日 / 周 / 月键、`periodAnchor`、格式化 |
 | `src/util/digest.ts` | 139 | 待补小结清单（配额 daily 6 / weekly 2 / monthly 2） |
 | `src/util/keyboard.ts` | 39 | `useKeyboardHeight()`（替代 `KeyboardAvoidingView`） |
+| `src/util/highlight.ts` | 55 | 搜索命中位置：`findHits` / `countHits`。**计数与高亮共用同一份实现** |
 
 ### 组件与类型
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/components/FragmentDetail.tsx` | 510 | 全屏详情：左右滑、整屏内联编辑、当天小结；正文走 NoteBody 阅读态 |
+| `src/components/FragmentDetail.tsx` | 677 | 全屏详情：左右滑、整屏内联编辑、当天小结；搜索命中高亮与逐处跳转 |
+| `src/components/DocViewer.tsx` | 491 | 文档阅读器：Markdown 阅读、打开原文件、重新解析、删除（二次确认） |
 | `src/components/SummarySheet.tsx` | 794 | 小结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
-| `src/components/UpdateSheet.tsx` | 464 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态；下载中显示当前源 |
-| `src/update/check.ts` | 161 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
+| `src/components/UpdateSheet.tsx` | 502 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态；下载中显示当前源 |
+| `src/update/check.ts` | 176 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
 | `src/update/mirror.ts` | 65 | 下载源：自定义地址 / 内置加速镜像 / 官方 的候选构建 + 下载地址设置 |
 | `src/update/download.ts` | 213 | 多源回退下载（带进度、可取消、校验字节数）+ 拉起系统安装器 |
 | `src/update/notify.ts` | 142 | 下载进度通知（LOW 渠道、sticky）。**JS 在后台被挂起，通知数字会停在切走那刻** |
@@ -170,7 +182,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
 | `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 398 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标；`variant` / `selectable` / `muted` 支持碎片与详情页。**表格用 View 排** |
+| `src/components/NoteBody.tsx` | 524 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标；`variant` / `selectable` / `muted` 支持碎片与详情页。**表格用 View 排** |
 | `src/util/mdBlocks.ts` | 433 | Markdown 分块解析 + 引用标记识别（纯函数，可断言）。渲染本地看不见，能验的都在这里 |
 | `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 84 | 全项目唯一的图标按钮与页头；`ScreenHeader` 的左侧按钮可换成「历史」 |
 | `src/components/SwipeRow.tsx` | 279 | 时间轴行的手势：左滑露出删除、右滑直接进问。**不能加 `overflow:'hidden'`**，会切断时间轴竖线 |
@@ -180,13 +192,13 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/ReasoningFold.tsx` | 83 | 「问」页每轮答案上方的深度思考折叠块；最新一轮默认展开 |
 | `src/components/BacklogCard.tsx` | 87 | 整理页的「待补小结」条目 |
 | `src/components/TagPill.tsx` | 64 | 标签胶囊（哈希取色） |
-| `src/types.ts` | 328 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9） |
+| `src/types.ts` | 368 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9） |
 | `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
 | `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
 
 ---
 
-## 5. 数据模型（SQLite v8）
+## 5. 数据模型（SQLite v9）
 
 ```sql
 fragments         id, content, created_at, source, status, tags(JSON), project, merged_into, nature
@@ -196,12 +208,13 @@ settings          key, value
 organize_runs     id, started_at, fragment_ids, model, result_json, applied   -- 历史表，v0.7 起不再写入
 organize_sessions id, scope, pending_ids, cursor, plan_json, context_summary, finished, created_at, updated_at
 ask_sessions      id, title, turns_json, archived, fragment_id, created_at, updated_at
+documents         id, name, ext, size, file_uri, body_md, pages, char_count, state, error, created_at, updated_at
 fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
 ```
 
 索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、
 `idx_todos_done_at(done_at DESC)`、`idx_sessions_open(finished, updated_at DESC)`、
-`idx_ask_sessions_updated(archived, updated_at DESC)`。
+`idx_ask_sessions_updated(archived, updated_at DESC)`、`idx_documents_updated(updated_at DESC)`。
 
 **v6 迁移做了三件事**：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、
 建 `fragment_fts` 与 `organize_sessions`。
@@ -215,7 +228,11 @@ fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
 不依赖碎片、待办、小结还在不在。它**不写 `fragments`**：只有用户点「整理为碎片」
 才落一条纪要。
 
-前七段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
+**v9 只干一件事**：建 `documents`。正文单独一列 `body_md`，**列表查询不取它** ——
+一篇几十万字的文档每次都读一遍，首屏会肉眼可见地卡。`char_count` 由写入方按
+`body_md.length` 一起写，调用方不要自己算。文档**不进** `fragment_fts`。
+
+前八段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
 
 几个容易误解的点：
 
@@ -561,7 +578,7 @@ v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在�
 
 ## 11. 下一步（按顺序）
 
-1. **装 `fragments-v0.9.0.apk`，按 ROADMAP 那 71 条验。** 有问题先修，不要叠新功能。
+1. **装 `fragments-v0.10.0.apk`，按 ROADMAP 的清单验。** 有问题先修，不要叠新功能。
    如果手机已经是 v0.8.5 以上，直接打开 App 就能收到更新提示，不用手动装。
 2. 通知栏常驻的「快速记录」入口（ROADMAP P0-2）。通知库 v0.8.6 已经因为下载进度通知装好了，
    剩下是 JS 改动，见 ROADMAP 里重估过的成本。

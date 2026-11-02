@@ -2,6 +2,8 @@ import type { Repo } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
+  Document,
+  DocumentMeta,
   Fragment,
   FragmentNature,
   FragmentSource,
@@ -33,6 +35,7 @@ interface WebDb {
   settings: Record<string, string>;
   sessions: OrganizeSession[];
   askSessions: AskSession[];
+  documents: Document[];
 }
 
 function empty(): WebDb {
@@ -45,6 +48,7 @@ function empty(): WebDb {
     settings: {},
     sessions: [],
     askSessions: [],
+    documents: [],
   };
 }
 
@@ -82,6 +86,7 @@ function load(): WebDb {
       turns: Array.isArray(s.turns) ? s.turns : [],
     }));
     pruneDone(cache!);
+    cache!.documents = cache!.documents ?? [];
   } catch {
     cache = empty();
   }
@@ -566,6 +571,63 @@ export const repo: Repo = {
     const d = load();
     const r = d.runs.find((x) => x.id === id);
     if (r) r.applied = 1;
+    persist();
+  },
+
+  async listDocuments() {
+    // 与 native 一致：列表不返回正文
+    return load()
+      .documents.slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map(({ bodyMd, ...meta }) => meta as DocumentMeta);
+  },
+
+  async findDocument(id) {
+    const d = load();
+    const hit = d.documents.find((x) => x.id === id);
+    return hit ? { ...hit } : null;
+  },
+
+  async insertDocument(input) {
+    const d = load();
+    const now = Date.now();
+    const id = nextId(d);
+    d.documents.push({
+      id,
+      name: input.name,
+      ext: input.ext,
+      size: input.size,
+      fileUri: input.fileUri,
+      bodyMd: '',
+      pages: null,
+      charCount: 0,
+      state: input.state,
+      error: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    persist();
+    return id;
+  },
+
+  async updateDocument(id, patch) {
+    const d = load();
+    const doc = d.documents.find((x) => x.id === id);
+    if (!doc) return;
+    if (patch.bodyMd !== undefined) {
+      doc.bodyMd = patch.bodyMd;
+      doc.charCount = patch.bodyMd.length;
+    }
+    if (patch.pages !== undefined) doc.pages = patch.pages;
+    if (patch.state !== undefined) doc.state = patch.state;
+    if (patch.error !== undefined) doc.error = patch.error;
+    doc.updatedAt = Date.now();
+    persist();
+  },
+
+  async deleteDocument(id) {
+    const d = load();
+    d.documents = d.documents.filter((x) => x.id !== id);
     persist();
   },
 
