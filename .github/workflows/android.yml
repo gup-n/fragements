@@ -152,13 +152,21 @@ jobs:
           # 老写法只补传 APK，**说明还是旧的** —— v0.12.0 第一次就是这样：
           # 修正了 CHANGELOG 却怎么重跑都改不掉 Release 正文。所以这里先判断存在性。
           if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "已存在 $TAG 的 Release，更新说明与 APK"
             gh release edit "$TAG" --title "$TAG" --notes-file /tmp/notes.md
             gh release upload "$TAG" "/tmp/fragments-$TAG.apk" --clobber
           else
+            echo "创建 $TAG 的 Release"
             gh release create "$TAG" "/tmp/fragments-$TAG.apk" \
               --title "$TAG" \
-              --notes-file /tmp/notes.md
+              --notes-file /tmp/notes.md \
+              --verify-tag
           fi
+          # 删过 tag 再重建时，GitHub 会把原来的 Release 留成**草稿**：
+          # `gh release view` 能查到，手机端匿名下载却 404，而 CI 每一步都是绿的。
+          # 所以无条件再发布一次（已发布时是空操作），并把最终结果打到日志里。
+          gh release edit "$TAG" --draft=false
+          gh release view "$TAG" --json tagName,isDraft,assets
 
       - name: 输出体积与校验值
         run: |
