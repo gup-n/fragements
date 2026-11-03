@@ -3,6 +3,7 @@ import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
   Document,
+  DocumentChunk,
   DocumentMeta,
   Fragment,
   FragmentNature,
@@ -12,10 +13,12 @@ import type {
   OrganizePlan,
   OrganizeScope,
   OrganizeSession,
+  QaScope,
   TagStat,
   Todo,
 } from '../types';
 import { emptyPlan, normalizePlan } from '../util/organizePlan';
+import { normalizeQaScope } from '../util/qaScope';
 import { cleanTag, dedupeTags, normalizeTag, sameTag, tokenizeText } from '../util/tokenize';
 
 /**
@@ -36,6 +39,8 @@ interface WebDb {
   sessions: OrganizeSession[];
   askSessions: AskSession[];
   documents: Document[];
+  /** v0.12：文档切片。web 侧不建 FTS，检索直接扫 text */
+  documentChunks: DocumentChunk[];
 }
 
 function empty(): WebDb {
@@ -49,6 +54,7 @@ function empty(): WebDb {
     sessions: [],
     askSessions: [],
     documents: [],
+    documentChunks: [],
   };
 }
 
@@ -80,13 +86,34 @@ function load(): WebDb {
       ...t,
       doneAt: t.doneAt ?? (t.done ? t.createdAt : null),
     }));
-    // 旧版本没有 askSessions；顺便兜住 turns 缺失的脏数据
-    cache!.askSessions = (cache!.askSessions ?? []).map((s) => ({
-      ...s,
-      turns: Array.isArray(s.turns) ? s.turns : [],
-    }));
+    // 旧版本没有 askSessions；顺便兜住 turns 缺失的脏数据。
+    // 旧会话没有 scope，那时还没有文档范围的问法，按 records 补（与 native 同口径）
+    cache!.askSessions = (cache!.askSessions ?? []).map((s) => {
+      let scope: QaScope = { kind: 'records' };
+      let scopeBroken = false;
+      try {
+        scope = normalizeQaScope(s.scope, true);
+      } catch {
+        scopeBroken = true;
+      }
+      return {
+        ...s,
+        scope,
+        scopeBroken,
+        turns: Array.isArray(s.turns) ? s.turns : [],
+      };
+    });
     pruneDone(cache!);
-    cache!.documents = cache!.documents ?? [];
+    // 旧版本文档没有版本与切片字段：补 0 / null，语义与 native v10 迁移一致 ——
+    // 「有正文但没建索引」，需要用户主动准备才能问
+    cache!.documents = (cache!.documents ?? []).map((d) => ({
+      ...d,
+      contentRevision: d.contentRevision ?? 0,
+      indexedRevision: d.indexedRevision ?? 0,
+      chunkCount: d.chunkCount ?? 0,
+      contentSource: d.contentSource ?? null,
+    }));
+    cache!.documentChunks = cache!.documentChunks ?? [];
   } catch {
     cache = empty();
   }
@@ -517,6 +544,7 @@ export const repo: Repo = {
       // 与 native 一致：只改传进来的字段，undefined 保持原值
       s.title = input.title;
       s.turns = input.turns;
+      s.scope = normalizeQaScope(input.scope);
       s.updatedAt = now;
       if (input.archived !== undefined) s.archived = input.archived;
       if (input.fragmentId !== undefined) s.fragmentId = input.fragmentId;
@@ -529,6 +557,7 @@ export const repo: Repo = {
       id,
       title: input.title,
       turns: input.turns,
+      scope: normalizeQaScope(input.scope),
       archived: input.archived ?? false,
       fragmentId: input.fragmentId ?? null,
       createdAt: input.createdAt,
@@ -603,6 +632,10 @@ export const repo: Repo = {
       charCount: 0,
       state: input.state,
       error: null,
+      contentRevision: 0,
+      indexedRevision: 0,
+      chunkCount: 0,
+      contentSource: null,
       createdAt: now,
       updatedAt: now,
     });
@@ -628,7 +661,65 @@ export const repo: Repo = {
   async deleteDocument(id) {
     const d = load();
     d.documents = d.documents.filter((x) => x.id !== id);
+    d.documentChunks = d.documentChunks.filter((c) => c.documentId !== id);
     persist();
+  },
+
+  async replaceDocumentContent(id, content, expectedRevision) {
+    const d = load();
+    const doc = d.documents.find((x) => x.id === id);
+    // 与 native 同一口径：文档没了或版本已被推进，这次写入作废
+    if (!doc || doc.contentRevision !== expectedRevision) return false;
+    const next = expectedRevision + 1;
+    doc.bodyMd = content.bodyMd;
+    doc.charCount = content.bodyMd.length;
+    doc.pages = content.pages;
+    doc.state = 'done';
+    doc.error = null;
+    doc.contentRevision = next;
+    doc.indexedRevision = next;
+    doc.contentSource = content.source;
+    doc.updatedAt = Date.now();
+    d.documentChunks = d.documentChunks.filter((c) => c.documentId !== id);
+    content.chunks.forEach((chunk, i) => {
+      d.documentChunks.push({
+        id: nextId(d),
+        documentId: id,
+        contentRevision: next,
+        ordinal: i,
+        text: chunk.text,
+        locator: chunk.locator,
+      });
+    });
+    doc.chunkCount = content.chunks.length;
+    persist();
+    return true;
+  },
+
+  async listDocumentChunks(documentId) {
+    const d = load();
+    const doc = d.documents.find((x) => x.id === documentId);
+    if (!doc) return [];
+    return d.documentChunks
+      .filter((c) => c.documentId === documentId && c.contentRevision === doc.contentRevision)
+      .sort((a, b) => a.ordinal - b.ordinal);
+  },
+
+  async searchDocumentChunks(query, documentIds, limit = 40) {
+    if (!documentIds.length) return [];
+    const allow = new Set(documentIds);
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+    const d = load();
+    const revisions = new Map(d.documents.map((x) => [x.id, x.contentRevision]));
+    return d.documentChunks
+      .filter(
+        (c) =>
+          allow.has(c.documentId) &&
+          c.contentRevision === revisions.get(c.documentId) &&
+          c.text.toLowerCase().includes(needle),
+      )
+      .slice(0, limit);
   },
 
   async getSetting(key) {

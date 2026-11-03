@@ -236,115 +236,147 @@ export interface WebHit {
   score: number;
 }
 
-/** 问答引用类型：碎片 / 小结 / 待办 / 网页 */
-export type QaCiteKind = 'F' | 'N' | 'T' | 'W';
+/** 文档范围是会话契约，不是“优先检索”的提示。空白名单不得回退全库。 */
+export type QaScope = { kind: 'records' } | { kind: 'documents'; documentIds: number[] };
+export const MAX_ASK_DOCUMENTS = 8;
 
-/**
- * 一条可展开的引用。
- * 历史会话重开时不能依赖「当时检索到的内存数据」，所以正文一起存快照。
- * W 的 id 是第几条网页资料（1 起），不是数据库 id。
- */
+/** 问答引用类型：碎片 / 小结 / 待办 / 网页 / 文档片段 */
+export type QaCiteKind = 'F' | 'N' | 'T' | 'W' | 'D';
+
+/** 来源位置必须来自原件或提取结果；旧 Markdown 不得猜原页码。 */
+export interface DocumentLocator {
+  kind: 'text' | 'markdown' | 'pdf' | 'sheet';
+  page?: number;
+  sheet?: string;
+  cellRange?: string;
+  rowStart?: number;
+  rowEnd?: number;
+  lineStart?: number;
+  lineEnd?: number;
+  section?: string;
+}
+
+/** 一条可展开的引用。D/W 的 id 是本轮别名，不是持久数据 id。 */
 export interface QaCitation {
   kind: QaCiteKind;
   id: number;
-  /** 列表里显示的一行标题，例如「2026-10-20 21:40 · 碎片」 */
   label: string;
-  /** 展开后看到的正文，已裁剪到合理长度 */
+  /** 本轮实际交给模型的片段快照，历史不依赖原件仍存在。 */
   body: string;
-  /** 仅 W：原文链接 */
   url?: string;
+  /** 仅 D：稳定身份，不能用跨轮重复的 D1 代替。 */
+  documentId?: number;
+  contentRevision?: number;
+  chunkId?: number;
+  locator?: DocumentLocator;
 }
 
-/** 问答会话里的一轮。sourceIds 只用于把上一轮引用过的碎片带进下一轮 */
+/** sourceIds 仍只代表碎片，文档来源使用 citations 的稳定身份。 */
 export interface QaTurn {
   question: string;
   answer: string;
   sourceIds: number[];
-  /** 本轮引用到的来源快照；旧数据可能没有 */
   citations?: QaCitation[];
-  /**
-   * 本轮思维链。v0.8.9 起随会话保存：
-   * 以前它只活在 `busy` 期间，答完就卸载，用户看到「闪一下没了」。
-   */
   reasoning?: string;
+  truncated?: boolean;
+  documentCoverage?: DocumentCoverage[];
 }
 
-/** 一次问答的结果 */
+export interface DocumentCoverage {
+  documentId: number;
+  name: string;
+  includedChunks: number;
+  totalChunks: number;
+  usedChars: number;
+  totalChars: number;
+}
+
+/** 一次问答的结果，旧记录问答与限定文档问答共享展示层。 */
 export interface QaOutcome {
-  /** Markdown 回答 */
   answer: string;
-  /** 思维链，仅展示 */
   reasoning: string;
-  /** 本轮实际装进上下文的碎片 */
   fragments: Fragment[];
-  /** 本轮引用到的碎片（回答里出现 [F12] 的那些） */
   cited: Fragment[];
-  /** 本轮装进上下文的小结 */
   notes: Note[];
-  /** 未完成待办 + 最近完成待办 */
   todos: Todo[];
-  /** 本轮网络资料，没联网就是空数组 */
   web: WebHit[];
-  /** 本轮引用到的全部来源，按 F→N→T→W 顺序 */
   citations: QaCitation[];
-  /** 回答被输出上限截断 */
   truncated: boolean;
-  /** 联网搜失败的原因；没开联网或搜成功就是 null */
   webError: string | null;
-  /** 实际读了几条碎片 */
   scanned: number;
+  scope: QaScope;
+  documentCoverage?: DocumentCoverage[];
+  inputTruncated?: boolean;
 }
 
-/** 「问」页的一条持久化会话 */
+/** 「问」页的持久会话，范围与 turns 一起保存。 */
 export interface AskSession {
   id: number;
   title: string;
   turns: QaTurn[];
+  scope: QaScope;
+  /**
+   * 存下来的范围读不出来（脏数据、或者将来出现不认识的 kind）。
+   *
+   * 这时 `scope` 是 records 的占位值，**不能直接拿来用** ——
+   * 打开这场会话会把文档会话变成全库会话。界面应当拒绝打开并说明原因，
+   * 而不是悄悄按 records 恢复。
+   */
+  scopeBroken?: boolean;
   archived: boolean;
-  /** 已整理成碎片后的 fragment id；null 表示还没整理 */
   fragmentId: number | null;
   createdAt: number;
   updatedAt: number;
 }
 
 /* ------------------------------------------------------------------ */
-/* 文档（v0.10.0）                                                     */
+/* 文档工作区：原件、内容版本与索引彼此独立                               */
 /* ------------------------------------------------------------------ */
 
-/**
- * 文档的解析状态。
- *
- * `local` 是「不需要解析」：txt / md 直接读文本，不走 MinerU。
- * 其余三个都是 MinerU 任务的状态映射，界面上只显示文案，不直接展示这些值。
- */
-export type DocState = 'local' | 'parsing' | 'done' | 'failed';
+/** stored 是正常成功状态；失败/重试不得销毁上一次可用内容。 */
+export type DocState = 'stored' | 'local' | 'parsing' | 'done' | 'failed';
+export type DocumentContentSource = 'text' | 'markdown' | 'pdf' | 'excel' | 'mineru' | 'legacy';
 
-/** 列表用的轻量文档条目：不带正文，避免一次把几 MB 的 Markdown 全读进内存 */
 export interface DocumentMeta {
   id: number;
-  /** 原文件名，含扩展名 */
   name: string;
-  /** 小写扩展名，不含点。空串表示没有扩展名 */
   ext: string;
-  /** 原文件字节数 */
   size: number;
-  /**
-   * 原文件的本地 URI（App 私有目录）。
-   * 解析失败或用户删了文件时可能指向不存在的位置，读写前都要判空。
-   */
   fileUri: string | null;
   pages: number | null;
   charCount: number;
   state: DocState;
-  /** 失败原因。state !== 'failed' 时为 null */
   error: string | null;
+  contentRevision: number;
+  indexedRevision: number;
+  chunkCount: number;
+  contentSource: DocumentContentSource | null;
   createdAt: number;
   updatedAt: number;
 }
 
-/** 详情用：带解析出来的 Markdown 正文 */
 export interface Document extends DocumentMeta {
   bodyMd: string;
+}
+
+export interface DocumentChunkInput {
+  text: string;
+  locator: DocumentLocator;
+}
+
+export interface DocumentChunk extends DocumentChunkInput {
+  id: number;
+  documentId: number;
+  contentRevision: number;
+  ordinal: number;
+}
+
+/** 只有完整、受限且有真实位置的提取结果才提交；不得把静默截断当完整。 */
+export interface DocumentContentInput {
+  bodyMd: string;
+  chunks: DocumentChunkInput[];
+  source: DocumentContentSource;
+  pages: number | null;
 }
 
 /**

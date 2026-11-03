@@ -1,16 +1,16 @@
 /**
- * 文档列表 + 上传流水线 + 删除确认。
+ * 文档列表：导入原件、本地准备、云解析确认、多选去问。
  *
- * 一期只做「上传 → 解析成 Markdown → 读 → 打开原文件」。
- * 搜索和「问」都还没接进来 —— 那些要等文档正文也能被检索之后再谈。
+ * v0.12 起这里**不再是上传流水线**：
+ * - 导入只做「复制进私有目录 + 核验真实大小 + 写一条 stored 记录」，
+ *   不读正文、不建索引、不联网。飞行模式、没 Token、超大文件都必须能保存成功。
+ * - 准备正文是另外两件事：本地提取（不出手机）和云解析（必须先过确认卡）。
+ *   两者都由 `documents/jobs` 跑，任务不依附这一页的生命周期。
+ * - 这一页只订阅任务状态，不管任务本身。离开页面再回来还能看到进度。
  *
- * 流水线为什么放在页面里而不是再抽一层：
- * 一次上传只有一条链路，抽出去之后「进度文案」「失败原因」「列表刷新」
- * 三处都得再穿一遍回调；真正的复杂度在 `docFiles` 和 `ai/mineru` 里。
- *
- * 解析期间可以离开这一页：Promise 在内存里继续跑，写库不依赖页面存活；
- * 页面只负责「如果还活着就更新进度」。**没有后台任务持久化**，
- * 进程被杀之后那条记录会停在「解析中」，阅读器里可以手动重新解析。
+ * 为什么不再自己跑流水线：v0.11.0 把任务放在页面里，结果列表和阅读器
+ * 各起一个任务、同一个文件传到服务端两遍；页面卸载后进度回调指向死组件，
+ * 列表永远停在「解析中」。这些都不是靠加防抖能修的，得换结构。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -25,76 +25,72 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocumentMeta } from '../types';
+import { MAX_ASK_DOCUMENTS } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
+import { deleteOriginal, pickDocumentFile, saveOriginal } from '../db/docFiles';
+import { getMineruToken } from '../ai/mineru';
 import {
-  deleteOriginal,
-  pickDocumentFile,
-  readPlainText,
-  saveOriginal,
-  type PickedDocument,
-} from '../db/docFiles';
+  CLOUD_SUPPORT_HINT,
+  LOCAL_SUPPORT_HINT,
+  localReaderLimitNote,
+  planForDoc,
+  sizeText,
+} from '../util/docSupport';
+import { isDocumentReady, notReadyReason, supportsLocalDocument } from '../documents/formats';
 import {
-  MAX_FILE_LABEL,
-  PRO_MAX_FILE_LABEL,
-  PRO_MAX_PAGES,
-  getMineruToken,
-  mineruMessage,
-  stageText,
-  type MineruStage,
-} from '../ai/mineru';
-import { SUPPORT_HINT, isLocalText, parseDocFile, planForDoc } from '../util/docSupport';
+  cancelDocumentJob,
+  dismissDocumentJob,
+  initDocumentJobs,
+  isJobRunning,
+  jobPhaseText,
+  prepareDocumentCloud,
+  prepareDocumentLocal,
+  subscribeDocumentJobs,
+  useDocumentJob,
+} from '../documents/jobs';
 import { dayLabel, formatTime } from '../util/date';
 import { ScreenHeader } from '../components/ScreenHeader';
-import { DocViewer } from '../components/DocViewer';
+import { CloudConfirmSheet, DocViewer } from '../components/DocViewer';
+import { IconButton } from '../components/IconButton';
 import { Toast } from '../components/Toast';
 
 interface Props {
   onClose: () => void;
+  /**
+   * 进入问答。范围怎么转成 `QaScope` 由上层决定，这一页只交 id。
+   * 文档模式会话锁定这几份文档，不会混入笔记和其它文档。
+   */
+  onAsk: (documentIds: number[]) => void;
 }
 
 const isWeb = Platform.OS === 'web';
 
-/** `23347200` → `22.3 MB`。**0 不写成 0 B** —— 选择器没给大小时那是个未知数 */
-function sizeText(n: number): string {
-  if (!Number.isFinite(n) || n <= 0) return '大小未知';
-  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function statusText(doc: DocumentMeta, stage?: MineruStage): string {
-  if (doc.state === 'parsing') return stage ? stageText(stage) : '解析中';
-  if (doc.state === 'failed') return '解析失败';
-  if (doc.state === 'local') return `本地文本 · ${doc.charCount} 字`;
-  return `已解析 · ${doc.charCount} 字`;
-}
-
-export function DocsScreen({ onClose }: Props) {
+export function DocsScreen({ onClose, onAsk }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [docs, setDocs] = useState<DocumentMeta[] | null>(null);
-  /** 选完文件先确认，确认了才保存和上传 */
-  const [confirm, setConfirm] = useState<PickedDocument | null>(null);
-  /** 待删除的文档。非空时弹二次确认 */
-  const [pendingDelete, setPendingDelete] = useState<DocumentMeta | null>(null);
-  /** 正在读的文档。**只存 id**，内容由阅读器自己查 */
-  const [openDocId, setOpenDocId] = useState<number | null>(null);
-  /** id → 当前阶段。只在本页内存里，离开页面就没了，但解析本身继续 */
-  const [progress, setProgress] = useState<Record<number, MineruStage>>({});
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 浮在底部的一句话提示。删除之后列表可能已经滚到别处，顶部提示会看不见 */
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [picking, setPicking] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<DocumentMeta | null>(null);
+  /** 正在读的文档。**只存 id**，内容由阅读器自己查 */
+  const [openDocId, setOpenDocId] = useState<number | null>(null);
   /** 写完库就 +1，让打开着的阅读器重新取一次 */
   const [docVersion, setDocVersion] = useState(0);
-  const alive = useRef(true);
-  /**
-   * 当前填的 MinerU Token。空串 = 只有轻量通道（10 MB / 20 页）。
-   *
-   * 页面每次进入都会重新挂载（路由是 state 切换），所以填完 Token 从设置页
-   * 回来时这里会重新读一次 —— 不需要额外的「刷新配置」时机。
-   */
+
+  const [selectMode, setSelectMode] = useState(false);
+  /** 勾选顺序无所谓，只用来算范围与上限 */
+  const [selected, setSelected] = useState<number[]>([]);
+  /** 点了「问」但选中里有没准备好的：列出来让人决定，**不静默丢掉** */
+  const [blocked, setBlocked] = useState<DocumentMeta[] | null>(null);
+  /** 云解析确认卡。**重试同样要过这张卡** */
+  const [cloudFor, setCloudFor] = useState<DocumentMeta | null>(null);
+
+  /** 当前 MinerU Token。空串 = 只能走轻量通道；确认卡里要用它决定精准能不能选 */
   const [token, setToken] = useState('');
+  const alive = useRef(true);
 
   useEffect(() => {
     alive.current = true;
@@ -102,6 +98,11 @@ export function DocsScreen({ onClose }: Props) {
       alive.current = false;
       if (toastTimer.current) clearTimeout(toastTimer.current);
     };
+  }, []);
+
+  // 启动时收拾上次被杀进程留下的 parsing 记录。幂等，多调几次也没事
+  useEffect(() => {
+    void initDocumentJobs();
   }, []);
 
   useEffect(() => {
@@ -131,42 +132,37 @@ export function DocsScreen({ onClose }: Props) {
     }
   }, []);
 
-  /** 阅读器重试时把阶段同步过来，关掉阅读器之后列表还能继续显示进度 */
-  const applyStage = useCallback((id: number, stage: MineruStage | null) => {
-    setProgress((prev) => {
-      const next = { ...prev };
-      if (stage) next[id] = stage;
-      else delete next[id];
-      return next;
-    });
-  }, []);
-
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  /**
-   * 有文档在解析时轮询列表。
-   *
-   * 解析任务活在**发起它的那次页面实例**里：用户离开再回来，进度回调已经指向
-   * 卸载掉的组件，新页面收不到「写完了」。不轮询的话列表会永远停在「解析中」。
-   * 只查本地库，3 秒一次，且最多跟 10 分钟（和解析超时同一档），
-   * 留下一条永远 parsing 的坏记录也不会一直耗电。
+  /*
+   * 任务状态变了就重新读一次列表（节流 400ms）。
+   * 任务服务只写库，不会把新状态推给列表；没有这一层，准备完了列表还显示「正在准备」。
+   * 以前这里是 3 秒轮询 + 10 分钟上限，既费电又只能覆盖「页面还活着」的情况。
    */
-  const hasParsing = docs?.some((d) => d.state === 'parsing') ?? false;
   useEffect(() => {
-    if (!hasParsing) return;
-    const deadline = Date.now() + 10 * 60 * 1000;
-    const timer = setInterval(() => {
-      if (Date.now() > deadline) {
-        clearInterval(timer);
-        return;
-      }
-      refresh();
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [hasParsing, refresh]);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const sub = subscribeDocumentJobs(() => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        refresh();
+      }, 400);
+    });
+    return () => {
+      sub();
+      if (timer) clearTimeout(timer);
+    };
+  }, [refresh]);
 
+  /**
+   * 导入 = 只保存原件。
+   *
+   * 顺序不能换：**先落原文件、核验大小，再写记录**。反过来的话，写库成功但复制失败，
+   * 列表里就多一条永远「打开原文件失败」的记录，用户只能删掉重来。
+   * 记录没写成时要把刚复制的那份删掉，否则私有目录里会攒下孤儿文件。
+   */
   async function handlePick() {
     if (picking) return;
     setPicking(true);
@@ -174,94 +170,90 @@ export function DocsScreen({ onClose }: Props) {
     try {
       const file = await pickDocumentFile();
       if (!file) return;
-      // 能不能进来、走哪条通道，全部由 planForDoc 决定。这里不再自己判断大小和扩展名
-      const plan = planForDoc(file.ext, file.size, !!token);
-      if (plan.channel === 'none') {
-        setNotice({ kind: 'err', text: `「${file.name}」${plan.reason}` });
-        return;
+      const saved = await saveOriginal(file.uri, file.name);
+      try {
+        await repo.insertDocument({
+          name: file.name,
+          ext: file.ext,
+          size: saved.size,
+          fileUri: saved.uri,
+          state: 'stored',
+        });
+      } catch (e) {
+        // 记录没写成，刚复制的那份就是孤儿，顺手清掉
+        await deleteOriginal(saved.uri);
+        throw e;
       }
-      setConfirm(file);
+      await refresh();
+      setDocVersion((v) => v + 1);
+      showToast(`已保存「${file.name}」`);
     } catch (e) {
-      setNotice({ kind: 'err', text: e instanceof Error ? e.message : '打不开文件选择器' });
+      if (alive.current) {
+        setNotice({
+          kind: 'err',
+          text: e instanceof Error ? e.message : '保存文件失败，请检查存储空间后重试',
+        });
+      }
     } finally {
       if (alive.current) setPicking(false);
     }
   }
 
-  /**
-   * 确认之后的完整流水线。
-   *
-   * 顺序不能换：**先落原文件，再写记录**。反过来的话，写库成功但复制失败，
-   * 列表里就多一条永远「打开原文件失败」的记录，用户只能删掉重来。
-   */
-  async function startImport(file: PickedDocument) {
-    setConfirm(null);
-    setNotice({ kind: 'ok', text: `正在保存「${file.name}」…` });
+  function enterSelect() {
+    setSelectMode(true);
+    setSelected([]);
+  }
 
-    let fileUri: string;
-    try {
-      fileUri = await saveOriginal(file.uri, file.name);
-    } catch (e) {
-      if (alive.current) {
-        setNotice({ kind: 'err', text: e instanceof Error ? e.message : '保存原文件失败' });
-      }
+  function exitSelect() {
+    setSelectMode(false);
+    setSelected([]);
+    setBlocked(null);
+  }
+
+  function toggle(id: number) {
+    // 上限提示得在 updater 外面发：setState 的 updater 可能在严格模式下跑两次，
+    // 放在里面会连弹两个 Toast
+    if (selected.includes(id)) {
+      setSelected(selected.filter((x) => x !== id));
       return;
     }
+    if (selected.length >= MAX_ASK_DOCUMENTS) {
+      showToast(`最多同时问 ${MAX_ASK_DOCUMENTS} 份文档`);
+      return;
+    }
+    setSelected([...selected, id]);
+  }
 
-    let id: number;
-    try {
-      id = await repo.insertDocument({
-        name: file.name,
-        ext: file.ext,
-        size: file.size,
-        fileUri,
-        state: 'parsing',
+  /** 多选里点「问」：先分清哪些没准备好，不能偷偷只问剩下的 */
+  function askSelected() {
+    const chosen = (docs ?? []).filter((d) => selected.includes(d.id));
+    if (!chosen.length) return;
+    const notReady = chosen.filter((d) => !isDocumentReady(d));
+    if (notReady.length) {
+      setBlocked(notReady);
+      return;
+    }
+    onAsk(chosen.map((d) => d.id));
+  }
+
+  /** 在本地准备一批。只对「本机能读且没超上限」的动手，其余如实说明 */
+  function prepareMany(list: DocumentMeta[]) {
+    let started = 0;
+    const skipped: string[] = [];
+    for (const doc of list) {
+      if (!supportsLocalDocument(doc.ext) || localReaderLimitNote(doc)) {
+        skipped.push(doc.name);
+        continue;
+      }
+      void prepareDocumentLocal(doc.id);
+      started += 1;
+    }
+    if (started) showToast(`已开始本地准备 ${started} 份`);
+    if (skipped.length) {
+      setNotice({
+        kind: 'err',
+        text: `${skipped.length} 份本机读不了（${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' 等' : ''}），需要云解析`,
       });
-    } catch (e) {
-      // 记录没写成，刚复制的那份就是孤儿，顺手清掉
-      await deleteOriginal(fileUri);
-      if (alive.current) {
-        setNotice({ kind: 'err', text: e instanceof Error ? e.message : '写入文档记录失败' });
-      }
-      return;
-    }
-
-    await refresh();
-    setDocVersion((v) => v + 1);
-    // 记录已经在列表里了，进度交给条目自己显示；这句「正在保存」再多留一会儿就是误导
-    if (alive.current) setNotice(null);
-
-    const plain = isLocalText(file.ext);
-    try {
-      if (plain) {
-        const text = await readPlainText(fileUri);
-        if (!text.trim()) throw new Error('文件里没有可读的文字');
-        await repo.updateDocument(id, { bodyMd: text, state: 'local', pages: null, error: null });
-        if (alive.current) setNotice({ kind: 'ok', text: `「${file.name}」已保存` });
-      } else {
-        const md = await parseDocFile({ ...file, uri: fileUri }, token, (stage) => {
-          if (alive.current) setProgress((prev) => ({ ...prev, [id]: stage }));
-        });
-        await repo.updateDocument(id, { bodyMd: md, state: 'done', pages: null, error: null });
-        if (alive.current) setNotice({ kind: 'ok', text: `「${file.name}」解析完成` });
-      }
-    } catch (e) {
-      const text = plain ? (e instanceof Error ? e.message : '读取失败') : mineruMessage(e);
-      // 失败保留记录和原文件：用户可以重试，也可以自己删；不要偷偷把文件删了
-      await repo.updateDocument(id, { state: 'failed', error: text }).catch(() => undefined);
-      if (alive.current) {
-        setNotice({ kind: 'err', text: `「${file.name}」解析失败：${text}` });
-      }
-    } finally {
-      if (alive.current) {
-        setProgress((prev) => {
-          const next = { ...prev };
-          delete next[id];
-          return next;
-        });
-      }
-      await refresh();
-      if (alive.current) setDocVersion((v) => v + 1);
     }
   }
 
@@ -269,38 +261,58 @@ export function DocsScreen({ onClose }: Props) {
     const target = pendingDelete;
     if (!target) return;
     setPendingDelete(null);
+    // 先停任务：迟到的结果不能写回一条正在被删的记录
+    cancelDocumentJob(target.id);
+
+    // 先删原件再删记录：反过来文件删不掉时记录已经没了，URI 也丢了
+    const cleaned = await deleteOriginal(target.fileUri);
+    if (!cleaned) {
+      // 用浮层提示而不是顶部 notice：删除失败时列表通常已经滚到这条上，
+      // 顶部那句话用户根本看不到
+      showToast('原文件没删掉（可能被别的应用占用），记录先留着，可以再删一次');
+      return;
+    }
+
     try {
       await repo.deleteDocument(target.id);
-      // repo 不碰文件系统，副本在这里删
-      await deleteOriginal(target.fileUri);
+      // 记录没了，任务快照也就没意义了，别让「已取消」留在列表上
+      dismissDocumentJob(target.id);
       if (openDocId === target.id) setOpenDocId(null);
+      setSelected((prev) => prev.filter((id) => id !== target.id));
       showToast(`已删除「${target.name}」`);
       await refresh();
       setDocVersion((v) => v + 1);
     } catch (e) {
-      setNotice({ kind: 'err', text: e instanceof Error ? e.message : '删除失败' });
+      showToast(
+        `记录没删掉：${e instanceof Error ? e.message : '未知原因'}。原文件已经删了`,
+      );
     }
   }
 
-  const statusIcon = (doc: DocumentMeta) => {
-    if (doc.state === 'parsing') return { name: 'sync-outline' as const, color: c.accent };
-    if (doc.state === 'failed') return { name: 'alert-circle-outline' as const, color: c.danger };
-    if (doc.state === 'local') return { name: 'document-text-outline' as const, color: c.text3 };
-    return { name: 'checkmark-circle-outline' as const, color: c.tealText };
-  };
+  const selectedCount = selected.length;
 
   return (
     <View style={styles.root}>
       <ScreenHeader
-        title="文档"
-        subtitle={docs ? `${docs.length} 篇` : undefined}
+        title={selectMode ? '选择要问的文档' : '文档'}
+        subtitle={docs ? (selectMode ? `已选 ${selectedCount} / ${MAX_ASK_DOCUMENTS}` : `${docs.length} 篇`) : undefined}
         onBack={onClose}
+        right={
+          docs && docs.length > 0 && !isWeb ? (
+            <IconButton
+              name={selectMode ? 'close' : 'checkmark-circle-outline'}
+              color={c.text2}
+              onPress={selectMode ? exitSelect : enterSelect}
+              accessibilityLabel={selectMode ? '退出多选' : '多选去问'}
+            />
+          ) : undefined
+        }
       />
 
       <FlatList
         data={docs ?? []}
         keyExtractor={(d) => String(d.id)}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, selectMode && styles.listContentWithBar]}
         ItemSeparatorComponent={() => <View style={styles.sep} />}
         ListHeaderComponent={
           <View style={styles.uploadBlock}>
@@ -315,25 +327,22 @@ export function DocsScreen({ onClose }: Props) {
                 onPress={handlePick}
                 disabled={picking}
                 accessibilityRole="button"
-                accessibilityLabel="上传文档"
+                accessibilityLabel="添加文档"
               >
                 {picking ? (
                   <ActivityIndicator size="small" color={c.onAccent} />
                 ) : (
                   <>
-                    <Ionicons name="cloud-upload-outline" size={18} color={c.onAccent} />
-                    <Text style={styles.uploadText}>上传文档</Text>
+                    <Ionicons name="add" size={19} color={c.onAccent} />
+                    <Text style={styles.uploadText}>添加文件</Text>
                   </>
                 )}
               </Pressable>
             )}
 
-            <Text style={styles.limitText}>
-              {SUPPORT_HINT}。
-              {token
-                ? '已填 Token，超过轻量的文件会自动走精准接口（≤200 MB / 200 页）。'
-                : `没填 Token，超过 ${MAX_FILE_LABEL} 或 20 页、以及 doc / ppt / xls 都解不了，可在设置里填。`}
-            </Text>
+            <Text style={styles.limitText}>{LOCAL_SUPPORT_HINT}</Text>
+            <Text style={styles.limitText}>{CLOUD_SUPPORT_HINT}</Text>
+            <Text style={styles.limitText}>添加只保存原件，不上传，也不会自动解析。</Text>
 
             {notice ? (
               <Text
@@ -353,89 +362,55 @@ export function DocsScreen({ onClose }: Props) {
           ) : (
             <View style={styles.empty}>
               <Ionicons name="documents-outline" size={32} color={c.text3} />
-              <Text style={styles.emptyTitle}>
-                把 PDF、Word、PPT、Excel 放进来，解析成可读的 Markdown
-              </Text>
+              <Text style={styles.emptyTitle}>先把文件存进来</Text>
               <Text style={styles.emptyHint}>
-                解析会把文件上传到 mineru.net；原文件同时保留在手机上。
-                扫描件的文字识别可能不准，表格会尽量还原。
+                原文件会复制进 App 私有目录，随时能打开。需要读或问的时候再决定：
+                本机提取，还是确认后上传到 mineru.net。
               </Text>
             </View>
           )
         }
-        renderItem={({ item }) => {
-          const icon = statusIcon(item);
-          /*
-           * 卡片本体和垃圾桶是**并排的两个 Pressable**，不是嵌套的。
-           * 嵌套在 RN Web 上点击会冒泡，点垃圾桶会顺带打开阅读器；
-           * 安卓虽然靠 responder 只触发一个，但没必要留这种平台差异。
-           */
-          return (
-            <View style={styles.card}>
-              <Pressable
-                style={({ pressed }) => [styles.cardMain, pressed && styles.cardPressed]}
-                onPress={() => setOpenDocId(item.id)}
-                accessibilityRole="button"
-                accessibilityLabel={`打开 ${item.name}`}
-              >
-                <View style={styles.titleRow}>
-                  <View style={styles.extBadge}>
-                    <Text style={styles.extText} numberOfLines={1}>
-                      {(item.ext || 'file').slice(0, 4).toUpperCase()}
-                    </Text>
-                  </View>
-                  <Text style={styles.name} numberOfLines={1}>
-                    {item.name}
-                  </Text>
-                </View>
-
-                <Text style={styles.meta}>
-                  {sizeText(item.size)} · {dayLabel(item.updatedAt)} {formatTime(item.updatedAt)}
-                </Text>
-
-                <View style={styles.statusRow}>
-                  <Ionicons name={icon.name} size={13} color={icon.color} />
-                  <Text
-                    style={[
-                      styles.status,
-                      item.state === 'failed' && styles.statusErr,
-                      item.state === 'parsing' && styles.statusParsing,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {statusText(item, progress[item.id])}
-                  </Text>
-                </View>
-
-                {item.state === 'failed' && item.error ? (
-                  <Text style={styles.errorText} numberOfLines={1}>
-                    {item.error}
-                  </Text>
-                ) : null}
-              </Pressable>
-
-              <Pressable
-                onPress={() => setPendingDelete(item)}
-                hitSlop={10}
-                style={({ pressed }) => [styles.trash, pressed && { opacity: 0.5 }]}
-                accessibilityRole="button"
-                accessibilityLabel={`删除 ${item.name}`}
-              >
-                <Ionicons name="trash-outline" size={17} color={c.text3} />
-              </Pressable>
-            </View>
-          );
-        }}
+        renderItem={({ item }) => (
+          <DocRow
+            doc={item}
+            selectMode={selectMode}
+            selected={selected.includes(item.id)}
+            onOpen={() => setOpenDocId(item.id)}
+            onToggle={() => toggle(item.id)}
+            onDelete={() => setPendingDelete(item)}
+            onLocal={() => prepareMany([item])}
+            onCloud={() => setCloudFor(item)}
+          />
+        )}
       />
 
-      {confirm ? (
-        <UploadConfirm
-          file={confirm}
-          uploads={!isLocalText(confirm.ext)}
-          pro={planForDoc(confirm.ext, confirm.size, !!token).channel === 'pro'}
-          onCancel={() => setConfirm(null)}
-          onStart={() => startImport(confirm)}
-        />
+      {selectMode ? (
+        <View style={styles.selectBar}>
+          <View style={styles.selectInfo}>
+            <Text style={styles.selectCount}>已选 {selectedCount} 份</Text>
+            <Text style={styles.selectHint}>只问这几份，不混入笔记和其它文档</Text>
+          </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.askBtn,
+              !selectedCount && styles.askBtnOff,
+              pressed && { opacity: 0.85 },
+            ]}
+            onPress={askSelected}
+            disabled={!selectedCount}
+            accessibilityRole="button"
+            accessibilityLabel={`问这 ${selectedCount} 份文档`}
+          >
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={16}
+              color={selectedCount ? c.onAccent : c.text3}
+            />
+            <Text style={[styles.askText, !selectedCount && styles.askTextOff]}>
+              问这 {selectedCount} 份
+            </Text>
+          </Pressable>
+        </View>
       ) : null}
 
       {pendingDelete ? (
@@ -446,45 +421,224 @@ export function DocsScreen({ onClose }: Props) {
         />
       ) : null}
 
+      {cloudFor ? (
+        <CloudConfirmSheet
+          doc={cloudFor}
+          defaultChannel={planForDoc(cloudFor.ext, cloudFor.size, !!token.trim()).channel === 'pro' ? 'pro' : 'lite'}
+          hasToken={!!token.trim()}
+          onCancel={() => setCloudFor(null)}
+          onConfirm={(channel) => {
+            const target = cloudFor;
+            setCloudFor(null);
+            if (!target) return;
+            void prepareDocumentCloud(target.id, { channel });
+          }}
+        />
+      ) : null}
+
+      {blocked ? (
+        <AskBlockedSheet
+          docs={blocked}
+          onCancel={() => setBlocked(null)}
+          onRemove={() => {
+            const ids = new Set(blocked.map((d) => d.id));
+            setSelected((prev) => prev.filter((id) => !ids.has(id)));
+            setBlocked(null);
+            showToast(`已移除 ${ids.size} 份，剩下的可直接问`);
+          }}
+          onPrepare={() => {
+            const list = blocked;
+            setBlocked(null);
+            prepareMany(list);
+          }}
+        />
+      ) : null}
+
       {openDocId !== null ? (
         <DocViewer
           docId={openDocId}
-          parsingStage={progress[openDocId]}
           reloadKey={docVersion}
           onClose={() => setOpenDocId(null)}
           onChanged={() => {
             refresh();
             setDocVersion((v) => v + 1);
           }}
-          onStage={(stage) => applyStage(openDocId, stage)}
+          onAsk={onAsk}
         />
       ) : null}
 
-      <Toast text={toast} />
+      <Toast text={toast} bottom={selectMode ? 96 : 24} />
     </View>
   );
 }
 
 /**
- * 上传前的确认卡。
+ * 列表一行。
  *
- * 这一层不是形式主义：点下去文件就会离开手机。用户有权在**发出去之前**
- * 看清楚「发给谁、原文件还在不在」，而不是事后从隐私政策里找答案。
+ * 单独一个组件是为了能调 `useDocumentJob` —— `renderItem` 不是组件，里面不能挂 hook。
+ * 卡片本体和右侧按钮是**并排的两个 Pressable**，不是嵌套的：嵌套在 RN Web 上点击会冒泡，
+ * 点垃圾桶会顺带打开阅读器。
  */
-function UploadConfirm({
-  file,
-  uploads,
-  pro,
-  onCancel,
-  onStart,
+function DocRow({
+  doc,
+  selectMode,
+  selected,
+  onOpen,
+  onToggle,
+  onDelete,
+  onLocal,
+  onCloud,
 }: {
-  file: PickedDocument;
-  /** 是否会真的发给 MinerU。txt / md 只在本机读，不能也写「会上传」 */
-  uploads: boolean;
-  /** 走精准接口（已填 Token）。限制不一样，得让用户在点下去之前就知道消耗的是哪条通道 */
-  pro: boolean;
+  doc: DocumentMeta;
+  selectMode: boolean;
+  selected: boolean;
+  onOpen: () => void;
+  onToggle: () => void;
+  onDelete: () => void;
+  onLocal: () => void;
+  onCloud: () => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const job = useDocumentJob(doc.id);
+  const running = isJobRunning(job);
+  const ready = isDocumentReady(doc);
+  const canLocal = supportsLocalDocument(doc.ext);
+  const limitNote = localReaderLimitNote(doc);
+
+  const status = running ? jobPhaseText(job) : ready ? `可问 · ${doc.charCount} 字` : notReadyReason(doc);
+
+  const icon = running
+    ? { name: 'sync-outline' as const, color: c.accent }
+    : doc.state === 'failed'
+      ? { name: 'alert-circle-outline' as const, color: c.danger }
+      : ready
+        ? { name: 'checkmark-circle-outline' as const, color: c.tealText }
+        : { name: 'document-text-outline' as const, color: c.text3 };
+
+  /*
+   * 一行的主动作，按状态给且只给一个：
+   * 正在跑 → 取消；已就绪 → 不显示（点卡片就是打开读）；失败 → 重试（本地）；
+   * 其余 → 本地准备。本机读不了的格式只能去云解析，按钮也就换成它。
+   */
+  let action: { label: string; icon: 'download-outline' | 'refresh-outline' | 'close-outline' | 'cloud-outline'; run: () => void } | null = null;
+  if (!selectMode) {
+    if (running) {
+      action = { label: '取消', icon: 'close-outline', run: () => cancelDocumentJob(doc.id) };
+    } else if (ready) {
+      action = null;
+    } else if (canLocal && !limitNote) {
+      action = { label: doc.state === 'failed' ? '重试' : '本地准备', icon: 'download-outline', run: onLocal };
+    } else {
+      action = { label: '云解析', icon: 'cloud-outline', run: onCloud };
+    }
+  }
+
+  return (
+    <View style={[styles.card, selected && styles.cardSelected]}>
+      <View style={styles.cardTop}>
+        <Pressable
+          style={({ pressed }) => [styles.cardMain, pressed && styles.cardPressed]}
+          onPress={selectMode ? onToggle : onOpen}
+          accessibilityRole="button"
+          accessibilityLabel={selectMode ? `${selected ? '取消选择' : '选择'} ${doc.name}` : `打开 ${doc.name}`}
+        >
+          <View style={styles.titleRow}>
+            <View style={styles.extBadge}>
+              <Text style={styles.extText} numberOfLines={1}>
+                {(doc.ext || 'file').slice(0, 4).toUpperCase()}
+              </Text>
+            </View>
+            <Text style={styles.name} numberOfLines={1}>
+              {doc.name}
+            </Text>
+          </View>
+
+          <Text style={styles.meta}>
+            {sizeText(doc.size)} · {dayLabel(doc.updatedAt)} {formatTime(doc.updatedAt)}
+          </Text>
+
+          <View style={styles.statusRow}>
+            <Ionicons name={icon.name} size={13} color={icon.color} />
+            <Text
+              style={[
+                styles.status,
+                doc.state === 'failed' && !running && styles.statusErr,
+                running && styles.statusParsing,
+                ready && !running && styles.statusReady,
+              ]}
+              numberOfLines={1}
+            >
+              {status}
+            </Text>
+          </View>
+
+          {doc.state === 'failed' && !running && doc.error ? (
+            <Text style={styles.errorText} numberOfLines={2}>
+              {doc.error}
+            </Text>
+          ) : null}
+          {limitNote && !running ? (
+            <Text style={styles.warnText} numberOfLines={2}>
+              {limitNote}
+            </Text>
+          ) : null}
+        </Pressable>
+
+        {selectMode ? (
+          <View style={styles.side}>
+            <IconButton
+              name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+              color={selected ? c.accent : c.text3}
+              onPress={onToggle}
+              accessibilityLabel={selected ? `取消选择 ${doc.name}` : `选择 ${doc.name}`}
+            />
+          </View>
+        ) : (
+          <View style={styles.side}>
+            <IconButton
+              name="trash-outline"
+              size={17}
+              color={c.text3}
+              onPress={onDelete}
+              accessibilityLabel={`删除 ${doc.name}`}
+            />
+          </View>
+        )}
+      </View>
+
+      {action ? (
+        <View style={styles.cardActions}>
+          <Pressable
+            style={({ pressed }) => [styles.pill, pressed && { opacity: 0.7 }]}
+            onPress={action.run}
+            accessibilityRole="button"
+            accessibilityLabel={`${action.label} ${doc.name}`}
+          >
+            <Ionicons name={action.icon} size={13} color={c.accentText} />
+            <Text style={styles.pillText}>{action.label}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * 选中里有没准备好的文档。
+ *
+ * 这里最容易犯的错是「静默只问能问的那几份」—— 用户勾了 5 份，实际只问了 3 份，
+ * 而答案里不会提这件事。必须把待准备的列出来，让人自己选「先准备」还是「移除」。
+ */
+function AskBlockedSheet({
+  docs,
+  onCancel,
+  onRemove,
+  onPrepare,
+}: {
+  docs: DocumentMeta[];
   onCancel: () => void;
-  onStart: () => void;
+  onRemove: () => void;
+  onPrepare: () => void;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   const live = useRef(onCancel);
@@ -503,39 +657,28 @@ function UploadConfirm({
       <Pressable style={styles.backdrop} onPress={onCancel} />
       <View style={styles.sheet}>
         <View style={styles.sheetHead}>
-          <View style={styles.sheetIcon}>
-            <Ionicons name="cloud-upload-outline" size={17} color={c.accentText} />
+          <View style={[styles.sheetIcon, styles.sheetIconWarn]}>
+            <Ionicons name="hourglass-outline" size={17} color={c.amberText} />
           </View>
-          <Text style={styles.sheetTitle}>{uploads ? '解析这个文件？' : '读取这个文件？'}</Text>
-        </View>
-
-        <Text style={styles.fileName} numberOfLines={2}>
-          {file.name}
-        </Text>
-        <Text style={styles.fileMeta}>
-          {sizeText(file.size)} · {file.ext ? file.ext.toUpperCase() : '未知格式'}
-        </Text>
-
-        <View style={[styles.privacy, uploads ? styles.privacyWarn : styles.privacyLocal]}>
-          <Ionicons
-            name={uploads ? 'cloud-outline' : 'phone-portrait-outline'}
-            size={14}
-            color={uploads ? c.amberText : c.text2}
-          />
-          <Text style={[styles.privacyText, !uploads && styles.privacyTextLocal]}>
-            {uploads
-              ? '解析会把文件上传到 mineru.net，原文件同时保留在手机上。'
-              : 'txt / md 只在手机上读取，不会上传到任何服务器。'}
-          </Text>
+          <Text style={styles.sheetTitle}>还有 {docs.length} 份没准备好</Text>
         </View>
 
         <Text style={styles.sheetHint}>
-          {!uploads
-            ? '原文件会复制进 App 私有目录，之后可以随时打开。'
-            : pro
-              ? `走精准接口（已填 Token）：≤ ${PRO_MAX_FILE_LABEL}、${PRO_MAX_PAGES} 页，每天 1000 页额度。解析通常要几分钟，这段时间可以离开这一页。`
-              : `走轻量接口：≤ ${MAX_FILE_LABEL}、20 页。解析通常要几十秒到几分钟，这段时间可以离开这一页。`}
+          这些不能放进这次问答的范围。可以先在本机准备（不上传），也可以从选择里移除。
         </Text>
+
+        <View style={styles.blockList}>
+          {docs.slice(0, MAX_ASK_DOCUMENTS).map((d) => (
+            <View key={d.id} style={styles.blockRow}>
+              <Text style={styles.blockName} numberOfLines={1}>
+                {d.name}
+              </Text>
+              <Text style={styles.blockReason} numberOfLines={1}>
+                {supportsLocalDocument(d.ext) && !localReaderLimitNote(d) ? '待本地准备' : '需要云解析'}
+              </Text>
+            </View>
+          ))}
+        </View>
 
         <View style={styles.sheetActions}>
           <Pressable
@@ -545,10 +688,16 @@ function UploadConfirm({
             <Text style={styles.cancelText}>取消</Text>
           </Pressable>
           <Pressable
-            style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85 }]}
-            onPress={onStart}
+            style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
+            onPress={onRemove}
           >
-            <Text style={styles.startText}>{uploads ? '开始解析' : '开始读取'}</Text>
+            <Text style={styles.cancelText}>移除这些</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.startBtn, pressed && { opacity: 0.85 }]}
+            onPress={onPrepare}
+          >
+            <Text style={styles.startText}>在本地准备</Text>
           </Pressable>
         </View>
       </View>
@@ -556,7 +705,7 @@ function UploadConfirm({
   );
 }
 
-/** 删除确认。删掉的是 App 内的副本和解析结果，不影响手机里原来那个文件 */
+/** 删除确认。删掉的是 App 内的副本和已准备的正文，不影响手机里原来那个文件 */
 function DeleteConfirm({
   doc,
   onCancel,
@@ -593,7 +742,8 @@ function DeleteConfirm({
           {doc.name}
         </Text>
         <Text style={styles.sheetHint}>
-          会删掉 App 里的原文件副本和已解析的正文。手机里原来那个文件不受影响。
+          会删掉 App 里的原文件副本和已准备的正文。手机里原来那个文件不受影响。
+          正在跑的任务会先停掉。
         </Text>
 
         <View style={styles.sheetActions}>
@@ -619,6 +769,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
 
   listContent: { paddingHorizontal: 16, paddingBottom: 32 },
+  listContentWithBar: { paddingBottom: 96 },
   sep: { height: 10 },
   loading: { paddingTop: 50, alignItems: 'center' },
 
@@ -630,10 +781,10 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 7,
+    gap: 6,
   },
   uploadText: { fontSize: 14.5, color: c.onAccent, fontWeight: '600' },
-  limitText: { marginTop: 9, fontSize: 11, lineHeight: 17, color: c.text3, paddingHorizontal: 2 },
+  limitText: { marginTop: 6, fontSize: 11, lineHeight: 17, color: c.text3, paddingHorizontal: 2 },
   notice: { marginTop: 10, fontSize: 12, lineHeight: 18, paddingHorizontal: 2 },
   noticeOk: { color: c.tealText },
   noticeErr: { color: c.danger },
@@ -658,19 +809,21 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     fontWeight: '500',
     maxWidth: 300,
   },
-  emptyHint: { fontSize: 12, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
+  emptyHint: { fontSize: 12, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 320 },
 
   card: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: c.hair,
     overflow: 'hidden',
   },
+  cardSelected: { borderColor: c.accent },
+  cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
-  cardMain: { flex: 1, minWidth: 0, paddingLeft: 13, paddingRight: 6, paddingVertical: 12 },
+  cardMain: { flex: 1, minWidth: 0, paddingLeft: 13, paddingRight: 4, paddingVertical: 12 },
+  side: { paddingHorizontal: 6, paddingTop: 8 },
+
   titleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   extBadge: {
     backgroundColor: c.accentBg,
@@ -690,9 +843,58 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 },
   status: { flex: 1, fontSize: 11.5, color: c.text2 },
   statusParsing: { color: c.accentText },
+  statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
   errorText: { marginTop: 3, fontSize: 11, lineHeight: 16, color: c.danger },
-  trash: { paddingHorizontal: 12, paddingVertical: 16 },
+  warnText: { marginTop: 3, fontSize: 11, lineHeight: 16, color: c.amberText },
+
+  cardActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 13,
+    paddingBottom: 10,
+  },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: c.accentBg,
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 6,
+  },
+  pillText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
+
+  selectBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 16,
+    backgroundColor: c.page,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hair,
+  },
+  selectInfo: { flex: 1, minWidth: 0 },
+  selectCount: { fontSize: 13, color: c.text, fontWeight: '600' },
+  selectHint: { marginTop: 2, fontSize: 11, color: c.text3 },
+  askBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: R.btn,
+    backgroundColor: c.accent,
+  },
+  askBtnOff: { backgroundColor: c.hairSoft },
+  askText: { fontSize: 13.5, color: c.onAccent, fontWeight: '600' },
+  askTextOff: { color: c.text3 },
 
   overlay: {
     position: 'absolute',
@@ -722,26 +924,17 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'center',
   },
   sheetIconDanger: { backgroundColor: c.dangerBg },
-  sheetTitle: { fontSize: 16, fontWeight: '600', color: c.text },
+  sheetIconWarn: { backgroundColor: c.amberBg },
+  sheetTitle: { fontSize: 16, fontWeight: '600', color: c.text, flex: 1 },
   fileName: { marginTop: 12, fontSize: 13, lineHeight: 19, color: c.text, fontWeight: '500' },
-  fileMeta: { marginTop: 3, fontSize: 11.5, color: c.text3 },
+  sheetHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text3 },
 
-  privacy: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 6,
-    marginTop: 14,
-    borderRadius: R.btn,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-  },
-  privacyWarn: { backgroundColor: c.amberBg },
-  privacyLocal: { backgroundColor: c.hairSoft },
-  privacyText: { flex: 1, fontSize: 12, lineHeight: 18, color: c.amberText },
-  privacyTextLocal: { color: c.text2 },
-  sheetHint: { marginTop: 12, fontSize: 12, lineHeight: 18, color: c.text3 },
+  blockList: { marginTop: 12, gap: 6 },
+  blockRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  blockName: { flex: 1, fontSize: 12.5, color: c.text },
+  blockReason: { fontSize: 11, color: c.text3 },
 
-  sheetActions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  sheetActions: { flexDirection: 'row', gap: 8, marginTop: 18 },
   cancelBtn: {
     flex: 1,
     height: 42,
@@ -751,7 +944,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelText: { fontSize: 14, color: c.text2 },
+  cancelText: { fontSize: 13.5, color: c.text2 },
   startBtn: {
     flex: 1.4,
     height: 42,
@@ -760,7 +953,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  startText: { fontSize: 14, fontWeight: '600', color: c.onAccent },
+  startText: { fontSize: 13.5, fontWeight: '600', color: c.onAccent },
   deleteBtn: {
     flex: 1.4,
     height: 42,

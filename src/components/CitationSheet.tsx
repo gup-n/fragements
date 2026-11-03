@@ -11,20 +11,27 @@
  * 正文用快照（`QaCitation.body`）而不是回库查：历史会话重开时当时检索到的
  * 碎片可能已经被合并、改标签甚至删掉了，回查会得到空面板，而回答里明明写着
  * 「按 [F3] 的做法」。快照过期，但至少是当时真实看到的东西。
+ *
+ * 文档引用（D）多两条要求：
+ * - 位置只用提取结果里的 locator，**绝不凭印象补页码**；
+ * - 原件可能被删、被重新解析过，打开前要如实说明，但快照始终可读。
  */
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { QaCitation } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { IconButton, type IoniconName } from './IconButton';
+import { repo } from '../db/repo';
+import { openOriginal } from '../db/docFiles';
 
-/** 四种来源的图标。用线框图标，和页面别处的写法一致 */
+/** 五种来源的图标。用线框图标，和页面别处的写法一致 */
 const ICON: Record<QaCitation['kind'], IoniconName> = {
   F: 'document-text-outline',
   N: 'sparkles-outline',
   T: 'checkbox-outline',
   W: 'globe-outline',
+  D: 'documents-outline',
 };
 
 const KIND_NAME: Record<QaCitation['kind'], string> = {
@@ -32,6 +39,7 @@ const KIND_NAME: Record<QaCitation['kind'], string> = {
   N: '小结',
   T: '待办',
   W: '网页',
+  D: '文档',
 };
 
 interface Props {
@@ -58,6 +66,46 @@ export function CitationSheet({ cite, onClose }: Props) {
     if (!url) return;
     Linking.openURL(url).catch(() => {});
   }, [url]);
+
+  /** 打开原件时的就近提示：原件被删、版本变了、没装能打开的 App 都写在这里 */
+  const [docNote, setDocNote] = useState('');
+  const [opening, setOpening] = useState(false);
+
+  const openDoc = useCallback(async () => {
+    if (opening) return;
+    setDocNote('');
+    if (!cite.documentId) {
+      setDocNote('这条引用没有记录文档编号，只能看下面的片段');
+      return;
+    }
+    setOpening(true);
+    try {
+      const doc = await repo.findDocument(cite.documentId);
+      if (!doc) {
+        setDocNote('原件已经从文档库里删掉了，下面的片段仍是提问当时的内容');
+        return;
+      }
+      if (
+        cite.contentRevision !== undefined &&
+        doc.contentRevision !== cite.contentRevision
+      ) {
+        // 版本变了：打开的是新文件，这段片段属于旧版本，说清楚别让人误会
+        setDocNote(
+          `原件内容已经更新过（这段片段来自更早的一版），打开看到的是最新的文件`,
+        );
+      }
+      if (!doc.fileUri) {
+        setDocNote('这篇文档没有保存原件，只能看片段');
+        return;
+      }
+      await openOriginal(doc.fileUri, doc.ext);
+    } catch (e) {
+      // openOriginal 抛出的本来就是给用户看的一句话，直接用它
+      setDocNote(e instanceof Error ? e.message : '打不开原件，只能看片段');
+    } finally {
+      setOpening(false);
+    }
+  }, [cite.contentRevision, cite.documentId, opening]);
 
   return (
     <View style={styles.overlay}>
@@ -93,6 +141,26 @@ export function CitationSheet({ cite, onClose }: Props) {
             {cite.body.trim() || '（这条没有正文）'}
           </Text>
         </ScrollView>
+
+        {cite.kind === 'D' ? (
+          <View style={styles.docFooter}>
+            <View style={styles.docRow}>
+              <Text style={styles.docHint} numberOfLines={2}>
+                片段是提问当时发出去的那一段，原件改动或删除都不影响这里
+              </Text>
+              <Pressable
+                onPress={openDoc}
+                disabled={opening}
+                accessibilityRole="button"
+                accessibilityLabel="打开原件"
+                style={({ pressed }) => [styles.openBtn, pressed && styles.pressed]}
+              >
+                <Text style={styles.openText}>{opening ? '正在打开…' : '打开原件'}</Text>
+              </Pressable>
+            </View>
+            {docNote ? <Text style={styles.docNote}>{docNote}</Text> : null}
+          </View>
+        ) : null}
 
         {url ? (
           <View style={styles.linkRow}>
@@ -190,4 +258,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   openText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
   pressed: { opacity: 0.7 },
+
+  /* ---- 文档引用：打开原件 ---- */
+  docFooter: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    marginTop: 4,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hair,
+    gap: 6,
+  },
+  docRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  docHint: { flex: 1, fontSize: 11, lineHeight: 16, color: c.text3 },
+  /** 原件被删/版本变了就写在这里，就近反馈，不要另弹一个框 */
+  docNote: { fontSize: 11.5, lineHeight: 17, color: c.danger },
 });

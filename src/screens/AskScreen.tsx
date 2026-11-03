@@ -1,5 +1,10 @@
 /**
- * 「问」：只查自己记录的问答页。
+ * 「问」：问答页。两种范围共用一套界面 ——
+ * - `records`：查自己的碎片、小结、待办（v0.7 起的老能力）；
+ * - `documents`：**只**查用户在文档页勾中的那几份文档，不碰记录、不联网。
+ *
+ * v0.12 起范围是会话契约：一场会话锁定一个范围，换集合必须新开会话。
+ * 界面上必须一直看得到「这次只问了什么」—— 隐私边界不能只写在代码里。
  *
  * v0.8.8 起它同时是「会话管理器」：
  * - 每轮答完自动把整场会话写进 `ask_sessions`，退出不再问「要不要留纪要」；
@@ -29,7 +34,15 @@ import {
   type ScrollViewInstance,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { AiConfig, AskSession, Fragment, QaCitation, QaTurn } from '../types';
+import type {
+  AiConfig,
+  AskSession,
+  DocumentCoverage,
+  Fragment,
+  QaCitation,
+  QaScope,
+  QaTurn,
+} from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
@@ -37,6 +50,7 @@ import { AiError } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
 import { summarizeQaSession } from '../ai/qaSummary';
 import { buildQaFragment, buildQaNote } from '../util/qaNote';
+import { normalizeQaScope } from '../util/qaScope';
 import { dayKey, formatTime } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
 import { collectCitations, type CiteRef } from '../util/mdBlocks';
@@ -59,6 +73,11 @@ interface Props {
   registerClose: (fn: (() => void) | null) => void;
   /** 从时间轴右滑进来时带上的那条碎片 */
   contextFragment?: Fragment | null;
+  /**
+   * 打开这一页时用户明确选定的范围。不传 = 记录模式。
+   * **只用于新会话**：历史会话以它自己保存的范围为准，不能被这里覆盖。
+   */
+  initialScope?: QaScope;
 }
 
 const THINK_KEY = 'qa.thinking';
@@ -86,6 +105,45 @@ function plainPreview(text: string): string {
     .replace(/[#*>`]+/g, '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * 解析打开页面时带进来的范围。
+ *
+ * 带了个读不懂的范围时**不能退回 records**：那是把「只问这两份文档」
+ * 悄悄换成「查全库」，方向正好反了（范围变大＝泄露）。所以这里把错误
+ * 记下来，由界面挡住发送，让用户回去重选。
+ */
+function readPageScope(initial?: QaScope): { scope: QaScope; error: string | null } {
+  if (!initial) return { scope: { kind: 'records' }, error: null };
+  try {
+    return { scope: normalizeQaScope(initial), error: null };
+  } catch {
+    return {
+      scope: { kind: 'records' },
+      error: '这次没拿到有效的文档范围，先回文档页重新选一份再问',
+    };
+  }
+}
+
+/**
+ * 「读了多少」的一行话。只报事实，不粉饰：
+ * 用户看到 2/10 就知道答案是基于部分片段来的。
+ */
+function coverageLine(coverage: DocumentCoverage[]): string {
+  const read = coverage.filter((c) => c.includedChunks > 0);
+  const missing = coverage.filter((c) => c.includedChunks === 0);
+  const parts = read.map((c) => `《${c.name}》${c.includedChunks}/${c.totalChunks} 段`);
+  const body = `${parts.slice(0, 3).join(' · ')}${parts.length > 3 ? ` 等 ${parts.length} 份` : ''}`;
+  // 全部读完就别说「部分」，把话说准才有用
+  const partial = read.some((c) => c.includedChunks < c.totalChunks);
+  const head = !read.length
+    ? '没有读到可用的片段'
+    : partial
+      ? `基于部分片段：${body}`
+      : `读到的片段：${body}`;
+  const absent = missing.length ? `；${missing.map((c) => `《${c.name}》`).join('')}里没找到相关内容` : '';
+  return `${head}${absent}`;
 }
 
 /**
@@ -152,6 +210,10 @@ function TurnAnswer({
     <View style={styles.aRow}>
       <NoteBody text={turn.answer} style={styles.aText} citeLabel={citeLabel} onCite={openCite} />
 
+      {turn.documentCoverage?.length ? (
+        <Text style={styles.covText}>{coverageLine(turn.documentCoverage)}</Text>
+      ) : null}
+
       {cites.length > 0 ? (
         <View style={styles.srcBlock}>
           <Pressable
@@ -191,8 +253,24 @@ function TurnAnswer({
   );
 }
 
-export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: Props) {
+export function AskScreen({
+  onClose,
+  onSaved,
+  registerClose,
+  contextFragment,
+  initialScope,
+}: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  /**
+   * 这一页的范围（进入页面时明确选定的那个）。新开会话回到它，
+   * 而不是继承刚才翻到的那场历史会话 —— 那会变成「悄悄换范围」。
+   */
+  const [pageScope] = useState(() => readPageScope(initialScope));
+  const [scope, setScope] = useState<QaScope>(pageScope.scope);
+  /** 范围读不出来时的说明。非空就挡住发送，别拿错的边界去查 */
+  const [scopeProblem, setScopeProblem] = useState<string | null>(pageScope.error);
+  /** 文档名只用于显示范围；读不到不影响提问 */
+  const [docNames, setDocNames] = useState<string[]>([]);
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -216,6 +294,13 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const sessionIdRef = useRef<number | null>(null);
+  /**
+   * 当前范围，供 `persistSession` 这类不在渲染闭包里的路径读取。
+   * 每帧同步一次：保存必须用「产生这些轮次的那个范围」，
+   * 不能等异步回来时再读 state（那时可能已经是新会话的范围了）。
+   */
+  const scopeRef = useRef<QaScope>(scope);
+  scopeRef.current = scope;
   /**
    * 会话代次。新建 / 切换会话时 +1。
    * 保存是异步的：上一场还没写完就点了「+」，回来不能把旧标题、旧 id 写到新会话上。
@@ -283,6 +368,28 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     })();
   }, []);
 
+  // 文档范围要能看到具体是哪几份。名字只用于显示，读不到就退成编号
+  useEffect(() => {
+    if (scope.kind !== 'documents') {
+      setDocNames([]);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      try {
+        const all = await repo.listDocuments();
+        if (!alive) return;
+        const byId = new Map(all.map((d) => [d.id, d.name]));
+        setDocNames(scope.documentIds.map((id) => byId.get(id) ?? `文档 ${id}`));
+      } catch {
+        /* 名字读不到不影响提问，范围仍然靠 id 生效 */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [scope]);
+
   // 从时间轴带进来的上下文。正常情况下 AskScreen 会重新挂载；
   // 这里仍然跟着 prop 走，避免上层换了一条碎片而页面没换。
   useEffect(() => {
@@ -344,6 +451,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
       if (!list.length) return;
       const gen = sessionGenRef.current;
       const id = sessionIdRef.current;
+      // 范围在调用的一瞬间取定：await 之后 state 可能已经换了新会话
+      const sessionScope = scopeRef.current;
       const rawTitle = (titleHint ?? sessionTitle ?? list[0]?.question ?? '新会话')
         .replace(/\s+/g, ' ')
         .trim()
@@ -354,6 +463,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
           id: id ?? undefined,
           title,
           turns: list,
+          scope: sessionScope,
           createdAt: startedAtRef.current,
         });
         // 保存期间用户可能已经新建/切换会话，那就只落库，不再改当前界面状态
@@ -435,6 +545,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   /** 新建一场。旧会话已经自动存好，这里只重置当前视图 */
   function newSession() {
     if (busy) return;
+    // 先落上一场（此时 scopeRef 还是上一场的范围），再回到页面范围
     void persistSession(turns);
     // 先让上一场的保存拿到旧代次，再切代次；否则它回来会改到新会话上
     sessionGenRef.current += 1;
@@ -460,11 +571,29 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     setSummary(null);
     setSummarySaving(false);
     setContext(null);
+    // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
+    setScope(pageScope.scope);
+    setScopeProblem(pageScope.error);
   }
 
   /** 打开一个历史会话 */
   function loadSession(s: AskSession) {
     if (busy) return;
+
+    // 范围读不出来的会话不能按 records 打开：那会把「只问两份文档」变成全库问答
+    if (s.scopeBroken) {
+      showToast('这场会话的范围读不出来，不能继续问');
+      return;
+    }
+    let nextScope: QaScope;
+    try {
+      // 只有读旧会话时允许缺字段（那时还没有范围概念，它们确实是 records）
+      nextScope = normalizeQaScope(s.scope, true);
+    } catch {
+      showToast('这场会话的范围读不出来，不能继续问');
+      return;
+    }
+
     sessionGenRef.current += 1;
     dirtyRef.current = false;
     setTurns(s.turns);
@@ -472,6 +601,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
     sessionIdRef.current = s.id;
     setSessionTitle(s.title);
     startedAtRef.current = s.createdAt;
+    setScope(nextScope);
+    setScopeProblem(null);
     setHistoryOpen(false);
     setActionSession(null);
     setDeleteSession(null);
@@ -513,11 +644,17 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   async function send() {
     const question = input.trim();
     if (!question || busy) return;
+    if (scopeProblem) {
+      // 边界不清楚就不发：宁可让用户回去重选，也不要拿错的范围去查
+      setError(scopeProblem);
+      return;
+    }
+    const docMode = scope.kind === 'documents';
     setInput('');
     setPendingQ(question);
     setBusy(true);
     setError('');
-    setWebNote(webOn ? '正在同时搜本地和网络…' : '');
+    setWebNote(docMode ? '正在读选定的文档…' : webOn ? '正在同时搜本地和网络…' : '');
     setReasoning('');
     setReceived(0);
     setElapsed(0);
@@ -538,8 +675,10 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
         turns,
         config: { ...config, thinking: thinkingOn },
         thinking: thinkingOn,
-        useWeb: webOn,
-        contextIds: context ? [context.id] : [],
+        // 文档模式不联网：来源必须是用户选的那几份
+        useWeb: !docMode && webOn,
+        contextIds: !docMode && context ? [context.id] : [],
+        scope,
         onProgress: (patch) => {
           const now = Date.now();
           if (now - streamRef.current.lastFlush < 120) return;
@@ -557,6 +696,8 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
         sourceIds: run.cited.map((f) => f.id),
         citations: run.citations,
         reasoning: run.reasoning,
+        truncated: run.truncated,
+        documentCoverage: run.documentCoverage,
       };
       const next = [...turns, turn];
       setTurns(next);
@@ -565,17 +706,29 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
       dirtyRef.current = true;
       void persistSession(next);
 
-      setWebNote(
-        run.webError
-          ? `联网没搜成：${run.webError}。下面是只查你记录的结果。`
-          : run.web.length
-            ? `联网补了 ${run.web.length} 条网页资料`
-            : webOn
-              ? '联网开了，但没搜到有用的网页'
+      if (docMode) {
+        const read = (run.documentCoverage ?? []).reduce((n, x) => n + x.includedChunks, 0);
+        const all = (run.documentCoverage ?? []).reduce((n, x) => n + x.totalChunks, 0);
+        setWebNote(
+          read === 0
+            ? '这几份文档里没找到和问题相关的内容'
+            : run.truncated
+              ? `只读了部分片段（${read} / ${all} 段），答案基于这些片段`
               : '',
-      );
-      if (run.scanned === 0 && run.fragments.length === 0) {
-        setWebNote((s) => (s ? `${s}｜本地记录里没检索到相关碎片` : '本地记录里没检索到相关碎片'));
+        );
+      } else {
+        setWebNote(
+          run.webError
+            ? `联网没搜成：${run.webError}。下面是只查你记录的结果。`
+            : run.web.length
+              ? `联网补了 ${run.web.length} 条网页资料`
+              : webOn
+                ? '联网开了，但没搜到有用的网页'
+                : '',
+        );
+        if (run.scanned === 0 && run.fragments.length === 0) {
+          setWebNote((s) => (s ? `${s}｜本地记录里没检索到相关碎片` : '本地记录里没检索到相关碎片'));
+        }
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '回答失败，再试一次');
@@ -718,6 +871,9 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
         sessionIdRef.current = null;
         setSessionTitle(null);
         startedAtRef.current = Date.now();
+        // 会话没了，范围跟着回到这一页的默认值，别留着上一场文档集合的残影
+        setScope(pageScope.scope);
+        setScopeProblem(pageScope.error);
       }
       setDeleteSession(null);
       await loadHistory();
@@ -730,6 +886,13 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
   }
 
   const hasContent = turns.length > 0;
+  const docMode = scope.kind === 'documents';
+  /** 范围必须一直看得见：隐私边界不能只写在代码里 */
+  const scopeLine = docMode
+    ? `只问这 ${scope.documentIds.length} 份文档${docNames.length ? `：${docNames.join('、')}` : ''}`
+    : '范围：你的碎片、小结与待办';
+  /** 能不能发出去：有字、不在忙、范围明确 */
+  const canSend = !!input.trim() && !busy && !scopeProblem;
 
   /** 按「今天 / 昨天 / 更早」分组，归档的单独放最后 */
   const history = useMemo(() => {
@@ -764,6 +927,9 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
               {s.title}
             </Text>
             {s.fragmentId ? <Text style={styles.histBadge}>已整理</Text> : null}
+            {s.scope?.kind === 'documents' ? (
+              <Text style={styles.histScope}>文档 {s.scope.documentIds.length} 份</Text>
+            ) : null}
             {s.archived ? <Text style={styles.histArchived}>已归档</Text> : null}
           </View>
           <Text style={styles.histMeta}>
@@ -815,6 +981,19 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
           </View>
         }
       />
+      {/* 范围常驻在标题下面：一旦滚走，用户就不记得这次到底问了什么 */}
+      <View style={styles.scopeBar}>
+        <Ionicons
+          name={docMode ? 'documents-outline' : 'albums-outline'}
+          size={13}
+          color={c.text3}
+        />
+        <Text style={styles.scopeText} numberOfLines={2}>
+          {scopeLine}
+        </Text>
+        {docMode ? <Text style={styles.scopeTag}>不联网</Text> : null}
+      </View>
+      {scopeProblem ? <Text style={styles.scopeWarn}>{scopeProblem}</Text> : null}
 
       <ScrollView
         ref={scrollRef}
@@ -827,8 +1006,9 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
             <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
             <Text style={styles.emptyTitle}>问点什么</Text>
             <Text style={styles.emptyBody}>
-              它会先在你自己的碎片里找，再回答。{'\n'}
-              找到的来源会标在回答里，点一下就能看原文。
+              {docMode
+                ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
+                : '它会先在你自己的碎片里找，再回答。\n找到的来源会标在回答里，点一下就能看原文。'}
             </Text>
           </View>
         ) : null}
@@ -864,7 +1044,7 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
                 <View style={styles.thinkingRow}>
                   <ActivityIndicator size="small" color={c.text3} />
                   <Text style={styles.thinkingText}>
-                    {thinkingOn ? '在想…' : '在读你的记录…'}
+                    {thinkingOn ? '在想…' : docMode ? '在读选定的文档…' : '在读你的记录…'}
                   </Text>
                 </View>
               )}
@@ -914,14 +1094,22 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
             />
             <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
           </Pressable>
-          <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb}>
-            <Ionicons
-              name="globe-outline"
-              size={13}
-              color={webOn ? c.accentText : c.text3}
-            />
-            <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
-          </Pressable>
+          {docMode ? (
+            // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
+            <View style={[styles.toggle, styles.toggleOff]} accessibilityLabel="文档模式不联网">
+              <Ionicons name="cloud-offline-outline" size={13} color={c.text3} />
+              <Text style={styles.toggleText}>不联网</Text>
+            </View>
+          ) : (
+            <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb}>
+              <Ionicons
+                name="globe-outline"
+                size={13}
+                color={webOn ? c.accentText : c.text3}
+              />
+              <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
+            </Pressable>
+          )}
           {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
         </View>
 
@@ -938,15 +1126,12 @@ export function AskScreen({ onClose, onSaved, registerClose, contextFragment }: 
           />
           <Pressable
             onPress={send}
-            disabled={!input.trim() || busy}
-            style={[styles.send, input.trim() && !busy && styles.sendOn]}
+            // 范围有问题时按钮直接不可用：原因就写在上面的红字里
+            disabled={!input.trim() || busy || !!scopeProblem}
+            style={[styles.send, canSend && styles.sendOn]}
             hitSlop={6}
           >
-            <Ionicons
-              name="arrow-up"
-              size={16}
-              color={input.trim() && !busy ? c.onAccent : c.text3}
-            />
+            <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />
           </Pressable>
         </View>
         <View style={{ height: keyboardHeight }} />
@@ -1193,6 +1378,39 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 
+  /* ---- 范围条（常驻） ---- */
+  scopeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginHorizontal: 16,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: R.btn,
+    backgroundColor: c.hairSoft,
+  },
+  scopeText: { flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 17, color: c.text2 },
+  scopeTag: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: c.text3,
+    borderWidth: 0.5,
+    borderColor: c.hair,
+    borderRadius: R.pill,
+    paddingHorizontal: 6,
+    overflow: 'hidden',
+  },
+  scopeWarn: {
+    fontSize: 11.5,
+    lineHeight: 17,
+    color: c.danger,
+    marginHorizontal: 16,
+    marginTop: 6,
+  },
+  /** 只读的开关：看着像开关，但不给点，也不给「关掉后偷偷联网」的错觉 */
+  toggleOff: { opacity: 0.75 },
+
   empty: { alignItems: 'center', gap: 8 },
   emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500', marginTop: 4 },
   emptyBody: { fontSize: 12.5, color: c.text3, textAlign: 'center', lineHeight: 20 },
@@ -1209,6 +1427,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 
   aRow: { marginBottom: 6 },
   aText: { fontSize: 14, lineHeight: 23, color: c.text },
+  /** 「只读了部分片段」的说明。不显眼但必须常驻，不能只写进回答正文 */
+  covText: { fontSize: 11, lineHeight: 16, color: c.text3, marginTop: 6 },
 
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
   thinkingText: { fontSize: 13, color: c.text3 },
@@ -1366,6 +1586,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     overflow: 'hidden',
   },
   histArchived: { fontSize: 10, color: c.text3 },
+  histScope: { fontSize: 10, color: c.text3 },
   histMeta: { fontSize: 10.5, color: c.text3, marginTop: 3, fontVariant: ['tabular-nums'] },
   histPreview: { fontSize: 11.5, lineHeight: 17, color: c.text3, marginTop: 4 },
 

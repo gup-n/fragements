@@ -66,6 +66,13 @@ export interface TableBlock {
    * 上限防止某一列长句子把别的列挤成一条缝。
    */
   weights: number[];
+  /**
+   * 被列数上限挡掉、没有渲染出来的列数。0 表示全显示了。
+   *
+   * 之所以要带这个数字：手机屏排不下 20 列，裁列是必须的，但**静默裁掉**
+   * 会让用户以为表格就这么多列。渲染层要把它显示成「另 N 列未显示」。
+   */
+  droppedCols?: number;
 }
 
 export interface CodeBlock {
@@ -115,11 +122,17 @@ const INLINE_RE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/;
  * 数字限制 1-6 位：模型只会在本轮资料条数范围内编号（碎片 18 条、待办 60 条），
  * 六位已经远远够；不设上限的话 `[F0000000001]` 这种也能匹上，纯属噪音。
  */
-const CITE_RE = /\[([FNTW])(\d{1,6})\]/g;
+const CITE_RE = /\[([FNTWD])(\d{1,6})\]/g;
 
 /** 拆普通文字里的引用标记。`bold` 透传，因为加粗里的引用也得是粗的 */
-function pushText(text: string, bold: boolean, out: Seg[]) {
+function pushText(text: string, bold: boolean, out: Seg[], literal?: boolean) {
   if (!text) return;
+  // 文档正文里的 `[F12]` 是作者写的字面量，不是我们这轮的引用编号。
+  // 关掉解析时整段原样保留 —— 吞掉它等于把用户文档改字。
+  if (literal) {
+    out.push({ text, bold, code: false });
+    return;
+  }
   CITE_RE.lastIndex = 0;
   let last = 0;
   let m: RegExpExecArray | null;
@@ -139,23 +152,23 @@ function pushText(text: string, bold: boolean, out: Seg[]) {
  * 否则用户点不到它、序号也标不上。内层正则不许含 `*`（`[^*\n]+`），
  * 所以递归最多一层，不会自激。
  */
-function scanInline(text: string, bold: boolean, out: Seg[]) {
+function scanInline(text: string, bold: boolean, out: Seg[], literal?: boolean) {
   // 每次新建带 g 的正则：共用一个会带着上次的 lastIndex
   const re = new RegExp(INLINE_RE.source, 'g');
   let last = 0;
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(text))) {
-    if (m.index > last) pushText(text.slice(last, m.index), bold, out);
+    if (m.index > last) pushText(text.slice(last, m.index), bold, out, literal);
     if (m[1]) {
       // 代码优先：代码里的 [F12] 是字符，不是引用
       out.push({ text: m[1].slice(1, -1), bold, code: true });
     } else {
-      scanInline(m[2].slice(2, -2), true, out);
+      scanInline(m[2].slice(2, -2), true, out, literal);
     }
     last = m.index + m[0].length;
   }
-  if (last < text.length) pushText(text.slice(last), bold, out);
+  if (last < text.length) pushText(text.slice(last), bold, out, literal);
 }
 
 /**
@@ -165,10 +178,10 @@ function scanInline(text: string, bold: boolean, out: Seg[]) {
  * `` `**a**` `` 里的星号当成加粗。两者互斥，一次过。
  * 引用标记在普通文字（含加粗内部）里再切一刀，代码里的不动。
  */
-export function parseInline(raw: string): Seg[] {
+export function parseInline(raw: string, opts?: { literalCitations?: boolean }): Seg[] {
   const text = raw.replace(/^>\s?/, '');
   const segs: Seg[] = [];
-  scanInline(text, false, segs);
+  scanInline(text, false, segs, opts?.literalCitations);
   // 空的 `**` 之类会产出零个片段，渲染层按约定至少给一个
   return segs.length ? segs : [{ text: '', bold: false, code: false }];
 }
@@ -281,10 +294,17 @@ function alignOf(cell: string): Align {
   return 'left';
 }
 
-function buildTable(lines: string[], start: number): { block: TableBlock; next: number } {
+function buildTable(
+  lines: string[],
+  start: number,
+  opts?: { literalCitations?: boolean },
+): { block: TableBlock; next: number } {
   const headRaw = splitRow(lines[start]);
   const sepRaw = splitRow(lines[start + 1]);
-  const cols = Math.min(Math.max(headRaw.length, sepRaw.length), MAX_COLS);
+  const declared = Math.max(headRaw.length, sepRaw.length);
+  const cols = Math.min(declared, MAX_COLS);
+  // 单元格解析一律走闭包，不写 `.map(parseInline)` —— map 会把 index 当第二个参数传进去
+  const cell = (s: string) => parseInline(s, opts);
 
   const pad = (cells: string[]) => {
     const out = cells.slice(0, cols);
@@ -292,7 +312,7 @@ function buildTable(lines: string[], start: number): { block: TableBlock; next: 
     return out;
   };
 
-  const head = pad(headRaw).map(parseInline);
+  const head = pad(headRaw).map(cell);
   const align = pad(sepRaw).map(alignOf);
 
   const rows: Seg[][][] = [];
@@ -303,7 +323,7 @@ function buildTable(lines: string[], start: number): { block: TableBlock; next: 
     // 表格后面紧跟一个代码块/标题时，别把它当行
     if (/^```/.test(line.trim()) || /^#{1,4}\s/.test(line.trim())) break;
     if (isSeparator(line)) break;
-    rows.push(pad(splitRow(line)).map(parseInline));
+    rows.push(pad(splitRow(line)).map(cell));
     i++;
   }
 
@@ -311,13 +331,16 @@ function buildTable(lines: string[], start: number): { block: TableBlock; next: 
   const weights = Array.from({ length: cols }, (_, c) => {
     let w = 0;
     for (const row of [head, ...rows]) {
-      const cell = row[c] ?? [];
-      w = Math.max(w, visualLen(cell.map((s) => s.text).join('')));
+      const segs = row[c] ?? [];
+      w = Math.max(w, visualLen(segs.map((s) => s.text).join('')));
     }
     return Math.max(3, Math.min(18, Math.ceil(w)));
   });
 
-  return { block: { kind: 'table', head, rows, align, weights }, next: i };
+  return {
+    block: { kind: 'table', head, rows, align, weights, droppedCols: Math.max(0, declared - cols) },
+    next: i,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -330,7 +353,7 @@ function buildTable(lines: string[], start: number): { block: TableBlock; next: 
  * 顺序很重要：先认代码围栏 —— 围栏里的 `|` 和 `#` 都只是字符，
  * 不能被后面的规则抢走。
  */
-export function parseBlocks(text: string): Block[] {
+export function parseBlocks(text: string, opts?: { literalCitations?: boolean }): Block[] {
   const lines = text.split('\n');
   const blocks: Block[] = [];
 
@@ -352,7 +375,7 @@ export function parseBlocks(text: string): Block[] {
     }
 
     if (isTableStart(lines, i)) {
-      const { block, next } = buildTable(lines, i);
+      const { block, next } = buildTable(lines, i, opts);
       blocks.push(block);
       i = next - 1;
       continue;
@@ -365,13 +388,16 @@ export function parseBlocks(text: string): Block[] {
 
     const heading = line.match(/^#{1,4}\s+(.*)$/);
     if (heading) {
-      blocks.push({ kind: 'h', segs: parseInline(heading[1]) });
+      blocks.push({ kind: 'h', segs: parseInline(heading[1], opts) });
       continue;
     }
 
     const bullet = line.match(/^[-*+]\s+(.*)$/);
     if (bullet) {
-      blocks.push({ kind: 'b', segs: [{ text: '· ', bold: false, code: false }, ...parseInline(bullet[1])] });
+      blocks.push({
+        kind: 'b',
+        segs: [{ text: '· ', bold: false, code: false }, ...parseInline(bullet[1], opts)],
+      });
       continue;
     }
 
@@ -379,12 +405,12 @@ export function parseBlocks(text: string): Block[] {
     if (num) {
       blocks.push({
         kind: 'b',
-        segs: [{ text: `${num[1]}. `, bold: false, code: false }, ...parseInline(num[2])],
+        segs: [{ text: `${num[1]}. `, bold: false, code: false }, ...parseInline(num[2], opts)],
       });
       continue;
     }
 
-    blocks.push({ kind: 'p', segs: parseInline(line) });
+    blocks.push({ kind: 'p', segs: parseInline(line, opts) });
   }
 
   return blocks;

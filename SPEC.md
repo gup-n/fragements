@@ -3,7 +3,25 @@
 > 本文档是跨会话开发的**唯一设计依据**：数据模型、AI 契约、界面规范、构建环境。
 > 改功能先改这里，再改代码。**版本历史不写在这里** —— 那是 [CHANGELOG.md](./CHANGELOG.md) 的事。
 
-最后更新：2026-10-30（v0.8.7：正文渲染支持表格、代码块、分隔线）
+最后更新：2026-11-03（v0.12 文档工作区开发规格）
+
+## 文档工作区 v0.12：本轮已批准的开发规格
+
+用户于 2026-11-03 授权按推荐方向直接开发，并提交现有 GitHub 仓库构建 APK。本轮已实现并随 v0.12.0 发布；下面写的是**已实现的行为契约**，不是待办。仅文档相关内容以本节覆盖旧的一期限制，其余契约不变。
+
+- **导入只保存本机原件与元数据**，不强制读取全文、建索引或调用云解析。无网络、无 AI Key／MinerU Token 也能保存；云解析格式及容量不作为本地导入门槛。
+- **应用内只读**：PDF 原版式／缩放，Excel（xlsx/xls）工作表与单元格视图，Markdown 排版及原文、TXT 原文；各阅读器提供本地查找、真实命中计数、前后定位。Word 本地增强后置，既有原件打开和主动云解析保留。
+- PDF 没有文本层时可读页面，但不伪报可查；OCR／复杂版面解析继续用用户主动确认的 MinerU。每次云请求（含重试、换通道）明确接收方、文件、通道与限制；浏览／查找／选文档不暗中上传。
+- 保存状态、可用正文及内容版本、可问索引分离。按需提取产生正文、来源定位与版本；文档专用切片及 FTS5+bigram 是可重建投影，不写 fragment_fts，不引知识卡／向量模型／服务端。
+- 列表多选和阅读器均有可见“问”入口。首版最多同时选择 8 份，问页明确显示范围；仅所选文档可作为本地来源，不混入笔记／其它文档，文档会话默认关闭联网。空／非法范围不得回退全库。
+- 会话锁定文档集合，换集合新建会话。历史存范围及引用快照；旧会话默认 records，新数据无效则明确报错。D 引用映射本轮真实 documentId／内容版本／切片／定位，快照保存本轮实际发送的片段，不编原页码。
+- 每次问答有完整输入预算（资料＋历史＋问题＋提示词），多文档公平装填；局部检索不得冒充全文通读。超出处理能力保留原件、明确限制，不静默截断为完整结果。
+- 应用级任务防重、取消与代次校验覆盖解析和写回；离页不重复上传，删除／取消后迟到结果不覆盖新状态，重试失败保留旧可读正文。
+- SQLite 只追加 v10 迁移，保留旧 id／原件路径／正文／会话；迁移事务化并保留迁移前数据库恢复点。现有 Markdown 导出不含文档，不能声称它是完整文档备份。
+- 文档内容按不可信资料处理；不执行宏、PDF 脚本、文档指令或自动外链。导入／浏览／查找在本地，用户发送提问才将选定片段交给配置的 AI 服务；这与 MinerU 原件上传分别告知。
+- 采用主／子 Agent 分工：主 Agent 独占共享类型、Repo／迁移、路由与集成；子 Agent 按不重叠模块实现。GitHub CI 构建 APK，测试不调用项目付费 AI，不上传用户文件，不本地打包。
+
+实施接口与写入边界见 [本轮协作契约](./docs/plans/2026-11-03-documents-contracts.md)。
 
 > 从 v0.7.2 起又改了几轮，本节以下凡是标了 `（vX.Y.Z）` 的地方都是后续修订。
 > **没标年份的段落默认是 v0.7 定的**，读的时候留意版本标注。
@@ -265,10 +283,11 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 |---|---|---|
 | 框架 | React Native + Expo SDK 58 | 复用已有 TypeScript/React 经验；prebuild 后直接出 APK 装机，不依赖 Expo Go |
 | 语言 | TypeScript | — |
-| 存储 | expo-sqlite（本地 SQLite，迁移到 v9）+ FTS5 全文索引 | 结构化查询、索引、事务；中文用 bigram 分词才能搜两个字 |
+| 存储 | expo-sqlite（本地 SQLite，迁移到 v10）+ FTS5 全文索引 | 结构化查询、索引、事务；中文用 bigram 分词才能搜两个字 |
 | 密钥 | expo-secure-store（Android Keystore 加密） | API Key 不落明文 |
 | 文件导出 | expo-file-system + expo-sharing | 生成 md 后走系统分享，可直接存到电脑或网盘 |
 | 导航 | 自实现轻量页面栈（6 个页面：时间轴 / 整理 / 回顾 / 问 / 设置 / 文档） | 不引入 react-navigation，减少依赖与配置成本 |
+| 本地阅读与提取 | PDF.js（legacy build，WebView 内跑）+ SheetJS 只读 | 原生 PDF 组件没有文本层，搜不了也提取不出带页码的文字，这是选 WebView 的唯一理由。资源全部内联进 `assets/pdfjs/reader.html`（`file://` 下 ESM 会被 CORS 拦） |
 | 文档解析 | MinerU 两条通道：轻量 Agent 接口（免 Token，≤10 MB / 20 页）+ 精准 `/api/v4`（Token，≤200 MB / 200 页，每天 1000 页） | 手机端跑不了版面分析模型。轻量免 Token 且不耗额度，先用它；精准接口换 20 倍体积和旧版 Office 格式。它返回 zip，用 `fflate` 只解 `full.md`（全解会内存雪崩） |
 | Web | react-native-web + localStorage 驱动 | **只用来跑编译校验**（`npm run build:web` 打一遍包即删），不做交付、不做界面预览 |
 
@@ -290,18 +309,37 @@ CREATE TABLE IF NOT EXISTS organize_sessions (
 - 碎片编辑 / 删除
 - **时间轴手势（v0.8.8）**：长按复制正文；左滑露出「删除」（二次确认）；右滑直接进「问」并带上这条碎片
 
-**文档（v0.10.0 起，v0.11.0 加精准通道）**
+**文档工作区（v0.12 重做）**
 
-- 上传 PDF / 图片 / docx / pptx / xlsx / doc / ppt / xls / txt / md，**原文件留在手机本地**
-- txt / md 直接读文本；其余走 MinerU 转 Markdown，两条通道按文件情况自动选：
-  - **轻量**（免 Token，≤10 MB / ≤20 页）：PDF、图片、docx、pptx、xlsx
-  - **精准**（需 Token，≤200 MB / ≤200 页，每天 1000 页）：以上全部 + doc / ppt / xls
-- 分派判据只有一份：`util/docSupport.ts` 的 `planForDoc(ext, size, hasToken)`。
-  上传预判、确认卡文案、失败重试都走它，不允许页面里另写一套 if
-- 重试一律 `preferPro`（有 Token 时）：页数在本地看不出来，只看大小会再撞同一堵墙
-- 列表显示状态（解析中 / 已解析 N 字 / 失败 / 本地文本），失败可重试或删除
-- 阅读器复用 `NoteBody`，支持打开原文件（系统查看器）
-- 一期**不进全文索引、不进「问」**；接入检索是二期，索引口径等那时再定
+四个能力分开，对应四种状态，界面上要能分辨：
+
+| 能力 | 门槛 | 状态 | 不成立时 |
+|---|---|---|---|
+| 导入保存原件 | 无 | `stored` | 只有复制失败/空间不足才失败 |
+| 应用内阅读 | 格式支持且不超本地上限 | 只读视图 | 用外部应用打开 |
+| 有正文 | 本地提取成功，或用户确认后的 MinerU | `local` / `done` | `failed`，可重试 |
+| 能问 | `isDocumentReady()` 为真 | 可勾选 | 列进「待准备」，不静默丢 |
+
+- **导入只保存**：选文件 → 复制进私有目录（核验真实字节数、同名去冲突）→ `state: 'stored'`。
+  不读正文、不调 MinerU、不发任何请求。飞行模式与无 Token 都能保存成功。
+- **云解析要单独确认**，每次都要（含重试、换通道）：文件名 / 大小 / mineru.net / 轻量还是精准。
+  浏览、查找、勾选文档都不许顺手触发。
+- **应用内只读**：PDF 原版式与文本层（同一份 PDF.js 同时供渲染、查找、提取）、
+  Excel 工作表与单元格、Markdown 排版与原文、TXT 原文。Word 本地增强后置，保留外部打开与云解析。
+- **文内查找**：阅读器内搜索框，「第 i / N 处」+ 上下跳，命中描底色。
+  确定性字面匹配（`util/highlight.ts`），**不用 FTS 的结果冒充命中总数**；超 99 处显示「99+」。
+- **多选去问**：列表可见多选按钮 + 底部「问这 N 份文档」，上限 8（`MAX_ASK_DOCUMENTS`）；
+  阅读器另有「问这份」。未就绪的列出待准备项，由用户选择准备/移除/取消。
+- **问答范围是契约**：`QaScope` 二选一（全库记录 / 指定文档），空集合报错不回落全库。
+  文档模式只查 `document_chunks_fts`，不碰碎片/小结/待办检索，默认关联网。
+- **引用带真实位置**：D 引用存 `documentId` + `contentRevision` + `chunkId` + `locator`，
+  显示成「《方案.pdf》第 3 页」；没有定位信息只标「正文第 N 段」，**不反推页码**。
+- **一次问答一个总预算**：资料 + 历史 + 问题 + 提示词一起算；读不全时 `truncated` +
+  `documentCoverage` 如实报覆盖，不拿 topK 结果说「读完了全文」。
+- **本地上限**（`LOCAL_READER_LIMITS`）：PDF 48 MiB / 300 页、Excel 12 MiB / 10 万单元格、
+  纯文本 4 MiB、正文 200 万字、单片 4000 字、最多 4000 片。超限明确提示，
+  **原件保留、外部应用仍可打开**，不静默截断。
+- 文档切片**不进 `fragment_fts`**：时间轴搜索不能被文档段落污染。
 
 **整理（v0.7 重做）**
 
@@ -520,34 +558,62 @@ CREATE TABLE ask_sessions (
 );
 CREATE INDEX idx_ask_sessions_updated ON ask_sessions(archived, updated_at DESC);
 
--- 文档库（v9）。原文件不进库，只存路径；正文单独一列，列表查询不取它
+-- 文档库（v9 建表；v10 加内容版本与来源）。原文件不进库，只存路径；正文单独一列，列表查询不取它
 CREATE TABLE documents (
-  id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  name       TEXT    NOT NULL,             -- 原文件名，含扩展名
-  ext        TEXT    NOT NULL DEFAULT '',  -- 小写扩展名，不含点
-  size       INTEGER NOT NULL DEFAULT 0,   -- 原文件字节数
-  file_uri   TEXT,                         -- App 私有目录里的原文件；失败/被删时为 null
-  body_md    TEXT    NOT NULL DEFAULT '',  -- 解析出来的 Markdown
-  pages      INTEGER,                      -- 页数；解析接口没给就是 NULL
-  char_count INTEGER NOT NULL DEFAULT 0,   -- 由 body_md.length 写入，供列表显示
-  state      TEXT    NOT NULL DEFAULT 'parsing', -- local | parsing | done | failed
-  error      TEXT,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  name             TEXT    NOT NULL,             -- 原文件名，含扩展名
+  ext              TEXT    NOT NULL DEFAULT '',  -- 小写扩展名，不含点
+  size             INTEGER NOT NULL DEFAULT 0,   -- 原文件字节数
+  file_uri         TEXT,                         -- App 私有目录里的原文件；失败/被删时为 null
+  body_md          TEXT    NOT NULL DEFAULT '',  -- 提取出来的规范正文（不是展示用的 AST）
+  pages            INTEGER,                      -- 页数；提取过程没拿到就是 NULL
+  char_count       INTEGER NOT NULL DEFAULT 0,   -- body_md.length，供列表显示与就绪判定
+  state            TEXT    NOT NULL DEFAULT 'stored', -- stored | local | parsing | done | failed
+  error            TEXT,
+  -- v10：正文版本与索引版本分开存。indexed_revision < content_revision 表示
+  -- 「正文换了、索引还没跟上」，这时可读但不可问
+  content_revision INTEGER NOT NULL DEFAULT 0,
+  indexed_revision INTEGER NOT NULL DEFAULT 0,
+  chunk_count      INTEGER NOT NULL DEFAULT 0,
+  content_source   TEXT,                         -- text | markdown | pdf | excel | mineru | legacy
+  created_at       INTEGER NOT NULL,
+  updated_at       INTEGER NOT NULL
 );
 CREATE INDEX idx_documents_updated ON documents(updated_at DESC);
+
+-- v10：文档切片。可重建的搜索投影，独立于 fragment_fts
+CREATE TABLE document_chunks (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  document_id      INTEGER NOT NULL,
+  content_revision INTEGER NOT NULL,  -- 属于哪一版正文；与 documents 当前版本不等即视为过期
+  ordinal          INTEGER NOT NULL,
+  text             TEXT    NOT NULL,
+  locator_json     TEXT    NOT NULL DEFAULT '{}'  -- DocumentLocator：页码 / sheet+单元格 / 行号
+);
+CREATE INDEX idx_document_chunks_doc ON document_chunks(document_id, content_revision, ordinal);
+CREATE VIRTUAL TABLE document_chunks_fts USING fts5(text, tokenize = 'unicode61');
 ```
 
 索引：`fragments(created_at DESC)`、`todos(done)`、`todos(done_at DESC)`、`todos(merged_into)`、
 `organize_sessions(finished, updated_at DESC)`、`ask_sessions(archived, updated_at DESC)`、
-`documents(updated_at DESC)`。
+`documents(updated_at DESC)`、`document_chunks(document_id, content_revision, ordinal)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v9。**
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v10。**
 v6 做三件事：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、建 `fragment_fts` 与 `organize_sessions`。
 v7 给 `todos` 加 `done_at`，用 `created_at` 回填旧完成项，并物理清理超过 5 条的旧完成项。
 v8 建 `ask_sessions`：会话正文与引用快照一起存，历史重开不依赖当时的检索结果。
-v9 建 `documents`：文档列表与解析结果。**正文不进 `fragment_fts`** —— 一期文档只做阅读库，不参与搜索与「问」，
-等接入检索时再决定索引口径（全文索引还是按页/段切片），避免现在先按碎片的方式切一遍、以后又推翻。
+v9 建 `documents`：文档列表与解析结果。
+v10 把文档做成工作区：`documents` 加 `content_revision` / `indexed_revision` / `chunk_count` / `content_source`，
+建 `document_chunks` 与 `document_chunks_fts`，`ask_sessions` 加 `scope_json`。
+
+**v10 为什么不给旧文档自动建索引**：建索引要跑分词、切片、写 FTS，属于用户点「准备资料」的动作。
+借迁移之名做掉，等于用户升级完发现几十篇文档同时开始吃 CPU，而且不知道是谁在动。
+旧文档 `content_revision` 保持 0，语义就是「有正文但没建索引」——可读、不可问，直到用户主动准备。
+
+**文档切片为什么不进 `fragment_fts`**：一条碎片和一段 PDF 段落混在同一个索引里，
+时间轴的全库搜索会被文档内容污染（搜「报销」时冒出一堆 PDF 段落）。
+两个索引各管一件事，问答的文档模式只查 `document_chunks_fts`。
+
 
 **几条刻意的结构决定：**
 

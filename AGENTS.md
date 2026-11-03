@@ -50,19 +50,32 @@ cd android && ./gradlew assembleRelease
 `npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途：产物打进 `.tmp-bundle/`，
 同一次运行里量完体积就删掉。**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
 
-## 改完必须自己打包
+## 发版：走 CI，不本地打包
 
-用户要求（2026-10-22 明确交代：「每次自行打包给我」）：**每次改完代码，自己把 APK 打出来，不要把命令丢给用户自己跑。**
+用户 2026-10-31 改的口径（**覆盖**此前 2026-10-22 的「自己打包」）：**构建交给 GitHub Actions，发版走 tag → Release。**
+不要在本机跑 `gradlew assembleRelease`，也不要让用户自己跑。
 
 ```bash
-cd F:/coding/python/project/Test/fragments
-npx expo prebuild --platform android --no-install --no-clean   # app.json 改了才需要
-cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
-./gradlew assembleRelease --console=plain > build-vXXX.log 2>&1   # 别管道给 tail，会缓冲看不到进度
+git commit && git push origin master
+git tag v0.12.0 && git push origin v0.12.0
 ```
 
-产物在 `android/app/build/outputs/apk/release/app-release.apk`，
-复制成 `fragments-v<版本>.apk` 放项目根目录，把大小和 MD5 一并报给用户。增量约 2–3 分钟。
+CI（`.github/workflows/android.yml`）跑 `tsc` → `test:md` → `check:docs` → `assembleRelease`，
+成功后自动建 Release 并挂 **raw APK**。这一步的产物是唯一可信的：
+
+- artifact 是 zip、要登录才能下；**Release 的 asset 才是手机端匿名可下、也是应用内「检查更新」唯一认的地址**；
+- 所以 tag 必须打，只 push master 不会产出 Release。
+
+本地只做快速冒烟：`npx tsc --noEmit`、`npm run test:md`、`npm run check:docs`、`npm run build:web`
+（`build:web` 只当编译校验，产物脚本自己删）。
+
+真需要本地打包时的环境（CI 不可用才用）：
+
+```bash
+npx expo prebuild --platform android --no-install --no-clean   # app.json 改了才需要
+cd android && export JAVA_HOME="D:/Program Files/Java/jdk-21" && export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
+./gradlew assembleRelease --console=plain > build-vXXX.log 2>&1   # 别管道给 tail，会缓冲看不到进度
+```
 
 ## 九条硬规矩
 
@@ -86,6 +99,12 @@ cd android && unset JAVA_HOME && export ANDROID_HOME="C:/Users/14428/AppData/Loc
 
 - **v0.7 起没有知识库**。没有 `knowledge_cards`、没有 `topic` / `subtopic`、没有 `ask_logs`。
   **时间轴就是知识库**：碎片原文 + 标签 + 时间就是全部沉淀。别再往「卡」的方向加东西。
+- **Metro 默认就把 `html` 和 `pdf` 当资源**（`expo/metro-config` 的 `resolver.assetExts`），
+  所以 `import x from './reader.html'` 直接可用，**不要为它新造 `metro.config.js`**。
+  真要加别的扩展名才需要动配置，而那种改动会影响整个打包链路，先问清楚再动。
+- **Excel / docx 是 zip，解压和遍历都有坑**。用 `fflate` 解，但 ZIP64 的畸形包在
+  `0.8.2` 会死循环（已升到 `0.8.3`）；SheetJS 读表要按**实际单元格**遍历
+  （`Object.keys(ws)` 过滤 `!` 开头），**不能按 `!ref` 面积** —— 见「文档」一节。
 - **「整理」= 一批一批跑到完，最后统一确认**。不是「一次调用出十类结果」，也不是「让 AI 重写正文」。
   一次点击会跑 N 批（每批 40 条 / 16000 字），每批结果合并进同一个 `OrganizePlan`，
   **只有用户点「应用」才写库**（`db/commit.ts`）。
@@ -236,28 +255,111 @@ export function Foo() {
 - **`numberOfLines` 预览分支不测位置**：View 截不了行，卡片预览必须退回单 Text。
 - 换页时命中下标归零（`useEffect` 依赖 `current`），否则上一页的「3/5」会带到下一屏。
 
-## 文档（v0.10.0 起，v0.11.0 加精准通道）
+## 文档（v0.10.0 起；v0.12 重做成工作区）
 
-- **全项目唯一把用户内容发到外网的地方**。调用点只有 `ai/mineru.ts` 的两条通道
-  （`parseWithMineru` 轻量 / `parseWithMineruPro` 精准），且必须经过上传确认卡
-  （写明「会上传到 mineru.net」）。不要在任何自动流程里偷偷上传。
+### 四个能力分开，别混着说
+
+**导入 → 读 → 提取成正文 → 建索引** 是四件事，各有各的前置条件：
+
+| 能力 | 门槛 | 不成立时 |
+|---|---|---|
+| 导入保存原件 | 什么都不需要 | 复制失败/空间不足才失败 |
+| 应用内阅读 | 格式在 `supportsLocalDocument` 里且不超 `LOCAL_READER_LIMITS` | 用外部应用打开 |
+| 提取成正文 | 同上（本地），或用户确认后的 MinerU | 保持「已保存」状态 |
+| 能问 | `isDocumentReady(doc)` 为真 | 列进「待准备」清单，不能静默丢 |
+
+最常见的错是拿「能打开」当「能搜/能问」。PDF 渲染出来了不代表有文本层——
+扫描件能翻页但提取是空的，这时必须说「没有文字层」，不能报「全文无命中」。
+
+### 导入只保存，不触发任何解析
+
+选文件 → 复制进 `Paths.document/documents/` → **核验副本真实字节数** → 同名去冲突 →
+`insertDocument({ state: 'stored' })` → 提示「已保存」。
+
+**不得**在这条路径里读正文、调 `parseDocFile`、调 MinerU、调模型、发任何网络请求。
+飞行模式、无 Token、500 MB 的文件都必须能保存成功。云解析的格式/容量限制**不是**本地导入门槛——
+v0.11.0 把它们混在一起，导致「MinerU 不认这个格式」变成了「文件传不进来」。
+
+### 任务不能挂在页面上
+
+`documents/jobs.ts` 是唯一执行内容写回的地方，页面只订阅。原因很具体：v0.11.0 里
+列表页和阅读器各能起一个任务，同一篇文档会被上传两次；用户离开页面后进度就断了。
+
+- **单文档互斥**：同一 `documentId` 同时只跑一个任务
+- **`runId` + `expectedRevision`**：写回用 `replaceDocumentContent(id, content, expectedRevision)`，
+  返回 `false` 说明版本变了或文档已删 → **丢弃这次结果**，不许覆盖
+- **取消是用户动作不是失败**：`isCancelled(e)` 为真时要把状态还原，不是写 `failed`
+- **取消不撤回已上传的字节**：预签名地址发出去就收不回，文案不许暗示能撤回
+- **杀进程后**：启动时把 `state === 'parsing'` 但没有任务的记录标成失败（「上次没跑完」），
+  **不自动重发**
+
+### 云解析每一次都要重新确认
+
+首次、重试、换通道，三种情况都要弹确认卡（文件名 / 大小 / mineru.net / 轻量还是精准 / 各自上限）。
+浏览、查找、勾选文档**都不能**顺手触发云解析。
+
+### 发送与外发的三条线
+
+1. **MinerU**：发整个原文件，必须确认；
+2. **AI 服务**：只发选中文档的**片段**，用户按下发送才发，交互里要写清接收方；
+3. **本地**：导入、阅读、查找全在手机上，零请求。
+
+别把 1 和 2 说成同一件事，也别用「文档只在本地」这种话概括全部。
+
+### MinerU 通道（v0.11.0 加精准，仍然有效）
+
 - **通道选择只有一份判据**：`util/docSupport.ts` 的 `planForDoc(ext, size, hasToken)`。
   上传预判、确认卡文案、失败重试全走它。**页面里不许再写「这个后缀算不算文本」** ——
   v0.10.0 时 `isPlainText` 在列表页和阅读器里各有一份，加第二条通道必然分叉。
-- **上传不带 `Content-Type`**，两条通道都是预签名地址，多一个头就签名对不上；
-  用 `FileSystem.uploadAsync(..., {httpMethod:'PUT', uploadType: BINARY_CONTENT})`。
-- **原文件必须复制进私有目录**（`Paths.document/documents/`）。文档选择器给的是临时 URI，
-  不复制的话下次「打开原文件」就找不到。
+- **上传不带 `Content-Type`**，两条通道都是预签名地址，多一个头就签名对不上。
 - **上限不同**：轻量 10 MB / 20 页（免 Token），精准 200 MB / 200 页（要 Token，每天 1000 页）。
   错误码 -30001 大小、-30002 类型、-30003 页数、-30004 参数；精准另有 -60018 额度用尽。
 - **精准接口返回 zip，只解 `full.md`**：`unzipSync(buf, { filter })`。
   包里还有 `layout.json`、`*_content_list.json` 和图片，大文档全解开直接 OOM。
-- **页数在本地看不出来**，所以只按大小判断会在 20 页这堵墙上反复撞。重试一律 `preferPro`
-  （有 Token 时直接走精准），这是唯一能在不解析 PDF 的前提下绕过去的办法。
+- **重试不是「再发一次」**：v0.12.0 起 `parseDocFile(file, token, onStage, { channel })`
+  只认用户明确选的通道，没有 `preferPro` 这种隐式切换。重试同样要过确认卡 ——
+  重发一次等于再做一次上传决定，用户得知道这次走哪条路。
+- **页数现在本地能拿到**：PDF 提取会写入 `documents.pages`。有它就按真实页数判，
+  没有再退回只按大小估（`planForDoc` 不猜页数）。
+
+### 正文、版本、切片
+
 - **`documents.body_md` 不参与列表查询**。几十万字的正文每次都读，首屏会明显卡；
   列表只查元数据列（`listDocuments` 返回 `DocumentMeta`）。
-- **失败保留记录与原文件**，给「重新解析」；删除是记录 + 文件一起删，且二次确认。
-- **文档不进 `fragment_fts`、不进「问」**。一期就是阅读库，索引口径等二期再定。
+- **`contentRevision` 与 `indexedRevision` 必须分开存**。两者不一致时（正文换了、索引还没重建）
+  问答要拒绝使用，但用户仍应读到新正文。用一个字段表达不了这种中间态。
+- **写正文只有 `replaceDocumentContent` 一条路**：正文 + 版本 + 切片 + FTS 必须在同一个事务里。
+  只写正文不写切片，就会拿旧切片配新正文，引用指到错误的位置。
+- **文档切片进 `document_chunks_fts`，不进 `fragment_fts`**。一条碎片和一段 PDF 段落
+  混在同一个索引里，时间轴搜索会被文档内容污染。
+- **切片基于完整文本，不基于 `mdBlocks` 的展示 AST**。那个 AST 会裁宽表、去引用标记，
+  是有损的；拿它建索引就是「搜不到用户明明看到的字」。
+
+### 阅读与查找
+
+- **格式判断只有一份**：`documents/formats.ts`。`documentFormat` / `supportsLocalDocument` /
+  `isDocumentReady` / `notReadyReason` / `locatorLabel` / `LOCAL_READER_LIMITS` 都在这里。
+- **查找是确定性字面匹配**（`util/highlight.ts`），不是 FTS。FTS 的 OR/topK 结果是排序后的
+  候选集，不能用来报「共有 N 处」。
+- **位置不许编**。`DocumentLocator` 只能来自原件或提取过程：PDF 的 page、Excel 的 sheet/cell、
+  文本的 line。**旧 Markdown 正文反推不出原页码**，那种情况只标「正文第 N 段」。
+- **超限不静默截断**：宽表裁列要显示「另 N 列未显示」，命中超 99 显示「99+」，
+  正文超 200 万字明确报错。原件始终保留，外部应用仍能打开。
+- **Excel 按实际单元格遍历**（`Object.keys(ws)` 过滤 `!` 开头的键），**不按 `!ref` 面积**。
+  一个 `A1:XFD1048576` 的稀疏表按面积遍历是 170 亿次循环 —— 实测 3 个真实单元格的表
+  写成 `A1:Z1000` 就已经是 26000 次。
+- **合并单元格只有左上角有值**；一行全在 merge 里时看起来是空行，实际有内容。
+- **不执行宏、表单脚本、文档指令、自动外链**。文档内容是数据，不是指令。
+
+### 文档正文不能按引用标记解析
+
+用户文档里写的 `[F12]` 是作者的字面量。按引用解析会把它整个吞掉——那不是显示问题，
+是改用户的内容。
+
+- 阅读器（`documents/readers/*`）自己排版，不经过 `NoteBody`，天然不受影响。
+- 剩下唯一会渲染文档文本的地方是**引用快照**（`NoteBody`）。那里必须传
+  `literalCitations`，否则从文档里剪出来的片段会把 `[F12]` 吃掉。
+
 
 ## 导出与导入（v0.7.2）
 

@@ -227,15 +227,21 @@ function Table({
      * FlatList，表格里再放一个横向滚动区，手指在表上左右滑就变成滚表格、翻不了页 ——
      * 这个冲突用户无法理解，也看不出提示。列多的表变高，但读得下去。
      */
-    <View style={styles.table}>
-      <View style={[styles.tr, styles.trHead]}>
-        {block.head.map((segs, i) => cell(segs, i, true))}
-      </View>
-      {block.rows.map((row, r) => (
-        <View key={r} style={[styles.tr, r < block.rows.length - 1 && styles.trDivider]}>
-          {row.map((segs, i) => cell(segs, i, false))}
+    <View>
+      <View style={styles.table}>
+        <View style={[styles.tr, styles.trHead]}>
+          {block.head.map((segs, i) => cell(segs, i, true))}
         </View>
-      ))}
+        {block.rows.map((row, r) => (
+          <View key={r} style={[styles.tr, r < block.rows.length - 1 && styles.trDivider]}>
+            {row.map((segs, i) => cell(segs, i, false))}
+          </View>
+        ))}
+      </View>
+      {block.droppedCols ? (
+        // 裁列是手机屏的现实，但静默裁掉会让人以为表格只有这么多列
+        <Text style={[styles.tableNote, mutedStyle]}>另 {block.droppedCols} 列未显示</Text>
+      ) : null}
     </View>
   );
 }
@@ -268,6 +274,14 @@ interface Props {
    * 不给时保持原来的合并渲染（连续文字块共用一行距，视觉更连贯）。
    */
   onBlockLayout?: (blockIndex: number, y: number) => void;
+  /**
+   * 关掉引用解析：`[F12]` 这类标记当**字面文字**原样显示。
+   *
+   * 文档阅读器和文档正文必须传。用户文档里写 `[F12]`（比如表格编号、
+   * 法律条款引用）本来就是一个普通字符串，按引用解析会把它整个吞掉，
+   * 屏幕上凭空少一段内容 —— 那是改用户的数据，不是显示问题。
+   */
+  literalCitations?: boolean;
 }
 
 export function NoteBody({
@@ -281,12 +295,16 @@ export function NoteBody({
   muted,
   highlight,
   onBlockLayout,
+  literalCitations,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const reading = variant === 'reading';
   const mutedStyle = muted ? { color: c.text3 } : undefined;
   // 两个 memo 都无条件调用：条件调用 hook 会破坏顺序，哪怕只有一个分支用得到
-  const blocks = useMemo(() => parseBlocks(text), [text]);
+  const blocks = useMemo(
+    () => parseBlocks(text, literalCitations ? { literalCitations: true } : undefined),
+    [text, literalCitations],
+  );
   const flat = useMemo(() => flattenForPreview(blocks), [blocks]);
   const groups = useMemo(() => group(blocks), [blocks]);
 
@@ -512,6 +530,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   tr: { flexDirection: 'row', alignItems: 'stretch' },
   trHead: { backgroundColor: c.hairSoft },
+  /** 表格下方那行「另 N 列未显示」。字号跟着正文小一档，别抢表格的注意力 */
+  tableNote: {
+    fontSize: 12,
+    color: c.text3,
+    marginTop: -4,
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
   trDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
 
   td: { paddingHorizontal: 9, paddingVertical: 7, justifyContent: 'center', minWidth: 0 },

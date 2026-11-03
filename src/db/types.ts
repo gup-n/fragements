@@ -1,6 +1,8 @@
 import type {
   AskSession,
   Document,
+  DocumentChunk,
+  DocumentContentInput,
   DocumentMeta,
   Fragment,
   FragmentNature,
@@ -10,6 +12,7 @@ import type {
   OrganizePlan,
   OrganizeScope,
   OrganizeSession,
+  QaScope,
   QaTurn,
   TagStat,
   Todo,
@@ -172,11 +175,15 @@ export interface Repo {
   /**
    * 新建或更新一个会话。id 为空就 INSERT；有 id 就 UPDATE。
    * 返回会话 id。turns 变化时 updatedAt 自动更新。
+   *
+   * `scope` 必填：一场会话锁定一个范围，换集合必须开新会话。
+   * 不给默认值是有意的 —— 默认成 records 会让文档会话在保存时被悄悄改回全库。
    */
   saveAskSession(input: {
     id?: number;
     title: string;
     turns: QaTurn[];
+    scope: QaScope;
     createdAt: number;
     archived?: boolean;
     fragmentId?: number | null;
@@ -211,6 +218,31 @@ export interface Repo {
   ): Promise<void>;
   /** 删除文档记录。原文件由调用方删，repo 不碰文件系统 */
   deleteDocument(id: number): Promise<void>;
+
+  /* ---- 文档内容与切片（v0.12） ---- */
+  /**
+   * 原子替换一篇文档的正文、内容版本与切片索引。
+   *
+   * `expectedRevision` 是调用方读到的版本号：版本对不上（另一个任务先写完了）
+   * 或文档已删除时返回 false，**不覆盖**。迟到的解析结果不能盖掉新内容，
+   * 这一条只能靠版本号保证，不能靠调用方记得先查。
+   *
+   * 正文、版本、切片、FTS 必须在同一个事务里：只写正文不写切片会让
+   * 「正文就绪但索引还停在上一版」，问答拿旧切片去配新正文。
+   */
+  replaceDocumentContent(
+    id: number,
+    content: DocumentContentInput,
+    expectedRevision: number,
+  ): Promise<boolean>;
+  /** 某篇文档当前版本的切片，按 ordinal 升序。供阅读器定位与调试 */
+  listDocumentChunks(documentId: number): Promise<DocumentChunk[]>;
+  /**
+   * 在**指定文档**范围内检索切片。`documentIds` 为空返回空数组，
+   * 绝不放宽成全库 —— 问答的「只查这几份」是契约，不是偏好。
+   * 只返回就绪且索引版本等于内容版本的切片。
+   */
+  searchDocumentChunks(query: string, documentIds: number[], limit?: number): Promise<DocumentChunk[]>;
 
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;

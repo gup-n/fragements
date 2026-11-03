@@ -20,6 +20,8 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
 import { AskScreen } from './src/screens/AskScreen';
 import { DocsScreen } from './src/screens/DocsScreen';
+import { DocumentRuntime } from './src/documents/readers';
+import { initDocumentJobs } from './src/documents/jobs';
 import { dayKey } from './src/util/date';
 
 type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask' | 'docs';
@@ -45,6 +47,12 @@ export default function App() {
       try {
         await repo.init();
         setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
+        /*
+         * 文档任务服务必须在库就绪之后启动：它启动时要扫一遍
+         * `state = 'parsing'` 但没有对应任务的记录，把它们标成「上次没跑完」。
+         * 库还没开就去扫，只会报错然后静默跳过 —— 那界面会一直显示「解析中」。
+         */
+        await initDocumentJobs();
       } catch (e) {
         console.warn('[fragments] 初始化失败', e);
       } finally {
@@ -93,6 +101,15 @@ function Shell({ booted }: { booted: boolean }) {
    * 从页头聊天按钮进来时是 null —— 两种入口共用同一个页面，但上下文不一样。
    */
   const [askContextId, setAskContextId] = useState<number | null>(null);
+  /**
+   * 从文档页「问这些文档」进来时带上的文档 id 集合。
+   *
+   * 和 `askContextId` 是两条互斥的入口：一个是「关于这条碎片」，
+   * 一个是「只看这几份文档」。同时为空才是普通的全库问答。
+   * 存在 App 里而不是页面里，是因为切页面会卸载 AskScreen，而范围是这场会话的契约 ——
+   * 卸载一次就退回全库，等于用户勾的框白勾了。
+   */
+  const [askDocIds, setAskDocIds] = useState<number[] | null>(null);
   /**
    * 「问」页的关闭动作。
    *
@@ -302,6 +319,18 @@ function Shell({ booted }: { booted: boolean }) {
   return (
     <>
       <StatusBar style={dark ? 'light' : 'dark'} />
+      {/*
+        文档运行时挂在**最外层**，不在文档页里面，也不在布局容器里。
+
+        它承接 PDF 提取用的隐藏 WebView 队列：用户从文档页点「本地准备」，
+        翻到别的页面、甚至一路退回时间轴，提取都得继续跑完。
+        挂在页面里的话，页面一卸载 WebView 就连带销毁，任务半路断掉 ——
+        v0.11.0 的「离开页面进度就断」就是这么来的。
+
+        放在 `<View outer>` 之外，是为了它不参与任何 flex 布局（尺寸由它自己压到 1×1）；
+        放在这个 fragment 里，仍然在 App 的 ThemeProvider 之内，能读主题色。
+      */}
+      {booted ? <DocumentRuntime /> : null}
       <View style={[styles.outer, isWeb && styles.outerWeb]}>
         <View style={[styles.app, isWeb && styles.appWeb]}>
           {ready ? (
@@ -354,15 +383,28 @@ function Shell({ booted }: { booted: boolean }) {
               {route === 'review' && (
                 <ReviewScreen onClose={() => setRoute('timeline')} onChanged={reload} />
               )}
-              {route === 'docs' && <DocsScreen onClose={() => setRoute('timeline')} />}
+              {route === 'docs' && (
+                <DocsScreen
+                  onClose={() => setRoute('timeline')}
+                  onAsk={(documentIds) => {
+                    // 文档问和碎片问是两条入口，进来时清掉另一条，别让上一个范围残留
+                    setAskContextId(null);
+                    setAskDocIds(documentIds);
+                    setRoute('ask');
+                  }}
+                />
+              )}
               {route === 'ask' && (
                 <AskScreen
                   onClose={() => {
                     setRoute('timeline');
                     setAskContextId(null);
+                    setAskDocIds(null);
                   }}
                   onSaved={reload}
                   registerClose={registerAskClose}
+                  // 文档范围是会话契约：进来就锁死，页面里不许再改（改就得开新会话）
+                  initialScope={askDocIds ? { kind: 'documents', documentIds: askDocIds } : undefined}
                   contextFragment={
                     askContextId === null
                       ? null

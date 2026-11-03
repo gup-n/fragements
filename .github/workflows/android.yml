@@ -35,11 +35,22 @@ jobs:
       - name: 安装依赖
         run: npm ci
 
+      # reader.html 是 PDF 阅读器运行期唯一加载的资源（主库 / worker / cmap 全内联），
+      # 它由脚本从 pdfjs-dist 生成。生成物只有 reader.html 入库，其余副产物忽略，
+      # 所以这里必须重新生成一次，否则打包时找不到 assets/pdfjs/reader.html。
+      - name: 生成 PDF 阅读器资源
+        run: npm run prepare:pdf
+
       - name: 类型检查
         run: npx tsc --noEmit
 
       - name: 导入导出往返断言
         run: npm run test:md
+
+      # 文档层的三组纯 Node 断言（阅读器 / 任务服务 / 限定问答）。
+      # 它们跑的是真源码 + 桩依赖，秒级完成，所以放在最前面。
+      - name: 文档层断言
+        run: npm run test:docs
 
       # 版本号 / 行数表 / 死链 / 提示词抄录 这些全是机器能比的，
       # 放这一步是因为它秒级完成 —— 失败得越早越好定位

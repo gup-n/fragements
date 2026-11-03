@@ -5,6 +5,9 @@ import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
   Document,
+  DocumentChunk,
+  DocumentContentInput,
+  DocumentLocator,
   DocumentMeta,
   Fragment,
   FragmentNature,
@@ -14,11 +17,13 @@ import type {
   OrganizePlan,
   OrganizeScope,
   OrganizeSession,
+  QaScope,
   QaTurn,
   TagStat,
   Todo,
 } from '../types';
 import { normalizePlan } from '../util/organizePlan';
+import { normalizeQaScope } from '../util/qaScope';
 import {
   buildFtsQuery,
   cleanTag,
@@ -201,6 +206,41 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_documents_updated ON documents(updated_at DESC);
   `,
+  // v10：文档工作区（v0.12）。
+  //
+  //     content_revision 是「正文版本」，indexed_revision 是「切片索引基于哪一版」。
+  //     分开存是因为两者会短暂不一致：正文换了一版而索引还没重建时，
+  //     问答必须拒绝使用（否则拿旧切片配新正文，引用指错地方），
+  //     但用户仍应该能读到新正文。用一个字段表达不了这种中间态。
+  //
+  //     切片单独成表 + 独立 FTS：文档切片是可重建的搜索投影，
+  //     不进 fragment_fts —— 一条碎片和一段 PDF 正文混在同一个索引里，
+  //     时间轴搜索会被文档段落污染。
+  //
+  //     已有文档的 content_revision 保持 0：正文在库里，但没有切片。
+  //     迁移**故意不自动建索引** —— 建索引要跑分词和入库，
+  //     属于用户点「准备资料」的动作，不能借迁移之名悄悄做掉。
+  `
+  ALTER TABLE documents ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE documents ADD COLUMN indexed_revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE documents ADD COLUMN chunk_count INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE documents ADD COLUMN content_source TEXT;
+
+  CREATE TABLE IF NOT EXISTS document_chunks (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id      INTEGER NOT NULL,
+    content_revision INTEGER NOT NULL,
+    ordinal          INTEGER NOT NULL,
+    text             TEXT    NOT NULL,
+    locator_json     TEXT    NOT NULL DEFAULT '{}'
+  );
+  CREATE INDEX IF NOT EXISTS idx_document_chunks_doc
+    ON document_chunks(document_id, content_revision, ordinal);
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(text, tokenize = 'unicode61');
+
+  ALTER TABLE ask_sessions ADD COLUMN scope_json TEXT;
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -344,19 +384,36 @@ interface AskSessionRow {
   id: number;
   title: string;
   turns_json: string;
+  scope_json: string | null;
   archived: number;
   fragment_id: number | null;
   created_at: number;
   updated_at: number;
 }
 
-/** 会话行 → 领域对象。turns_json 坏掉时退回空数组，不要让一条脏数据拖垮整个历史列表 */
+/**
+ * 会话行 → 领域对象。turns_json 坏掉时退回空数组，不要让一条脏数据拖垮整个历史列表。
+ *
+ * 但 `scope_json` 坏掉**不能**退回 records：那会把一场文档会话变成全库会话，
+ * 用户点开历史时看到的范围就变了。这里的做法是标记成 records 但**记下**解析失败，
+ * 由调用方决定拒绝打开 —— 见 `AskSession.scopeBroken`。
+ */
 function toAskSession(r: AskSessionRow): AskSession {
   const turns = parseJson(r.turns_json, []);
+  const rawScope = parseJson(r.scope_json, null);
+  let scope: QaScope = { kind: 'records' };
+  let scopeBroken = false;
+  try {
+    scope = normalizeQaScope(rawScope, true);
+  } catch {
+    scopeBroken = true;
+  }
   return {
     id: r.id,
     title: r.title,
     turns: Array.isArray(turns) ? (turns as QaTurn[]) : [],
+    scope,
+    scopeBroken,
     archived: r.archived === 1,
     fragmentId: r.fragment_id,
     createdAt: r.created_at,
@@ -375,6 +432,10 @@ interface DocumentRow {
   char_count: number;
   state: string;
   error: string | null;
+  content_revision: number;
+  indexed_revision: number;
+  chunk_count: number;
+  content_source: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -389,8 +450,12 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
     fileUri: r.file_uri,
     pages: r.pages,
     charCount: r.char_count,
-    state: (r.state as DocumentMeta['state']) ?? 'parsing',
+    state: (r.state as DocumentMeta['state']) ?? 'stored',
     error: r.error,
+    contentRevision: r.content_revision ?? 0,
+    indexedRevision: r.indexed_revision ?? 0,
+    chunkCount: r.chunk_count ?? 0,
+    contentSource: (r.content_source as DocumentMeta['contentSource']) ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -398,6 +463,26 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
 
 function toDocument(r: DocumentRow): Document {
   return { ...toDocumentMeta(r), bodyMd: r.body_md ?? '' };
+}
+
+/** 切片行 → 领域对象。locator_json 坏掉时给一个空定位，不要整条丢弃 */
+function toDocumentChunk(r: {
+  id: number;
+  document_id: number;
+  content_revision: number;
+  ordinal: number;
+  text: string;
+  locator_json: string;
+}): DocumentChunk {
+  const loc = parseJson(r.locator_json, {}) as DocumentLocator;
+  return {
+    id: r.id,
+    documentId: r.document_id,
+    contentRevision: r.content_revision,
+    ordinal: r.ordinal,
+    text: r.text,
+    locator: loc && typeof loc === 'object' && 'kind' in loc ? loc : { kind: 'text' },
+  };
 }
 
 /** 把一条碎片写进 FTS。先删后插，更新/打标签都走它 */
@@ -941,12 +1026,15 @@ export const repo: Repo = {
   async saveAskSession(input) {
     const now = Date.now();
     const turnsJson = JSON.stringify(input.turns);
+    // 范围每次保存都写：会话范围是契约的一部分，不是创建时的临时选择。
+    // 不写的话，一场文档会话重新打开后会退回 records。
+    const scopeJson = JSON.stringify(normalizeQaScope(input.scope));
 
     if (input.id !== undefined) {
       // 只改传进来的字段：archived / fragmentId 为 undefined 时保持原值，
       // 否则「保存一下对话」会把归档状态和已整理标记一起抹掉。
-      const sets = ['title = ?', 'turns_json = ?', 'updated_at = ?'];
-      const params: (string | number | null)[] = [input.title, turnsJson, now];
+      const sets = ['title = ?', 'turns_json = ?', 'scope_json = ?', 'updated_at = ?'];
+      const params: (string | number | null)[] = [input.title, turnsJson, scopeJson, now];
       if (input.archived !== undefined) {
         sets.push('archived = ?');
         params.push(input.archived ? 1 : 0);
@@ -961,11 +1049,12 @@ export const repo: Repo = {
     }
 
     const res = db().runSync(
-      `INSERT INTO ask_sessions (title, turns_json, archived, fragment_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO ask_sessions (title, turns_json, scope_json, archived, fragment_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       [
         input.title,
         turnsJson,
+        scopeJson,
         input.archived ? 1 : 0,
         input.fragmentId ?? null,
         input.createdAt,
@@ -991,7 +1080,9 @@ export const repo: Repo = {
   async listDocuments() {
     // 不取 body_md：列表只需要标题和状态
     const rows = db().getAllSync<DocumentRow>(
-      `SELECT id, name, ext, size, file_uri, pages, char_count, state, error, created_at, updated_at
+      `SELECT id, name, ext, size, file_uri, pages, char_count, state, error,
+              content_revision, indexed_revision, chunk_count, content_source,
+              created_at, updated_at
          FROM documents ORDER BY updated_at DESC`,
     );
     return rows.map((r) => toDocumentMeta(r));
@@ -1038,7 +1129,155 @@ export const repo: Repo = {
   },
 
   async deleteDocument(id) {
-    db().runSync('DELETE FROM documents WHERE id = ?', [id]);
+    // 切片和 FTS 必须一起删：只删主记录会留下孤儿切片，
+    // searchDocumentChunks 明明限定了 documentIds 却仍能搜到已删文档的段落。
+    // 放在一个事务里，避免删一半中断后留下不一致。
+    const d = db();
+    d.withTransactionSync(() => {
+      const ids = d.getAllSync<{ id: number }>(
+        'SELECT id FROM document_chunks WHERE document_id = ?',
+        [id],
+      );
+      for (const row of ids) {
+        d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
+      }
+      d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
+      d.runSync('DELETE FROM documents WHERE id = ?', [id]);
+    });
+  },
+
+  async replaceDocumentContent(id, content, expectedRevision) {
+    const d = db();
+    let ok = false;
+
+    d.withTransactionSync(() => {
+      const cur = d.getFirstSync<{ content_revision: number }>(
+        'SELECT content_revision FROM documents WHERE id = ?',
+        [id],
+      );
+      // 文档没了、或版本已经被别人推进过 → 这次写入是迟到的，丢掉
+      if (!cur || (cur.content_revision ?? 0) !== expectedRevision) return;
+
+      const next = expectedRevision + 1;
+      d.runSync(
+        `UPDATE documents
+            SET body_md = ?, char_count = ?, pages = ?, state = ?,
+                content_revision = ?, indexed_revision = ?, chunk_count = ?,
+                content_source = ?, error = NULL, updated_at = ?
+          WHERE id = ?`,
+        [
+          content.bodyMd,
+          content.bodyMd.length,
+          content.pages,
+          'done',
+          next,
+          next,
+          content.chunks.length,
+          content.source,
+          Date.now(),
+          id,
+        ],
+      );
+
+      // 旧切片整批换掉：这是「内容版本」的物理含义，不是增量更新
+      const old = d.getAllSync<{ id: number }>(
+        'SELECT id FROM document_chunks WHERE document_id = ?',
+        [id],
+      );
+      for (const row of old) {
+        d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
+      }
+      d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
+
+      content.chunks.forEach((chunk, i) => {
+        const res = d.runSync(
+          `INSERT INTO document_chunks (document_id, content_revision, ordinal, text, locator_json)
+           VALUES (?, ?, ?, ?, ?)`,
+          [id, next, i, chunk.text, JSON.stringify(chunk.locator)],
+        );
+        d.runSync('INSERT INTO document_chunks_fts(rowid, text) VALUES (?, ?)', [
+          Number(res.lastInsertRowId),
+          tokenizeText(chunk.text).join(' '),
+        ]);
+      });
+
+      ok = true;
+    });
+
+    return ok;
+  },
+
+  async listDocumentChunks(documentId) {
+    const rows = db().getAllSync<{
+      id: number;
+      document_id: number;
+      content_revision: number;
+      ordinal: number;
+      text: string;
+      locator_json: string;
+    }>(
+      `SELECT c.* FROM document_chunks c
+         JOIN documents d
+           ON d.id = c.document_id AND d.content_revision = c.content_revision
+        WHERE c.document_id = ?
+        ORDER BY c.ordinal ASC`,
+      [documentId],
+    );
+    return rows.map(toDocumentChunk);
+  },
+
+  async searchDocumentChunks(query, documentIds, limit = 40) {
+    // 空集合就是「不查」，不能当成「没限制」
+    if (!documentIds.length) return [];
+    const match = buildFtsQuery(query);
+    const ids = documentIds.join(',');
+
+    if (match) {
+      try {
+        const rows = db().getAllSync<{
+          id: number;
+          document_id: number;
+          content_revision: number;
+          ordinal: number;
+          text: string;
+          locator_json: string;
+        }>(
+          `SELECT c.*, bm25(document_chunks_fts) AS rank
+             FROM document_chunks_fts
+             JOIN document_chunks c ON c.id = document_chunks_fts.rowid
+             JOIN documents d
+               ON d.id = c.document_id AND d.content_revision = c.content_revision
+            WHERE document_chunks_fts MATCH ?
+              AND c.document_id IN (${ids})
+            ORDER BY rank
+            LIMIT ?`,
+          [match, limit],
+        );
+        if (rows.length) return rows.map(toDocumentChunk);
+      } catch {
+        /* FTS 异常退回 LIKE，和碎片检索一致：不能因为索引问题让问答整条挂掉 */
+      }
+    }
+
+    const like = likeNeedle(query);
+    if (!like) return [];
+    const rows = db().getAllSync<{
+      id: number;
+      document_id: number;
+      content_revision: number;
+      ordinal: number;
+      text: string;
+      locator_json: string;
+    }>(
+      `SELECT c.* FROM document_chunks c
+         JOIN documents d
+           ON d.id = c.document_id AND d.content_revision = c.content_revision
+        WHERE c.document_id IN (${ids}) AND c.text LIKE ? ESCAPE '\\'
+        ORDER BY c.document_id, c.ordinal
+        LIMIT ?`,
+      [like, limit],
+    );
+    return rows.map(toDocumentChunk);
   },
 
   async saveRun(input) {

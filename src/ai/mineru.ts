@@ -19,9 +19,13 @@
  *    把 `converting` 这种原样端给用户，没人看得懂。
  * 3. **精准接口返回的是 zip**，只有里面那个 `full.md` 有用。解压时按文件名过滤，
  *    不要把整包解开 —— 200 MB 的文档连中间产物一起解会直接把内存吃穿。
+ *
+ * 取消（v0.12）：两条通道都收 `AbortSignal`，一路传到 fetch / 上传任务 / 下载。
+ * 取消抛 `MineruError('cancelled')`，用 `isCancelled` 判定。**它不等于失败** ——
+ * 上层要把文档状态还原，而不是写一条 failed 记录。
  */
 import { fetch as expoFetch } from 'expo/fetch';
-import { uploadAsync, FileSystemUploadType } from 'expo-file-system/legacy';
+import { createUploadTask, FileSystemUploadType } from 'expo-file-system/legacy';
 import { strFromU8, unzipSync } from 'fflate';
 import { repo } from '../db/repo';
 
@@ -105,6 +109,40 @@ export function mineruMessage(e: unknown): string {
 }
 
 /**
+ * 取消是用户主动动作，不是失败。
+ *
+ * 单独一个 code 是为了让上层能分开处理：失败要落 `failed` 并把原因写进库，
+ * 取消必须把状态还原成任务开始前的样子。**不要声称取消能撤回已经上传的字节** ——
+ * 上传走的是预签名地址，取消只能让本机停止后续步骤。
+ */
+export function isCancelled(e: unknown): boolean {
+  return e instanceof MineruError && e.code === 'cancelled';
+}
+
+function cancelled(): MineruError {
+  return new MineruError('cancelled', '已取消这次准备');
+}
+
+/**
+ * 把外部 signal 接到内部回调上。
+ *
+ * 不用 `signal.onabort =` 直接赋值：那样会覆盖别的订阅者（任务服务和超时共用同一个
+ * signal 时就少一路通知）。部分运行时的 AbortSignal 没有事件接口，这时退回轮询。
+ */
+function onAbort(signal: AbortSignal | undefined, fn: () => void): () => void {
+  if (!signal) return () => {};
+  if (signal.aborted) {
+    fn();
+    return () => {};
+  }
+  if (typeof signal.addEventListener === 'function') {
+    signal.addEventListener('abort', fn);
+    return () => signal.removeEventListener('abort', fn);
+  }
+  return () => {};
+}
+
+/**
  * 服务端错误码 → 人话。**顺序按官方文档**：
  * -30001 大小、-30002 类型、-30003 页数、-30004 参数。
  * 这几类重试都没用，必须直接告诉用户该怎么办。
@@ -149,34 +187,58 @@ function asText(v: unknown): string {
   return typeof v === 'string' ? v : '';
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+/**
+ * 可取消的等待。
+ *
+ * 按 250ms 切片而不是一次 `setTimeout(ms)`：轮询间隔是 3 秒，一口气睡满的话
+ * 用户点了取消还要再等三秒界面才有反应，看起来像「取消没生效」。
+ */
+async function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw cancelled();
+    const left = deadline - Date.now();
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(250, Math.max(1, left))));
+  }
+  if (signal?.aborted) throw cancelled();
 }
 
 /**
  * 发一个 JSON 请求并把 `data` 取出来。
  *
  * 超时用 AbortController 自己控，不用 Promise.race —— race 之后请求还在跑，
- * 轮询会越积越多。
+ * 轮询会越积越多。`signal` 是用户的取消：一路挂到 fetch 上，
+ * 否则点了取消，在途的 30 秒请求还会把连接占满。
  */
 async function requestJson(
   url: string,
   init: RequestInit,
   table: Record<string, string> = SERVER_ERRORS,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
+  if (signal?.aborted) throw cancelled();
+
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    ctrl.abort();
+  }, REQUEST_TIMEOUT);
+  const off = onAbort(signal, () => ctrl.abort());
+
   let res: Response;
   try {
     res = await fetch(url, { ...init, signal: ctrl.signal });
   } catch (e) {
+    if (signal?.aborted) throw cancelled();
     const aborted = e instanceof Error && /abort/i.test(e.name + e.message);
     throw new MineruError(
       'network',
-      aborted ? '请求解析服务超时，请检查网络后重试' : '连不上解析服务，请检查网络后重试',
+      aborted || timedOut ? '请求解析服务超时，请检查网络后重试' : '连不上解析服务，请检查网络后重试',
     );
   } finally {
     clearTimeout(timer);
+    off();
   }
 
   let raw = '';
@@ -219,19 +281,24 @@ async function requestJson(
 }
 
 /** 建任务：拿到 task_id 和预签名上传地址 */
-async function createTask(file: MineruFile): Promise<{ taskId: string; fileUrl: string }> {
-  const data = await requestJson(CREATE_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      file_name: file.name,
-      language: 'ch',
-      enable_table: true,
-      // 默认不做 OCR：扫描件识别慢且容易错，用户明确需要时再考虑开口子
-      is_ocr: false,
-      enable_formula: true,
-    }),
-  });
+async function createTask(file: MineruFile, signal?: AbortSignal): Promise<{ taskId: string; fileUrl: string }> {
+  const data = await requestJson(
+    CREATE_URL,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        file_name: file.name,
+        language: 'ch',
+        enable_table: true,
+        // 默认不做 OCR：扫描件识别慢且容易错，用户明确需要时再考虑开口子
+        is_ocr: false,
+        enable_formula: true,
+      }),
+    },
+    SERVER_ERRORS,
+    signal,
+  );
 
   const taskId = asText(data.task_id);
   const fileUrl = asText(data.file_url);
@@ -244,20 +311,35 @@ async function createTask(file: MineruFile): Promise<{ taskId: string; fileUrl: 
 /**
  * PUT 原文件。
  *
- * `uploadAsync` 走原生，比把几 MB 读进 JS 再 fetch 稳；`BINARY_CONTENT` 表示
- * 文件内容就是整个请求体。**不要加 Content-Type**，预签名地址对头部敏感。
+ * 用 `createUploadTask` 而不是 `uploadAsync`：前者能 `cancelAsync()`，
+ * 几十 MB 的文件传到一半用户点取消时，只有这条路能真的停手。
+ * `BINARY_CONTENT` 表示文件内容就是整个请求体。**不要加 Content-Type**，
+ * 预签名地址对头部敏感。
  */
-async function uploadFile(fileUrl: string, uri: string): Promise<void> {
+async function uploadFile(fileUrl: string, uri: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw cancelled();
+
+  const task = createUploadTask(fileUrl, uri, {
+    httpMethod: 'PUT',
+    uploadType: FileSystemUploadType.BINARY_CONTENT,
+  });
+  const off = onAbort(signal, () => {
+    task.cancelAsync().catch(() => undefined);
+  });
+
   let res;
   try {
-    res = await uploadAsync(fileUrl, uri, {
-      httpMethod: 'PUT',
-      uploadType: FileSystemUploadType.BINARY_CONTENT,
-    });
+    res = await task.uploadAsync();
   } catch (e) {
+    if (signal?.aborted) throw cancelled();
     const msg = e instanceof Error ? e.message : String(e);
     throw new MineruError('upload', `上传原文件失败：${msg}`);
+  } finally {
+    off();
   }
+  if (signal?.aborted) throw cancelled();
+  // 取消时 uploadAsync 可能返回 null
+  if (!res) throw new MineruError('upload', '上传原文件失败，请检查网络后重试');
   if (res.status < 200 || res.status >= 300) {
     throw new MineruError('upload', `上传原文件失败（HTTP ${res.status}），请检查网络后重试`);
   }
@@ -273,19 +355,26 @@ async function uploadFile(fileUrl: string, uri: string): Promise<void> {
 async function waitForTask(
   taskId: string,
   onProgress: (stage: MineruStage) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const deadline = Date.now() + MAX_WAIT;
   let failures = 0;
   let lastStage: MineruStage | null = null;
 
   while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL);
+    await sleep(POLL_INTERVAL, signal);
     let data: Record<string, unknown>;
     try {
-      data = await requestJson(`${API_BASE}/${encodeURIComponent(taskId)}`, { method: 'GET' });
+      data = await requestJson(
+        `${API_BASE}/${encodeURIComponent(taskId)}`,
+        { method: 'GET' },
+        SERVER_ERRORS,
+        signal,
+      );
       failures = 0;
     } catch (e) {
-      // 断网/超时重试几次；服务端明确报错（文件不合规、限频）就别再耗了
+      // 断网/超时重试几次；服务端明确报错（文件不合规、限频）就别再耗了。
+      // 取消不进这一支：code 是 'cancelled'，直接往上抛
       if (e instanceof MineruError && e.code === 'network' && ++failures < MAX_POLL_FAILURES) {
         continue;
       }
@@ -318,11 +407,12 @@ async function waitForTask(
 }
 
 /** 下载解析结果。Markdown 可能很大，用 expo/fetch 拿文本 */
-async function downloadMarkdown(url: string): Promise<string> {
+async function downloadMarkdown(url: string, signal?: AbortSignal): Promise<string> {
   let res;
   try {
-    res = await expoFetch(url);
+    res = await expoFetch(url, { signal });
   } catch {
+    if (signal?.aborted) throw cancelled();
     throw new MineruError('download', '下载解析结果失败，请检查网络后重试');
   }
   if (!res.ok) {
@@ -343,10 +433,12 @@ async function downloadMarkdown(url: string): Promise<string> {
  *
  * 失败一律抛 `MineruError`；调用方只负责写库（保留记录，不删原文件）。
  * `onProgress` 只在阶段变化时调用，界面不用自己去重。
+ * `signal` 是用户取消：每一步都接，取消后抛 code='cancelled'。
  */
 export async function parseWithMineru(
   file: MineruFile,
   onProgress: (stage: MineruStage, detail?: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (file.size > MAX_FILE_BYTES) {
     throw new MineruError('too-large', `文件超过 ${MAX_FILE_LABEL}，轻量解析接口不支持`);
@@ -355,16 +447,16 @@ export async function parseWithMineru(
     throw new MineruError('no-file', '原文件已经不在手机上了，没法解析');
   }
 
-  const { taskId, fileUrl } = await createTask(file);
+  const { taskId, fileUrl } = await createTask(file, signal);
 
   onProgress('uploading');
-  await uploadFile(fileUrl, file.uri);
+  await uploadFile(fileUrl, file.uri, signal);
 
   onProgress('queued');
-  const markdownUrl = await waitForTask(taskId, (stage) => onProgress(stage));
+  const markdownUrl = await waitForTask(taskId, (stage) => onProgress(stage), signal);
 
   onProgress('downloading');
-  return downloadMarkdown(markdownUrl);
+  return downloadMarkdown(markdownUrl, signal);
 }
 
 /* ------------------------------------------------------------------ *
@@ -375,6 +467,7 @@ export async function parseWithMineru(
 async function createProTask(
   file: MineruFile,
   token: string,
+  signal?: AbortSignal,
 ): Promise<{ batchId: string; fileUrl: string }> {
   const data = await requestJson(
     `${PRO_API_BASE}/file-urls/batch`,
@@ -395,6 +488,7 @@ async function createProTask(
       }),
     },
     PRO_SERVER_ERRORS,
+    signal,
   );
 
   const batchId = asText(data.batch_id);
@@ -416,6 +510,7 @@ async function waitForProTask(
   batchId: string,
   token: string,
   onProgress: (stage: MineruStage, detail?: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const deadline = Date.now() + PRO_MAX_WAIT;
   let failures = 0;
@@ -423,7 +518,7 @@ async function waitForProTask(
   let lastDetail = '';
 
   while (Date.now() < deadline) {
-    await sleep(POLL_INTERVAL);
+    await sleep(POLL_INTERVAL, signal);
 
     let data: Record<string, unknown>;
     try {
@@ -431,6 +526,7 @@ async function waitForProTask(
         `${PRO_API_BASE}/extract-results/batch/${encodeURIComponent(batchId)}`,
         { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
         PRO_SERVER_ERRORS,
+        signal,
       );
       failures = 0;
     } catch (e) {
@@ -482,11 +578,12 @@ async function waitForProTask(
  * 用 `filter` 只解一个文件是必须的：包里还有 `layout.json`、`*_content_list.json`、
  * 抽出来的图片，200 MB 的文档这些中间产物加起来比原文件还大，全解开就是内存雪崩。
  */
-async function downloadZipMarkdown(url: string): Promise<string> {
+async function downloadZipMarkdown(url: string, signal?: AbortSignal): Promise<string> {
   let res: Response;
   try {
-    res = await expoFetch(url);
+    res = await expoFetch(url, { signal });
   } catch {
+    if (signal?.aborted) throw cancelled();
     throw new MineruError('download', '下载解析结果失败，请检查网络后重试');
   }
   if (!res.ok) {
@@ -527,6 +624,7 @@ export async function parseWithMineruPro(
   file: MineruFile,
   token: string,
   onProgress: (stage: MineruStage, detail?: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
   const t = token.trim();
   if (!t) throw new MineruError('no-token', '还没填 MinerU Token，填了才能用精准解析');
@@ -537,14 +635,14 @@ export async function parseWithMineruPro(
     throw new MineruError('no-file', '原文件已经不在手机上了，没法解析');
   }
 
-  const { batchId, fileUrl } = await createProTask(file, t);
+  const { batchId, fileUrl } = await createProTask(file, t, signal);
 
   onProgress('uploading');
-  await uploadFile(fileUrl, file.uri);
+  await uploadFile(fileUrl, file.uri, signal);
 
   onProgress('queued');
-  const zipUrl = await waitForProTask(batchId, t, onProgress);
+  const zipUrl = await waitForProTask(batchId, t, onProgress, signal);
 
   onProgress('downloading');
-  return downloadZipMarkdown(zipUrl);
+  return downloadZipMarkdown(zipUrl, signal);
 }

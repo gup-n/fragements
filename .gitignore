@@ -50,6 +50,14 @@ yarn-error.*
 /.tmp-bundle
 expo-qr.png
 
+# PDF.js 构建副产物。运行期只加载 assets/pdfjs/reader.html（主库 + worker + cmap
+# 全内联在里面，file:// 下 ESM 会被 CORS 拦），这几个独立文件谁都不读。
+# 不进库是因为它们和 reader.html 内容重复，每次升级 PDF.js 都要多背 2 MB 历史。
+# CI 在 npm ci 之后跑 `npm run prepare:pdf` 重新生成。
+/assets/pdfjs/pdf.min.mjs
+/assets/pdfjs/pdf.worker.min.mjs
+/assets/pdfjs/cmaps/
+
 # 本地日志与临时文件
 *.log
 err.txt

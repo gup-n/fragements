@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<!--
+  本地 PDF 阅读器的外壳。
+
+  为什么要有这个文件、而且要「自包含」：
+  WebView 的页面是 `file://` 起源，Chrome 对 `file://` 下的 ES module 一律按
+  不透明源处理，`import "./pdf.min.mjs"` 会被 CORS 拦掉；本地 HTTP 服务又等于
+  引入了「服务端」。所以 PDF.js 主库、worker、CMap 全部由 prepare_pdf.mjs 在
+  构建期**内联**进这个 HTML：运行期不再有任何脚本加载动作，也就不存在远程地址。
+
+  主库被改写成经典脚本（去掉 `export{}`、把 `import.meta.url` 换成常量），
+  挂在 `window.pdfjsLib`；worker 同样是经典脚本，用 Blob URL 交给
+  `GlobalWorkerOptions.workerPort`。这样不依赖 module worker，也不依赖
+  `workerSrc` 的同源判断。
+
+  安全边界：不执行 PDF 里的脚本（isEvalSupported=false）、不请求任何 http(s)、
+  不允许导航（RN 侧 onShouldStartLoadWithRequest 会拦）、CSP 只放行 inline/blob/file。
+-->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' blob:; worker-src blob:; style-src 'unsafe-inline'; img-src data: blob:; font-src data: blob:; connect-src file: blob:; form-action 'none'; base-uri 'none'">
+<style>
+  :root {
+    --page: #FBFBF9;
+    --text: #1B1B19;
+    --text2: #6E6E68;
+    --text3: #A6A69F;
+    --hair: #ECECE7;
+    --accent: #185FA5;
+    --accent-text: #0C447C;
+    --hit: #FAEEDA;
+    --hit-current: #F2C97D;
+    --danger: #A32D2D;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0; background: var(--page); color: var(--text);
+    font: 14px/1.6 -apple-system, "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    overscroll-behavior: none;
+  }
+  #status {
+    display: none; padding: 14px 16px; font-size: 13px; line-height: 21px;
+    color: var(--text2); border-bottom: 1px solid var(--hair); white-space: pre-wrap;
+  }
+  #status.show { display: block; }
+  #status.err { color: var(--danger); }
+  #pages { padding: 10px 0 40px; }
+  .page {
+    position: relative; margin: 0 auto 12px; background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.16); overflow: hidden;
+  }
+  .page canvas { display: block; }
+  /* 文本层：透明字盖在 canvas 上，只为了能选中/高亮，位置由 PDF.js 算 */
+  .textLayer {
+    position: absolute; inset: 0; overflow: hidden; opacity: 1;
+    line-height: 1; text-align: initial;
+  }
+  .textLayer span, .textLayer br {
+    color: transparent; position: absolute; white-space: pre;
+    transform-origin: 0 0; cursor: text;
+  }
+  .textLayer span.hit { background: var(--hit); border-radius: 2px; }
+  .textLayer span.hit-current { background: var(--hit-current); border-radius: 2px; }
+  .textLayer ::selection { background: rgba(24,95,165,0.28); }
+  .empty-hint {
+    margin: 22px 18px; padding: 14px 16px; border-radius: 10px;
+    background: rgba(127,127,127,0.10); color: var(--text2); font-size: 13px; line-height: 21px;
+  }
+  .empty-hint b { color: var(--text); display: block; margin-bottom: 4px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="status"></div>
+<div id="pages"></div>
+<script>
+/*
+  老 WebView 兜底。PDF.js 4.x 用到了 Promise.withResolvers（Chrome 119+），
+  安卓系统 WebView 的版本跟着 Chrome 走，但企业的托管设备可能被钉在旧版本上。
+  这里补一层：缺了就用等价实现顶上，缺不了的地方不硬造。
+*/
+(function () {
+  if (typeof Promise.withResolvers !== 'function') {
+    Promise.withResolvers = function () {
+      var cap = {};
+      cap.promise = new Promise(function (resolve, reject) { cap.resolve = resolve; cap.reject = reject; });
+      return cap;
+    };
+  }
+})();
+</script>
+<!--@PDFJS_LIB@-->
+<!--@PDFJS_WORKER@-->
+<!--@PDFJS_CMAPS@-->
+<script>
+(function () {
+  'use strict';
+
+  /* ---------------- 基础设施 ---------------- */
+
+  var MAX_HITS = 999;
+  var lib = window.pdfjsLib;
+
+  var S = {
+    opened: false,
+    failed: false,
+    mode: 'view',
+    doc: null,
+    task: null,
+    worker: null,
+    pageCount: 0,
+    pageTexts: [],     // 每页的拼接文本，索引 0 = 第 1 页
+    pageSpans: [],     // 每页的 item 区间，索引同上
+    hasText: false,
+    scale: 1,
+    boxes: [],         // 每页的 DOM 容器
+    rendered: {},      // 已渲染的页（1 起）
+    renderOrder: [],
+    observer: null,
+    hits: [],
+    hitIndex: -1,
+  };
+
+  function post(msg) {
+    try { window.ReactNativeWebView.postMessage(JSON.stringify(msg)); } catch (e) { /* 页面可能已经销毁 */ }
+  }
+
+  function setStatus(text, isError) {
+    var el = document.getElementById('status');
+    if (!text) { el.className = ''; el.textContent = ''; return; }
+    el.textContent = text;
+    el.className = isError ? 'show err' : 'show';
+  }
+
+  function fail(code, message) {
+    if (S.failed) return;
+    S.failed = true;
+    setStatus(message, true);
+    clearHint();
+    post({ type: 'error', code: code, message: message });
+  }
+
+  function applyTheme(t) {
+    if (!t) return;
+    var r = document.documentElement.style;
+    r.setProperty('--page', t.page);
+    r.setProperty('--text', t.text);
+    r.setProperty('--text2', t.text2);
+    r.setProperty('--text3', t.text3);
+    r.setProperty('--hair', t.hair);
+    r.setProperty('--accent', t.accent);
+    r.setProperty('--accent-text', t.accentText);
+    r.setProperty('--hit', t.hitBg);
+    r.setProperty('--hit-current', t.hitCurrent);
+    r.setProperty('--danger', t.danger);
+  }
+
+  function clearHint() {
+    var h = document.getElementById('hint');
+    if (h && h.parentNode) h.parentNode.removeChild(h);
+  }
+
+  function showHint(title, lines) {
+    clearHint();
+    var box = document.createElement('div');
+    box.id = 'hint';
+    box.className = 'empty-hint';
+    var b = document.createElement('b');
+    b.textContent = title;
+    box.appendChild(b);
+    for (var i = 0; i < lines.length; i++) {
+      var p = document.createElement('div');
+      p.textContent = lines[i];
+      box.appendChild(p);
+    }
+    document.getElementById('pages').appendChild(box);
+  }
+
+  /* ---------------- CMap：完全走内联数据，不发任何请求 ---------------- */
+
+  var CMAPS = JSON.parse(document.getElementById('pdfjs-cmaps').textContent || '{}');
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  /**
+   * PDF.js 只在使用「非 DOM 的」工厂时才会把 CMap 请求交回主线程；
+   * 我们给一个自定义类，正好触发这条路径（useWorkerFetch 被自动关掉），
+   * 于是中文 CMap 从内联表里取，不碰网络也不碰 file://。
+   */
+  function InlineCMapReaderFactory() {
+    this.baseUrl = 'inline://';
+    this.isCompressed = true;
+  }
+  InlineCMapReaderFactory.prototype.fetch = function (data) {
+    var name = data && data.name;
+    var b64 = name && CMAPS[name];
+    if (!b64) return Promise.reject(new Error('缺少 CMap：' + name));
+    return Promise.resolve({ cMapData: b64ToBytes(b64), isCompressed: true });
+  };
+
+  /* ---------------- 读原文件：XHR，不经过 RN bridge ---------------- */
+
+  /**
+   * 必须是 XHR 而不是 fetch：`fetch` 不支持 `file://`，
+   * 而这里拿到的正是 App 私有目录里的原文件 URI（几十 MB 不能 base64 过桥）。
+   */
+  function readFile(url) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.responseType = 'arraybuffer';
+      xhr.onload = function () {
+        // file:// 成功时 status 是 0，别按 200 判
+        if (xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) {
+          resolve(new Uint8Array(xhr.response));
+        } else {
+          reject(new Error('读取原文件失败（HTTP ' + xhr.status + '）'));
+        }
+      };
+      xhr.onerror = function () { reject(new Error('读不了原文件，可能已被系统清理')); };
+      xhr.send();
+    });
+  }
+
+  /* ---------------- 文本拼装：阅读、查找、提取共用一套 ---------------- */
+
+  /**
+   * 只在两边都是 ASCII 字母数字时补空格。
+   *
+   * PDF 的文字项是按字体切开的，"NAS" 和 "换盘" 可能是两项；
+   * 无条件补空格会把中文词组切碎，查找「换盘」就再也匹配不到。
+   */
+  function needsSpace(a, b) {
+    if (!a || !b) return false;
+    return /[0-9A-Za-z]$/.test(a) && /^[0-9A-Za-z]/.test(b);
+  }
+
+  /** 把一页的 textContent 拼成文本，同时记录每一项落在哪个字符区间、对应第几个 span */
+  function buildPage(items) {
+    var text = '';
+    var spans = [];
+    var div = 0;
+    var prev = '';
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      // markedContent 之类的项没有 str，PDF.js 的 TextLayer 也会跳过它们，
+      // 这里的 div 序号必须和它一致，否则高亮会落到别的文字上
+      if (typeof it.str !== 'string') continue;
+      var s = it.str;
+      if (s && prev && needsSpace(prev, s)) text += ' ';
+      var start = text.length;
+      text += s;
+      spans.push({ div: div, start: start, end: text.length });
+      if (it.hasEOL) text += '\n';
+      prev = s;
+      div++;
+    }
+    return { text: text, spans: spans };
+  }
+
+  /* ---------------- 查找：确定性字面匹配 ---------------- */
+
+  /** 与 RN 侧 util/highlight.ts 同口径：忽略大小写、不重叠、连续推进、查询去空白 */
+  function findHits(text, query, limit) {
+    var needle = String(query || '').trim().toLowerCase();
+    if (!needle || !text) return [];
+    var hay = text.toLowerCase();
+    var out = [];
+    var from = 0;
+    while (out.length < limit) {
+      var at = hay.indexOf(needle, from);
+      if (at < 0) break;
+      out.push({ start: at, end: at + needle.length });
+      from = at + needle.length;
+    }
+    return out;
+  }
+
+  function spanOfHit(pageSpans, hit) {
+    // 二分找命中起点所在的 item
+    var lo = 0, hi = pageSpans.length - 1, best = -1;
+    while (lo <= hi) {
+      var mid = (lo + hi) >> 1;
+      if (pageSpans[mid].start <= hit.start) { best = mid; lo = mid + 1; }
+      else hi = mid - 1;
+    }
+    return best >= 0 ? pageSpans[best] : null;
+  }
+
+  function runFind(query) {
+    S.hits = [];
+    S.hitIndex = -1;
+    var q = String(query || '').trim();
+    if (!q) { post({ type: 'find', total: 0, current: 0 }); clearMarks(); return; }
+
+    for (var p = 0; p < S.pageTexts.length && S.hits.length < MAX_HITS; p++) {
+      var found = findHits(S.pageTexts[p], q, MAX_HITS - S.hits.length);
+      for (var i = 0; i < found.length; i++) {
+        var span = spanOfHit(S.pageSpans[p], found[i]);
+        S.hits.push({ page: p + 1, div: span ? span.div : -1 });
+      }
+    }
+
+    if (!S.hits.length) { post({ type: 'find', total: 0, current: 0 }); clearMarks(); return; }
+    S.hitIndex = 0;
+    paintHits();
+    revealHit();
+    post({ type: 'find', total: S.hits.length, current: 1 });
+  }
+
+  function moveFind(delta) {
+    if (!S.hits.length) { post({ type: 'find', total: 0, current: 0 }); return; }
+    var next = S.hitIndex + (delta > 0 ? 1 : -1);
+    if (next < 0) next = 0;
+    if (next > S.hits.length - 1) next = S.hits.length - 1;
+    if (next === S.hitIndex) { post({ type: 'find', total: S.hits.length, current: S.hitIndex + 1 }); return; }
+    S.hitIndex = next;
+    paintHits();
+    revealHit();
+    post({ type: 'find', total: S.hits.length, current: S.hitIndex + 1 });
+  }
+
+  function clearMarks() {
+    var marks = document.querySelectorAll('.textLayer .hit, .textLayer .hit-current');
+    for (var i = 0; i < marks.length; i++) {
+      marks[i].classList.remove('hit');
+      marks[i].classList.remove('hit-current');
+    }
+  }
+
+  /** 只画当前页的命中，其余页等渲染出来再说（避免为已销毁的页留住 DOM） */
+  function paintHits() {
+    clearMarks();
+    if (!S.hits.length) return;
+    var cur = S.hits[S.hitIndex];
+    var box = S.boxes[cur.page - 1];
+    if (!box) return;
+    var divs = box.__textDivs || [];
+    for (var i = 0; i < S.hits.length; i++) {
+      var h = S.hits[i];
+      if (h.page !== cur.page || h.div < 0) continue;
+      var node = divs[h.div];
+      if (!node) continue;
+      node.classList.add('hit');
+      if (i === S.hitIndex) node.classList.add('hit-current');
+    }
+  }
+
+  function revealHit() {
+    var h = S.hits[S.hitIndex];
+    if (!h) return;
+    var box = S.boxes[h.page - 1];
+    if (!box) return;
+    if (!S.rendered[h.page]) {
+      renderPage(h.page).then(function () {
+        paintHits();
+        box.scrollIntoView({ block: 'center' });
+      });
+      return;
+    }
+    paintHits();
+    box.scrollIntoView({ block: 'center' });
+  }
+
+  /* ---------------- 渲染 ---------------- */
+
+  function clearPage(p) {
+    var box = S.boxes[p - 1];
+    if (!box) return;
+    var canvas = box.querySelector('canvas');
+    // 把位图尺寸归零才真的释放显存：只删 DOM 的话内存要等 GC
+    if (canvas) { canvas.width = 0; canvas.height = 0; }
+    var layer = box.querySelector('.textLayer');
+    if (layer) layer.textContent = '';
+    box.__textDivs = null;
+    delete S.rendered[p];
+    var at = S.renderOrder.indexOf(p);
+    if (at >= 0) S.renderOrder.splice(at, 1);
+  }
+
+  function renderPage(p) {
+    if (S.rendered[p] || S.failed) return Promise.resolve();
+    var box = S.boxes[p - 1];
+    if (!box) return Promise.resolve();
+    S.rendered[p] = true;
+    S.renderOrder.push(p);
+    // 只保留最近 6 页的位图：300 页全画出来会直接 OOM
+    while (S.renderOrder.length > 6) clearPage(S.renderOrder[0]);
+
+    return S.doc.getPage(p).then(function (page) {
+      var vp = page.getViewport({ scale: S.scale });
+      var canvas = box.querySelector('canvas');
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.floor(vp.width * dpr);
+      canvas.height = Math.floor(vp.height * dpr);
+      canvas.style.width = vp.width + 'px';
+      canvas.style.height = vp.height + 'px';
+      var ctx = canvas.getContext('2d');
+      return page.render({
+        canvasContext: ctx,
+        viewport: vp,
+        transform: dpr === 1 ? null : [dpr, 0, 0, dpr, 0, 0],
+      }).promise.then(function () {
+        // 文本层要拿到 --scale-factor，否则字号会按 1 倍算、位置整体错位
+        box.style.setProperty('--scale-factor', String(vp.scale));
+        var layerDiv = box.querySelector('.textLayer');
+        var layer = new lib.TextLayer({
+          textContentSource: page.getTextContent(),
+          container: layerDiv,
+          viewport: vp,
+        });
+        return layer.render().then(function () {
+          box.__textDivs = layer.textDivs;
+        });
+      });
+    }).catch(function (e) {
+      // 单页渲染失败不该整份白屏：把错误写在页脚，其余页继续
+      delete S.rendered[p];
+      var at = S.renderOrder.indexOf(p);
+      if (at >= 0) S.renderOrder.splice(at, 1);
+      var msg = (e && e.message) || String(e);
+      box.setAttribute('data-error', msg);
+      setStatus('第 ' + p + ' 页渲染失败：' + msg, true);
+    });
+  }
+
+  /* ---------------- 打开文档 ---------------- */
+
+  function mapLoadError(e) {
+    var name = (e && e.name) || '';
+    if (name === 'PasswordException') {
+      return ['encrypted', '这份 PDF 有打开密码，应用内读不了。请先用别的应用去掉密码，再重新导入。'];
+    }
+    if (name === 'InvalidPDFException') {
+      return ['corrupt', '这个 PDF 结构损坏或不是 PDF，读不出来。原件仍在本机，可以试试用其它应用打开。'];
+    }
+    if (name === 'MissingPDFException') {
+      return ['no-file', '原文件已不在手机上（可能被系统清理），只能看已解析的正文。'];
+    }
+    var msg = (e && e.message) || String(e);
+    return ['corrupt', '这个 PDF 读不出来：' + msg];
+  }
+
+  function open(msg) {
+    if (S.opened) return;
+    S.opened = true;
+    S.mode = msg.mode === 'extract' ? 'extract' : 'view';
+    applyTheme(msg.theme);
+    setStatus('正在读取 PDF…');
+
+    readFile(msg.uri).then(function (bytes) {
+      var workerSrc = document.getElementById('pdfjs-worker').textContent;
+      var workerUrl = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+      // 经典 worker（不是 module worker）：Blob URL 在 file:// 页面下更稳，
+      // 也绕开 PDF.js 对 workerSrc 的同源判断
+      S.worker = new Worker(workerUrl);
+      lib.GlobalWorkerOptions.workerPort = S.worker;
+
+      S.task = lib.getDocument({
+        data: bytes,
+        isEvalSupported: false,
+        disableAutoFetch: true,
+        disableStream: true,
+        enableXfa: false,
+        useSystemFonts: true,
+        // 自定义工厂 ⇒ PDF.js 关掉 useWorkerFetch，CMap 由主线程从内联表取
+        CMapReaderFactory: InlineCMapReaderFactory,
+        verbosity: 0,
+      });
+
+      S.task.onPassword = function () {
+        try { S.task.destroy(); } catch (e) { /* ignore */ }
+        fail('encrypted', '这份 PDF 有打开密码，应用内读不了。请先用别的应用去掉密码，再重新导入。');
+      };
+
+      return S.task.promise;
+    }).then(function (doc) {
+      if (S.failed) return;
+      S.doc = doc;
+      S.pageCount = doc.numPages;
+      if (msg.maxPages && S.pageCount > msg.maxPages) {
+        fail('too-many-pages', '这份 PDF 有 ' + S.pageCount + ' 页，超过应用内阅读上限 ' + msg.maxPages + ' 页。原件仍在本机，可以用其它应用打开。');
+        return;
+      }
+      return collectText(doc).then(function () {
+        if (S.failed) return;
+        if (S.mode === 'extract') return extractDone();
+        return buildView(msg);
+      });
+    }).catch(function (e) {
+      if (S.failed) return;
+      var pair = mapLoadError(e);
+      fail(pair[0], pair[1]);
+    });
+
+    function extractDone() {
+      setStatus('');
+      post({ type: 'done', pageTexts: S.pageTexts, pageCount: S.pageCount });
+    }
+  }
+
+  /** 逐页取文本。最多回 6 次进度，回的是累计文本（任务层只用来显示字数） */
+  function collectText(doc) {
+    S.pageTexts = [];
+    S.pageSpans = [];
+    var nonEmpty = 0;
+    // 每页都回一次进度等于把整份正文按页数重复过一遍桥（300 页 ≈ 几百 MB），
+    // 所以固定最多 6 次；完整结果只走最后的 done。
+    var every = Math.max(1, Math.ceil(doc.numPages / 6));
+    var chain = Promise.resolve();
+
+    function step(p) {
+      if (S.failed || p > doc.numPages) return Promise.resolve();
+      return doc.getPage(p).then(function (page) {
+        return page.getTextContent().then(function (tc) {
+          var built = buildPage(tc.items || []);
+          S.pageTexts.push(built.text);
+          S.pageSpans.push(built.spans);
+          if (built.text.trim()) nonEmpty++;
+          if (S.mode === 'extract' && (p % every === 0 || p === doc.numPages)) {
+            setStatus('正在提取文字 ' + p + ' / ' + doc.numPages + ' 页…');
+            post({ type: 'progress', pagesDone: p, text: S.pageTexts.join('\n\n') });
+          }
+          return step(p + 1);
+        });
+      });
+    }
+
+    return chain.then(function () { return step(1); }).then(function () {
+      S.hasText = nonEmpty > 0;
+    });
+  }
+
+  /* ---------------- 视图：占位 + 懒渲染 ---------------- */
+
+  function buildView(msg) {
+    var host = document.getElementById('pages');
+    host.textContent = '';
+    S.boxes = [];
+    S.rendered = {};
+    S.renderOrder = [];
+
+    var width = Math.max(200, window.innerWidth);
+
+    var chain = Promise.resolve();
+    function step(p) {
+      if (p > S.doc.numPages) return Promise.resolve();
+      return S.doc.getPage(p).then(function (page) {
+        var vp0 = page.getViewport({ scale: 1 });
+        var scale = width / vp0.width;
+        if (p === 1) S.scale = scale;
+        var vp = page.getViewport({ scale: S.scale });
+
+        var box = document.createElement('div');
+        box.className = 'page';
+        box.style.width = Math.floor(vp.width) + 'px';
+        box.style.height = Math.floor(vp.height) + 'px';
+        box.style.setProperty('--scale-factor', String(S.scale));
+        box.setAttribute('data-page', String(p));
+
+        var canvas = document.createElement('canvas');
+        var layer = document.createElement('div');
+        layer.className = 'textLayer';
+        box.appendChild(canvas);
+        box.appendChild(layer);
+        host.appendChild(box);
+        S.boxes.push(box);
+
+        return step(p + 1);
+      });
+    }
+
+    return chain.then(function () { return step(1); }).then(function () {
+      if (!S.hasText) {
+        showHint('这份 PDF 没有文字层（扫描件）', [
+          '可以翻页查看，但不能在应用内查找，也不能用来提问。',
+          '需要正文请用 MinerU 云解析（会上传原件，需要你确认）。',
+        ]);
+      }
+      setStatus('');
+      post({ type: 'loaded', pageCount: S.pageCount, hasText: S.hasText });
+
+      if (S.observer) S.observer.disconnect();
+      if (typeof IntersectionObserver === 'function') {
+        S.observer = new IntersectionObserver(function (entries) {
+          for (var i = 0; i < entries.length; i++) {
+            if (!entries[i].isIntersecting) continue;
+            var p = Number(entries[i].target.getAttribute('data-page'));
+            renderPage(p);
+          }
+        }, { rootMargin: '900px 0px' });
+        for (var i = 0; i < S.boxes.length; i++) S.observer.observe(S.boxes[i]);
+      } else {
+        // 没有 IntersectionObserver 的老 WebView：退化成先画前 3 页
+        for (var k = 1; k <= Math.min(3, S.pageCount); k++) renderPage(k);
+      }
+      renderPage(1);
+    });
+  }
+
+  /* ---------------- 消息入口 ---------------- */
+
+  function onNativeMessage(event) {
+    var raw = event && event.data;
+    if (typeof raw !== 'string') return;
+    var msg;
+    try { msg = JSON.parse(raw); } catch (e) { return; }
+    if (!msg || typeof msg.type !== 'string') return;
+
+    if (msg.type === 'open') { open(msg); return; }
+    if (msg.type === 'theme') { applyTheme(msg.theme); return; }
+    if (msg.type === 'cancel') {
+      S.failed = true;
+      try { if (S.task) S.task.destroy(); } catch (e) { /* ignore */ }
+      post({ type: 'error', code: 'aborted', message: '已取消' });
+      return;
+    }
+    if (msg.type === 'find') { runFind(msg.query); return; }
+    if (msg.type === 'find-move') { moveFind(Number(msg.delta) || 1); return; }
+  }
+
+  window.addEventListener('message', onNativeMessage);
+  document.addEventListener('message', onNativeMessage);
+
+  post({ type: 'ready' });
+})();
+</script>
+</body>
+</html>
