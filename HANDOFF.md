@@ -527,6 +527,10 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 - Release 需要 `permissions: contents: write`，workflow 里已经写了。
   不加的话 `gh release create` 会 403，而且报错不明显。
+- **删过 tag 再重建，旧 Release 会变成草稿**（`gh release view` 查得到，匿名访问 404）。
+  v0.12.0 第一次重建就栽在这：CI 全绿、步骤显示「创建 Release 成功」，手机端更新却下不到。
+  workflow 现在**无条件**再跑一次 `gh release edit --draft=false` 并打印最终状态，
+  别把那一行删掉。同一版重跑也只更新说明和 APK，不会重复建。
 - asset 名要先 `cp` 再传，不要用 `gh` 的 `file#name` 语法 —— v0.8.4 试过，
   没生效，落成了 `app-release.apk`。
 
