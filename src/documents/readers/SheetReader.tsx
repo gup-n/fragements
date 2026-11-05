@@ -10,6 +10,11 @@
  *    超了会在顶上写明，不是悄悄省略。
  * 3. **不做公式重算、不执行宏、不开外链。** SheetJS 只给上次保存的缓存值；
  *    没有缓存值的公式显示成 `=SUM(A1:A3)`，让用户知道这里本来是个公式。
+ *
+ * v0.12.1 起这一页的三处开销被砍掉（原因见 CHANGELOG）：
+ * - 解析结果按文件缓存，退出再进来不再重解析；
+ * - 搜索索引推迟到真正输入时才建（以前一开屏就给每个单元格建一个 span 对象）；
+ * - 只物化当前工作表，列按视口窗口渲染（以前一屏最多 20 行 × 60 列 = 1200 个节点）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -20,6 +25,9 @@ import {
   StyleSheet,
   Text,
   View,
+  useWindowDimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type ScrollViewInstance,
 } from 'react-native';
 import type { Document } from '../../types';
@@ -28,17 +36,22 @@ import { findHits } from '../../util/highlight';
 import {
   listSheetRows,
   readWorkbook,
+  type SheetRow,
   type SheetTable,
   type WorkbookView,
 } from './excelWorkbook';
 import { readDocBytes } from './readerFiles';
-import { readerMessage } from './errors';
+import { readerMessage, formatSize } from './errors';
+import { recallWorkbook, rememberWorkbook, workbookKey } from './workbookCache';
+import { SHEET_GUTTER, columnOffsets, spacerWidths, visibleColumns } from './sheetWindow';
 import { SearchBar } from './SearchBar';
 
 const MAX_HITS = 999;
 /** 视图的行/列显示上限。超了在顶部明说，不影响提取（提取走另一条路） */
 const VIEW_ROWS = 1200;
 const VIEW_COLS = 60;
+/** 列窗口两侧多画几列，横向滑动时不会先看到一块空白 */
+const COL_OVERSCAN = 240;
 
 /** 中日韩按两格宽估列宽，否则中文列会挤成一条 */
 function visualLen(s: string): number {
@@ -59,12 +72,11 @@ function visualLen(s: string): number {
   return n;
 }
 
-function columnWidths(sheet: SheetTable, rows: ReturnType<typeof listSheetRows>): number[] {
+function columnWidths(sheet: SheetTable, rows: SheetRow[]): number[] {
   const widths = new Array<number>(Math.min(sheet.cols, VIEW_COLS)).fill(64);
   for (const row of rows) {
     for (const cell of row.cells) {
       if (cell.col >= widths.length) continue;
-      // 只取样一部分单元格即可，全表扫一遍在大表上没必要
       const want = Math.min(28, visualLen(cell.text)) * 7 + 20;
       if (want > widths[cell.col]) widths[cell.col] = want;
     }
@@ -78,13 +90,92 @@ interface Hit {
   col: number;
 }
 
+interface SearchEntry {
+  text: string;
+  spans: { start: number; end: number; row: number; col: number }[];
+}
+
+/** 建索引的结果绑在具体的 `book` 上：换文件即失效，不需要额外的清空动作 */
+interface BuiltIndex {
+  book: WorkbookView;
+  entries: SearchEntry[];
+}
+
+interface RowProps {
+  row: SheetRow;
+  alt: boolean;
+  widths: number[];
+  offsets: number[];
+  start: number;
+  end: number;
+  gridWidth: number;
+  hitCells: Set<string>;
+  currentKey: string;
+  styles: ReturnType<typeof makeStyles>;
+}
+
+/**
+ * 一行。**只画窗口内的列**，两边用空白占位撑出原始宽度。
+ *
+ * 用游标而不是 Map：`row.cells` 天生按列升序（`listSheetRows` 就是这么造的），
+ * 一行一次线性推进就够，省掉每行一个 Map 的分配。
+ */
+const SheetRowView = React.memo(function SheetRowView({
+  row,
+  alt,
+  widths,
+  offsets,
+  start,
+  end,
+  gridWidth,
+  hitCells,
+  currentKey,
+  styles,
+}: RowProps) {
+  const { left, right } = spacerWidths(offsets, widths, start, end, gridWidth);
+  const cells: React.ReactNode[] = [];
+  let cursor = 0;
+
+  for (let col = start; col < end; col++) {
+    while (cursor < row.cells.length && row.cells[cursor].col < col) cursor++;
+    const text = row.cells[cursor]?.col === col ? row.cells[cursor].text : '';
+    const key = `${row.row},${col}`;
+    const isHit = hitCells.size > 0 && hitCells.has(key);
+    cells.push(
+      <View key={col} style={[styles.td, { width: widths[col] }]}>
+        <Text
+          selectable
+          style={[styles.cellText, isHit && styles.cellHit, key === currentKey && styles.cellCurrent]}
+        >
+          {text}
+        </Text>
+      </View>,
+    );
+  }
+
+  return (
+    <View style={[styles.tr, alt && styles.trAlt]}>
+      <View style={styles.gutter}>
+        <Text style={styles.gutterText}>{row.row + 1}</Text>
+      </View>
+      {left > 0 ? <View style={{ width: left }} /> : null}
+      {cells}
+      {right > 0 ? <View style={{ width: right }} /> : null}
+    </View>
+  );
+});
+
 export function SheetReader({ document: doc }: { document: Document }) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { width: viewWidth } = useWindowDimensions();
   const [book, setBook] = useState<WorkbookView | null>(null);
+  const [phase, setPhase] = useState<'reading' | 'parsing'>('reading');
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState(0);
   const [query, setQuery] = useState('');
   const [hitIndex, setHitIndex] = useState(0);
+  const [built, setBuilt] = useState<BuiltIndex | null>(null);
+  const [scrollX, setScrollX] = useState(0);
   const listRef = useRef<FlatList<number>>(null);
   const hRef = useRef<ScrollViewInstance>(null);
   const alive = useRef(true);
@@ -98,65 +189,160 @@ export function SheetReader({ document: doc }: { document: Document }) {
 
   useEffect(() => {
     setBook(null);
+    setPhase('reading');
     setError(null);
     setActive(0);
     setHitIndex(0);
     setQuery('');
+    setBuilt(null);
+    setScrollX(0);
     let cancelled = false;
+
+    const key = workbookKey(doc.fileUri, doc.size);
     (async () => {
       try {
+        // 命中缓存就直接出图：这是「退出再进来」的常见路径，不该再解析一遍
+        const cached = recallWorkbook(key);
+        if (cached) {
+          if (!cancelled && alive.current) setBook(cached);
+          return;
+        }
+
         const buf = await readDocBytes(doc.fileUri ?? '');
+        if (cancelled || !alive.current) return;
+
+        /*
+         * `XLSX.read` 是同步的，进去就交不出主线程。先让「正在解析 3.7 MB」
+         * 这一帧画出来，再进解析 —— 否则用户看到的是一个不动的圈，
+         * 分不清是在读还是在等死。`setTimeout(0)` 是真的让出一次事件循环，
+         * `await` 一个已 resolve 的 Promise 只会走微任务，画不了帧。
+         */
+        setPhase('parsing');
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (cancelled || !alive.current) return;
+
         const view = readWorkbook(buf);
+        rememberWorkbook(key, view);
         if (!cancelled && alive.current) setBook(view);
       } catch (e) {
         if (!cancelled && alive.current) setError(readerMessage(e, '读不了这个表格'));
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [doc.fileUri, doc.id, doc.updatedAt]);
+  }, [doc.fileUri, doc.id, doc.updatedAt, doc.size]);
 
-  /** 每个工作表的行列表算一次，视图、查找、列宽都复用它 */
-  const rowsBySheet = useMemo(
-    () => (book ? book.sheets.map((s) => listSheetRows(s)) : []),
-    [book],
+  /**
+   * 每张表的行列表**按需**物化。
+   *
+   * 以前一开屏就把所有工作表都算出来（`searchIndex` 里又算了一遍），
+   * 10 万格的表光这一项就是两次全量 Map 查找。现在只有当前表会算，
+   * 切表时才算下一张，搜索时才把全部算出来（反正那时候也要用）。
+   */
+  const rowCache = useMemo(() => new Map<number, SheetRow[]>(), [book]);
+  const rowsOf = useCallback(
+    (index: number): SheetRow[] => {
+      if (!book) return [];
+      const hit = rowCache.get(index);
+      if (hit) return hit;
+      const sheet = book.sheets[index];
+      const next = sheet ? listSheetRows(sheet) : [];
+      rowCache.set(index, next);
+      return next;
+    },
+    [book, rowCache],
   );
 
   const sheet = book?.sheets[active] ?? null;
-  const rows = rowsBySheet[active] ?? [];
-  const viewRows = rows.length > VIEW_ROWS ? rows.slice(0, VIEW_ROWS) : rows;
+  const rows = useMemo(() => rowsOf(active), [rowsOf, active]);
+  const viewRows = useMemo(() => (rows.length > VIEW_ROWS ? rows.slice(0, VIEW_ROWS) : rows), [rows]);
+  const rowKeys = useMemo(() => viewRows.map((r) => r.row), [viewRows]);
   const widths = useMemo(() => (sheet ? columnWidths(sheet, viewRows) : []), [sheet, viewRows]);
-  const gridWidth = useMemo(() => 52 + widths.reduce((a, b) => a + b, 0), [widths]);
+  const gridWidth = useMemo(
+    () => SHEET_GUTTER + widths.reduce((a, b) => a + b, 0),
+    [widths],
+  );
+  const offsets = useMemo(() => columnOffsets(widths), [widths]);
+
+  const win = useMemo(
+    () => visibleColumns(offsets, widths, scrollX, viewWidth, COL_OVERSCAN),
+    [offsets, widths, scrollX, viewWidth],
+  );
+  const winRef = useRef(win);
+  winRef.current = win;
+
+  /*
+   * 换表：横向回到最左。
+   *
+   * 在**渲染期**归零而不是等 effect：effect 跑在提交之后，那一帧已经用上一张表的
+   * `scrollX` 算过窗口了，切过去会先闪一下最右边那几列。渲染期 setState 会被 React
+   * 丢弃并立刻用新值重渲染，这一帧就不会提交。ref 先更新，所以不会死循环。
+   */
+  const lastSheet = useRef(sheet);
+  if (lastSheet.current !== sheet) {
+    lastSheet.current = sheet;
+    setScrollX(0);
+  }
+
+  useEffect(() => {
+    hRef.current?.scrollTo({ x: 0, animated: false });
+  }, [sheet]);
+
+  /** 只有「窗口变了」才 setState —— 每一帧滚动都重渲染等于把省下的又还回去 */
+  const onGridScroll = useCallback(
+    (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+      const x = e.nativeEvent.contentOffset.x;
+      const next = visibleColumns(offsets, widths, x, viewWidth, COL_OVERSCAN);
+      const cur = winRef.current;
+      if (next.start === cur.start && next.end === cur.end) return;
+      setScrollX(x);
+    },
+    [offsets, widths, viewWidth],
+  );
+
+  const index = built && built.book === book ? built.entries : null;
 
   /**
-   * 查找索引：每张表拼一段文本 + 单元格区间。
+   * 搜索索引**推迟到用户真的开始查**。
    *
-   * 只依赖工作簿、不依赖查询词 —— 否则每敲一个字都要把几万个单元格重新拼一遍。
+   * 以前它是随文档一起建的：10 万格 = 10 万个 span 对象，用户可能这辈子都
+   * 不搜一次。放在定时器里而不是直接算，是为了让刚敲下的那个字先上屏。
    */
-  const searchIndex = useMemo(() => {
-    if (!book) return null;
-    return book.sheets.map((s) => {
-      let text = '';
-      const spans: { start: number; end: number; row: number; col: number }[] = [];
-      for (const r of listSheetRows(s)) {
-        for (const cell of r.cells) {
-          const start = text.length;
-          text += cell.text;
-          spans.push({ start, end: text.length, row: r.row, col: cell.col });
-          text += '\n';
+  useEffect(() => {
+    if (!book || index) return;
+    if (!query.trim()) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      if (cancelled) return;
+      const entries: SearchEntry[] = book.sheets.map((_, si) => {
+        let text = '';
+        const spans: SearchEntry['spans'] = [];
+        for (const r of rowsOf(si)) {
+          for (const cell of r.cells) {
+            const start = text.length;
+            text += cell.text;
+            spans.push({ start, end: text.length, row: r.row, col: cell.col });
+            text += '\n';
+          }
         }
-      }
-      return { text, spans };
-    });
-  }, [book]);
+        return { text, spans };
+      });
+      setBuilt({ book, entries });
+    }, 0);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [book, index, query, rowsOf]);
 
   const hits = useMemo(() => {
     const q = query.trim();
-    if (!searchIndex || !q) return [] as Hit[];
+    if (!index || !q) return [] as Hit[];
     const out: Hit[] = [];
-    for (let s = 0; s < searchIndex.length && out.length < MAX_HITS; s++) {
-      const { text, spans } = searchIndex[s];
+    for (let s = 0; s < index.length && out.length < MAX_HITS; s++) {
+      const { text, spans } = index[s];
       const found = findHits(text, q, MAX_HITS - out.length);
       for (const h of found) {
         // 命中的起点落在哪个单元格（跨单元格的匹配归到起点那格）
@@ -176,7 +362,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
       }
     }
     return out;
-  }, [query, searchIndex]);
+  }, [query, index]);
 
   const total = hits.length;
   const shown = total > 0 ? Math.min(hitIndex, total - 1) : 0;
@@ -186,23 +372,17 @@ export function SheetReader({ document: doc }: { document: Document }) {
     setHitIndex(0);
   }, [query]);
 
-  /** 单元格下标 → 行在视图里的位置，跳转要按这个来 */
-  const rowIndexIn = useCallback(
-    (sheetIdx: number, row: number) => {
-      const list = rowsBySheet[sheetIdx] ?? [];
-      const limit = list.length > VIEW_ROWS ? VIEW_ROWS : list.length;
-      for (let i = 0; i < limit; i++) {
-        if (list[i].row === row) return i;
-      }
-      return -1;
-    },
-    [rowsBySheet],
-  );
+  /** 真实行号 → 视图下标。跳转要用，做成一次 Map 而不是每次线性扫 */
+  const rowIndexIn = useMemo(() => {
+    const map = new Map<number, number>();
+    viewRows.forEach((r, i) => map.set(r.row, i));
+    return map;
+  }, [viewRows]);
 
   /** 跳到某一格：竖滚到行 + 横滚到列。两件都做才算「落到真实位置」 */
   const scrollToCell = useCallback(
     (h: Hit) => {
-      const idx = rowIndexIn(h.sheet, h.row);
+      const idx = rowIndexIn.get(h.row) ?? -1;
       if (idx >= 0) {
         try {
           listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.2 });
@@ -210,11 +390,27 @@ export function SheetReader({ document: doc }: { document: Document }) {
           /* onScrollToIndexFailed 兜住 */
         }
       }
-      const before = widths.slice(0, h.col).reduce((a, b) => a + b, 0);
-      hRef.current?.scrollTo({ x: Math.max(0, 52 + before - 60), animated: true });
+      // 目标列左边界再往左留 60：命中格不会贴着屏幕右缘。
+      // 必须夹到最大滚动量上：ScrollView 会自己夹，但这里的 scrollX 不会，
+      // 不夹的话窗口会按一个滚不到的位置算，目标列就被算到窗口左边、高亮不出现
+      const maxX = Math.max(0, gridWidth - viewWidth);
+      const x = Math.min(maxX, Math.max(0, (offsets[h.col] ?? SHEET_GUTTER) - 60));
+      hRef.current?.scrollTo({ x, animated: true });
+      // 横向是动画滚过去的，窗口要立刻跟上，否则高亮要等动画结束才出现
+      setScrollX(x);
     },
-    [rowIndexIn, widths],
+    [rowIndexIn, offsets, gridWidth, viewWidth],
   );
+
+  /**
+   * 跨表跳转要读**切表之后**的 `offsets` / `rowIndexIn`。
+   *
+   * `go` 在 `setActive` 那一刻就把当时的 `scrollToCell` 闭包逮住了，140 ms 后
+   * 执行的是上一张表的列宽 —— 横向会滚到一个毫无关系的位置。旧版也是这样，
+   * 只是那时列不加窗口，错了也不明显。用 ref 拿最新的那份。
+   */
+  const scrollToCellRef = useRef(scrollToCell);
+  scrollToCellRef.current = scrollToCell;
 
   /** 跳到第 n 处。命中可能在别的工作表，得先切表再滚 */
   const go = useCallback(
@@ -227,12 +423,46 @@ export function SheetReader({ document: doc }: { document: Document }) {
       if (h.sheet !== active) {
         setActive(h.sheet);
         // 换表后 FlatList 是新挂的，等一帧再滚
-        setTimeout(() => scrollToCell(h), 140);
+        setTimeout(() => scrollToCellRef.current(h), 140);
         return;
       }
       scrollToCell(h);
     },
     [active, hits, scrollToCell, total],
+  );
+
+  const hitCells = useMemo(() => {
+    const set = new Set<string>();
+    for (const h of hits) if (h.sheet === active) set.add(`${h.row},${h.col}`);
+    return set;
+  }, [hits, active]);
+
+  const currentKey = current ? `${current.row},${current.col}` : '';
+
+  /*
+   * 换表那一帧，`win` 还是按上一张表的列宽算的（重置 scrollX 的 effect 在提交后才跑），
+   * 所以这里夹一次，避免 `widths[col]` 越界取到 undefined —— 那会让单元格宽度变成 auto，
+   * 一闪而过但确实会跳一下。
+   */
+  const colStart = Math.min(win.start, Math.max(0, widths.length - 1));
+  const colEnd = Math.min(win.end, widths.length);
+
+  const renderRow = useCallback(
+    ({ index }: { index: number }) => (
+      <SheetRowView
+        row={viewRows[index]}
+        alt={index % 2 === 1}
+        widths={widths}
+        offsets={offsets}
+        start={colStart}
+        end={colEnd}
+        gridWidth={gridWidth}
+        hitCells={hitCells}
+        currentKey={currentKey}
+        styles={styles}
+      />
+    ),
+    [viewRows, widths, offsets, colStart, colEnd, gridWidth, hitCells, currentKey, styles],
   );
 
   if (error) {
@@ -248,23 +478,24 @@ export function SheetReader({ document: doc }: { document: Document }) {
     return (
       <View style={styles.state}>
         <ActivityIndicator color={c.accent} />
-        <Text style={styles.stateHint}>正在读取工作表…</Text>
+        <Text style={styles.stateHint}>
+          {phase === 'parsing' ? `正在解析 ${formatSize(doc.size)} 的表格…` : '正在读取文件…'}
+        </Text>
+        {phase === 'parsing' ? (
+          <Text style={styles.stateTip}>大表格要几秒，解析完会立刻显示，期间点按没反应是正常的。</Text>
+        ) : null}
       </View>
     );
   }
 
   const q = query.trim();
-  const hitCells = new Set(
-    hits.filter((h) => h.sheet === active).map((h) => `${h.row},${h.col}`),
-  );
-  const currentKey = current ? `${current.row},${current.col}` : '';
 
   return (
     <View style={styles.root}>
       <SearchBar
         value={query}
         onChange={setQuery}
-        total={q ? total : -1}
+        total={q && !index ? -1 : q ? total : -1}
         current={shown + 1}
         note={q ? `全部 ${book.sheets.length} 个工作表` : undefined}
         onPrev={() => go(shown - 1)}
@@ -320,13 +551,15 @@ export function SheetReader({ document: doc }: { document: Document }) {
               ref={hRef}
               horizontal
               showsHorizontalScrollIndicator
+              onScroll={onGridScroll}
+              scrollEventThrottle={32}
               style={styles.gridScroll}
               contentContainerStyle={styles.gridContent}
             >
               <View style={{ width: gridWidth, flexGrow: 1 }}>
                 <FlatList
                   ref={listRef}
-                  data={viewRows.map((r) => r.row)}
+                  data={rowKeys}
                   keyExtractor={(r) => String(r)}
                   style={styles.grid}
                   initialNumToRender={20}
@@ -346,36 +579,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
                       });
                     }, 60);
                   }}
-                  renderItem={({ item, index }) => {
-                    const row = viewRows[index];
-                    const byCol = new Map(row.cells.map((cell) => [cell.col, cell.text]));
-                    return (
-                      <View style={[styles.tr, index % 2 === 1 && styles.trAlt]}>
-                        <View style={styles.gutter}>
-                          <Text style={styles.gutterText}>{item + 1}</Text>
-                        </View>
-                        {widths.map((w, col) => {
-                          const key = `${item},${col}`;
-                          const text = byCol.get(col) ?? '';
-                          const isHit = hitCells.has(key);
-                          return (
-                            <View key={col} style={[styles.td, { width: w }]}>
-                              <Text
-                                selectable
-                                style={[
-                                  styles.cellText,
-                                  isHit && styles.cellHit,
-                                  key === currentKey && styles.cellCurrent,
-                                ]}
-                              >
-                                {text}
-                              </Text>
-                            </View>
-                          );
-                        })}
-                      </View>
-                    );
-                  }}
+                  renderItem={renderRow}
                 />
               </View>
             </ScrollView>
@@ -422,7 +626,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   tr: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
   trAlt: { backgroundColor: c.hairSoft },
   gutter: {
-    width: 52,
+    width: SHEET_GUTTER,
     paddingHorizontal: 8,
     paddingVertical: 7,
     borderRightWidth: StyleSheet.hairlineWidth,
@@ -444,4 +648,5 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
   stateTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
   stateHint: { fontSize: 12.5, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
+  stateTip: { fontSize: 11.5, lineHeight: 17, color: c.text3, textAlign: 'center', maxWidth: 280 },
 });

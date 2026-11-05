@@ -14,6 +14,7 @@ import { LOCAL_READER_LIMITS, documentFormat } from '../formats';
 import { assertBody, assertChunkCount, contentFromText, splitByLines } from './chunk';
 import { assertDecodableText } from './textDecode';
 import { readWorkbook, workbookToContent } from './excelWorkbook';
+import { recallWorkbook, rememberWorkbook, workbookKey } from './workbookCache';
 import { extractPdfPages } from './pdfRuntime';
 import { readDocBytes, readDocText, requireFileUri } from './readerFiles';
 import { ReaderError, abortError, tooLargeMessage } from './errors';
@@ -91,10 +92,22 @@ async function extractWorkbookFile(
     );
   }
   const uri = requireFileUri(doc.fileUri);
-  const buf = await readDocBytes(uri);
+
+  /*
+   * 和阅读器共用同一份解析结果：用户通常是「先在这里准备，再点开看」，
+   * 两次 `XLSX.read` 里没有哪一次是必要的。缓存只是加速，失败照常往上抛。
+   */
+  const key = workbookKey(uri, doc.size);
+  let view = recallWorkbook(key);
+  if (!view) {
+    const buf = await readDocBytes(uri);
+    throwIfAborted(options.signal);
+    view = readWorkbook(buf);
+    rememberWorkbook(key, view);
+  }
   throwIfAborted(options.signal);
 
-  const content = workbookToContent(readWorkbook(buf));
+  const content = workbookToContent(view);
   options.onProgress?.(content.bodyMd);
   return content;
 }

@@ -66,6 +66,8 @@ const tscArgs = [
   'src/documents/readers/chunk.ts',
   'src/documents/readers/textDecode.ts',
   'src/documents/readers/excelWorkbook.ts',
+  'src/documents/readers/sheetWindow.ts',
+  'src/documents/readers/workbookCache.ts',
   'src/documents/readers/color.ts',
   '--rootDir',
   'src',
@@ -94,6 +96,8 @@ try {
 const chunk = require(path.join(outDir, 'documents', 'readers', 'chunk.js'));
 const decode = require(path.join(outDir, 'documents', 'readers', 'textDecode.js'));
 const excel = require(path.join(outDir, 'documents', 'readers', 'excelWorkbook.js'));
+const sheetWindow = require(path.join(outDir, 'documents', 'readers', 'sheetWindow.js'));
+const wbCache = require(path.join(outDir, 'documents', 'readers', 'workbookCache.js'));
 const color = require(path.join(outDir, 'documents', 'readers', 'color.js'));
 const formats = require(path.join(outDir, 'documents', 'formats.js'));
 const XLSX = require('xlsx');
@@ -357,7 +361,90 @@ check('坏文件给出可读错误', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. locator 与 formats 的口径对得上
+// 4. 表格分列窗口（v0.12.1）
+// ---------------------------------------------------------------------------
+
+check('列偏移从 gutter 之后开始累加', () => {
+  const offsets = sheetWindow.columnOffsets([100, 50, 80]);
+  eq(offsets[0], sheetWindow.SHEET_GUTTER, '第一列左边界');
+  eq(offsets[1], sheetWindow.SHEET_GUTTER + 100, '第二列');
+  eq(offsets[2], sheetWindow.SHEET_GUTTER + 150, '第三列');
+});
+
+check('空表没有窗口，也不会算出负数', () => {
+  const w = sheetWindow.visibleColumns([], [], 0, 400, 240);
+  eq(w.start, 0, 'start');
+  eq(w.end, 0, 'end');
+});
+
+check('scrollX=0 时窗口从第一列开始，且不把整表算进来', () => {
+  const widths = Array.from({ length: 30 }, () => 100);
+  const offsets = sheetWindow.columnOffsets(widths);
+  const w = sheetWindow.visibleColumns(offsets, widths, 0, 400, 240);
+  eq(w.start, 0, 'start');
+  // 可见 0..4（0..400）再加右侧 overscan 240 → 至少到第 6 列
+  assert(w.end >= 6, `窗口太窄：只到第 ${w.end} 列`);
+  assert(w.end < 30, '不该把整表都算进窗口');
+});
+
+check('滚到最右，窗口必须包含最后一列', () => {
+  const widths = Array.from({ length: 30 }, () => 100);
+  const offsets = sheetWindow.columnOffsets(widths);
+  const gridWidth = sheetWindow.SHEET_GUTTER + 3000;
+  const w = sheetWindow.visibleColumns(offsets, widths, gridWidth - 400, 400, 240);
+  eq(w.end, 30, '最后一列必须在窗口里');
+  assert(w.start > 0, '不该还从第一列开始');
+});
+
+check('两侧占位 + 窗口内列宽 === 总宽（破了横向滚动会跳）', () => {
+  const widths = [64, 120, 240, 64, 88, 240, 64, 64];
+  const offsets = sheetWindow.columnOffsets(widths);
+  const gridWidth = sheetWindow.SHEET_GUTTER + widths.reduce((a, b) => a + b, 0);
+  const content = gridWidth - sheetWindow.SHEET_GUTTER;
+  for (let x = 0; x <= gridWidth; x += 37) {
+    const w = sheetWindow.visibleColumns(offsets, widths, x, 360, 240);
+    const { left, right } = sheetWindow.spacerWidths(offsets, widths, w.start, w.end, gridWidth);
+    let sum = 0;
+    for (let i = w.start; i < w.end; i++) sum += widths[i];
+    eq(left + sum + right, content, `x=${x} 时占位对不上`);
+    assert(w.end > w.start, `x=${x} 时窗口是空的`);
+  }
+});
+
+check('窗口不越界（回弹到负数、滚过头都不许出界）', () => {
+  const widths = Array.from({ length: 5 }, () => 100);
+  const offsets = sheetWindow.columnOffsets(widths);
+  for (const x of [-999, 0, 250, 99999]) {
+    const w = sheetWindow.visibleColumns(offsets, widths, x, 300, 240);
+    assert(w.start >= 0 && w.start < 5, `x=${x} 时 start 越界：${w.start}`);
+    assert(w.end > w.start && w.end <= 5, `x=${x} 时 end 越界：${w.end}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 5. 解析结果缓存
+// ---------------------------------------------------------------------------
+
+check('缓存只认同一个键：换文件、换大小都不命中', () => {
+  wbCache.forgetWorkbook();
+  const view = { sheets: [], cellCount: 0, truncated: false, limit: 1 };
+  const key = wbCache.workbookKey('file:///a.xlsx', 1024);
+  eq(key, 'file:///a.xlsx|1024', '键 = uri + size');
+  wbCache.rememberWorkbook(key, view);
+  eq(wbCache.recallWorkbook(key), view, '同一个键要命中');
+  eq(wbCache.recallWorkbook(wbCache.workbookKey('file:///a.xlsx', 2048)), null, '大小变了不该命中');
+  eq(wbCache.recallWorkbook(wbCache.workbookKey('file:///b.xlsx', 1024)), null, '换文件不该命中');
+  eq(wbCache.recallWorkbook(null), null, '没有键返回 null');
+  wbCache.forgetWorkbook();
+  eq(wbCache.recallWorkbook(key), null, '清掉之后不该再命中');
+});
+
+check('没有原文件的记录不产生缓存键', () => {
+  eq(wbCache.workbookKey(null, 100), null, 'null uri');
+});
+
+// ---------------------------------------------------------------------------
+// 6. locator 与 formats 的口径对得上
 // ---------------------------------------------------------------------------
 
 check('locatorLabel 认得我们生成的三种 locator', () => {

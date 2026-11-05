@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-03 更新到 v0.12.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.12.0（versionCode 40）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-05 更新到 v0.12.1**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.12.1（versionCode 41）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -21,7 +21,7 @@
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.12.0 / versionCode 40 |
+| 版本 | v0.12.1 / versionCode 41 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -38,7 +38,7 @@
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
 | 自动化测试 | 没有单测框架，但有三道机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run check:docs`（文档一致性 7 项）、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，71 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，75 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
@@ -166,12 +166,14 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `src/documents/formats.ts` | 128 | 格式判定与唯一判据：`documentFormat` / `isDocumentReady` / `notReadyReason` / `locatorLabel` / `LOCAL_READER_LIMITS` |
 | `src/documents/jobs.ts` | 487 | **应用级任务服务**：单文档互斥、`runId` + `expectedRevision` 写回、`AbortSignal` 取消、离页不中断、杀进程后收拾 `parsing` 尸体 |
-| `src/documents/readers/extract.ts` | 143 | 本地提取总入口：按格式分派，产出正文 + 切片 + locator |
+| `src/documents/readers/extract.ts` | 156 | 本地提取总入口：按格式分派，产出正文 + 切片 + locator；表格复用解析缓存 |
 | `src/documents/readers/chunk.ts` | 182 | 切片：按段落/行切、真实行号、`contentFromText`；超片数明确失败 |
 | `src/documents/readers/excelWorkbook.ts` | 321 | 表格解析：**不按 `!ref` 遍历**、宽表不丢列、公式只读缓存值、先认文件头 |
+| `src/documents/readers/workbookCache.ts` | 39 | 工作簿解析结果**单槽缓存**（键 = `fileUri + size`），阅读器与本地准备共用 |
+| `src/documents/readers/sheetWindow.ts` | 96 | 表格分列渲染的窗口计算（纯函数）：列偏移、可见列区间、左右占位 |
 | `src/documents/readers/pdfRuntime.tsx` | 301 | 常驻 PDF 提取队列，`<DocumentRuntime />` 挂在 App 根，不跟页面生死 |
 | `src/documents/readers/PdfReader.tsx` | 229 | PDF 阅读：PDF.js 文本层 + 跨页查找 + 逐页提取 |
-| `src/documents/readers/SheetReader.tsx` | 447 | 表格阅读：工作表切换、单元格/行列定位、内查找 |
+| `src/documents/readers/SheetReader.tsx` | 652 | 表格阅读：工作表切换、单元格/行列定位、内查找；列按视口窗口渲染 |
 | `src/documents/readers/TextReader.tsx` | 358 | txt / md 阅读：真实行号、内查找；原件被删时回退到正文快照 |
 | `src/ai/documentRetrieval.ts` | 530 | 文档检索与装填：逐篇检索、每篇保底预算、概括类覆盖策略、D 引用快照 |
 | `src/util/qaScope.ts` | 70 | 问答范围：`normalizeQaScope` / `qaScopeKey` / `sameQaScope` |
@@ -592,7 +594,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-71 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+75 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**
