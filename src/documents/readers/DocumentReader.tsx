@@ -6,10 +6,9 @@
  * 原件还在，明确告诉用户「用外部应用打开」比给个打不开的空白页好。
  */
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
 import type { Document } from '../../types';
 import { ScreenHeader } from '../../components/ScreenHeader';
-import { NoteBody } from '../../components/NoteBody';
 import { useThemedStyles, type Palette } from '../../theme';
 import { documentFormat, type DocumentFormat } from '../formats';
 import { formatSize } from './errors';
@@ -69,14 +68,18 @@ export function DocumentReader({
          * Word / PPT / 图片没有本机阅读器，但**云解析出来过正文**。
          * 这一段不能省：v0.11.0 里它们就是靠这段文本可读的，
          * 换成「这种格式读不了」等于把已有内容弄丢了。
-         * 所以有正文就按 Markdown 显示，并说清楚「这是转出来的，不是原版式」。
+         *
+         * 以前这里是一个 ScrollView + 整篇 NoteBody：几百个块一次性布局，
+         * 文档越长打开越慢、滑动越顿，而且没有查找。现在交给 TextReader，
+         * 分块虚拟化和查找栏都是现成的，代价只是把正文从库里读出来。
          */
-        <ScrollView contentContainerStyle={styles.snapshot} showsVerticalScrollIndicator={false}>
-          <Text style={styles.snapshotHint}>
-            这是云解析得到的文本，版式可能失真。要看原样请用「打开原文件」。
-          </Text>
-          <NoteBody text={doc.bodyMd} variant="reading" selectable literalCitations />
-        </ScrollView>
+        <TextReader
+          key={`snapshot-${doc.id}`}
+          document={doc}
+          mode="markdown"
+          text={doc.bodyMd}
+          notice="这是云解析得到的文本，版式可能失真。要看原样请用「打开原文件」。"
+        />
       ) : (
         <View style={styles.state}>
           <Text style={styles.stateTitle}>这种格式还没有应用内阅读器</Text>
@@ -94,6 +97,4 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
   stateTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
   stateHint: { fontSize: 12.5, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
-  snapshot: { paddingHorizontal: 22, paddingTop: 18, paddingBottom: 40 },
-  snapshotHint: { fontSize: 12, lineHeight: 18, color: c.text3, marginBottom: 12 },
 });

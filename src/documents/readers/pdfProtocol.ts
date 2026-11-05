@@ -41,8 +41,16 @@ export type PdfToPage =
 
 export type PdfFromPage =
   | { type: 'ready' }
-  /** 文档打开了。`pageCount` 是真实页数，用来判页数上限 */
-  | { type: 'loaded'; pageCount: number; hasText: boolean }
+  /**
+   * 文档打开了（首屏可以画了）。
+   *
+   * `hasText` 为 `null` 表示**文字还没索引**：阅读模式不再等全篇 `getTextContent`
+   * 才报 `loaded`，否则 100 页的 PDF 要等它跑完才画出第一页。有结果之后再补一条
+   * `text-ready`。提取模式（`done`）不受影响，它本来就要求整篇跑完。
+   */
+  | { type: 'loaded'; pageCount: number; hasText: boolean | null }
+  /** 后台文字索引完成。`hasText=false` 是扫描件：能翻不能搜 */
+  | { type: 'text-ready'; hasText: boolean }
   /** 提取进度。`text` 是**已提取部分的累计文本**，任务层只拿它显示进度 */
   | { type: 'progress'; pagesDone: number; text: string }
   /** 提取完成。空字符串页保留位置，切片时按 page 号定位 */

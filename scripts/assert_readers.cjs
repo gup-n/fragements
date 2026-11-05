@@ -17,6 +17,7 @@
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const root = path.resolve(__dirname, '..');
 const outDir = path.join(root, '.tmp-assert-readers');
@@ -68,6 +69,7 @@ const tscArgs = [
   'src/documents/readers/excelWorkbook.ts',
   'src/documents/readers/sheetWindow.ts',
   'src/documents/readers/workbookCache.ts',
+  'src/documents/readers/textBlocks.ts',
   'src/documents/readers/color.ts',
   '--rootDir',
   'src',
@@ -98,6 +100,7 @@ const decode = require(path.join(outDir, 'documents', 'readers', 'textDecode.js'
 const excel = require(path.join(outDir, 'documents', 'readers', 'excelWorkbook.js'));
 const sheetWindow = require(path.join(outDir, 'documents', 'readers', 'sheetWindow.js'));
 const wbCache = require(path.join(outDir, 'documents', 'readers', 'workbookCache.js'));
+const textBlocks = require(path.join(outDir, 'documents', 'readers', 'textBlocks.js'));
 const color = require(path.join(outDir, 'documents', 'readers', 'color.js'));
 const formats = require(path.join(outDir, 'documents', 'formats.js'));
 const XLSX = require('xlsx');
@@ -464,6 +467,115 @@ check('withAlpha 输出半透明色（高亮不能盖住 PDF 的字）', () => {
   eq(color.withAlpha('#FAEEDA', 0.5), 'rgba(250,238,218,0.5)', 'rgba 转换');
   eq(color.withAlpha('#abc', 1), 'rgba(170,187,204,1)', '三位简写');
   eq(color.withAlpha('not-a-color', 0.4), 'not-a-color', '非法输入原样返回');
+});
+
+// ---------------------------------------------------------------------------
+// 7. 正文分块（TXT / Markdown / 云解析快照共用）
+// ---------------------------------------------------------------------------
+
+check('分块拼回去一个字不少', () => {
+  const text = [
+    '# 标题',
+    '',
+    '第一段正文，包含中文和 English mixed 内容。',
+    '',
+    '- 列表项一',
+    '- 列表项二',
+    '',
+    '| 项目 | 标准 |',
+    '| --- | --- |',
+    '| 住宿 | 600 |',
+    '',
+    '```js',
+    'const a = 1;',
+    '```',
+    '',
+    '结尾一段。',
+  ].join('\n');
+  const blocks = textBlocks.buildBlocks(text);
+  // 行首空行会被丢掉（既省预算又不让「第 N 行」指到空行），所以按非空白比较
+  eq(squish(blocks.map((b) => b.text).join('')), squish(text), '分块前后正文必须一致');
+});
+
+check('块的 start 是真实偏移（TXT 靠它把命中映射回块）', () => {
+  const text = '甲'.repeat(2000) + '\n\n' + '乙'.repeat(2000) + '\n\n' + '丙'.repeat(500);
+  const blocks = textBlocks.buildBlocks(text);
+  assert(blocks.length > 1, '应该切成多块');
+  for (const b of blocks) {
+    eq(text.slice(b.start, b.start + b.text.length), b.text, 'start 处的切片必须等于块内容');
+  }
+});
+
+check('块的起始行号对得上原文', () => {
+  const text = '第一行\n第二行\n\n第四行\n第五行';
+  const blocks = textBlocks.buildBlocks(text);
+  const lines = text.split('\n');
+  for (const b of blocks) {
+    eq(lines[b.lineStart - 1], b.text.split('\n')[0], 'lineStart 应该指到块的第一行');
+    eq(lines[b.lineEnd - 1], b.text.split('\n').slice(-1)[0], 'lineEnd 应该指到块的最后一行');
+  }
+});
+
+check('代码围栏不被切断（切开就是半个 ```，后面全变代码）', () => {
+  const code = Array.from({ length: 120 }, (_, i) => `console.log(${i});`).join('\n');
+  const text = `前言\n\n\`\`\`js\n${code}\n\`\`\`\n\n后记`;
+  const blocks = textBlocks.buildBlocks(text);
+  for (const b of blocks) {
+    const fences = b.text.split('\n').filter((l) => /^\s*```/.test(l)).length;
+    eq(fences % 2, 0, '每个块里的围栏标记必须是成对的');
+  }
+});
+
+check('表格不被切成两段（GFM 要求连续）', () => {
+  const rows = Array.from({ length: 200 }, (_, i) => `| 行 ${i} | 值 ${i} |`).join('\n');
+  const blocks = textBlocks.buildBlocks(`| 项目 | 值 |\n| --- | --- |\n${rows}\n\n结尾`);
+  for (let i = 0; i + 1 < blocks.length; i++) {
+    const tail = blocks[i].text.split('\n').filter(Boolean).slice(-1)[0] || '';
+    const head = blocks[i + 1].text.split('\n').filter(Boolean)[0] || '';
+    if (tail.includes('|') && head.includes('|')) {
+      throw new Error(`第 ${i} 块和第 ${i + 1} 块之间切断了表格`);
+    }
+  }
+});
+
+check('空文本不产出块', () => {
+  eq(textBlocks.buildBlocks('').length, 0, '空串');
+  eq(textBlocks.buildBlocks('\n\n\n').length, 0, '只有空行');
+});
+
+check('命中偏移落到正确的块（含边界）', () => {
+  const text = '甲'.repeat(1500) + '\n\n' + '乙'.repeat(1500);
+  const blocks = textBlocks.buildBlocks(text);
+  assert(blocks.length === 2, `应该正好两块，实际 ${blocks.length}`);
+  eq(textBlocks.blockAt(blocks, 0), 0, '开头');
+  eq(textBlocks.blockAt(blocks, blocks[0].start + 10), 0, '第一块内部');
+  eq(textBlocks.blockAt(blocks, blocks[1].start), 1, '第二块起点');
+  eq(textBlocks.blockAt(blocks, blocks[1].start + 100), 1, '第二块内部');
+});
+
+// ---------------------------------------------------------------------------
+// 8. 阅读器页面里的内联脚本
+// ---------------------------------------------------------------------------
+
+/**
+ * `reader.template.html` 里那段 JS 是字符串，`tsc` 检查不到它 ——
+ * 语法错一个括号，表现是「打开 PDF 一片空白」，真机上才看得见。
+ * 这里只做**解析**（`vm.Script` 不执行），能在十几毫秒里把这类错误挡在提交前。
+ */
+check('reader.template.html 的内联脚本语法正确', () => {
+  const html = fs.readFileSync(
+    path.join(root, 'src', 'documents', 'readers', 'pdfjs', 'reader.template.html'),
+    'utf8',
+  );
+  const blocks = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert(blocks.length >= 2, `应该找到至少 2 段内联脚本，实际 ${blocks.length}`);
+  for (let i = 0; i < blocks.length; i++) {
+    try {
+      new vm.Script(blocks[i], { filename: `reader.template.html#script${i + 1}` });
+    } catch (e) {
+      throw new Error(`第 ${i + 1} 段脚本语法错误：${e.message}`);
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,14 @@ interface Props {
   onNext: () => void;
   /** 关闭输入（比如 PDF 没有文字层） */
   disabled?: boolean;
+  /**
+   * 可以输入，但结果还没算出来（PDF 正在后台建文字索引）。
+   *
+   * 和 `disabled` 分开：索引中是「还没查」，不是「查不到」。用 disabled 的话
+   * 输入框会变灰、占位符写着「没有可查找的文字」—— 那是在说谎，用户也就没机会
+   * 先把词打进去等结果。
+   */
+  busy?: boolean;
   /** 「当前工作表」「第 12 行」这类补充说明，跟在计数后面 */
   note?: string;
   placeholder?: string;
@@ -45,6 +53,7 @@ export function SearchBar({
   onPrev,
   onNext,
   disabled,
+  busy,
   note,
   placeholder = '在文档里查找',
 }: Props) {
@@ -79,7 +88,7 @@ export function SearchBar({
       {trimmed ? (
         <View style={styles.hitRow}>
           <Text style={styles.hitText} numberOfLines={1}>
-            {countLabel(total, current, note)}
+            {busy ? '正在索引文字…' : countLabel(total, current, note)}
           </Text>
           <View style={styles.hitBtns}>
             <IconButton

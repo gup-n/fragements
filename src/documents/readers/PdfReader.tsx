@@ -32,7 +32,12 @@ export function PdfReader({ document: doc }: Props) {
 
   const [uri, setUri] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
-  const [hasText, setHasText] = useState(true);
+  /**
+   * 文字索引的状态。**不能用一个 boolean**：`indexing` 是「还不知道」，
+   * 和 `none`（扫过了，确实没有文字层）在界面上必须分开 —— 混成一个 false
+   * 会让每份正常 PDF 打开时先闪一下「没有文字层」。
+   */
+  const [textState, setTextState] = useState<'indexing' | 'ready' | 'none'>('indexing');
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -80,7 +85,7 @@ export function PdfReader({ document: doc }: Props) {
     setQuery('');
     setError(null);
     setPageCount(null);
-    setHasText(true);
+    setTextState('indexing');
   }, [doc.id]);
 
   const open = useCallback(() => {
@@ -103,8 +108,12 @@ export function PdfReader({ document: doc }: Props) {
           return;
         case 'loaded':
           setOpened(true);
-          setHasText(msg.hasText);
+          if (msg.hasText === null) setTextState('indexing');
+          else setTextState(msg.hasText ? 'ready' : 'none');
           setPageCount(msg.pageCount);
+          return;
+        case 'text-ready':
+          setTextState(msg.hasText ? 'ready' : 'none');
           return;
         case 'find':
           setFind({ total: msg.total, current: msg.current });
@@ -124,9 +133,11 @@ export function PdfReader({ document: doc }: Props) {
     if (opened) view.current?.send({ type: 'theme', theme });
   }, [opened, theme]);
 
-  // 查询词变化：下发给页面，计数清零等回包
+  // 查询词变化：下发给页面，计数清零等回包。
+  // `textState` 进依赖是有意的：文字索引建好之后要把当前查询词补发一次，
+  // 否则「打开就搜」会永远停在「正在索引」等不到结果。
   useEffect(() => {
-    if (!opened) return;
+    if (!opened || textState !== 'ready') return;
     const q = query.trim();
     if (!q) {
       setFind({ total: -1, current: 0 });
@@ -134,7 +145,7 @@ export function PdfReader({ document: doc }: Props) {
     }
     setFind({ total: -1, current: 0 });
     view.current?.send({ type: 'find', query: q });
-  }, [opened, query]);
+  }, [opened, query, textState]);
 
   const step = useCallback((delta: number) => {
     view.current?.send({ type: 'find-move', delta });
@@ -158,11 +169,11 @@ export function PdfReader({ document: doc }: Props) {
             current={find.current}
             onPrev={() => step(-1)}
             onNext={() => step(1)}
-            disabled={!opened || !hasText}
-            note={!hasText && opened ? '没有文字层' : undefined}
+            disabled={!opened || textState === 'none'}
+            busy={opened && textState === 'indexing'}
           />
 
-          {opened && !hasText ? (
+          {opened && textState === 'none' ? (
             <Text style={styles.notice}>
               这份 PDF 没有文字层（扫描件）：可以翻页，但不能查找，也不能用来提问。
               需要正文请用 MinerU 云解析（会上传原件，需要你确认）。

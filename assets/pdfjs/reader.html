@@ -158,10 +158,16 @@
     pageTexts: [],     // 每页的拼接文本，索引 0 = 第 1 页
     pageSpans: [],     // 每页的 item 区间，索引同上
     hasText: false,
+    /** 阅读模式下文字索引是否已建好。没建好时查找不能给结果，也不能说「没有文字层」 */
+    textReady: false,
     scale: 1,
     boxes: [],         // 每页的 DOM 容器
     rendered: {},      // 已渲染的页（1 起）
     renderOrder: [],
+    /** 当前在视野内（含 rootMargin）的页。队列出队时用它把「已经划走」的页丢掉 */
+    visible: {},
+    /** 跳转目标页：即使已经划走也必须画出来 */
+    forced: {},
     observer: null,
     hits: [],
     hitIndex: -1,
@@ -403,7 +409,8 @@
     var box = S.boxes[h.page - 1];
     if (!box) return;
     if (!S.rendered[h.page]) {
-      renderPage(h.page).then(function () {
+      // 走队列而不是直接画：这一页可能正排在别的页后面，直接并发会让跳转和滚动打架
+      whenRendered(h.page).then(function () {
         paintHits();
         box.scrollIntoView({ block: 'center' });
       });
@@ -475,6 +482,65 @@
     });
   }
 
+  /* ---------------- 渲染队列：一次只画一页 ---------------- */
+
+  /**
+   * 为什么要串行：`rootMargin: 900px` 在手机上一次能让 3–4 页同时进入视野，
+   * 而 `renderPage` 是「整页全分辨率 canvas + TextLayer」，全部压在 WebView 主线程上。
+   * 并发它们不会更快出结果，只会让正在滑的那一帧掉帧 —— 用户感觉就是「卡」。
+   * 排队之后每一页仍然照画，只是画完一页再开始下一页。
+   */
+  var renderQueue = [];
+  var rendering = false;
+  /** 跳转等待者：page → resolve 列表。跳过去的页必须画，不能因为是「划走了」就跳过 */
+  var waiters = {};
+
+  function settleWaiters(p) {
+    var list = waiters[p];
+    if (!list) return;
+    delete waiters[p];
+    for (var i = 0; i < list.length; i++) list[i]();
+  }
+
+  function startRender(p) {
+    rendering = true;
+    renderPage(p).then(function () {
+      rendering = false;
+      settleWaiters(p);
+      pumpRender();
+    });
+  }
+
+  function pumpRender() {
+    if (rendering || S.failed) return;
+    while (renderQueue.length) {
+      var p = renderQueue.shift();
+      if (S.rendered[p]) { settleWaiters(p); continue; }
+      // 已经滑出视野、也没人等着看：不画。快速滑过 300 页时这一步省掉大量白工
+      if (!S.visible[p] && !S.forced[p]) { settleWaiters(p); continue; }
+      startRender(p);
+      return;
+    }
+  }
+
+  function enqueueRender(p, must) {
+    if (!p || p < 1 || p > S.pageCount) return;
+    if (!must && S.rendered[p]) return;
+    if (must) S.forced[p] = true;
+    if (renderQueue.indexOf(p) < 0) renderQueue.push(p);
+    pumpRender();
+  }
+
+  /** 等某一页真的画完。查找跳转要用：`revealHit` 之后才能 paintHits */
+  function whenRendered(p) {
+    return new Promise(function (resolve) {
+      if (S.rendered[p] || S.failed) return resolve();
+      (waiters[p] = waiters[p] || []).push(resolve);
+      enqueueRender(p, true);
+    });
+  }
+
+
   /* ---------------- 打开文档 ---------------- */
 
   function mapLoadError(e) {
@@ -533,11 +599,18 @@
         fail('too-many-pages', '这份 PDF 有 ' + S.pageCount + ' 页，超过应用内阅读上限 ' + msg.maxPages + ' 页。原件仍在本机，可以用其它应用打开。');
         return;
       }
-      return collectText(doc).then(function () {
-        if (S.failed) return;
-        if (S.mode === 'extract') return extractDone();
-        return buildView(msg);
-      });
+      /*
+       * 提取模式（「准备资料」）必须整篇跑完，这是它的产出本身。
+       * 阅读模式不能等：`collectText` 对每一页都要 `getTextContent`（解码内容流、
+       * 加载字体），100 页就是 100 次 worker 往返；而画第一页完全不需要它。
+       * 以前两种模式都先跑一遍，等于「翻开书之前先把全书抄一遍」。
+       */
+      if (S.mode === 'extract') {
+        return collectText(doc).then(function () {
+          if (!S.failed) extractDone();
+        });
+      }
+      return buildView(msg);
     }).catch(function (e) {
       if (S.failed) return;
       var pair = mapLoadError(e);
@@ -582,6 +655,35 @@
     });
   }
 
+  /**
+   * 阅读模式的文字索引：**首屏画完之后**才跑。
+   *
+   * 跑完之前「有没有文字层」是未知的（`hasText: null`），而不是 false ——
+   * 先报 false 会让每一份正常 PDF 都闪一下「没有文字层」的提示，
+   * 那是把「还没查」说成「查过了没有」。
+   */
+  function startTextIndex() {
+    if (S.failed || S.textReady || !S.doc) return;
+    collectText(S.doc).then(function () {
+      if (S.failed) return;
+      S.textReady = true;
+      if (!S.hasText) {
+        showHint('这份 PDF 没有文字层（扫描件）', [
+          '可以翻页查看，但不能在应用内查找，也不能用来提问。',
+          '需要正文请用 MinerU 云解析（会上传原件，需要你确认）。',
+        ]);
+      }
+      post({ type: 'text-ready', hasText: S.hasText });
+    }).catch(function () {
+      // 索引建不起来（内存紧张、页面被回收）不该毁掉已经能看的阅读界面：
+      // 报一次「不可查找」，让用户知道按钮为什么灰着，而不是一直转
+      if (S.failed) return;
+      S.textReady = true;
+      S.hasText = false;
+      post({ type: 'text-ready', hasText: false });
+    });
+  }
+
   /* ---------------- 视图：占位 + 懒渲染 ---------------- */
 
   function buildView(msg) {
@@ -590,6 +692,10 @@
     S.boxes = [];
     S.rendered = {};
     S.renderOrder = [];
+    S.visible = {};
+    S.forced = {};
+    renderQueue = [];
+    waiters = {};
 
     var width = Math.max(200, window.innerWidth);
 
@@ -622,30 +728,30 @@
     }
 
     return chain.then(function () { return step(1); }).then(function () {
-      if (!S.hasText) {
-        showHint('这份 PDF 没有文字层（扫描件）', [
-          '可以翻页查看，但不能在应用内查找，也不能用来提问。',
-          '需要正文请用 MinerU 云解析（会上传原件，需要你确认）。',
-        ]);
-      }
+      if (S.failed) return;
       setStatus('');
-      post({ type: 'loaded', pageCount: S.pageCount, hasText: S.hasText });
+      // hasText: null —— 文字还没索引，先别下结论（见 startTextIndex）
+      post({ type: 'loaded', pageCount: S.pageCount, hasText: null });
 
-      if (S.observer) S.observer.disconnect();
+      if (S.observer) { S.observer.disconnect(); S.observer = null; }
       if (typeof IntersectionObserver === 'function') {
         S.observer = new IntersectionObserver(function (entries) {
           for (var i = 0; i < entries.length; i++) {
-            if (!entries[i].isIntersecting) continue;
-            var p = Number(entries[i].target.getAttribute('data-page'));
-            renderPage(p);
+            var box = entries[i].target;
+            var p = Number(box.getAttribute('data-page'));
+            if (!entries[i].isIntersecting) { delete S.visible[p]; continue; }
+            S.visible[p] = true;
+            enqueueRender(p);
           }
         }, { rootMargin: '900px 0px' });
         for (var i = 0; i < S.boxes.length; i++) S.observer.observe(S.boxes[i]);
       } else {
         // 没有 IntersectionObserver 的老 WebView：退化成先画前 3 页
-        for (var k = 1; k <= Math.min(3, S.pageCount); k++) renderPage(k);
+        for (var k = 1; k <= Math.min(3, S.pageCount); k++) enqueueRender(k);
       }
-      renderPage(1);
+      enqueueRender(1, true);
+      // 索引让出这一帧：先让第 1 页画出来，再开始扫全书
+      setTimeout(startTextIndex, 0);
     });
   }
 
@@ -666,7 +772,13 @@
       post({ type: 'error', code: 'aborted', message: '已取消' });
       return;
     }
-    if (msg.type === 'find') { runFind(msg.query); return; }
+    if (msg.type === 'find') {
+      // 文字索引没建好之前不给结果：返回 0 处会被读成「没有」，而实际是「还没查」。
+      // RN 侧在收到 text-ready 之后会把当前的查询词重发一次，这里直接丢掉即可。
+      if (!S.textReady) return;
+      runFind(msg.query);
+      return;
+    }
     if (msg.type === 'find-move') { moveFind(Number(msg.delta) || 1); return; }
   }
 

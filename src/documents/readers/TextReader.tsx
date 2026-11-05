@@ -30,92 +30,10 @@ import { parseBlocks, type Seg } from '../../util/mdBlocks';
 import { SearchBar } from './SearchBar';
 import { readDocText } from './readerFiles';
 import { readerMessage } from './errors';
+import { blockAt, buildBlocks, type Block } from './textBlocks';
 
 /** 单次查找最多认多少处。超过就不再往上加，界面显示 99+ */
 const MAX_HITS = 999;
-
-interface Block {
-  text: string;
-  /** 在整篇文本里的起始偏移（TXT 用来把命中映射回块） */
-  start: number;
-  lineStart: number;
-  lineEnd: number;
-}
-
-/**
- * 切成可虚拟化的块。
- *
- * 为什么不按行：4 MB 文本可能有十几万行，一行一个 FlatList item，光 key 就够卡。
- * 也不能切得太碎：块多到几千个时滚动同步会抖。目标 ~1 KB 一块。
- *
- * 两条不能切的位置：
- * - **代码围栏内部**：切开会留下半个 ```，后面全被当成代码；
- * - **表格行之间**：GFM 表格要求连续，切开就成了两段竖线。
- */
-function buildBlocks(text: string): Block[] {
-  const lines = text.split('\n');
-  const blocks: Block[] = [];
-  let buf: string[] = [];
-  let size = 0;
-  let startLine = 0;
-  let endLine = 0;
-  let startOffset = 0;
-  let offset = 0;
-  let inFence = false;
-
-  const MAX = 1200;
-  const SOFT = 320;
-
-  const push = () => {
-    if (!buf.length) return;
-    blocks.push({ text: buf.join('\n'), start: startOffset, lineStart: startLine, lineEnd: endLine });
-    buf = [];
-    size = 0;
-  };
-
-  for (let i = 0; i < lines.length; i++) {
-    const raw = lines[i];
-    const lineOffset = offset;
-    offset += raw.length + 1;
-
-    if (/^\s*```/.test(raw)) inFence = !inFence;
-
-    if (!buf.length) {
-      if (!raw.trim()) continue;
-      startLine = i + 1;
-      startOffset = lineOffset;
-    }
-
-    buf.push(raw);
-    size += raw.length + 1;
-    endLine = i + 1;
-
-    if (inFence || size < SOFT) continue;
-    const next = lines[i + 1] ?? '';
-    if (raw.includes('|') && next.includes('|')) continue;
-    if (size >= MAX || !next.trim()) push();
-  }
-
-  push();
-  return blocks;
-}
-
-/** 命中偏移落在哪一块。块按 start 升序，二分即可 */
-function blockAt(blocks: Block[], offset: number): number {
-  let lo = 0;
-  let hi = blocks.length - 1;
-  let best = 0;
-  while (lo <= hi) {
-    const mid = (lo + hi) >> 1;
-    if (blocks[mid].start <= offset) {
-      best = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return best;
-}
 
 /**
  * 一个 seg 在「字面量模式」下显示成什么。
@@ -130,9 +48,35 @@ function segText(seg: Seg): string {
 interface Props {
   document: Document;
   mode: 'text' | 'markdown';
+  /**
+   * 直接给正文，不读原文件。
+   *
+   * 云解析出来的 Word / PPT 只有一段 Markdown 快照（库里 `bodyMd`），没有可读的
+   * 原版式。以前这条分支在 `DocumentReader` 里自己包一个 ScrollView 把整篇塞
+   * 给 `NoteBody`：几百个块一次布局，越长的文档越顿，而且**没有查找**。
+   * 走这里就自动拿到分块虚拟化和查找栏。
+   */
+  text?: string;
+  /** 正文上方的说明（例如「这是转出来的，不是原版式」）。跟内容一起滚走 */
+  notice?: string;
 }
 
-export function TextReader({ document: doc, mode }: Props) {
+/**
+ * 库里这份正文是不是**就是这个文件本身**？
+ *
+ * txt/md 的本地提取产物就是原文件（`contentSource` 与格式一一对应），
+ * 所以能拿它顶替「再读一次磁盘 + 再解一次 UTF-8」——4 MB 的文本这一下
+ * 通常是几百毫秒。云解析（mineru）的正文**绝不能**用在这里：那是 OCR 结果，
+ * 和原文件不是一个东西，拿来显示等于偷偷改了用户的文档。
+ */
+function storedBodyOf(doc: Document, mode: 'text' | 'markdown'): string | null {
+  if (doc.contentRevision <= 0) return null;
+  if (doc.contentSource !== mode) return null;
+  const body = doc.bodyMd ?? '';
+  return body.length > 0 ? body : null;
+}
+
+export function TextReader({ document: doc, mode, text: providedText, notice }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -154,6 +98,20 @@ export function TextReader({ document: doc, mode }: Props) {
     setHitIndex(0);
     setQuery('');
     let cancelled = false;
+
+    // 已经拿在手上的正文（云解析快照）：不必再碰磁盘，也就没有读取失败这一步
+    if (providedText !== undefined) {
+      setText(providedText);
+      return;
+    }
+
+    // 本机提取过、且提取的就是这个文件本身：库里的正文和文件逐字相同，直接用它
+    const stored = storedBodyOf(doc, mode);
+    if (stored !== null) {
+      setText(stored);
+      return;
+    }
+
     (async () => {
       try {
         // 原件已经不在了（用户清理过存储）但正文快照还在：这时候读库里的 bodyMd。
@@ -169,7 +127,18 @@ export function TextReader({ document: doc, mode }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [doc.fileUri, doc.id, doc.updatedAt, doc.bodyMd]);
+  }, [
+    // 逐个字段而不是整个 `doc`：父层刷新时会给出新的对象，引用一变就会把用户的
+    // 查找词和滚动位置清掉。这几项变了才真的代表「正文换了一份」。
+    doc.fileUri,
+    doc.id,
+    doc.updatedAt,
+    doc.bodyMd,
+    doc.contentSource,
+    doc.contentRevision,
+    mode,
+    providedText,
+  ]);
 
   const blocks = useMemo(() => (text === null ? [] : buildBlocks(text)), [text]);
   const q = query.trim();
@@ -210,6 +179,12 @@ export function TextReader({ document: doc, mode }: Props) {
 
   const total = hitBlocks.length;
   const shown = total > 0 ? Math.min(hitIndex, total - 1) : 0;
+
+  /** 说明文字跟内容一起滚走，不占着屏幕顶部 */
+  const header = useMemo(
+    () => (notice ? <Text style={styles.notice}>{notice}</Text> : undefined),
+    [notice, styles.notice],
+  );
 
   useEffect(() => {
     setHitIndex(0);
@@ -303,6 +278,7 @@ export function TextReader({ document: doc, mode }: Props) {
           ref={listRef}
           data={blocks}
           keyExtractor={(_, i) => String(i)}
+          ListHeaderComponent={header}
           style={styles.list}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
@@ -350,6 +326,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   list: { flex: 1 },
   listContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 60 },
   block: { marginBottom: 6 },
+  notice: { fontSize: 12, lineHeight: 18, color: c.text3, marginBottom: 12 },
   body: { fontSize: 16, lineHeight: 27, color: c.text, letterSpacing: 0.2 },
   hit: { backgroundColor: c.amberBg, borderRadius: 3 },
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
