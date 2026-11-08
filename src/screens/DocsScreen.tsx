@@ -29,6 +29,7 @@ import { MAX_ASK_DOCUMENTS } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { deleteOriginal, pickDocumentFile, saveOriginal } from '../db/docFiles';
+import { dropViewCache } from '../documents/readers/viewCache';
 import { getMineruToken } from '../ai/mineru';
 import {
   CLOUD_SUPPORT_HINT,
@@ -272,6 +273,9 @@ export function DocsScreen({ onClose, onAsk }: Props) {
       showToast('原文件没删掉（可能被别的应用占用），记录先留着，可以再删一次');
       return;
     }
+
+    // 原件没了，派生出来的解析缓存也没有意义了 —— 几 MB 的 JSON 不能留下
+    await dropViewCache(target.fileUri);
 
     try {
       await repo.deleteDocument(target.id);

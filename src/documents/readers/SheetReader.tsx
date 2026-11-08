@@ -15,6 +15,8 @@
  * - 解析结果按文件缓存，退出再进来不再重解析；
  * - 搜索索引推迟到真正输入时才建（以前一开屏就给每个单元格建一个 span 对象）；
  * - 只物化当前工作表，列按视口窗口渲染（以前一屏最多 20 行 × 60 列 = 1200 个节点）。
+ *
+ * v0.14.0 起缓存不只在内存里：解析结果会落盘，**重启 App 之后再打开也不用重解析**。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -43,6 +45,7 @@ import {
 import { readDocBytes } from './readerFiles';
 import { readerMessage, formatSize } from './errors';
 import { recallWorkbook, rememberWorkbook, workbookKey } from './workbookCache';
+import { readViewCache, writeViewCache } from './viewCache';
 import { SHEET_GUTTER, columnOffsets, spacerWidths, visibleColumns } from './sheetWindow';
 import { SearchBar } from './SearchBar';
 
@@ -199,16 +202,30 @@ export function SheetReader({ document: doc }: { document: Document }) {
     let cancelled = false;
 
     const key = workbookKey(doc.fileUri, doc.size);
+    const uri = doc.fileUri ?? '';
     (async () => {
       try {
-        // 命中缓存就直接出图：这是「退出再进来」的常见路径，不该再解析一遍
+        // 命中内存缓存就直接出图：这是「退出再进来」的常见路径，不该再解析一遍
         const cached = recallWorkbook(key);
         if (cached) {
           if (!cancelled && alive.current) setBook(cached);
           return;
         }
 
-        const buf = await readDocBytes(doc.fileUri ?? '');
+        /*
+         * 磁盘上的那份解析结果。走这条路时**原件连读都不读** ——
+         * 一张 4 MB 的表光是读成 ArrayBuffer 再交给 SheetJS 就是几百毫秒，
+         * 而上次解析出来的东西一直躺在旁边。重启 App 之后仍然有效。
+         */
+        const onDisk = await readViewCache(doc.fileUri, doc.size);
+        if (cancelled || !alive.current) return;
+        if (onDisk) {
+          rememberWorkbook(key, onDisk);
+          setBook(onDisk);
+          return;
+        }
+
+        const buf = await readDocBytes(uri);
         if (cancelled || !alive.current) return;
 
         /*
@@ -224,6 +241,15 @@ export function SheetReader({ document: doc }: { document: Document }) {
         const view = readWorkbook(buf);
         rememberWorkbook(key, view);
         if (!cancelled && alive.current) setBook(view);
+
+        /*
+         * 落盘放在首屏之后：一张 10 万格的表要写 1.9 MB，和第一帧抢同一个
+         * JS 线程不值得。这里不 await，也不管成败 —— 缓存写不进去最多是
+         * 下次再解析一次，不能影响这次阅读。
+         */
+        setTimeout(() => {
+          void writeViewCache(doc.fileUri, doc.size, view);
+        }, 300);
       } catch (e) {
         if (!cancelled && alive.current) setError(readerMessage(e, '读不了这个表格'));
       }

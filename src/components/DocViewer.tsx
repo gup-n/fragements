@@ -27,6 +27,7 @@ import type { Document, DocumentMeta } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { deleteOriginal, openOriginal } from '../db/docFiles';
+import { dropViewCache } from '../documents/readers/viewCache';
 import {
   MAX_FILE_LABEL,
   PRO_MAX_FILE_LABEL,
@@ -196,6 +197,10 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
 
     // 先删原件，再删记录：反过来一旦文件删不掉，记录已经没了，URI 也就丢了
     const cleaned = await deleteOriginal(doc.fileUri);
+    if (cleaned) {
+      // 原件没了，派生出来的解析缓存也没有意义了 —— 几 MB 的 JSON 不能留下
+      await dropViewCache(doc.fileUri);
+    }
     if (!cleaned) {
       if (alive.current) {
         setMsg({

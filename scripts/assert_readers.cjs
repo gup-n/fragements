@@ -104,6 +104,7 @@ const textBlocks = require(path.join(outDir, 'documents', 'readers', 'textBlocks
 const color = require(path.join(outDir, 'documents', 'readers', 'color.js'));
 const formats = require(path.join(outDir, 'documents', 'formats.js'));
 const XLSX = require('xlsx');
+const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');
 
 const LIMIT = formats.LOCAL_READER_LIMITS.chunkChars;
 
@@ -290,8 +291,43 @@ check('稀疏 !ref 不会把进程拖死（只认真实单元格）', () => {
   eq(view.sheets[0].cols, 3, '列数来自真实单元格');
 });
 
-check('超过单元格上限明确失败', () => {
-  const aoa = [Array.from({ length: 10 }, (_, i) => `c${i}`), Array.from({ length: 10 }, (_, i) => `d${i}`)];
+/*
+ * 上一项验的是「我们自己不按 !ref 遍历」。这一项验的是**解析器那边**：
+ * v0.14.0 换成 `dense:true`（二维数组）之后，一份声明范围是整张表的真实文件
+ * 会不会被按范围预分配 —— 那才是真正的内存炸弹，一万亿格。
+ * 做法：正常写一份小文件，把里面那行 `<dimension ref>` 改成整张表，再读回来。
+ */
+check('dense 模式下声明范围是整张表也不按范围分配', () => {
+  const raw = makeBook([{ name: '表', aoa: [['甲', '', '丙']] }]);
+  const files = unzipSync(new Uint8Array(raw));
+  const sheetPath = Object.keys(files).find((p) => /^xl\/worksheets\/sheet\d+\.xml$/.test(p));
+  assert(sheetPath, '应该能在 zip 里找到工作表 XML');
+  const patchedXml = strFromU8(files[sheetPath]).replace(
+    /<dimension ref="[^"]*"\/>/,
+    '<dimension ref="A1:XFD1048576"/>',
+  );
+  assert(patchedXml.includes('XFD1048576'), 'dimension 没被改掉，样本无效');
+  files[sheetPath] = strToU8(patchedXml);
+
+  const started = Date.now();
+  const book = XLSX.read(zipSync(files), {
+    type: 'array',
+    dense: true,
+    cellStyles: false,
+    cellHTML: false,
+    cellNF: false,
+    sheetStubs: false,
+  });
+  const cost = Date.now() - started;
+  assert(cost < 2000, `解析花了 ${cost}ms，说明按 !ref 展开分配了`);
+
+  const data = book.Sheets['表']['!data'];
+  assert(Array.isArray(data), 'dense 读出来的应该是 !data 二维数组');
+  eq(data.length, 1, '行数组只该有真实存在的 1 行，不是 1048576 行');
+  eq(excel.workbookToView(book, 10000).cellCount, 2, '有内容的只有甲、丙两格');
+});
+
+check('超过单元格上限明确失败', () => {  const aoa = [Array.from({ length: 10 }, (_, i) => `c${i}`), Array.from({ length: 10 }, (_, i) => `d${i}`)];
   const buf = makeBook([{ name: 'S', aoa }]);
   const view = excel.readWorkbook(buf, { maxCells: 12 });
   eq(view.truncated, true, '应该在 12 个格子处停下');
@@ -444,6 +480,108 @@ check('缓存只认同一个键：换文件、换大小都不命中', () => {
 
 check('没有原文件的记录不产生缓存键', () => {
   eq(wbCache.workbookKey(null, 100), null, 'null uri');
+});
+
+// ---------------------------------------------------------------------------
+// 5b. 解析结果落盘（v0.14.0）
+// ---------------------------------------------------------------------------
+
+/** 两张表、带中文和空行的小样本 */
+function sampleBook() {
+  const a = XLSX.utils.aoa_to_sheet([
+    ['地区', '销售额', '备注'],
+    ['华东', 1234.5, '含税'],
+    [],
+    ['华南', 99, ''],
+  ]);
+  const b = XLSX.utils.aoa_to_sheet([
+    ['月份', '数量'],
+    [1, 2],
+  ]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, a, '台账');
+  XLSX.utils.book_append_sheet(wb, b, '汇总');
+  return wb;
+}
+
+check('落盘缓存往返：表名、坐标、正文一个字不差', () => {
+  const view = excel.workbookToView(sampleBook(), 1000);
+  const back = excel.decodeView(excel.encodeView(view, 4096), 4096);
+  assert(back, '同一份内容必须解得出来');
+  eq(back.sheets.length, view.sheets.length, '表数');
+  eq(
+    back.sheets.map((s) => s.name).join(','),
+    view.sheets.map((s) => s.name).join(','),
+    '表名与顺序',
+  );
+  eq(back.cellCount, view.cellCount, '总格数');
+  eq(back.limit, view.limit, '上限');
+  eq(back.truncated, view.truncated, '截断标记');
+  for (let i = 0; i < view.sheets.length; i++) {
+    const a = view.sheets[i];
+    const b = back.sheets[i];
+    eq(b.rows, a.rows, `${a.name} 行数`);
+    eq(b.cols, a.cols, `${a.name} 列数`);
+    eq(b.cells.size, a.cells.size, `${a.name} 格数`);
+    for (const [k, v] of a.cells) eq(b.cells.get(k), v, `${a.name} 的 ${k}`);
+  }
+  // 最终判据不是「结构像」，而是「读出来给人看的东西一样」
+  eq(excel.workbookToContent(back).bodyMd, excel.workbookToContent(view).bodyMd, '正文');
+});
+
+check('dense 表结构与对象键表结构读出同一份正文', () => {
+  const wb = sampleBook();
+  const bytes = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  // readWorkbook 走 dense:true；wb 本身是 aoa_to_sheet 建的对象键结构。
+  // 两条路必须得到同一份正文 —— 否则「换了解析方式」= 悄悄改了用户的表。
+  const dense = excel.readWorkbook(bytes);
+  const object = excel.workbookToView(wb, formats.LOCAL_READER_LIMITS.excelCells);
+  eq(dense.cellCount, object.cellCount, '格数');
+  eq(excel.workbookToContent(dense).bodyMd, excel.workbookToContent(object).bodyMd, '正文');
+});
+
+check('缓存不认版本不对、大小不对、内容损坏的', () => {
+  const view = excel.workbookToView(sampleBook(), 1000);
+  const json = excel.encodeView(view, 4096);
+  assert(excel.decodeView(json, 4096), '正常内容要认');
+  eq(excel.decodeView(json, 4097), null, '大小对不上要作废（同名文件被换掉的情况）');
+  eq(excel.decodeView(json.slice(0, json.length >> 1), 4096), null, '写了一半的文件要作废');
+  eq(excel.decodeView('null'), null, 'null');
+  eq(excel.decodeView('{"v":1}'), null, '字段缺失');
+  eq(
+    excel.decodeView(
+      JSON.stringify({
+        v: excel.VIEW_CACHE_VERSION + 1,
+        size: 4096,
+        cellCount: 0,
+        truncated: false,
+        limit: 1,
+        sheets: [],
+      }),
+      4096,
+    ),
+    null,
+    '版本升级后旧缓存自动失效，不需要迁移代码',
+  );
+});
+
+check('缓存里格子的值不是字符串一律作废', () => {
+  const withCells = (cells) =>
+    JSON.stringify({
+      v: excel.VIEW_CACHE_VERSION,
+      size: 4096,
+      cellCount: 1,
+      truncated: false,
+      limit: 1000,
+      sheets: [{ name: '表', rows: 1, cols: 1, cellCount: 1, cells }],
+    });
+  // 直接 `new Map(pairs)` 只会检查「长度 2」，数字也能塞进去，
+  // 然后渲染层对数字取 `.length` 就崩 —— 值类型必须在这里挡住
+  eq(excel.decodeView(withCells([['0,0', 42]]), 4096), null, '数字值');
+  eq(excel.decodeView(withCells([['0,0', null]]), 4096), null, 'null 值');
+  eq(excel.decodeView(withCells([['0,0']]), 4096), null, '长度不是 2');
+  eq(excel.decodeView(withCells(['0,0']), 4096), null, '不是数组');
+  assert(excel.decodeView(withCells([['0,0', '文本']]), 4096), '正常的一对要认');
 });
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ import { assertBody, assertChunkCount, contentFromText, splitByLines } from './c
 import { assertDecodableText } from './textDecode';
 import { readWorkbook, workbookToContent } from './excelWorkbook';
 import { recallWorkbook, rememberWorkbook, workbookKey } from './workbookCache';
+import { readViewCache, writeViewCache } from './viewCache';
 import { extractPdfPages } from './pdfRuntime';
 import { readDocBytes, readDocText, requireFileUri } from './readerFiles';
 import { ReaderError, abortError, tooLargeMessage } from './errors';
@@ -96,14 +97,21 @@ async function extractWorkbookFile(
   /*
    * 和阅读器共用同一份解析结果：用户通常是「先在这里准备，再点开看」，
    * 两次 `XLSX.read` 里没有哪一次是必要的。缓存只是加速，失败照常往上抛。
+   *
+   * 三层：内存 → 磁盘 → 真解析。磁盘那层让「准备过的表，重启后再打开」
+   * 也不用重来一遍 —— 准备时就落盘，打开时直接读回来。
    */
   const key = workbookKey(uri, doc.size);
   let view = recallWorkbook(key);
-  if (!view) {
+  if (!view) view = await readViewCache(doc.fileUri, doc.size);
+  if (view) {
+    rememberWorkbook(key, view);
+  } else {
     const buf = await readDocBytes(uri);
     throwIfAborted(options.signal);
     view = readWorkbook(buf);
     rememberWorkbook(key, view);
+    void writeViewCache(doc.fileUri, doc.size, view);
   }
   throwIfAborted(options.signal);
 
