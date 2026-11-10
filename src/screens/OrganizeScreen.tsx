@@ -24,7 +24,6 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type {
   AiConfig,
-  DigestKind,
   Fragment,
   Note,
   OrganizeReview,
@@ -91,7 +90,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
   const [outcome, setOutcome] = useState<CommitOutcome | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [stopping, setStopping] = useState(false);
-  const [digestTarget, setDigestTarget] = useState<{ kind: DigestKind; period: string } | null>(null);
+  const [digestTarget, setDigestTarget] = useState<string | null>(null);
 
   /** 上次没跑完的会话。进页面时读一次，用来显示「继续上次」 */
   const [resume, setResume] = useState<{ session: OrganizeSession; remaining: number } | null>(null);
@@ -510,7 +509,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
               ) : null}
             </View>
 
-            <BacklogCard backlog={backlog} onPick={(kind, period) => setDigestTarget({ kind, period })} />
+            <BacklogCard backlog={backlog} onPick={(period) => setDigestTarget(period)} />
           </View>
         )}
 
@@ -688,8 +687,7 @@ export function OrganizeScreen({ fragments, notes, onClose, onApplied, onOpenSet
 
       {digestTarget && (
         <SummarySheet
-          initialKind={digestTarget.kind}
-          initialPeriod={digestTarget.period}
+          initialPeriod={digestTarget}
           onClose={() => setDigestTarget(null)}
           onSaved={onApplied}
         />

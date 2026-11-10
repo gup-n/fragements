@@ -149,18 +149,17 @@ export function periodRange(period: string): { from: number; to: number } | null
   return null;
 }
 
-/** 最近 count 个周期键，从当前这个往前推，用于生成入口的选项列表 */
-export function recentPeriods(kind: 'daily' | 'weekly' | 'monthly', count: number, now = Date.now()) {
+/**
+ * 最近 count 个月份键（`2026-10` 这种），从当前这个往前推。
+ *
+ * v0.15 之前叫 `recentPeriods(kind, count)`，要按日/周/月分三种推法。
+ * 日、周两种总结下线后只剩月，参数里的 `kind` 就成了恒等分支 —— 删掉。
+ */
+export function recentMonths(count: number, now = Date.now()): string[] {
   const out: string[] = [];
   for (let i = 0; i < count; i++) {
-    if (kind === 'daily') {
-      out.push(dayKey(now - i * 86400000));
-    } else if (kind === 'weekly') {
-      out.push(weekKey(now - i * 7 * 86400000));
-    } else {
-      const d = new Date(now);
-      out.push(monthKey(new Date(d.getFullYear(), d.getMonth() - i, 1).getTime()));
-    }
+    const d = new Date(now);
+    out.push(monthKey(new Date(d.getFullYear(), d.getMonth() - i, 1).getTime()));
   }
   return out;
 }

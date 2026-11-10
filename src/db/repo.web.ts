@@ -19,6 +19,7 @@ import type {
 } from '../types';
 import { emptyPlan, normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
+import { planToggle } from '../util/todoTree';
 import { cleanTag, dedupeTags, normalizeTag, sameTag, tokenizeText } from '../util/tokenize';
 
 /**
@@ -85,7 +86,14 @@ function load(): WebDb {
     cache!.todos = (cache!.todos ?? []).map((t) => ({
       ...t,
       doneAt: t.doneAt ?? (t.done ? t.createdAt : null),
+      // v0.15 之前没有父子关系：补 null 当作顶层，与 native v11 迁移同口径
+      parentId: t.parentId ?? null,
     }));
+    // v0.15：日/周小结下线，旧数据一并清掉（与 native v11 的 DELETE 同口径）。
+    // 这一步在 load 里做而不是加版本号：web 版只是桌面预览，没有迁移框架。
+    cache!.notes = (cache!.notes ?? []).filter(
+      (n) => n.type !== 'daily' && n.type !== 'weekly',
+    );
     // 旧版本没有 askSessions；顺便兜住 turns 缺失的脏数据。
     // 旧会话没有 scope，那时还没有文档范围的问法，按 records 补（与 native 同口径）
     cache!.askSessions = (cache!.askSessions ?? []).map((s) => {
@@ -373,9 +381,31 @@ export const repo: Repo = {
       sourceFragmentId: input.sourceFragmentId,
       createdAt: Date.now(),
       mergedInto: null,
+      parentId: input.parentId,
     });
+    // 给已完成的父项加子项 = 这件事还没完，父项退回未完成（与 native 同口径）
+    if (input.parentId !== null) {
+      const parent = d.todos.find((t) => t.id === input.parentId);
+      if (parent?.done) {
+        parent.done = false;
+        parent.doneAt = null;
+      }
+    }
     persist();
     return id;
+  },
+
+  async updateTodo(id, patch) {
+    const d = load();
+    const t = d.todos.find((x) => x.id === id);
+    if (!t) return;
+    if (patch.text !== undefined) {
+      const text = patch.text.trim();
+      // 空文字不写：想删就删，改成空只会留下一条看不见的待办
+      if (text) t.text = text;
+    }
+    if (patch.dueAt !== undefined) t.dueAt = patch.dueAt;
+    persist();
   },
 
   async listTodos() {
@@ -391,10 +421,23 @@ export const repo: Repo = {
 
   async toggleTodo(id, done) {
     const d = load();
-    const t = d.todos.find((x) => x.id === id);
-    if (t) {
-      t.done = done;
-      t.doneAt = done ? Date.now() : null;
+    // 只拿还在用的条目算级联：被合并掉的子项不该参与「父项是不是全做完了」
+    const live = d.todos.filter((t) => t.mergedInto === null);
+    const plan = planToggle(live, id, done);
+    if (!plan.length) return;
+
+    const now = Date.now();
+    for (const step of plan) {
+      const t = d.todos.find((x) => x.id === step.id);
+      if (!t) continue;
+      if (step.done) {
+        t.done = true;
+        // 已经是完成的不刷新时间（与 native 的 COALESCE 同口径）
+        t.doneAt = t.doneAt ?? now;
+      } else {
+        t.done = false;
+        t.doneAt = null;
+      }
     }
     if (done) pruneDone(d);
     persist();
@@ -402,16 +445,21 @@ export const repo: Repo = {
 
   async deleteTodo(id) {
     const d = load();
+    // 子项升为顶层而不是跟着删（与 native 同口径）
+    for (const t of d.todos) if (t.parentId === id) t.parentId = null;
     d.todos = d.todos.filter((x) => x.id !== id);
     persist();
   },
 
   async mergeTodos(keepId, dropIds, text) {
     const d = load();
+    const drops = dropIds.filter((id) => id !== keepId);
     const keep = d.todos.find((t) => t.id === keepId);
     if (keep && text) keep.text = text;
     for (const t of d.todos) {
-      if (dropIds.includes(t.id) && t.id !== keepId) t.mergedInto = keepId;
+      if (drops.includes(t.id)) t.mergedInto = keepId;
+      // 被合并的父项挂着的子项跟到保留项下（与 native 同口径）
+      if (t.parentId !== null && drops.includes(t.parentId)) t.parentId = keepId;
     }
     persist();
   },

@@ -1,19 +1,18 @@
 /**
- * 「哪些周期还没写小结」的计算。
+ * 「哪些月还没写总结」的计算。
  *
  * 判定口径：
- * - 只看**有碎片**的周期 —— 空周期没什么可总结的
- * - 日小结**包含今天**：今天的碎片已经攒了一些，用户想写就该能写。
- *   这类还没走完的周期标 `running`，界面上要说清楚「到此刻为止」
- * - 周/月只算**已经结束**的周期：本周/本月写了也是半截，而且周期一结束
- *   就会重新出现在列表里，没必要先写一份残的
- * - 已经有小结的周期跳过（按 `type|period` 精确匹配）
+ * - 只看**有碎片**的月份 —— 空月份没什么可总结的
+ * - 只算**已经结束**的月份：本月写了也是半截，而且月份一结束它还会重新
+ *   出现在列表里，没必要先写一份残的
+ * - 已经有月总结的月份跳过（按 `type|period` 精确匹配）
  *
- * 列表排序用「按粒度配额」而不是纯按时间：月/周的周期末端始终比日靠后，
- * 纯按时间排会让一个月总结把一堆日小结全挤掉，而日小结才是日常真正常用的那个。
+ * v0.15 之前这里还按「粒度配额」给日/周/月各分名额（日 6、周 2、月 2），
+ * 因为纯按时间排会让一个月总结把一堆日小结全挤掉。日/周下线之后，
+ * 这件事变成了「按月倒序取前几条」，两轮挑选和配额表一起删了。
  */
-import type { DigestKind, Fragment, Note } from '../types';
-import { dayKey, monthKey, periodRange, weekKey } from './date';
+import type { Fragment, Note } from '../types';
+import { monthKey, periodRange } from './date';
 
 /** 小结的分组顺序：粒度大的在上面，旧数据里的「主题总结」垫底 */
 export const NOTE_GROUP_ORDER: Note['type'][] = ['monthly', 'weekly', 'daily', 'theme'];
@@ -38,6 +37,10 @@ export interface NoteGroup {
  * 一眼看过去分不清哪篇是概括、哪篇是流水。改成先按粒度分组（月 → 周 → 日），
  * 组内才按时间倒序。
  *
+ * 现在只会命中 monthly 一组（和可能残留的 theme），但顺序表不删：
+ * 万一某台设备的迁移没跑到，旧数据还在库里，这里的表现是「照常显示」，
+ * 而不是「突然消失」——后者才更需要排查。
+ *
  * 组内**不改顺序**：调用方传进来的已经是 createdAt DESC，
  * 这里再排一次只会让「哪条更新」出现两套口径。
  */
@@ -58,82 +61,46 @@ export function groupNotes(notes: Note[]): NoteGroup[] {
 }
 
 export interface MissingDigest {
-  kind: DigestKind;
+  /** 2026-10 */
   period: string;
-  /** 该周期里有几条碎片 */
+  /** 这个月里有几条碎片 */
   count: number;
-  /** 周期结束时间，用来排序和显示 */
+  /** 月份结束时间，用来排序 */
   at: number;
-  /** 这个周期还没走完（目前只有「今天」会为 true） */
-  running: boolean;
 }
 
 export interface Backlog {
   items: MissingDigest[];
-  /** 实际缺多少个周期（可能大于 items.length） */
+  /** 实际缺多少个月（可能大于 items.length） */
   total: number;
 }
-
-const KIND_ORDER: DigestKind[] = ['daily', 'weekly', 'monthly'];
-/** 每种粒度先占多少名额，剩下的名额再按时间补 */
-const QUOTA: Record<DigestKind, number> = { daily: 6, weekly: 2, monthly: 2 };
 
 export function missingDigests(
   fragments: Fragment[],
   notes: Note[],
-  limit = 10,
+  limit = 6,
   now = Date.now(),
 ): Backlog {
-  const covered = new Set(notes.filter((n) => n.period).map((n) => `${n.type}|${n.period}`));
+  // 只认月总结算「已写」。别的 type 即使 period 相同也不是同一件事 ——
+  // 旧数据里可能存在 daily 的 2026-10-01，它不能把 2026-10 这个月的缺口填掉
+  const covered = new Set(
+    notes.filter((n) => n.type === 'monthly' && n.period).map((n) => n.period as string),
+  );
   const buckets = new Map<string, MissingDigest>();
 
-  const bump = (kind: DigestKind, period: string) => {
-    if (covered.has(`${kind}|${period}`)) return;
-    const range = periodRange(period);
-    if (!range) return;
-    // 周/月没结束就先不列；日只保留今天这一种「进行中」
-    if (kind !== 'daily' && range.to > now) return;
-
-    const key = `${kind}|${period}`;
-    const hit = buckets.get(key);
-    if (hit) hit.count += 1;
-    else buckets.set(key, { kind, period, count: 1, at: range.to - 1, running: range.to > now });
-  };
-
   for (const f of fragments) {
-    bump('daily', dayKey(f.createdAt));
-    bump('weekly', weekKey(f.createdAt));
-    bump('monthly', monthKey(f.createdAt));
+    const period = monthKey(f.createdAt);
+    if (covered.has(period)) continue;
+    const range = periodRange(period);
+    if (!range) continue;
+    // 本月还没结束就不列 —— 写出来是半截，月份一过它又会重新出现
+    if (range.to > now) continue;
+
+    const hit = buckets.get(period);
+    if (hit) hit.count += 1;
+    else buckets.set(period, { period, count: 1, at: range.to - 1 });
   }
 
-  const all = Array.from(buckets.values());
-  const picked: MissingDigest[] = [];
-  const used = new Set<string>();
-
-  // 第一轮：每个粒度先占自己的名额
-  for (const kind of KIND_ORDER) {
-    const list = all
-      .filter((b) => b.kind === kind)
-      .sort((a, b) => b.at - a.at)
-      .slice(0, QUOTA[kind]);
-    for (const item of list) {
-      if (picked.length >= limit) break;
-      picked.push(item);
-      used.add(`${item.kind}|${item.period}`);
-    }
-  }
-
-  // 第二轮：还有空位就按时间补，别浪费名额
-  if (picked.length < limit) {
-    const rest = all
-      .filter((b) => !used.has(`${b.kind}|${b.period}`))
-      .sort((a, b) => b.at - a.at);
-    for (const item of rest) {
-      if (picked.length >= limit) break;
-      picked.push(item);
-    }
-  }
-
-  picked.sort((a, b) => b.at - a.at || KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind));
-  return { items: picked, total: all.length };
+  const all = Array.from(buckets.values()).sort((a, b) => b.at - a.at);
+  return { items: all.slice(0, limit), total: all.length };
 }

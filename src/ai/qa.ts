@@ -28,6 +28,7 @@ import type {
   WebHit,
 } from '../types';
 import { dayKey, formatTime, monthStart, weekStart } from '../util/date';
+import { flattenTodos } from '../util/todoTree';
 import { tokenizeText } from '../util/tokenize';
 import { normalizeQaScope } from '../util/qaScope';
 import { citedKeys } from '../util/qaNote';
@@ -249,8 +250,17 @@ export async function retrieveLocal(
   let todos: Todo[] = [];
   try {
     const all = await repo.listTodos();
-    const open = all.filter((t) => !t.done);
-    const done = all
+    /*
+     * 待办可能有子项。拍平并按层级加前缀 —— 直接丢给模型的话，
+     * 它会把「准备材料」「发邮件」当成两件互不相干的事，
+     * 而它们其实属于同一件。前缀只是提示从属关系，不改变每行的独立状态。
+     */
+    const flat = flattenTodos(all).map(({ todo, depth }) => ({
+      ...todo,
+      text: depth > 0 ? `· ${todo.text}` : todo.text,
+    }));
+    const open = flat.filter((t) => !t.done);
+    const done = flat
       .filter((t) => t.done)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, DONE_TODO_LIMIT);

@@ -117,9 +117,24 @@ export interface Repo {
    */
   selfTestSearch(samples?: number): Promise<SearchProbe>;
 
-  insertTodo(input: { text: string; dueAt: string | null; sourceFragmentId: number | null }): Promise<number>;
+  insertTodo(input: {
+    text: string;
+    dueAt: string | null;
+    sourceFragmentId: number | null;
+    /** null = 顶层待办；非 null = 挂在某条顶层待办下（只有两层） */
+    parentId: number | null;
+  }): Promise<number>;
   /** 只返回还在用的待办；被合并掉的（merged_into 非空）不在这里 */
   listTodos(): Promise<Todo[]>;
+  /**
+   * 改文字或到期日。传 `undefined` 的字段保持原样 —— 只需要能用一次改一项。
+   * `dueAt: null` 是「清掉日期」，和 `undefined`（不动）必须分得开。
+   */
+  updateTodo(id: number, patch: { text?: string; dueAt?: string | null }): Promise<void>;
+  /**
+   * 勾选/取消勾选。**级联规则在 `util/todoTree.planToggle`，两份 repo 都调它**：
+   * 勾父项连同子项、取消父项连同子项、子项全勾完父项自动完成。
+   */
   toggleTodo(id: number, done: boolean): Promise<void>;
   deleteTodo(id: number): Promise<void>;
   /**

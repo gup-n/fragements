@@ -24,6 +24,7 @@ import type {
 } from '../types';
 import { normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
+import { planToggle } from '../util/todoTree';
 import {
   buildFtsQuery,
   cleanTag,
@@ -241,6 +242,21 @@ const MIGRATIONS: string[] = [
 
   ALTER TABLE ask_sessions ADD COLUMN scope_json TEXT;
   `,
+  // v11：待办支持两层子项；日/周小结下线（v0.15）。
+  //
+  //     子项用 `parent_id` 自引用，不建独立表：两者字段完全一样，拆表之后
+  //     「列出所有未完成待办」要 UNION，父项完成时还得跨表更新，
+  //     而「一条待办能挂子项、也能被挂」这件事本来就是一个自引用。
+  //
+  //     删日/周小结是用户 2026-11-10 明确要求。迁移里直接 DELETE 而不是加一个
+  //     `hidden` 标记：留着标记，迟早有某条查询忘了过滤，界面上又冒出来；
+  //     而且用户要的就是「旧内容也不留」。月总结（monthly）与旧的主题总结
+  //     （theme）不动 —— 前者还在用，后者属于更早的数据，不在这次范围内。
+  `
+  ALTER TABLE todos ADD COLUMN parent_id INTEGER;
+  CREATE INDEX IF NOT EXISTS idx_todos_parent ON todos(parent_id);
+  DELETE FROM notes WHERE type IN ('daily', 'weekly');
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -301,6 +317,7 @@ interface TodoRow {
   source_fragment_id: number | null;
   created_at: number;
   merged_into: number | null;
+  parent_id: number | null;
 }
 
 /** 待办行 → 领域对象。三处查询都用它，免得字段映射各写一遍漏掉新字段 */
@@ -314,6 +331,7 @@ function toTodo(r: TodoRow): Todo {
     sourceFragmentId: r.source_fragment_id,
     createdAt: r.created_at,
     mergedInto: r.merged_into,
+    parentId: r.parent_id ?? null,
   };
 }
 
@@ -839,10 +857,34 @@ export const repo: Repo = {
 
   async insertTodo(input) {
     const res = db().runSync(
-      'INSERT INTO todos (text, due_at, done, source_fragment_id, created_at) VALUES (?, ?, 0, ?, ?)',
-      [input.text, input.dueAt, input.sourceFragmentId, Date.now()],
+      'INSERT INTO todos (text, due_at, done, source_fragment_id, created_at, parent_id) VALUES (?, ?, 0, ?, ?, ?)',
+      [input.text, input.dueAt, input.sourceFragmentId, Date.now(), input.parentId],
     );
+    /*
+     * 给一条**已完成**的父项加子项，等于这件事还没完 —— 父项必须退回未完成。
+     * 否则列表上会出现「父项打着勾、底下挂着一条没做的子项」，
+     * 而这条状态没有任何操作能让它自洽（勾子项会把它顶成完成，看起来像没反应）。
+     */
+    if (input.parentId !== null) {
+      db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ? AND done = 1', [
+        input.parentId,
+      ]);
+    }
     return Number(res.lastInsertRowId);
+  },
+
+  async updateTodo(id, patch) {
+    if (patch.text !== undefined) {
+      const text = patch.text.trim();
+      // 空文字不写库：想删就删，把内容改成空只会留下一条看不见的待办。
+      // 注意这里**不 return** —— 同一份 patch 里的日期修改还要生效。
+      if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, id]);
+    }
+    if (patch.dueAt !== undefined) {
+      // 清日期必须写 NULL 字面量，不能靠 ? 绑 JS null（见 AGENTS「SQL 里清空字段」）
+      if (patch.dueAt === null) db().runSync('UPDATE todos SET due_at = NULL WHERE id = ?', [id]);
+      else db().runSync('UPDATE todos SET due_at = ? WHERE id = ?', [patch.dueAt, id]);
+    }
   },
 
   async listTodos() {
@@ -853,16 +895,36 @@ export const repo: Repo = {
   },
 
   async toggleTodo(id, done) {
-    if (done) {
-      db().runSync('UPDATE todos SET done = 1, done_at = ? WHERE id = ?', [Date.now(), id]);
-      pruneDoneTodos(db());
-    } else {
-      // 清空字段必须写 NULL 字面量，不要靠 ? 绑 JS null（见 AGENTS「SQL 里清空字段」）
-      db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [id]);
+    /*
+     * 级联规则统一在 `planToggle` 里，这里只负责把结果写下去。
+     * 查全表而不是只查这一条，是因为「子项全勾完父项自动完成」需要兄弟状态；
+     * 待办是几百条量级，一次全表读远小于一次写错状态的代价。
+     *
+     * 必须过滤 merged_into —— 被合并掉的条目还在库里，把它们算进兄弟里，
+     * 父项就可能永远差一条勾不完。
+     */
+    const rows = db().getAllSync<TodoRow>('SELECT * FROM todos WHERE merged_into IS NULL');
+    const plan = planToggle(rows.map(toTodo), id, done);
+    if (!plan.length) return;
+
+    const now = Date.now();
+    for (const step of plan) {
+      if (step.done) {
+        // 已经是完成的不刷新时间：「最近完成」的排序不该被重复点击推后
+        db().runSync('UPDATE todos SET done = 1, done_at = COALESCE(done_at, ?) WHERE id = ?', [
+          now,
+          step.id,
+        ]);
+      } else {
+        db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [step.id]);
+      }
     }
+    if (done) pruneDoneTodos(db());
   },
 
   async deleteTodo(id) {
+    // 子项升为顶层而不是跟着删：「删掉这一条」不该连带删掉用户另外写的内容
+    db().runSync('UPDATE todos SET parent_id = NULL WHERE parent_id = ?', [id]);
     db().runSync('DELETE FROM todos WHERE id = ?', [id]);
   },
 
@@ -871,6 +933,12 @@ export const repo: Repo = {
     if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, keepId]);
     if (!drops.length) return;
     const marks = drops.map(() => '?').join(',');
+    // 被合并的父项如果挂着子项，子项跟到保留项下面 —— 不搬的话它们会变成
+    // parent_id 指向一条已隐藏条目的孤儿，界面上永远看不到，也勾不掉
+    db().runSync(`UPDATE todos SET parent_id = ? WHERE parent_id IN (${marks})`, [
+      keepId,
+      ...drops,
+    ]);
     db().runSync(`UPDATE todos SET merged_into = ? WHERE id IN (${marks})`, [keepId, ...drops]);
   },
 

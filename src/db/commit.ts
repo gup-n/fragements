@@ -110,7 +110,14 @@ export async function commitPlan({
     if (!accepted(K.todo(t.text))) continue;
     const key = normText(t.text);
     if (key && knownTodo.has(key)) continue;
-    await repo.insertTodo({ text: t.text, dueAt: t.due, sourceFragmentId: t.id });
+    // AI 抽出来的一律当顶层：它看到的是「有明确动作的碎片」，并不知道
+    // 哪几条属于同一件事。把拆解交给用户，比让模型猜错层级要好收拾。
+    await repo.insertTodo({
+      text: t.text,
+      dueAt: t.due,
+      sourceFragmentId: t.id,
+      parentId: null,
+    });
     if (key) knownTodo.add(key);
     todos++;
   }

@@ -27,7 +27,7 @@ import { R, useThemedStyles, type Palette } from '../theme';
 import { TagPill } from './TagPill';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
-import { dayKey, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
+import { dayKey, daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
 import { countHits } from '../util/highlight';
 import { parseBlocks } from '../util/mdBlocks';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -417,21 +417,15 @@ export function FragmentDetail({
 }
 
 /**
- * 挑出属于这一天的总结。
+ * 这条碎片所属月份的月总结。
  *
- * 当日小结优先；当天没写小结时，退而取锚点落在这天的周/月总结
- * （periodAnchor 对周/月给的是周日 / 月末，正好对应「这天在周期末尾」的情形）。
- * 反过来不行：只要有一条周总结就把每日小结顶掉，用户会觉得小结写丢了。
+ * v0.15 之前是三级降级：当天的日小结 → 当周周总结 → 当月月总结。
+ * 日/周两种粒度下线之后只剩「当月」一种，三级降级就退化成一条 —
+ * 留着分支只会让人以为那两种还在（而且它们的数据已经被迁移删掉了）。
  */
 function notesOn(day: number, notes: Note[]): Note[] {
-  const key = dayKey(day);
-  const daily = notes.filter((n) => n.type === 'daily' && n.period === key);
-  if (daily.length) return daily;
-  return notes.filter((n) => {
-    if (n.type === 'daily') return false;
-    const anchor = periodAnchor(n.period) ?? n.createdAt;
-    return dayKey(anchor) === key;
-  });
+  const key = monthKey(day);
+  return notes.filter((n) => n.type === 'monthly' && n.period === key);
 }
 
 function Page({
@@ -520,16 +514,14 @@ function Page({
       </Text>
 
       {/*
-        小结是「这一天的一句话结论」，看完零碎的碎片后紧接着看到它，
-        才不用退回时间轴再去找一遍。它和碎片是两种东西，所以用浅蓝卡片隔开。
+        月总结是这个月的结论。看完当天的零碎记录后紧接着看到它，
+        不用退回时间轴再翻一遍。它和碎片是两种东西，所以用浅蓝卡片隔开。
       */}
       {dayNotes.map((n) => (
         <View key={n.id} style={styles.noteCard}>
           <View style={styles.noteHead}>
             <Ionicons name="sparkles" size={13} color={c.accent} />
-            <Text style={styles.noteKind}>
-              {n.type === 'daily' ? '当天小结' : n.type === 'weekly' ? '当周总结' : '当月总结'}
-            </Text>
+            <Text style={styles.noteKind}>当月总结</Text>
             <Text style={styles.notePeriod}>{periodLabel(n.period)}</Text>
           </View>
           <NoteBody text={n.bodyMd} style={styles.noteBody} />

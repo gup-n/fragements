@@ -12,6 +12,7 @@
 
 import type { Fragment, Todo } from '../types';
 import { dayKey, formatTime, weekdayCN } from './date';
+import { flattenTodos } from './todoTree';
 
 export interface ExportFile {
   name: string;
@@ -72,8 +73,18 @@ export function buildMarkdown(fragments: Fragment[], todos: Todo[] = []): Export
     .map((s) => `### ${s.key} ${weekdayCN(s.date)}\n\n${s.body}\n`)
     .join('\n');
 
-  const open = todos.filter((t) => !t.done);
-  const done = todos.filter((t) => t.done);
+  /*
+   * 待办按父子拍平后输出：子项缩进两格，成为 Markdown 的嵌套列表。
+   * 用 `flattenTodos` 而不是直接 filter —— 直接 filter 会让子项混在顶层里，
+   * 导出一份「分不出哪几步属于同一件事」的清单。
+   */
+  const flat = flattenTodos(todos);
+  const open = flat.filter(({ todo }) => !todo.done);
+  const done = flat.filter(({ todo }) => todo.done);
+  const item = ({ todo, depth }: { todo: Todo; depth: number }) =>
+    `${'  '.repeat(depth)}- [${todo.done ? 'x' : ' '}] ${todo.text}` +
+    (todo.dueAt ? ` · ${todo.dueAt}` : '');
+
   const todoBlock =
     todos.length === 0
       ? ''
@@ -84,12 +95,10 @@ export function buildMarkdown(fragments: Fragment[], todos: Todo[] = []): Export
           '## 待办',
           '',
           open.length
-            ? `### 未完成（${open.length}）\n\n${open
-                .map((t) => `- [ ] ${t.text}${t.dueAt ? ` · ${t.dueAt}` : ''}`)
-                .join('\n')}\n`
+            ? `### 未完成（${open.length}）\n\n${open.map(item).join('\n')}\n`
             : '### 未完成\n\n（没有未完成的待办）\n',
           done.length
-            ? `### 已完成（${done.length}）\n\n${done.map((t) => `- [x] ${t.text}`).join('\n')}\n`
+            ? `### 已完成（${done.length}）\n\n${done.map(item).join('\n')}\n`
             : '',
         ].join('\n');
 

@@ -50,7 +50,13 @@ type DisplaySection = Section & { total: number; preview: string };
  */
 let autoFocusedOnce = false;
 
-/** 时间轴上总结条目的类型标签 */
+/**
+ * 时间轴上总结条目的类型标签。
+ *
+ * 四种都留着：v0.15 之后只会出现 `monthly`，但旧设备上可能还有没被迁移
+ * 清掉的 theme（甚至 daily/weekly）。留着文案 = 照常显示，删掉 = 那条总结
+ * 在时间轴上变成空白卡片。**显示兼容和生成入口是两件事。**
+ */
 const NOTE_KIND: Record<Note['type'], string> = {
   daily: '今日小结',
   weekly: '周总结',
@@ -237,27 +243,14 @@ export function TimelineScreen({
     // 反而看不清到底哪条碎片命中了。要翻小结请直接看时间轴。
     if (!narrowed) {
       for (const n of notes) {
-        // 周总结独占一个周级分区，固定放在该周最上方；
-        // 不再落进「周日」的日期桶 —— 否则它会和周日那天的日小结挤在一起，谁上谁下看运气。
-        if (n.type === 'weekly' && n.period) {
-          const anchor = periodAnchor(n.period);
-          if (anchor === null) continue;
-          const key = `week:${n.period}`;
-          let bucket = map.get(key);
-          if (!bucket) {
-            bucket = {
-              key,
-              title: periodLabel(n.period),
-              sub: '周总结',
-              order: anchor + 1,
-              data: [],
-            };
-            map.set(key, bucket);
-          }
-          bucket.data.push({ kind: 'note', id: n.id, at: anchor, note: n });
-          continue;
-        }
-        // 日 / 月总结仍按 period 落回它覆盖的那一天/月末，而不是它被生成的那天
+        /*
+         * 按 period 落回它覆盖的那一天，而不是它被生成的那天 ——
+         * 否则「9 月的总结」会飘到 11 月的时间轴上。
+         *
+         * v0.15 之前周总结独占一个 `week:` 分区压在该周最上方。日、周两种
+         * 粒度下线后那段分支再也不会命中（weekly 的数据已被迁移删掉），
+         * 留着只会让人以为周总结还在，所以一起删了。
+         */
         const at = periodAnchor(n.period) ?? n.createdAt;
         push(at, { kind: 'note', id: n.id, at, note: n });
       }

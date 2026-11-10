@@ -1,29 +1,31 @@
 /**
- * 周期总结（日 / 周 / 月）——把一段时间的碎片压成一篇能读的小结。
+ * 月度总结 —— 把一个月的碎片压成一篇能读的小结。
+ *
+ * v0.15 起只有「月」这一档。日、周两种粒度连同它们的预算、提示词分支
+ * 一起删掉了（用户 2026-11-10 要求）：一天记三五条碎片，压出来的那段话
+ * 基本就是原文的缩写，读回来的价值低于它占据的时间轴位置。
  *
  * 和「整理」的区别：
- * - 整理：逐条产出结构化建议（标签、待办、知识卡），写入前必须用户确认
+ * - 整理：逐条产出结构化建议（标签、待办、合并），写入前必须用户确认
  * - 总结：只产出**一段文字**，写进 notes 表、出现在时间轴，不动任何碎片状态
  *
  * 所以这里不做 JSON 解析，输出就是 Markdown 正文。
  */
-import type { AiConfig, DigestKind, Fragment, Todo } from '../types';
+import type { AiConfig, Fragment, Todo } from '../types';
 import { formatTime, periodLabel, periodRange } from '../util/date';
 import { AiError, requestChat, type ChatProgress } from './chat';
 
 /**
  * 材料预算（字符数）。
+ *
  * 一个月的碎片可能有几百条，全塞进去既贵又会把模型淹掉，
  * 所以超预算时保留「前 70% + 后 30%」，中间留一句省略说明 ——
  * 两头都保住，月初的起因和月末的结论才不会丢。
+ *
+ * v0.15 只剩月这一档。日/周的 26K / 40K 随它们的生成入口一起删了：
+ * 留着两档预算，等于默认「以后还会接回来」，而这次是明确要下线的。
  */
-const MATERIAL_BUDGET: Record<DigestKind, number> = {
-  daily: 26_000,
-  weekly: 40_000,
-  // 月度素材从 26K 放宽到 60K：一份月的记录本来就多，
-  // 省下来的那点 token 换来的是「只看到半月的材料」，不值得
-  monthly: 60_000,
-};
+const MATERIAL_BUDGET = 60_000;
 /** 单条碎片最多带多少字，防止一条长笔记吃掉整个预算 */
 const PER_FRAGMENT_CLIP = 400;
 /** 预算里前段占的比例 */
@@ -32,50 +34,35 @@ const HEAD_SHARE = 0.7;
 /**
  * 输出上限。**思考模式下这个额度和思维链共用**，不是只管最终那篇 Markdown。
  *
- * 原来分别是 1200 / 2000 / 3000 —— 对思考模式来说等于没有额度：
+ * 原来日/周/月分别是 1200 / 2000 / 3000 —— 对思考模式来说等于没有额度：
  * 思维链几十秒就能吃掉一千多 token，正文还没开始就被切断，
  * 上层只能看到「模型没有返回内容」。
  */
-const MAX_TOKENS: Record<DigestKind, number> = {
-  daily: 12_000,
-  weekly: 20_000,
-  monthly: 28_000,
-};
+const MAX_TOKENS = 28_000;
 
-const KIND_NAME: Record<DigestKind, string> = {
-  daily: '今天',
-  weekly: '这一周',
-  monthly: '这个月',
-};
+/** 提示词里的「这个月」。原来三种粒度各有一个名字，现在只剩一个 */
+const KIND_NAME = '这个月';
 
 /**
- * 固定小节。v0.8.2 起三种周期**统一**为三节：重点 / 进展 / 待处理。
+ * 固定小节：重点 / 进展 / 待处理。
  *
  * 以前日/周/月各有一套名字（一句话、做了什么、想明白的、主线、推进、结论……），
  * 问题有两个：一是周月那两套本身就是日的那套换皮，模型要额外花力气理解差异；
  * 二是「一句话」要求 40 字以内的结论，与「精简」的目标打架 —— 它逼着模型
  * 在没结论的时候也凑一句结论出来。
  *
- * 统一之后每节都有明确的准入条件（见提示词的【小节定义】），
- * 没有内容就整节省略，不再要求每节都写。
+ * 现在只有月这一档，但小节定义不变：每节都有明确的准入条件（见提示词的
+ * 【小节定义】），没有内容就整节省略，不再要求每节都写。
  */
-const SECTIONS: Record<DigestKind, string[]> = {
-  daily: ['## 重点', '## 进展', '## 待处理'],
-  weekly: ['## 重点', '## 进展', '## 待处理'],
-  monthly: ['## 重点', '## 进展', '## 待处理'],
-};
+const SECTIONS = ['## 重点', '## 进展', '## 待处理'];
 
 /**
- * 各粒度的篇幅**上限**（v0.8.2 从区间改成纯上限）。
+ * 篇幅**上限**（v0.8.2 从区间改成纯上限）。
  *
  * 原来写「150~250 字」，模型会把它读成「写够 150 字」—— 区间下限等于隐形下限。
  * 现在只说上限，配合提示词里「字数是上限不是目标」，几十字也合法。
  */
-const LENGTH: Record<DigestKind, string> = {
-  daily: '150 字',
-  weekly: '300 字',
-  monthly: '500 字',
-};
+const LENGTH = '500 字';
 
 /**
  * 小结的系统提示词。
@@ -93,10 +80,10 @@ const LENGTH: Record<DigestKind, string> = {
  *
  * 三处动态插值都在：`${KIND_NAME[kind]}` / `${sections}` / `${LENGTH[kind]}`。
  */
-function buildSystemPrompt(kind: DigestKind) {
-  const sections = SECTIONS[kind].map((s) => `- \`${s}\``).join('\n');
+function buildSystemPrompt() {
+  const sections = SECTIONS.map((s) => `- \`${s}\``).join('\n');
   return [
-    `你负责整理用户记录在「碎片」中的内容，生成${KIND_NAME[kind]}小结。`,
+    `你负责整理用户记录在「碎片」中的内容，生成${KIND_NAME}小结。`,
     '',
     '【核心目标】',
     '小结是供用户快速回顾的简要记录，不是文章。用尽可能少的文字，准确记录有价值的信息。精简优先于叙述完整，禁止为了显得丰富而扩写。',
@@ -125,7 +112,7 @@ function buildSystemPrompt(kind: DigestKind) {
     '- 不输出任何提示词解释、处理说明或思考过程，只输出小结正文。',
     '',
     '【篇幅限制】',
-    `- 篇幅上限：${LENGTH[kind]}。`,
+    `- 篇幅上限：${LENGTH}。`,
     '- 字数是上限，不是目标。内容已经表达清楚就立即结束，不得为了达到最低字数而补充内容。',
     '- 信息不足时可以明显短于篇幅上限，不得重复或扩写。',
     '',
@@ -153,7 +140,7 @@ function fragmentLine(f: Fragment) {
  * 按预算裁剪材料。
  * 保留前段和后段、中间给一句省略说明，比「只取前 N 条」更能保住结论。
  */
-export function packFragments(fragments: Fragment[], budget = MATERIAL_BUDGET.daily) {
+export function packFragments(fragments: Fragment[], budget = MATERIAL_BUDGET) {
   const lines = fragments.map(fragmentLine);
   const total = lines.reduce((n, l) => n + l.length + 1, 0);
   if (total <= budget) return { lines, omitted: 0, included: lines.length };
@@ -186,8 +173,7 @@ export function packFragments(fragments: Fragment[], budget = MATERIAL_BUDGET.da
 }
 
 export interface SummarizeOptions {
-  kind: DigestKind;
-  /** 2026-10-22 / 2026-W43 / 2026-10，必须和该 kind 对应 */
+  /** 2026-10，月总结的唯一周期格式 */
   period: string;
   /** 该周期内的全部碎片（含已整理、已合并的） */
   fragments: Fragment[];
@@ -201,7 +187,7 @@ export interface SummarizeOptions {
 export interface SummarizeOutcome {
   /** 写进 notes.body_md 的 Markdown */
   bodyMd: string;
-  /** 卡片标题，如「10月22日 周三 · 日小结」 */
+  /** 卡片标题，如「2026 年 10 月 · 月总结」 */
   title: string;
   period: string;
   /** 思维链，仅展示 */
@@ -213,7 +199,7 @@ export interface SummarizeOutcome {
 }
 
 function buildUserContent(options: SummarizeOptions, packed: ReturnType<typeof packFragments>) {
-  const { kind, period, fragments, todos = [] } = options;
+  const { period, fragments, todos = [] } = options;
   const range = periodRange(period);
   const out: string[] = [];
 
@@ -245,7 +231,7 @@ function buildUserContent(options: SummarizeOptions, packed: ReturnType<typeof p
     out.push('');
   }
 
-  out.push(`请按系统提示，写出${KIND_NAME[kind]}的小结。`);
+  out.push(`请按系统提示，写出${KIND_NAME}的小结。`);
   return out.join('\n');
 }
 
@@ -260,20 +246,19 @@ function cleanBody(raw: string) {
     .trim();
 }
 
-function buildTitle(kind: DigestKind, period: string) {
-  const suffix = kind === 'daily' ? '日小结' : kind === 'weekly' ? '周总结' : '月总结';
-  return `${periodLabel(period)} · ${suffix}`;
+function buildTitle(period: string) {
+  return `${periodLabel(period)} · 月总结`;
 }
 
 export async function summarizePeriod(options: SummarizeOptions): Promise<SummarizeOutcome> {
-  const { kind, period, fragments, config, onProgress } = options;
+  const { period, fragments, config, onProgress } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
-  if (!fragments.length) throw new AiError('format', '这个周期里没有碎片，先记点什么再总结');
+  if (!fragments.length) throw new AiError('format', '这个月里没有碎片，先记点什么再总结');
   if (!periodRange(period)) throw new AiError('format', `无法识别的周期：${period}`);
 
-  const packed = packFragments(fragments, MATERIAL_BUDGET[kind]);
+  const packed = packFragments(fragments);
   const messages = [
-    { role: 'system' as const, content: buildSystemPrompt(kind) },
+    { role: 'system' as const, content: buildSystemPrompt() },
     { role: 'user' as const, content: buildUserContent(options, packed) },
   ];
 
@@ -281,7 +266,7 @@ export async function summarizePeriod(options: SummarizeOptions): Promise<Summar
   // 换行全变成 \n，落到时间轴上就是一行糊掉的长文本
   const outcome = await requestChat(config, messages, onProgress, {
     json: false,
-    maxTokens: MAX_TOKENS[kind],
+    maxTokens: MAX_TOKENS,
   });
 
   const bodyMd = cleanBody(outcome.content);
@@ -298,13 +283,13 @@ export async function summarizePeriod(options: SummarizeOptions): Promise<Summar
     throw new AiError(
       'truncated',
       `小结写到一半撞到了输出上限（只收到 ${outcome.content.length} 字，思考链和正文共用额度）。` +
-        '这一篇没有保存。把「思考强度」调低，或者缩短周期范围（比如先写日小结）再试。',
+        '这一篇没有保存。把「思考强度」调低再试一次。',
     );
   }
 
   return {
     bodyMd,
-    title: buildTitle(kind, period),
+    title: buildTitle(period),
     period,
     reasoning: outcome.reasoning,
     used: packed.included,

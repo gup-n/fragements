@@ -1,61 +1,51 @@
 /**
- * 整理页里的「哪些周期还没写小结」卡片。
+ * 整理页里的「哪些月还没写总结」卡片。
  *
- * 小结不在这里生成 —— 点一条进周期总结面板，预览完再决定存不存。
- * 这条分工是刻意的：整理一次只看 30 条碎片，可能只是某个周期的一部分，
- * 在这里顺手写小结必然写残。
+ * 小结不在这里生成 —— 点一条进月度总结面板，预览完再决定存不存。
+ * 这条分工是刻意的：整理一次只看 30 条碎片，可能只是某个月的一部分，
+ * 在这里顺手写总结必然写残。
+ *
+ * v0.15 起只列月份。日/周两种粒度下线后，这张卡片从「按粒度配额挑几个」
+ * 变成「按月倒序取前几条」，行首那个「日/周/月」标记也就没有区分作用了。
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { DigestKind } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
-import { periodLabel, todayISO } from '../util/date';
+import { periodLabel } from '../util/date';
 import type { Backlog } from '../util/digest';
-
-/** 行首的粒度标记 */
-const DIGEST_TAG: Record<DigestKind, string> = { daily: '日', weekly: '周', monthly: '月' };
 
 interface Props {
   backlog: Backlog;
-  onPick: (kind: DigestKind, period: string) => void;
+  onPick: (period: string) => void;
 }
 
 export function BacklogCard({ backlog, onPick }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   if (!backlog.items.length) return null;
-  const today = todayISO();
-  const hasRunning = backlog.items.some((b) => b.period === today && b.kind === 'daily');
 
   return (
     <View style={styles.card}>
       <View style={styles.head}>
         <Ionicons name="sparkles-outline" size={14} color={c.accentText} />
         <Text style={styles.title}>
-          {backlog.total} 个周期还没写小结
+          {backlog.total} 个月还没写总结
           {backlog.total > backlog.items.length ? `（列前 ${backlog.items.length} 条）` : ''}
         </Text>
       </View>
-      <Text style={styles.hint}>
-        点一条去生成那一条，生成完先预览、再决定存不存。
-        {hasRunning ? '今天那条只统计到此刻。' : ''}
-      </Text>
+      <Text style={styles.hint}>点一条去写那个月，生成完先预览、再决定存不存。</Text>
 
-      {backlog.items.map((b) => {
-        const isToday = b.kind === 'daily' && b.period === today;
-        return (
-          <Pressable
-            key={`${b.kind}|${b.period}`}
-            style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hairSoft }]}
-            onPress={() => onPick(b.kind, b.period)}
-          >
-            <Text style={styles.kind}>{DIGEST_TAG[b.kind]}</Text>
-            <Text style={styles.period}>{isToday ? '今天' : periodLabel(b.period)}</Text>
-            <Text style={styles.count}>{b.count} 条</Text>
-            <Ionicons name="chevron-forward" size={13} color={c.text3} />
-          </Pressable>
-        );
-      })}
+      {backlog.items.map((b) => (
+        <Pressable
+          key={b.period}
+          style={({ pressed }) => [styles.row, pressed && { backgroundColor: c.hairSoft }]}
+          onPress={() => onPick(b.period)}
+        >
+          <Text style={styles.period}>{periodLabel(b.period)}</Text>
+          <Text style={styles.count}>{b.count} 条</Text>
+          <Ionicons name="chevron-forward" size={13} color={c.text3} />
+        </Pressable>
+      ))}
     </View>
   );
 }
@@ -81,7 +71,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: c.accentHair,
   },
-  kind: { fontSize: 11, color: c.accentText, fontWeight: '600', width: 14 },
   period: { flex: 1, fontSize: 13, color: c.accentText },
   count: { fontSize: 11, color: c.accentText, opacity: 0.7 },
 });
