@@ -109,6 +109,9 @@ function load(): WebDb {
         scope,
         scopeBroken,
         turns: Array.isArray(s.turns) ? s.turns : [],
+        // v0.16 之前没有这两列：补 null / 空数组，与 native v12 迁移同口径
+        documentId: s.documentId ?? null,
+        sourceIds: Array.isArray(s.sourceIds) ? s.sourceIds : [],
       };
     });
     pruneDone(cache!);
@@ -120,6 +123,9 @@ function load(): WebDb {
       indexedRevision: d.indexedRevision ?? 0,
       chunkCount: d.chunkCount ?? 0,
       contentSource: d.contentSource ?? null,
+      // v0.16 之前全是导入的原件；摘要没有就空着，不要现算（正文可能几十万字）
+      origin: d.origin ?? 'file',
+      excerpt: d.excerpt ?? '',
     }));
     cache!.documentChunks = cache!.documentChunks ?? [];
   } catch {
@@ -151,6 +157,12 @@ export const repo: Repo = {
 
   async listFragments(limit = 500) {
     return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+  },
+
+  async findFragmentsByIds(ids) {
+    if (!ids.length) return [];
+    const want = new Set(ids);
+    return load().fragments.filter((f) => want.has(f.id));
   },
 
   async listFragmentsBetween(from: number, to: number) {
@@ -608,6 +620,8 @@ export const repo: Repo = {
       scope: normalizeQaScope(input.scope),
       archived: input.archived ?? false,
       fragmentId: input.fragmentId ?? null,
+      documentId: null,
+      sourceIds: [],
       createdAt: input.createdAt,
       updatedAt: now,
     });
@@ -627,6 +641,16 @@ export const repo: Repo = {
     const d = load();
     const s = d.askSessions.find((x) => x.id === id);
     if (s) s.fragmentId = fragmentId;
+    persist();
+  },
+
+  async markAskSessionDocument(id, documentId, sourceIds) {
+    const d = load();
+    const s = d.askSessions.find((x) => x.id === id);
+    if (s) {
+      s.documentId = documentId;
+      if (sourceIds) s.sourceIds = sourceIds;
+    }
     persist();
   },
 
@@ -659,6 +683,23 @@ export const repo: Repo = {
       .map(({ bodyMd, ...meta }) => meta as DocumentMeta);
   },
 
+  /** 标题、摘要、正文三处都查；与 native 同一口径，只是这里本来就在内存里 */
+  async searchDocuments(query, limit = 50) {
+    const q = query.trim().toLowerCase();
+    const all = load()
+      .documents.slice()
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const hit = !q
+      ? all
+      : all.filter(
+          (d) =>
+            d.name.toLowerCase().includes(q) ||
+            (d.excerpt ?? '').toLowerCase().includes(q) ||
+            d.bodyMd.toLowerCase().includes(q),
+        );
+    return hit.slice(0, limit).map(({ bodyMd, ...meta }) => meta as DocumentMeta);
+  },
+
   async findDocument(id) {
     const d = load();
     const hit = d.documents.find((x) => x.id === id);
@@ -684,6 +725,8 @@ export const repo: Repo = {
       indexedRevision: 0,
       chunkCount: 0,
       contentSource: null,
+      origin: input.origin ?? 'file',
+      excerpt: input.excerpt ?? '',
       createdAt: now,
       updatedAt: now,
     });
@@ -699,10 +742,19 @@ export const repo: Repo = {
       doc.bodyMd = patch.bodyMd;
       doc.charCount = patch.bodyMd.length;
     }
+    if (patch.excerpt !== undefined) doc.excerpt = patch.excerpt;
     if (patch.pages !== undefined) doc.pages = patch.pages;
     if (patch.state !== undefined) doc.state = patch.state;
     if (patch.error !== undefined) doc.error = patch.error;
     doc.updatedAt = Date.now();
+    persist();
+  },
+
+  async clearAskSessionDocuments(documentId) {
+    const d = load();
+    for (const s of d.askSessions) {
+      if (s.documentId === documentId) s.documentId = null;
+    }
     persist();
   },
 

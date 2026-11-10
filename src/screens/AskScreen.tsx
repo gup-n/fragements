@@ -48,8 +48,22 @@ import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
-import { summarizeQaSession } from '../ai/qaSummary';
-import { buildQaFragment, buildQaNote } from '../util/qaNote';
+import { extractKnowledge, reviseDraft, type KnowledgeSource } from '../ai/knowledge';
+import {
+  docNameOf,
+  draftProblem,
+  emptyDraft,
+  excerptOf,
+  keptTodos,
+  type DraftMode,
+  type KnowledgeDraft,
+} from '../util/knowledgeDoc';
+import { routeAsk, TASK_SEED } from '../util/askIntent';
+import { packFragments } from '../util/batch';
+import { writeKnowledgeDocument } from '../documents/knowledge';
+import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
+import { SummarySheet } from '../components/SummarySheet';
+import { DocViewer } from '../components/DocViewer';
 import { normalizeQaScope } from '../util/qaScope';
 import { dayKey, formatTime } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -82,17 +96,6 @@ interface Props {
 
 const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
-
-/** 「整理为碎片」的 AI 预览状态 */
-type SummaryState = {
-  session: AskSession;
-  /** 最终会写进 fragments 的完整文本；生成中/失败时为空 */
-  text: string;
-  error: string;
-  busy: boolean;
-  /** 输入太长时被丢掉的最早轮数 */
-  omitted: number;
-};
 
 function citeKey(kind: string, id: number) {
   return `${kind}${id}`;
@@ -317,13 +320,39 @@ export function AskScreen({
   const [actionSession, setActionSession] = useState<AskSession | null>(null);
   const [deleteSession, setDeleteSession] = useState<AskSession | null>(null);
   const [working, setWorking] = useState<'' | 'archive' | 'delete'>('');
-  /** AI 整理预览。null = 没开 */
-  const [summary, setSummary] = useState<SummaryState | null>(null);
-  const [summarySaving, setSummarySaving] = useState(false);
-  const [summaryReceived, setSummaryReceived] = useState(0);
-  const [summaryElapsed, setSummaryElapsed] = useState(0);
-  /** 生成的代次：关掉预览后，迟到的请求结果不能再改界面 */
-  const summaryGenRef = useRef(0);
+
+  /* ---- 整理草稿（v0.16） ---- */
+  /** 当前草稿。null = 没有正在整理的稿子 */
+  const [draft, setDraft] = useState<KnowledgeDraft | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftErr, setDraftErr] = useState('');
+  /** 材料被截断的提示，必须显示：少看了内容就可能漏了结论 */
+  const [draftNote, setDraftNote] = useState('');
+  const [draftRecv, setDraftRecv] = useState(0);
+  const [draftElapsed, setDraftElapsed] = useState(0);
+  const [draftReasoning, setDraftReasoning] = useState('');
+  const [savingDraft, setSavingDraft] = useState(false);
+  /** 写入权限。默认开，但一定要看得见、关得掉 */
+  const [allowDoc, setAllowDoc] = useState(true);
+  const [allowTodos, setAllowTodos] = useState(true);
+  /** 写进去之后的那篇文档：卡片变成「已写入」，可以一键打开 */
+  const [writtenDoc, setWrittenDoc] = useState<{ id: number; name: string } | null>(null);
+  /**
+   * 这份草稿属于哪场会话。
+   *
+   * 不能直接用 `sessionIdRef.current`：从历史里对**别的**会话点「重新整理」时，
+   * 当前打开的可能是另一场 —— 用它去 mark，会把文档挂到不相干的会话上，
+   * 界面上看着「整理成功了」，其实那条历史行永远不会有徽标。
+   */
+  const [draftSession, setDraftSession] = useState<number | null>(null);
+  /** 草稿代次：放弃之后迟到的结果不能再把卡片弹回来 */
+  const draftGenRef = useRef(0);
+
+  /** 文档阅读器（从历史会话跳进来，或写完直接看） */
+  const [openDocId, setOpenDocId] = useState<number | null>(null);
+  const [docReload, setDocReload] = useState(0);
+  /** 月小结面板 */
+  const [summaryOpen, setSummaryOpen] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -340,7 +369,13 @@ export function AskScreen({
   busyRef.current = busy;
   historyRef.current = historyOpen;
   overlayRef.current =
-    historyOpen || !!actionSession || !!deleteSession || !!cite || !!summary;
+    historyOpen ||
+    !!actionSession ||
+    !!deleteSession ||
+    !!cite ||
+    !!draft ||
+    summaryOpen ||
+    openDocId !== null;
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -406,16 +441,16 @@ export function AskScreen({
     return () => clearInterval(timer);
   }, [busy]);
 
-  // 整理预览自己的计时：请求可能跑几十秒，得让用户知道还在动
+  // 草稿自己的计时：生成和改稿都可能跑几十秒，得让用户知道还在动
   useEffect(() => {
-    if (!summary?.busy) return;
+    if (!draftBusy) return;
     const started = Date.now();
     const timer = setInterval(
-      () => setSummaryElapsed(Math.round((Date.now() - started) / 1000)),
+      () => setDraftElapsed(Math.round((Date.now() - started) / 1000)),
       500,
     );
     return () => clearInterval(timer);
-  }, [summary?.busy]);
+  }, [draftBusy]);
 
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
@@ -486,11 +521,24 @@ export function AskScreen({
    * 会话已经每轮自动存过，这里不再问「要不要留纪要」。
    */
   const attemptClose = useCallback(() => {
-    if (summary) {
-      // 关掉预览就等于放弃这次生成；代次 +1，迟到的结果不再回写
-      summaryGenRef.current += 1;
-      setSummary(null);
-      setSummarySaving(false);
+    if (openDocId !== null) {
+      setOpenDocId(null);
+      return;
+    }
+    if (summaryOpen) {
+      setSummaryOpen(false);
+      return;
+    }
+    if (draft) {
+      /*
+       * 关掉草稿＝放弃这次整理。代次 +1，迟到的结果不再回写 ——
+       * 否则关完卡片又从底下冒出来，用户会以为自己点错了。
+       * 已经写进文档的那份不受影响（那时草稿已经是「已写入」状态，单独关掉即可）。
+       */
+      draftGenRef.current += 1;
+      setDraft(null);
+      setDraftBusy(false);
+      setWrittenDoc(null);
       return;
     }
     if (cite) {
@@ -512,7 +560,19 @@ export function AskScreen({
     if (busy) return;
     if (dirtyRef.current) void persistSession(turns);
     onClose();
-  }, [actionSession, busy, cite, deleteSession, historyOpen, onClose, persistSession, summary, turns]);
+  }, [
+    actionSession,
+    busy,
+    cite,
+    deleteSession,
+    draft,
+    historyOpen,
+    onClose,
+    openDocId,
+    persistSession,
+    summaryOpen,
+    turns,
+  ]);
 
   useEffect(() => {
     registerClose(attemptClose);
@@ -567,9 +627,11 @@ export function AskScreen({
     setHistoryOpen(false);
     setActionSession(null);
     setDeleteSession(null);
-    summaryGenRef.current += 1;
-    setSummary(null);
-    setSummarySaving(false);
+    draftGenRef.current += 1;
+    setDraft(null);
+    setDraftBusy(false);
+    setDraftErr('');
+    setWrittenDoc(null);
     setContext(null);
     // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
     setScope(pageScope.scope);
@@ -615,9 +677,11 @@ export function AskScreen({
     setOpenReasoningKey(null);
     setReceived(0);
     setElapsed(0);
-    summaryGenRef.current += 1;
-    setSummary(null);
-    setSummarySaving(false);
+    draftGenRef.current += 1;
+    setDraft(null);
+    setDraftBusy(false);
+    setDraftErr('');
+    setWrittenDoc(null);
     setContext(null);
   }
 
@@ -643,12 +707,39 @@ export function AskScreen({
 
   async function send() {
     const question = input.trim();
-    if (!question || busy) return;
+    if (!question || busy || draftBusy) return;
     if (scopeProblem) {
       // 边界不清楚就不发：宁可让用户回去重选，也不要拿错的范围去查
       setError(scopeProblem);
       return;
     }
+
+    /*
+     * 草稿开着的时候，这一句话就是「改哪里」。
+     *
+     * 不在这里再判意图：草稿已经在屏幕上了，用户打的字如果是「把第二段并进
+     * 第一段」，任何意图分类器都会把它判成问答。规则简单一点反而不会错 ——
+     * 想提问就先把草稿收掉，卡片上有按钮。
+     */
+    if (draft) {
+      void reviseCurrent(question);
+      return;
+    }
+
+    const intent = routeAsk(question);
+    if (intent.task === 'digest') {
+      setInput('');
+      setSummaryOpen(true);
+      return;
+    }
+    if (intent.task === 'organize' || intent.task === 'todos') {
+      setInput('');
+      await startDraft(intent.task === 'todos' ? 'todos' : 'knowledge', {
+        instruction: question,
+      });
+      return;
+    }
+
     const docMode = scope.kind === 'documents';
     setInput('');
     setPendingQ(question);
@@ -755,106 +846,258 @@ export function AskScreen({
   }
 
   /**
-   * 打开 AI 整理预览。
+   * 发起一次整理（v0.16）。
    *
-   * 不直接写库：AI 结果是建议，必须让用户看到并确认。
-   * 生成期间 `summary.busy=true`；成功后才出预览和「存为碎片」。
+   * 两种材料来源：碎片（受当前范围约束）和会话（从历史里点「整理成文档」）。
+   * 无论哪种，**写库都发生在用户点「通过并写入」之后** —— 这一步之前
+   * 数据一个字都不会变，包括模型自己觉得写得很好也不行。
    */
-  function openSummary(s: AskSession) {
-    if (working) return;
-    if (s.fragmentId) {
-      showToast('这条会话已经整理过');
+  async function startDraft(
+    mode: DraftMode,
+    opts: { instruction?: string; turns?: QaTurn[]; session?: AskSession } = {},
+  ) {
+    if (draftBusy || busy) return;
+    if (!opts.turns && docMode) {
+      // 文档范围是「只问这几份文档」的契约。整理要读碎片正文，跨过去就是越界。
+      showToast('这次的范围是文档，整理碎片请新开一场会话');
       return;
     }
-    setActionSession(null);
-    setSummaryReceived(0);
-    setSummaryElapsed(0);
-    setSummary({ session: s, text: '', error: '', busy: true, omitted: 0 });
-    void runSummary(s);
-  }
 
-  /** 调一次模型，把会话提炼成精要；失败保留错误，让用户重试或存全文 */
-  async function runSummary(s: AskSession) {
-    const gen = ++summaryGenRef.current;
-    setSummaryReceived(0);
-    setSummaryElapsed(0);
-    setSummary({ session: s, text: '', error: '', busy: true, omitted: 0 });
+    const gen = ++draftGenRef.current;
+    setDraftErr('');
+    setDraftNote('');
+    setDraftReasoning('');
+    setDraftRecv(0);
+    setDraftElapsed(0);
+    setWrittenDoc(null);
+    setInput('');
+    setDraft(emptyDraft(mode, []));
+    setDraftSession(opts.session?.id ?? sessionIdRef.current);
+    setDraftBusy(true);
+
     try {
       const config = await loadAiConfig();
-      const result = await summarizeQaSession({
-        turns: s.turns,
+      let source: KnowledgeSource;
+      let sourceIds: number[] = [];
+      let hint = '';
+
+      if (opts.turns) {
+        source = { kind: 'session', turns: opts.turns };
+      } else {
+        const picked = await pickFragments(context);
+        if (!picked.length) {
+          setDraft(null);
+          showToast('还没有可整理的碎片，先记点什么');
+          return;
+        }
+        sourceIds = picked.map((f) => f.id);
+        source = { kind: 'fragments', fragments: picked };
+        hint = `这次读了最近 ${picked.length} 条碎片`;
+      }
+
+      const out = await extractKnowledge({
+        source,
+        mode,
+        instruction: opts.instruction,
         config,
-        thinking: thinkingOn,
         onProgress: (patch) => {
-          if (summaryGenRef.current !== gen) return;
-          if (patch.content !== undefined) setSummaryReceived(patch.content.length);
+          if (draftGenRef.current !== gen) return;
+          if (patch.content !== undefined) setDraftRecv(patch.content.length);
+          if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
         },
       });
-      if (summaryGenRef.current !== gen) return;
-      const text = buildQaFragment(s.turns, s.createdAt, result.summary);
-      if (!text) throw new Error('整理结果为空');
-      setSummary({
-        session: s,
-        text,
-        error: '',
-        busy: false,
-        omitted: result.omittedTurns,
-      });
+      if (draftGenRef.current !== gen) return;
+
+      setDraft({ ...out.draft, sourceIds });
+      setDraftNote(
+        [
+          hint,
+          out.truncated ? '材料太多，中间省略了一部分，这篇可能漏掉一些细节' : '',
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      );
     } catch (e) {
-      if (summaryGenRef.current !== gen) return;
-      setSummary({
-        session: s,
-        text: '',
-        error: e instanceof Error ? e.message : '整理失败，再试一次',
-        busy: false,
-        omitted: 0,
-      });
+      if (draftGenRef.current !== gen) return;
+      setDraftErr(e instanceof Error ? e.message : '整理失败，再试一次');
+    } finally {
+      if (draftGenRef.current === gen) setDraftBusy(false);
     }
   }
 
-  function closeSummary() {
-    summaryGenRef.current += 1;
-    setSummary(null);
-    setSummarySaving(false);
+  /** 草稿开着时，用户说的每一句都是「改哪里」 */
+  async function reviseCurrent(instruction: string) {
+    if (!draft || draftBusy || savingDraft) return;
+    const gen = draftGenRef.current;
+    setInput('');
+    setDraftErr('');
+    setDraftRecv(0);
+    setDraftElapsed(0);
+    setDraftBusy(true);
+    try {
+      const config = await loadAiConfig();
+      const next = await reviseDraft({
+        draft,
+        instruction,
+        config,
+        onProgress: (patch) => {
+          if (draftGenRef.current !== gen) return;
+          if (patch.content !== undefined) setDraftRecv(patch.content.length);
+        },
+      });
+      if (draftGenRef.current !== gen) return;
+      setDraft(next);
+      setDraftNote('已按你说的改过；不满意可以继续说');
+    } catch (e) {
+      if (draftGenRef.current !== gen) return;
+      setDraftErr(e instanceof Error ? e.message : '没改成，再试一次');
+    } finally {
+      if (draftGenRef.current === gen) setDraftBusy(false);
+    }
   }
 
-  /** AI 摘要和「保存全文」共用的写库路径 */
-  async function writeSummaryFragment(session: AskSession, text: string, okText: string) {
-    if (summarySaving) return;
-    setSummarySaving(true);
+  function discardDraft() {
+    draftGenRef.current += 1;
+    setDraft(null);
+    setDraftBusy(false);
+    setDraftErr('');
+    setDraftNote('');
+    setWrittenDoc(null);
+    setDraftSession(null);
+  }
+
+  /**
+   * 通过并写入。
+   *
+   * 顺序不能反：先写文档、再写待办、最后改会话标记。文档写失败就整体中止，
+   * 不留「待办进去了、文档没进去」的半个结果 —— 用户没法从界面上判断缺了哪一半。
+   */
+  async function approveDraft() {
+    if (!draft || savingDraft || draftBusy) return;
+    const problem = draftProblem(draft);
+    if (problem) {
+      setDraftErr(problem);
+      return;
+    }
+    const writeDoc = allowDoc && draft.mode === 'knowledge' && draft.bodyMd.trim().length > 0;
+    const todos = allowTodos ? keptTodos(draft) : [];
+    if (!writeDoc && !todos.length) {
+      setDraftErr('两个权限都关掉了，没有可写的内容');
+      return;
+    }
+
+    setSavingDraft(true);
+    setDraftErr('');
     try {
-      const fragmentId = await repo.insertFragment(text, 'app', session.createdAt);
-      await repo.markAskSessionConverted(session.id, fragmentId);
+      let docId: number | null = null;
+      if (writeDoc) {
+        docId = await writeKnowledgeDocument({
+          title: docNameOf(draft, Date.now()),
+          bodyMd: draft.bodyMd,
+          excerpt: excerptOf(draft.bodyMd),
+        });
+      }
+      for (const t of todos) {
+        await repo.insertTodo({
+          text: t.text,
+          dueAt: t.due,
+          sourceFragmentId: null,
+          parentId: null,
+        });
+      }
+      // 会话上记下「这场整理出了哪篇」：历史列表要能跳过去
+      if (draftSession !== null) {
+        await repo.markAskSessionDocument(draftSession, docId, draft.sourceIds);
+        await loadHistory();
+      }
       try {
         await onSaved();
       } catch {
-        /* 刷新失败不影响已经写进去的碎片 */
+        /* 刷新失败不影响已经写进去的东西 */
       }
-      await loadHistory();
-      summaryGenRef.current += 1;
-      setSummary(null);
-      showToast(okText);
-    } catch {
-      showToast('写入失败，再试一次');
+      if (docId !== null) {
+        setWrittenDoc({ id: docId, name: docNameOf(draft, Date.now()) });
+        setDraft({ ...draft, todos: [] });
+      } else {
+        discardDraft();
+        showToast(`已写入 ${todos.length} 条待办`);
+      }
+    } catch (e) {
+      setDraftErr(e instanceof Error ? e.message : '写入失败，再试一次');
     } finally {
-      setSummarySaving(false);
+      setSavingDraft(false);
     }
   }
 
-  async function saveSummary() {
-    if (!summary || summary.busy || summary.error || !summary.text) return;
-    await writeSummaryFragment(summary.session, summary.text, '已存为一条整理后的碎片');
+  /**
+   * 取这一轮要整理的碎片。
+   *
+   * 从某条碎片进来就只整理那一条（用户点的就是它）；否则取最近的一批。
+   * 用 `packFragments` 而不是 `slice`：一条超长碎片会把整批挤掉，
+   * 这一点在「整理」里已经踩过一次（见 util/batch.ts）。
+   */
+  async function pickFragments(contextFragment: Fragment | null): Promise<Fragment[]> {
+    if (contextFragment) return [contextFragment];
+    try {
+      const all = await repo.listFragments(200);
+      const usable = all.filter((f) => f.mergedInto === null);
+      return packFragments(usable, 40, 16_000);
+    } catch {
+      return [];
+    }
   }
 
-  /** AI 失败时的兜底：不提炼，完整保存，至少不丢内容 */
-  async function saveFullTranscript() {
-    if (!summary || summarySaving) return;
-    const text = buildQaNote(summary.session.turns, summary.session.createdAt);
-    if (!text) {
+  /** 从历史会话重新整理：优先用当初那批碎片，它们被删了才退回会话原文 */
+  async function reorganize(s: AskSession) {
+    setActionSession(null);
+    if (draft || draftBusy) {
+      showToast('先把当前草稿处理掉');
+      return;
+    }
+    let fragments: Fragment[] = [];
+    if (s.sourceIds.length) {
+      try {
+        fragments = await repo.findFragmentsByIds(s.sourceIds);
+      } catch {
+        /* 查不到就退回会话原文，至少还能整理出点东西 */
+      }
+    }
+    if (fragments.length) {
+      draftGenRef.current += 1;
+      setDraft(emptyDraft('knowledge', fragments.map((f) => f.id)));
+      setDraftSession(s.id);
+      setDraftBusy(true);
+      setDraftErr('');
+      const gen = draftGenRef.current;
+      try {
+        const config = await loadAiConfig();
+        const out = await extractKnowledge({
+          source: { kind: 'fragments', fragments },
+          mode: 'knowledge',
+          config,
+          onProgress: (patch) => {
+            if (draftGenRef.current !== gen) return;
+            if (patch.content !== undefined) setDraftRecv(patch.content.length);
+            if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
+          },
+        });
+        if (draftGenRef.current !== gen) return;
+        setDraft({ ...out.draft, sourceIds: fragments.map((f) => f.id) });
+        setDraftNote(`用当初那 ${fragments.length} 条碎片重新整理了一遍`);
+      } catch (e) {
+        if (draftGenRef.current === gen) {
+          setDraftErr(e instanceof Error ? e.message : '重新整理失败');
+        }
+      } finally {
+        if (draftGenRef.current === gen) setDraftBusy(false);
+      }
+      return;
+    }
+    if (!s.turns.length) {
       showToast('这场会话没有可整理的内容');
       return;
     }
-    await writeSummaryFragment(summary.session, text, '已保存完整问答（未使用 AI 整理）');
+    await startDraft('knowledge', { turns: s.turns, session: s });
   }
 
   async function confirmDeleteSession() {
@@ -926,7 +1169,17 @@ export function AskScreen({
             <Text style={styles.histTitle} numberOfLines={1}>
               {s.title}
             </Text>
-            {s.fragmentId ? <Text style={styles.histBadge}>已整理</Text> : null}
+            {s.documentId ? (
+              <Pressable
+                onPress={() => setOpenDocId(s.documentId)}
+                hitSlop={6}
+                accessibilityLabel="打开这场会话整理出的文档"
+              >
+                <Text style={styles.histBadge}>已写入文档</Text>
+              </Pressable>
+            ) : s.fragmentId ? (
+              <Text style={styles.histBadge}>已整理</Text>
+            ) : null}
             {s.scope?.kind === 'documents' ? (
               <Text style={styles.histScope}>文档 {s.scope.documentIds.length} 份</Text>
             ) : null}
@@ -1001,15 +1254,55 @@ export function AskScreen({
         keyboardShouldPersistTaps="handled"
         onContentSizeChange={scrollToEnd}
       >
-        {!hasContent && !pendingQ ? (
+        {!hasContent && !pendingQ && !draft ? (
           <View style={styles.empty}>
             <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
-            <Text style={styles.emptyTitle}>问点什么</Text>
+            <Text style={styles.emptyTitle}>{docMode ? '就这几份文档提问' : '问、或者让它整理'}</Text>
             <Text style={styles.emptyBody}>
               {docMode
                 ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
-                : '它会先在你自己的碎片里找，再回答。\n找到的来源会标在回答里，点一下就能看原文。'}
+                : '提问会先在你的碎片里找依据，再把答案写出来。\n整理会读最近的碎片，产出一篇文档，写之前先给你看。'}
             </Text>
+
+            {!docMode ? (
+              <View style={styles.hints}>
+                <Pressable
+                  style={styles.hint}
+                  onPress={() => void startDraft('knowledge', { instruction: TASK_SEED.organize })}
+                  disabled={draftBusy || busy}
+                >
+                  <Ionicons name="sparkles-outline" size={16} color={c.accentText} />
+                  <View style={styles.hintBody}>
+                    <Text style={styles.hintTitle}>整理碎片</Text>
+                    <Text style={styles.hintText}>把最近记的东西汇成一篇能反复读的文档</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={styles.hint}
+                  onPress={() => void startDraft('todos', { instruction: TASK_SEED.todos })}
+                  disabled={draftBusy || busy}
+                >
+                  <Ionicons name="checkbox-outline" size={16} color={c.accentText} />
+                  <View style={styles.hintBody}>
+                    <Text style={styles.hintTitle}>整理待办</Text>
+                    <Text style={styles.hintText}>只从碎片里抽出「下一步要做什么」</Text>
+                  </View>
+                </Pressable>
+
+                <Pressable
+                  style={styles.hint}
+                  onPress={() => setSummaryOpen(true)}
+                  disabled={draftBusy || busy}
+                >
+                  <Ionicons name="calendar-outline" size={16} color={c.accentText} />
+                  <View style={styles.hintBody}>
+                    <Text style={styles.hintTitle}>写月小结</Text>
+                    <Text style={styles.hintText}>按日期把一个月的事列成表，另挑要紧的写进展</Text>
+                  </View>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         ) : null}
 
@@ -1060,6 +1353,36 @@ export function AskScreen({
             elapsed={elapsed}
             thinking={thinkingOn}
             height={180}
+          />
+        ) : null}
+
+        {draft ? (
+          <KnowledgeDraftCard
+            draft={draft}
+            onChange={setDraft}
+            busy={draftBusy}
+            received={draftRecv}
+            elapsed={draftElapsed}
+            reasoning={draftReasoning}
+            error={draftErr}
+            note={draftNote}
+            allowDoc={allowDoc}
+            allowTodos={allowTodos}
+            onAllowDoc={setAllowDoc}
+            onAllowTodos={setAllowTodos}
+            saving={savingDraft}
+            writtenId={writtenDoc?.id ?? null}
+            onOpenDoc={(id) => {
+              setDocReload((n) => n + 1);
+              setOpenDocId(id);
+            }}
+            onApprove={() => void approveDraft()}
+            onDiscard={discardDraft}
+            onRetry={() => {
+              // 重试＝用同一个来源再跑一遍。材料的取法和第一次完全一致
+              if (draft?.mode === 'todos') void startDraft('todos');
+              else void startDraft('knowledge');
+            }}
           />
         ) : null}
 
@@ -1117,7 +1440,7 @@ export function AskScreen({
           <TextInput
             value={input}
             onChangeText={setInput}
-            placeholder="问点什么…"
+            placeholder={draft ? '说要改哪里，比如「第二段并进第一段」…' : '问点什么，或者让它整理…'}
             placeholderTextColor={c.text3}
             style={styles.input}
             multiline
@@ -1217,22 +1540,41 @@ export function AskScreen({
 
             <Pressable
               style={styles.sheetAction}
-              onPress={() => openSummary(actionSession)}
-              disabled={!!actionSession.fragmentId || working !== ''}
+              onPress={() => {
+                const s = actionSession;
+                setActionSession(null);
+                if (s) void startDraft('knowledge', { turns: s.turns, session: s });
+              }}
+              disabled={working !== '' || draftBusy}
             >
-              <Ionicons
-                name="document-text-outline"
-                size={18}
-                color={actionSession.fragmentId ? c.text3 : c.text2}
-              />
-              <Text
-                style={[
-                  styles.sheetActionText,
-                  !!actionSession.fragmentId && { color: c.text3 },
-                ]}
+              <Ionicons name="sparkles-outline" size={18} color={c.text2} />
+              <Text style={styles.sheetActionText}>整理成文档（AI 提炼）</Text>
+            </Pressable>
+
+            {actionSession.documentId ? (
+              <Pressable
+                style={styles.sheetAction}
+                onPress={() => {
+                  setOpenDocId(actionSession.documentId);
+                  setActionSession(null);
+                }}
+                disabled={working !== ''}
               >
-                {actionSession.fragmentId ? '已整理为碎片' : '整理为碎片（AI 提炼）'}
-              </Text>
+                <Ionicons name="document-text-outline" size={18} color={c.text2} />
+                <Text style={styles.sheetActionText}>打开整理出的文档</Text>
+              </Pressable>
+            ) : null}
+
+            <Pressable
+              style={styles.sheetAction}
+              onPress={() => {
+                const s = actionSession;
+                if (s) void reorganize(s);
+              }}
+              disabled={working !== '' || draftBusy}
+            >
+              <Ionicons name="refresh-outline" size={18} color={c.text2} />
+              <Text style={styles.sheetActionText}>重新整理</Text>
             </Pressable>
 
             <Pressable
@@ -1278,89 +1620,39 @@ export function AskScreen({
         </View>
       ) : null}
 
-      {/* ---------------- AI 整理预览 ---------------- */}
-      {summary ? (
+      {/* ---------------- 月小结面板 ---------------- */}
+      {summaryOpen ? (
         <View style={styles.summaryPage}>
-          <ScreenHeader
-            title="整理为碎片"
-            subtitle={`${summary.session.turns.length} 轮 · ${
-              summary.busy ? 'AI 提炼中' : summary.error ? '生成失败' : '确认后写库'
-            }`}
-            onBack={closeSummary}
+          <SummarySheet
+            onClose={() => setSummaryOpen(false)}
+            onSaved={async () => {
+              setSummaryOpen(false);
+              try {
+                await onSaved();
+              } catch {
+                /* 刷新失败不影响已经写进去的小结 */
+              }
+              showToast('已保存到时间轴');
+            }}
           />
+        </View>
+      ) : null}
 
-          {summary.busy ? (
-            <View style={styles.summaryCenter}>
-              <ActivityIndicator size="large" color={c.accent} />
-              <Text style={styles.summaryBusyTitle}>正在提炼这场会话的要点…</Text>
-              <Text style={styles.summaryBusyBody}>
-                会调用一次 AI 请求，结果先给你看，确认后才写进时间轴。
-              </Text>
-              <Text style={styles.summaryMeta}>
-                {summaryElapsed}s
-                {summaryReceived > 0 ? ` · 已收到 ${summaryReceived} 字` : ''}
-              </Text>
-            </View>
-          ) : summary.error ? (
-            <View style={styles.summaryCenter}>
-              <Ionicons name="alert-circle-outline" size={30} color={c.danger} />
-              <Text style={styles.summaryError}>{summary.error}</Text>
-              <View style={styles.summaryButtons}>
-                <Pressable
-                  style={styles.ghostBtn}
-                  onPress={() => runSummary(summary.session)}
-                  disabled={summarySaving}
-                >
-                  <Text style={styles.ghostBtnText}>重试</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.ghostBtn}
-                  onPress={saveFullTranscript}
-                  disabled={summarySaving}
-                >
-                  <Text style={styles.ghostBtnText}>
-                    {summarySaving ? '保存中…' : '保存全文'}
-                  </Text>
-                </Pressable>
-              </View>
-              <Pressable style={styles.summaryCancel} onPress={closeSummary}>
-                <Text style={styles.muted}>取消</Text>
-              </Pressable>
-            </View>
-          ) : (
-            <>
-              <ScrollView contentContainerStyle={styles.summaryContent}>
-                <Text style={styles.summaryHint}>
-                  AI 提炼的版本，确认后才写进时间轴；原始会话仍在历史里。
-                </Text>
-                {summary.omitted > 0 ? (
-                  <Text style={styles.summaryOmitted}>
-                    对话较长，只提炼了最近 {summary.session.turns.length - summary.omitted} 轮
-                    （更早 {summary.omitted} 轮未放入）。
-                  </Text>
-                ) : null}
-                <NoteBody text={summary.text} style={styles.summaryBody} />
-              </ScrollView>
-              <View style={styles.summaryFooter}>
-                <Pressable
-                  style={styles.ghostBtn}
-                  onPress={() => runSummary(summary.session)}
-                  disabled={summarySaving}
-                >
-                  <Text style={styles.ghostBtnText}>重新生成</Text>
-                </Pressable>
-                <Pressable
-                  style={styles.solidBtn}
-                  onPress={saveSummary}
-                  disabled={summarySaving}
-                >
-                  <Text style={styles.solidBtnText}>
-                    {summarySaving ? '正在保存…' : '存为碎片'}
-                  </Text>
-                </Pressable>
-              </View>
-            </>
-          )}
+      {/* ---------------- 文档阅读（写完直接看 / 历史里跳过来） ---------------- */}
+      {openDocId !== null ? (
+        <View style={styles.summaryPage}>
+          <DocViewer
+            docId={openDocId}
+            reloadKey={docReload}
+            onClose={() => setOpenDocId(null)}
+            onChanged={() => setDocReload((n) => n + 1)}
+            onAsk={(ids) => {
+              setOpenDocId(null);
+              // 文档问和碎片问是两条入口：换范围必须新开会话，别在旧会话上改契约
+              newSession();
+              setScope({ kind: 'documents', documentIds: ids });
+            }}
+          />
         </View>
       ) : null}
 
@@ -1375,6 +1667,23 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 20 },
   /** 没内容时把「问点什么」放在可视区中间，而不是贴着顶部 */
   contentEmpty: { flexGrow: 1, justifyContent: 'center', paddingBottom: 90 },
+
+  /* ---- 空态的三张提示框 ---- */
+  hints: { alignSelf: 'stretch', gap: 10, marginTop: 22, paddingHorizontal: 4 },
+  hint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: c.hair,
+    backgroundColor: c.card,
+  },
+  hintBody: { flex: 1, gap: 2 },
+  hintTitle: { fontSize: 13.5, color: c.text, fontWeight: '600' },
+  hintText: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
 
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
 

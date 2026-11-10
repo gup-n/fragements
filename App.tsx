@@ -15,7 +15,6 @@ import {
 } from './src/theme';
 import { repo } from './src/db/repo';
 import { TimelineScreen } from './src/screens/TimelineScreen';
-import { OrganizeScreen } from './src/screens/OrganizeScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
 import { AskScreen } from './src/screens/AskScreen';
@@ -24,7 +23,7 @@ import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { dayKey } from './src/util/date';
 
-type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask' | 'docs';
+type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
 const isWeb = Platform.OS === 'web';
 
@@ -347,7 +346,12 @@ function Shell({ booted }: { booted: boolean }) {
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}
-                  onOpenOrganize={() => setRoute('organize')}
+                  // v0.16：整理页并进「问」。这里只负责把入口指过去，具体整理什么由页内指令决定
+                  onOpenOrganize={() => {
+                    setAskContextId(null);
+                    setAskDocIds(null);
+                    setRoute('ask');
+                  }}
                   onOpenSettings={() => {
                     setSettingsFrom('timeline');
                     setRoute('settings');
@@ -359,18 +363,6 @@ function Shell({ booted }: { booted: boolean }) {
                   onOpenReview={() => setRoute('review')}
                   onOpenDocs={() => setRoute('docs')}
                   onSeed={isWeb ? handleSeed : undefined}
-                />
-              )}
-              {route === 'organize' && (
-                <OrganizeScreen
-                  fragments={fragments}
-                  notes={notes}
-                  onClose={() => setRoute('timeline')}
-                  onApplied={reload}
-                  onOpenSettings={() => {
-                    setSettingsFrom('organize');
-                    setRoute('settings');
-                  }}
                 />
               )}
               {route === 'settings' && (

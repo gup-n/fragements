@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-10 更新到 v0.15.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.15.0（versionCode 44）**。
+> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-10 更新到 v0.16.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.16.0（versionCode 45）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -12,16 +12,19 @@
 
 ## 1. 三十秒速览
 
-一个**个人单机 Android 应用**，叫「碎片」。核心是「碎片化记录 + AI 分批整理 + 问自己的记录」：
+一个**个人单机 Android 应用**，叫「碎片」。核心是「随手记 + 在同一个地方问和整理」：
 
-随手记一条 → 点整理，AI **一批一批跑到完** → 全部跑完统一确认 → 才写库。
-想不起来时直接问，答案带引用；退出可以留一条「问答纪要」碎片。
+随手记一条 → 想整理时在「问」里说一句「整理这些碎片」→ AI 读最近的碎片写出一篇文档
+→ **先在对话里给你看、你可以直接改、也可以继续说「第二段并进第一段」** → 点「通过并写入」才进文档区。
+想不起来时还是同一页问，答案带引用。
+
+v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、提问，全在「问」里用一句话发起。
 
 | 项 | 值 |
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.15.0 / versionCode 44 |
+| 版本 | v0.16.0 / versionCode 45 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -37,12 +40,12 @@
 |---|---|
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
-| 自动化测试 | 没有单测框架，但有一组机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run test:docs`（阅读器 47 / 任务 8 / 问答 17）、`npm run test:todos`（待办与小结 18 项）、`npm run check:docs`、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，89 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 自动化测试 | 没有单测框架，但有一组机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run test:docs`（阅读器 47 / 任务 8 / 问答 16）、`npm run test:todos`（待办与小结 18 项）、`npm run test:ask`（指令路由与整理草稿 21 项）、`npm run check:docs`、`npm run typecheck` |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，97 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
-| 小结文风 | 精简优先，三节统一（重点/进展/待处理），字数是纯上限（v0.8.2，见 `TEXTS.md`） |
+| 月总结格式 | **一张按天的「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限（v0.16，见 `TEXTS.md` 1.3） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
-| 数据迁移 | v11。碎片 / 待办 / 月总结保留。**v11 会删掉库里的日/周小结**（用户 2026-11-10 要求）并给 `todos` 加 `parent_id`；v7 加 `todos.done_at` 并清理超过 5 条的旧完成项；v8 建 `ask_sessions`；v9 建 `documents`；v10 加切片与版本号 |
+| 数据迁移 | v12。碎片 / 待办 / 小结 / 文档全保留。v12 给 `documents` 加 `origin`（原件 / 整理产出）与 `excerpt`（列表摘要），给 `ask_sessions` 加 `document_id` / `source_ids`（会话跳转与重新整理）；v11 删掉库里日/周小结并给 `todos` 加 `parent_id`；v7 加 `todos.done_at`；v8 建 `ask_sessions`；v9 建 `documents`；v10 加切片与版本号 |
 
 **一句话：功能完整，但 v0.7 的重做还没经过真机检验。** 别在这之前继续叠功能。
 
@@ -119,12 +122,11 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `App.tsx` | 456 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
+| `App.tsx` | 448 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
 | `src/screens/TimelineScreen.tsx` | 1302 | 时间轴：按日折叠、搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；碎片正文走 NoteBody |
-| `src/screens/OrganizeScreen.tsx` | 931 | 整理：起会话 / 续跑 / 停止 / 失败三选一 / 确认页 / 应用 |
-| `src/screens/AskScreen.tsx` | 1712 | 「问」：聊天布局、两个开关、引用小标、思维链折叠、历史会话、AI 整理预览（重试 / 保存全文 / 确认写库） |
+| `src/screens/AskScreen.tsx` | 2021 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、整理草稿、权限位、历史会话（跳转文档 / 重新整理 / 删除）、引用小标、思维链折叠 |
 | `src/screens/ReviewScreen.tsx` | 280 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
-| `src/screens/DocsScreen.tsx` | 970 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
+| `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
 | `src/screens/SettingsScreen.tsx` | 877 | 外观、API 配置、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
 | `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
 
@@ -136,12 +138,9 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/ai/stream.ts` | 148 | SSE 逐块解析（`reasoning_content` 与 `content` 分开） |
 | `src/ai/config.ts` | 35 | 读写 AI 配置 |
 | `src/ai/keyStore.ts` | 37 | API Key 存 SecureStore |
-| `src/ai/prompt.ts` | 208 | 整理 prompt：六类 + `batch_summary`，四份上下文清单 |
-| `src/ai/deepseek.ts` | 158 | 一次整理请求：`json:true`、`pickEffort`、只收敛形状 |
-| `src/ai/organizeRun.ts` | 293 | **整理循环**：id 快照、装箱、批循环、截断对半拆、每批落库 |
+| `src/ai/knowledge.ts` | 243 | **整理成文档**：材料装填（70/30 截断）、`extractKnowledge`（文档 / 待办两种模式）、`reviseDraft`（只改点到的地方） |
 | `src/ai/qa.ts` | 688 | 「问」：四路检索 + 上下文碎片、预算装填、并行联网、引用反查与快照 |
-| `src/ai/qaSummary.ts` | 125 | 会话转碎片：48k 字预算装填、AI 提炼 300-800 字精要、输入超长报告丢了几轮 |
-| `src/ai/summarize.ts` | 298 | 月度总结 prompt 与素材装填（v0.15 起只有月） |
+| `src/ai/summarize.ts` | 302 | 月总结 prompt（表格 + 重要事件）与素材装填 |
 | `src/ai/search.ts` | 162 | `/v1/tools/search`，退避重试、结果兜底 |
 | `src/ai/mineru.ts` | 648 | 文档解析两条通道：轻量（免 Token，≤10 MB/20 页）+ 精准 `/api/v4`（Token，≤200 MB/200 页）；签名上传 PUT（不带 Content-Type）、状态轮询、zip 只解 `full.md`、错误码映射 |
 
@@ -149,11 +148,10 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/db/types.ts` | 277 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
-| `src/db/repo.native.ts` | 1427 | SQLite 实现 + 迁移 v1–v11 + FTS 索引维护 + 标签重写 + 问答会话 |
-| `src/db/repo.web.ts` | 816 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
+| `src/db/types.ts` | 318 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
+| `src/db/repo.native.ts` | 1539 | SQLite 实现 + 迁移 v1–v11 + FTS 索引维护 + 标签重写 + 问答会话 |
+| `src/db/repo.web.ts` | 868 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
-| `src/db/commit.ts` | 199 | **应用**：按勾选写库，合并 → 标状态的顺序，真实计数 |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
 | `src/db/docFiles.ts` | 327 | 文档文件层：选文件、复制进私有目录、读纯文本、`content://` 交给系统打开 |
 
@@ -205,11 +203,12 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
+| `src/util/askIntent.ts` | 90 | **指令路由唯一判据**：`routeAsk`（月小结 → 待办 → 碎片整理 → 问答）+ 提示框种子的默认指令 |
+| `src/util/knowledgeDoc.ts` | 173 | 整理草稿：模型 JSON 收敛、日期真校验、摘要、`draftProblem` 写入前校验 |
 | `src/util/organizePlan.ts` | 465 | **唯一业务判据**：`mergeBatchResult`、`buildTagGroups`、`finalizePlan`、`appendSummary` |
 | `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
-| `src/util/resultItems.ts` | 111 | 六组结果的 key、默认勾选、`isDestructiveKey` |
 | `src/util/batch.ts` | 41 | `packFragments`（条数 + 字数双上限，至少收一条）、`pendingOnly` |
-| `src/util/qaNote.ts` | 114 | 会话转碎片：AI 精要包装 `buildQaFragment` + 完整转录兜底 `buildQaNote` + 来源清单 |
+| `src/util/qaNote.ts` | 20 | 会话转碎片：AI 精要包装 `buildQaFragment` + 完整转录兜底 `buildQaNote` + 来源清单 |
 | `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
 | `src/util/mdBuild.ts` | 112 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
 | `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
@@ -224,8 +223,9 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
+| `src/components/KnowledgeDraft.tsx` | 389 | 整理草稿卡：编辑 / 预览（真渲染器）、待办勾选、**写入权限位**、写入后变成「已写入」 |
 | `src/components/FragmentDetail.tsx` | 669 | 全屏详情：左右滑、整屏内联编辑、当天小结；搜索命中高亮与逐处跳转 |
-| `src/components/DocViewer.tsx` | 797 | 文档阅读器：Markdown 阅读、打开原文件、重新解析、删除（二次确认） |
+| `src/components/DocViewer.tsx` | 803 | 文档阅读器：Markdown 阅读、打开原文件、重新解析、删除（二次确认） |
 | `src/components/SummarySheet.tsx` | 744 | 月度总结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
 | `src/components/TodoPanel.tsx` | 551 | 待办列表：两层缩进、勾选级联、折叠、多选合并、已合并撤回 |
 | `src/components/TodoEditor.tsx` | 245 | 待办编辑层：新建 / 加子项 / 改文字与到期日（全屏覆盖，不用 Modal） |
@@ -236,7 +236,6 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/update/notify.ts` | 142 | 下载进度通知（LOW 渠道、sticky）。**JS 在后台被挂起，通知数字会停在切走那刻** |
 | `src/util/semver.ts` | 62 | 版本号拆段比较（**不能比字符串**：`'0.10.0' < '0.9.9'`） |
 | `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
-| `src/components/ResultSections.tsx` | 321 | 确认页六组结果渲染与勾选 |
 | `src/components/TagPanel.tsx` | 313 | 标签管理：改名 / 合并 / 删除 |
 | `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
 | `src/components/NoteBody.tsx` | 550 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标；`variant` / `selectable` / `muted` 支持碎片与详情页。**表格用 View 排** |
@@ -247,9 +246,8 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/Toast.tsx` | 55 | 复制 / 归档 / 删除成功的轻提示；不自己计时 |
 | `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 整理页折叠 / 轨迹 |
 | `src/components/ReasoningFold.tsx` | 83 | 「问」页每轮答案上方的深度思考折叠块；最新一轮默认展开 |
-| `src/components/BacklogCard.tsx` | 76 | 整理页的「哪个月还没写总结」条目 |
 | `src/components/TagPill.tsx` | 64 | 标签胶囊（哈希取色） |
-| `src/types.ts` | 423 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9） |
+| `src/types.ts` | 451 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9） |
 | `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
 | `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
 
@@ -314,11 +312,22 @@ fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
   `monthly` 与更早的 `theme` 不动。
 - 迁移**不重建任何索引**，也不回填父子关系 —— 旧数据全是顶层，这是正确的默认。
 
-前十段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
+**v12 干两件事**：`documents` 加 `origin`（`file` / `knowledge`）与 `excerpt`，
+`ask_sessions` 加 `document_id` 与 `source_ids`。
+
+- `origin` 不能省成「`file_uri` 为空就是知识文档」：导入的原件被用户清掉之后
+  `file_uri` 也会变空，那时它是「原件没了但正文还在」，要提示重新导入；
+  而知识文档天生没有原件。**两种状态用一个字段表达，最后一定是两处判据对不上。**
+- `excerpt` 在写入时算一次。列表查询**永远不会**为了一行摘要去读 `body_md` ——
+  那等于把「列表不带正文」这条规矩废掉。
+- `source_ids` 存的是当初喂给模型的碎片 id，供「重新整理」复现同一批输入。
+  不存的话，重新整理只能拿「最近 40 条」重跑，结果和上次不是一回事。
+
+前十一段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
 
 几个容易误解的点：
 
-- **`nature` 字段还在，但没人读**。v0.7 起不再写 `knowledge`，`db/commit.ts` 也不再写 `todo`。
+- **`nature` 字段还在，但没人读**。v0.7 起不再写 `knowledge`，v0.16 起整理也不再改它。
   留着只为兼容旧数据，不要基于它做判断。
 - **`notes.type = 'theme'` 同样只是历史遗留**，新数据只有 `monthly`（v0.15 起日/周已下线，
   v11 迁移会把库里的 daily/weekly 删掉）。`NOTE_GROUP_LABEL` 里仍留着四种文案，
@@ -329,8 +338,9 @@ fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
   period 可空，SQLite 的 UNIQUE 对 NULL 不去重。
 - **`done_at` 为空但有 `done = 1` 的是旧数据**（v7 迁移前完成的）。清理逻辑用
   `COALESCE(done_at, created_at)` 兜底，别直接拿 `done_at` 排序，否则这些会全排到最后。
-- **`organize_runs` 目前是死数据**。v0.7 的循环用 `organize_sessions`；
-  `Repo.saveRun` / `markRunApplied` 还在接口里，但**已经没有任何调用点**，别以为它在记录历史。
+- **`organize_runs` / `organize_sessions` 是死数据**。v0.16 删掉了整理页与批循环，
+  这两张表只剩历史价值：`Repo.saveRun` / `saveSession` 还在接口里，**没有任何调用点**。
+  别以为它在记录历史；也不要基于 `organize_sessions` 做「续跑」——那个功能已经不存在。
 
 ---
 
@@ -341,68 +351,71 @@ fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
 
 | 功能 | 文件 | 输出 | `json` | 备注 |
 |---|---|---|---|---|
-| 整理（单批） | `ai/deepseek.ts` | 六类 + `batch_summary` | `true` | 流式 SSE |
-| 小结 | `ai/summarize.ts` | Markdown | **`false`** | 撞额度直接抛错，不保存 |
+| 整理成文档 | `ai/knowledge.ts` | `{title, body_md, todos, note}` | `true` | 12K 额度，`effort: high`；撞额度直接抛错，草稿不落地 |
+| 只抽待办 | `ai/knowledge.ts` | 同上（`body_md` 空） | `true` | 6K 额度，`effort: low` |
+| 改稿 | `ai/knowledge.ts` | 同结构 | `true` | 只改用户点到的地方，其余原样返回 |
+| 月总结 | `ai/summarize.ts` | Markdown（表格 + 列表） | **`false`** | 撞额度直接抛错，不保存 |
 | 问 | `ai/qa.ts` | Markdown + `[F]/[N]/[T]/[W]` 引用 | **`false`** | 撞额度标 `truncated` |
 
-### 整理的六类
+### 整理草稿的输出契约
 
 ```json
 {
-  "tags":        [{"id": 1, "labels": ["工作","报销"], "project": "报销单"}],
-  "todos":       [{"text": "提交报销单", "due": "2026-10-21", "id": 1}],
-  "merge":       [{"keep_id": 3, "drop_ids": [5], "reason": "同一件事"}],
-  "todo_done":   [{"todo_id": 2, "reason": "碎片里说了已经交了"}],
-  "drop_todos":  [{"todo_id": 6, "reason": "从纯感想里误抽的"}],
-  "merge_todos": [{"keep_id": 6, "drop_ids": [9,14], "text": null, "reason": "同一件事"}],
-  "batch_summary": "这批主要是 NAS 换盘和报销，抽了 3 条待办，并了 2 条重复待办。"
+  "title": "群晖换盘",
+  "body_md": "## 结论\n4 块 8T，RAID5 重建 30 小时完成。",
+  "todos": [{"text": "把旧盘跑一次 SMART 长检", "due": null}],
+  "note": "覆盖换盘全过程，2 条待办"
 }
 ```
 
-七个字段**必须都出现**，没内容的用空数组。`batch_summary` ≤60 字，是跨批唯一的交接信息。
+四个字段都可能为空，但**形状不能变**：`normalizeDraft` 按名字取，改一个字母草稿就是空的。
+`due` 只接受 `YYYY-MM-DD` 且必须是真实日期 —— `2026-02-31` 会被 `Date` 悄悄滚到 3 月 3 日，
+所以 `dueValid` 解析回来还要和输入比对一次。
 
-### 上下文清单与上限
+### 整理的材料与预算
 
-| 清单 | 上限 | 为什么要给 |
+| 项 | 值 | 为什么 |
 |---|---|---|
-| 已有标签（名字 + 次数） | 80 | 复用完全依赖「看得见已有写法」；只给前 20 个，长尾就会被造同义词 |
-| 未完成待办 | 60 | `todo_done` / `merge_todos` / `drop_todos` 的 id 来源 |
-| 已完成待办 | 30 | 不给，模型会把做完的事再抽一遍 |
-| 本轮已抽出的待办 | 40 | 前面几批的还没写库，模型在「未完成」里看不到 |
-| 前几批摘要 | 1500 字 | `appendSummary` 保留尾部，超了从头部截 |
+| 单次条数 | 40 条 | 再多输出会撞额度，而撞额度等于这一批白跑 |
+| 单次字数 | 16,000 字 | 与 `packFragments` 同一口径（条数 + 字数双上限，至少收一条） |
+| 超长材料 | 保留前 70% + 后 30% | 只留前面丢结论，只留后面丢起因；截断要在卡片上如实写出来 |
+| 输出额度 | 12,000（文档）/ 6,000（待办） | **思考链和正文共用**，给少了会「想到一半停住」 |
 
 ---
 
 ## 7. 五条主流程
 
-### 7.1 整理：起会话 → 循环 → 统一确认 → 应用
+### 7.1 「问」里的四种任务：路由 → 执行 → 草稿 → 写入
 
 ```
-startSession(scope)               取 id 快照，写 organize_sessions
-   ↓
-runOrganize(session)              while (池子非空) { 装 40 条 → 请求 → 合并进 plan → persist }
-   ↓  每批：mergeBatchResult(plan, batch, {batchIds, existingTags, todos})
-   ↓  截断：AiError('truncated') 且本批 >1 条 → 对半拆开递归
-   ↓  某批彻底失败：抛 BatchFailure（带已跑完的 session）
-   ↓
-finalizePlan(plan, existingTags)  → OrganizeReview（确认页）
-   ↓
-commitPlan({plan, existingTags, accepted, processedIds})  只有这一步写库
+用户输入
+  ↓ routeAsk(text)                     util/askIntent.ts（唯一判据）
+  ├─ digest   → 打开 SummarySheet（月小结）
+  ├─ todos    → extractKnowledge(mode:'todos')
+  ├─ organize → extractKnowledge(mode:'knowledge')
+  └─ answer   → askQuestion(...)       原有问答链路
+        ↓
+   整理类：草稿落在对话流里（KnowledgeDraft）
+        ├─ 直接改（标题 / 正文 / 待办逐条勾）
+        ├─ 继续说一句 → reviseDraft（只改点到的地方）
+        └─ 通过并写入 → writeKnowledgeDocument + insertTodo
 ```
 
-- **剩余量 = `pendingIds − processedIds − skippedIds`**，不是 offset。
-- **`cursor` 只用于显示**，不参与切分。
-- **用户点「停止」**：当前批跑完就收，已跑完的批次照常进确认页。
-- **失败三选一**：重试这一批 / 跳过这一批（不标状态）/ 放弃本次（删会话）。
-- **`commitPlan` 顺序**：标签 → 新待办 → 待办变更 → 待办合并 → 碎片合并 → `markStatus('tagged')`。
-  标状态放最后，失败时碎片仍在原状态可重跑。
+**路由顺序不能改**：月小结 → 待办 → 碎片整理 → 问答。「整理这个月的碎片」同时命中
+「整理」和「这个月」，先判「整理」的话这句话永远写不出月总结。
 
-### 7.2 应用时的四条纪律（`db/commit.ts`）
+**草稿开着时，任何一句话都是「改哪里」**，不再重新判意图。想提问就先把草稿收掉
+（卡片上有按钮）—— 让「这到底是在改稿还是在提问」变成一条明确的规则，比让分类器猜靠谱。
 
-1. 只写 `accepted(key)` 为真的条目。
-2. 标签按**一整组同名标签**勾选；一条碎片的标签全被取消时**跳过，不写空数组**。
-3. 新待办插入前先读库做 `normText` 查重（幂等：中途失败重试不会插两遍）。
-4. 返回值是**真实写入条数**；被合并掉的碎片不算进「已整理」。
+### 7.2 写入的三条纪律（`documents/knowledge.ts`）
+
+1. **先插一条 `parsing` 记录，再 `replaceDocumentContent` 写正文**。
+   正文要靠 document id 才能写；而 `replaceDocumentContent` 会把 state 改成 `done`。
+   直接 `updateDocument({bodyMd})` 只写正文、不建切片 —— 文档能读、能按标题搜到，
+   但「就这份文档提问」查不到它的任何一段。
+2. **写失败要把空壳删掉**。留一条 `parsing` 的空文档，用户点开是空白，而且没有入口能清掉它。
+3. **先文档、后待办、最后改会话标记**。顺序反了就可能「待办进去了、文档没进去」，
+   用户没法从界面上判断缺了哪一半。
 
 ### 7.3 问：四路检索 → 装填 → 并行联网 → 回答
 
@@ -426,51 +439,29 @@ requestChat({json:false, effort: thinking ? 'high' : undefined})
 - 每答完一轮 `AskScreen` 立刻 `repo.saveAskSession`；失败只静默，不拦回答。
   保存带**会话代次**（`sessionGenRef`）：切换/新建会话后，旧请求回来不能再改新会话的标题和 id。
 
-### 7.4 纪要：AI 提炼 + 预览确认（历史里主动整理）
+### 7.4 从历史会话整理：跳转、重跑、删除
 
-v0.8.8 起不再在退出时弹确认。用户在历史会话的「…」里点**整理为碎片（AI 提炼）**：
+历史行上如果 `document_id` 非空，就带一个「已写入文档」徽标，点它直接打开那篇文档
+（`DocViewer` 以内嵌覆盖层打开，不跳页）。会话操作面板有三项：
 
-```
-summarizeQaSession({turns, config, thinking})
-  ├─ buildTranscript：总预算 48k 字，超了优先保留最近轮次
-  ├─ requestChat({json:false, effort: thinking ? 'high' : undefined})
-  └─ 300-800 字 Markdown 精要，去掉 [F12] 等引用编号
-        ↓
-buildQaFragment(turns, startedAt, summary)
-  ├─ ## 问答纪要 · 日期 · N 轮
-  ├─ AI 精要
-  └─ 「参考来源」清单
-        ↓
-预览页：用户点「存为碎片」才 insertFragment → markAskSessionConverted
-```
+| 操作 | 行为 |
+|---|---|
+| 整理成文档（AI 提炼） | 把**这场会话的问答**当材料，走同一条 `extractKnowledge` |
+| 打开整理出的文档 | 只有整理过才出现；指向 `document_id` |
+| 重新整理 | 优先用 `source_ids` 找回**当初那批碎片**；碎片被删了才退回会话原文 |
 
-- **AI 只出建议，预览确认后才写库**。不要绕过预览直接 insert。
-- **失败兜底**：重试，或「保存全文」走 `buildQaNote`（完整转录、不截断）。
-- **输入超预算**：`summarizeQaSession` 返回 `omittedTurns`，预览页要如实提示。
-- **不另开表**：碎片进 `fragments`，能被整理、被搜索、被再次提问。
-- **关闭预览 = 放弃本次生成**：`summaryGenRef` +1，迟到的请求结果不能回写界面。
-
-示例（AI 精要版）：
-
-```md
-## 问答纪要 · 2026-10-25 21:40 · 3 轮
-
-RAID5 降级后先确认重建状态，别急着拔盘。
-
-- 先看存储池状态，确认哪块盘真正故障、哪块是热备
-- 新盘插入前跑一次 SMART 长检
-- 重建跑完再换盘
-
----
-
-**参考来源**
-- 2026-10-20 21:40 · 碎片
-```
+- 重新整理走 `findFragmentsByIds`，**不能**用 `listFragments(limit)` 再自己筛：
+  limit 一旦小于总数，较早的碎片就查不到，重跑会静默少一半材料。
+- 删除会话**不删文档**：文档已经是独立的一篇东西，删会话把它带走等于「删聊天记录顺手删了笔记」。
+  删除确认卡上写清了这一点。
+- 写入成功后 `markAskSessionDocument(sessionId, docId, sourceIds)`；同一场会话再整理一次会覆盖指向，
+  旧文档留在文档区（不自动删，用户可能已经引用过它）。
 
 ### 7.5 小结、待办与导出
 
-- 小结：`SummarySheet` 取该月全部碎片 → `summarizePeriod()` → 预览 → `upsertNote`。
-  v0.15 起**只有月**，三节固定「重点 / 进展 / 待处理」，字数纯上限 500，素材预算 60k 字。
+- 月总结：`SummarySheet` 取该月全部碎片 → `summarizePeriod()` → 预览 → `upsertNote`。
+  入口现在只在「问」里（提示框或一句「写个月小结」）。输出是**一张按天的
+  「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限，素材预算 60k 字。
   有旧稿时左右对照；缺口可勾选排队生成、逐篇确认。**完整规格见 SPEC §6.3，这里不重复。**
 - 待办：勾选级联全在 `util/todoTree.planToggle`，两份 repo 只负责执行；
   两层子项、可新建/编辑/多选合并。**四条级联规则与四个边界坑见 AGENTS「待办的两层子项」。**
@@ -635,7 +626,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-89 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+97 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**

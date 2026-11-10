@@ -106,6 +106,12 @@ for (const doc of DOCS) {
    */
   const allow = new Set(['src/app/', 'src/util/dedupe.ts']);
   for (const doc of DOCS) {
+    /*
+     * CHANGELOG 是编年史：它记录的是「当时」有什么。为了通过检查去改写历史，
+     * 会让人以为那个文件现在还在 —— 恰恰是反的。所以只跳过它。
+     * HANDOFF / AGENTS / TEXTS 描述的是当前状态，一条都不能放过。
+     */
+    if (doc === 'CHANGELOG.md') continue;
     for (const m of read(doc).matchAll(/`((?:src|scripts|plugins|assets)\/[\w./-]+)`/g)) {
       const p = m[1];
       if (allow.has(p)) continue;
@@ -126,13 +132,18 @@ for (const doc of DOCS) {
   const index = new Map();
   for (const p of [...walk('src'), 'App.tsx']) {
     if (!/\.tsx?$/.test(p)) continue;
-    index.set(path.basename(p), p);
+    // 按**完整相对路径**登记，basename 只作兜底。
+    // v0.16 加了 src/documents/knowledge.ts 之后暴露出旧写法的问题：
+    // 只按 basename 登记时，两个同名文件后写的那个会盖掉前一个，
+    // 于是 `src/ai/knowledge.ts:196` 被拿去和另一个文件比行数，报「越界」。
+    index.set(p.replace(/\\/g, '/'), p);
+    if (!index.has(path.basename(p))) index.set(path.basename(p), p);
   }
 
   for (const doc of DOCS) {
     for (const m of read(doc).matchAll(/`([\w/]+\.(?:tsx?)):(\d+)`/g)) {
       const [, name, lineNo] = m;
-      const file = index.get(path.basename(name));
+      const file = index.get(name) ?? index.get(path.basename(name));
       if (!file) {
         fail('行号', `${doc} 引用了不存在的文件 ${name}`);
         continue;
@@ -167,10 +178,12 @@ for (const doc of DOCS) {
   };
   const norm = (t) => t.trim().split('\n').map((l) => l.trim().replace(/\\`/g, '`'));
 
-  const pairs = [
-    ['### 1.1 整理', 'src/ai/prompt.ts', /export const SYSTEM_PROMPT = `([\s\S]*?)`;/],
-    ['### 1.5 「问」', 'src/ai/qa.ts', /const SYSTEM_PROMPT = `([\s\S]*?)`;/],
-  ];
+  /*
+   * v0.16 只留 1.5：整理的 SYSTEM_PROMPT 随整理页一起删了，
+   * 新的整理提示词（ai/knowledge.ts）在 TEXTS 里是节选，不适合逐行比。
+   * 逐行比只对「整段抄录」的那种有效，节选版硬比只会得到一堆假失败。
+   */
+  const pairs = [['### 1.5 「问」', 'src/ai/qa.ts', /const SYSTEM_PROMPT = `([\s\S]*?)`;/]];
   for (const [heading, file, re] of pairs) {
     const doc = section(heading);
     const src = read(file).match(re)?.[1];
@@ -194,8 +207,8 @@ for (const doc of DOCS) {
   }
 
   // 1.3 是渲染后的样子，不能逐字比；只抽查几条最关键的规则还在不在
-  const d13 = section('### 1.3 周期小结');
-  for (const key of ['精简优先于叙述完整', '不使用第一人称', '没有符合条件的内容就省略整个小节', '字数是上限，不是目标']) {
+  const d13 = section('### 1.3 月总结');
+  for (const key of ['一天一行', '省略实现细节', '3–6 件事', '原样保留']) {
     if (d13 && !d13.includes(key)) fail('提示词', `TEXTS.md 1.3 里缺少规则「${key}」`);
   }
 }

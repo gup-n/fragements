@@ -214,6 +214,7 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
 
     try {
       await repo.deleteDocument(doc.id);
+      await repo.clearAskSessionDocuments(doc.id);
       dismissDocumentJob(doc.id);
       onChanged();
       onClose();
@@ -360,24 +361,27 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
             <Text style={[styles.actionText, styles.primaryText, !ready && styles.textDisabled]}>问这份</Text>
           </Pressable>
 
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, pressed && { backgroundColor: c.hairSoft }]}
-            onPress={open}
-            disabled={busy !== 'idle'}
-          >
-            {busy === 'opening' ? (
-              <ActivityIndicator size="small" color={c.text2} />
-            ) : (
-              <>
-                <Ionicons name="open-outline" size={16} color={c.text} />
-                <Text style={styles.actionText}>打开原文件</Text>
-              </>
-            )}
-          </Pressable>
+          {/* 整理出来的知识文档没有原件：这个按钮点下去只会得到「原文件已不在」 */}
+          {doc.origin === 'knowledge' ? null : (
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={open}
+              disabled={busy !== 'idle'}
+            >
+              {busy === 'opening' ? (
+                <ActivityIndicator size="small" color={c.text2} />
+              ) : (
+                <>
+                  <Ionicons name="open-outline" size={16} color={c.text} />
+                  <Text style={styles.actionText}>打开原文件</Text>
+                </>
+              )}
+            </Pressable>
+          )}
         </View>
 
         <View style={styles.actions}>
-          {running ? (
+          {doc.origin === 'knowledge' ? null : running ? (
             // 正在跑的文档也能从这里停：就绪文档显示的是旧正文，进度条不在正文区，
             // 只在进度页放「取消」的话，这种情况就没地方取消
             <Pressable
@@ -404,14 +408,16 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
             </Pressable>
           )}
 
-          <Pressable
-            style={({ pressed }) => [styles.actionBtn, pressed && { backgroundColor: c.hairSoft }]}
-            onPress={() => setCloudAsk(true)}
-            disabled={busy !== 'idle' || running}
-          >
-            <Ionicons name="cloud-outline" size={16} color={running ? c.text3 : c.text} />
-            <Text style={[styles.actionText, running && styles.textDisabled]}>云解析</Text>
-          </Pressable>
+          {doc.origin === 'knowledge' ? null : (
+            <Pressable
+              style={({ pressed }) => [styles.actionBtn, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={() => setCloudAsk(true)}
+              disabled={busy !== 'idle' || running}
+            >
+              <Ionicons name="cloud-outline" size={16} color={running ? c.text3 : c.text} />
+              <Text style={[styles.actionText, running && styles.textDisabled]}>云解析</Text>
+            </Pressable>
+          )}
 
           <Pressable
             style={({ pressed }) => [

@@ -1,6 +1,6 @@
 {
   "name": "fragments",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
@@ -42,7 +42,8 @@
     "prepare:pdf": "node scripts/prepare_pdf.mjs",
     "build:web": "node scripts/build_web.mjs",
     "check:docs": "node scripts/check_docs.mjs",
-    "test:todos": "node scripts/assert_todos.cjs"
+    "test:todos": "node scripts/assert_todos.cjs",
+    "test:ask": "node scripts/assert_ask.cjs"
   },
   "private": true
 }

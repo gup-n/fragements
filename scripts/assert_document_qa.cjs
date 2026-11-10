@@ -443,48 +443,11 @@ async function main() {
     assert.strictEqual(cites[0].label, '《旧笔记.md》· 正文第 1 段');
   });
 
-  await ok('不同轮次里的 D1 各自映射到自己的文档（纪要来源不能并成一条）', () => {
-    const turns = [
-      {
-        question: '第一轮',
-        answer: '见 [D1]',
-        sourceIds: [],
-        citations: [
-          {
-            kind: 'D',
-            id: 1,
-            label: '《A.pdf》· 第 1 页',
-            body: 'a',
-            documentId: 11,
-            chunkId: 111,
-            contentRevision: 2,
-          },
-        ],
-      },
-      {
-        question: '第二轮',
-        answer: '见 [D1]',
-        sourceIds: [],
-        citations: [
-          {
-            kind: 'D',
-            id: 1,
-            label: '《B.pdf》· 第 2 页',
-            body: 'b',
-            documentId: 12,
-            chunkId: 222,
-            contentRevision: 2,
-          },
-        ],
-      },
-    ];
-    const sources = collectSources(turns);
-    assert.strictEqual(sources.length, 2);
-    assert.ok(sources[0].includes('A.pdf'));
-    assert.ok(sources[1].includes('B.pdf'));
-    // 同一份文档同一段的重复出现仍然只算一条
-    assert.strictEqual(collectSources([turns[0], turns[0]]).length, 1);
-  });
+  /*
+   * v0.16 删掉了「会话整理为碎片」，`collectSources` 随之删除 ——
+   * 跨轮聚合来源只服务于那条链路的「参考来源」清单。现在来源是按轮显示的，
+   * 所以这条断言守的行为已经不存在，不能留着当装饰。
+   */
 
   /* ---- 7. 预算 ---------------- */
 

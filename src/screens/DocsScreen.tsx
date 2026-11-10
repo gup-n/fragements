@@ -21,6 +21,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -70,6 +71,10 @@ const isWeb = Platform.OS === 'web';
 export function DocsScreen({ onClose, onAsk }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [docs, setDocs] = useState<DocumentMeta[] | null>(null);
+  /** 检索词。空 = 看全部；非空时列表来自 `searchDocuments`，不是本地筛 */
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<DocumentMeta[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 浮在底部的一句话提示。删除之后列表可能已经滚到别处，顶部提示会看不见 */
   const [toast, setToast] = useState<string | null>(null);
@@ -136,6 +141,41 @@ export function DocsScreen({ onClose, onAsk }: Props) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  /*
+   * 文档检索。
+   *
+   * 走到库里的 `searchDocuments` 而不是在 `docs` 上过滤：列表接口**不带正文**，
+   * 在内存里筛等于只能搜标题 —— 而用户想找的几乎总是「哪篇里写过群晖」。
+   *
+   * 250ms 防抖是给输入法用的：中文候选词每次变化都会触发 onChangeText，
+   * 不防抖的话打五个字就是五次全表 LIKE。
+   */
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits(null);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const timer = setTimeout(async () => {
+      try {
+        const found = await repo.searchDocuments(q, 60);
+        if (!cancelled) setHits(found);
+      } catch {
+        // 检索失败退回「没有命中」，不要端一整屏错误：用户还能清空搜索继续用
+        if (!cancelled) setHits([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
   /*
    * 任务状态变了就重新读一次列表（节流 400ms）。
@@ -279,6 +319,8 @@ export function DocsScreen({ onClose, onAsk }: Props) {
 
     try {
       await repo.deleteDocument(target.id);
+      // 指向这篇的会话徽标要一起解掉，否则历史里点进去是一片空白
+      await repo.clearAskSessionDocuments(target.id);
       // 记录没了，任务快照也就没意义了，别让「已取消」留在列表上
       dismissDocumentJob(target.id);
       if (openDocId === target.id) setOpenDocId(null);
@@ -313,8 +355,28 @@ export function DocsScreen({ onClose, onAsk }: Props) {
         }
       />
 
+      {/* 检索框常驻在标题下面：文档一多，翻列表找不到东西 */}
+      <View style={styles.searchBar}>
+        <Ionicons name="search" size={15} color={c.text3} />
+        <TextInput
+          value={query}
+          onChangeText={setQuery}
+          placeholder="搜标题、摘要或正文"
+          placeholderTextColor={c.text3}
+          style={styles.searchInput}
+          returnKeyType="search"
+          autoCorrect={false}
+        />
+        {searching ? <ActivityIndicator size="small" color={c.text3} /> : null}
+        {query ? (
+          <Pressable onPress={() => setQuery('')} hitSlop={8} accessibilityLabel="清空搜索">
+            <Ionicons name="close-circle" size={15} color={c.text3} />
+          </Pressable>
+        ) : null}
+      </View>
+
       <FlatList
-        data={docs ?? []}
+        data={hits ?? docs ?? []}
         keyExtractor={(d) => String(d.id)}
         contentContainerStyle={[styles.listContent, selectMode && styles.listContentWithBar]}
         ItemSeparatorComponent={() => <View style={styles.sep} />}
@@ -362,6 +424,15 @@ export function DocsScreen({ onClose, onAsk }: Props) {
           docs === null ? (
             <View style={styles.loading}>
               <ActivityIndicator color={c.text3} />
+            </View>
+          ) : query.trim() && !searching ? (
+            <View style={styles.empty}>
+              <Ionicons name="search-outline" size={30} color={c.text3} />
+              <Text style={styles.emptyTitle}>没有找到「{query.trim()}」</Text>
+              <Text style={styles.emptyHint}>
+                搜的是标题、摘要和正文。正文还没准备的文档只有一个文件名，
+                准备过之后就能搜到里面的内容。
+              </Text>
             </View>
           ) : (
             <View style={styles.empty}>
@@ -549,7 +620,7 @@ function DocRow({
           <View style={styles.titleRow}>
             <View style={styles.extBadge}>
               <Text style={styles.extText} numberOfLines={1}>
-                {(doc.ext || 'file').slice(0, 4).toUpperCase()}
+                {doc.origin === 'knowledge' ? '知识' : (doc.ext || 'file').slice(0, 4).toUpperCase()}
               </Text>
             </View>
             <Text style={styles.name} numberOfLines={1}>
@@ -560,6 +631,16 @@ function DocRow({
           <Text style={styles.meta}>
             {sizeText(doc.size)} · {dayLabel(doc.updatedAt)} {formatTime(doc.updatedAt)}
           </Text>
+
+          {/*
+            知识文档把摘要直接铺在卡片上：这类文档的价值是「里面写了什么」，
+            而不是「有这么一个文件」。要读全文还是点一下，但不必靠点开才知道是什么。
+          */}
+          {doc.origin === 'knowledge' && doc.excerpt ? (
+            <Text style={styles.excerpt} numberOfLines={3}>
+              {doc.excerpt}
+            </Text>
+          ) : null}
 
           <View style={styles.statusRow}>
             <Ionicons name={icon.name} size={13} color={icon.color} />
@@ -815,6 +896,19 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   emptyHint: { fontSize: 12, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 320 },
 
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 6,
+    marginBottom: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: R.btn,
+    backgroundColor: c.hairSoft,
+  },
+  searchInput: { flex: 1, fontSize: 13, color: c.text, padding: 0 },
   card: {
     backgroundColor: c.card,
     borderRadius: R.card,
@@ -838,12 +932,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   extText: { fontSize: 9.5, lineHeight: 13, color: c.accentText, fontWeight: '600' },
   name: { flex: 1, fontSize: 14.5, color: c.text, fontWeight: '500' },
-  meta: {
-    marginTop: 5,
-    fontSize: 11,
-    color: c.text3,
-    fontVariant: ['tabular-nums'],
-  },
+  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'], marginTop: 3 },
+  /** 知识文档的摘要：三行封顶，多了会把一行卡片撑得过高 */
+  excerpt: { fontSize: 12.5, lineHeight: 19, color: c.text2, marginTop: 6 },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 5 },
   status: { flex: 1, fontSize: 11.5, color: c.text2 },
   statusParsing: { color: c.accentText },

@@ -348,6 +348,15 @@ export interface AskSession {
   scopeBroken?: boolean;
   archived: boolean;
   fragmentId: number | null;
+  /**
+   * 这场会话整理出并写入文档区的那篇知识文档。
+   *
+   * 存 id 不存标题：标题可能在文档区被改，会话行上的徽标要跟着变。
+   * 跳转也用它 —— 没有这个字段，用户看到「已整理」却不知道整理到哪去了。
+   */
+  documentId: number | null;
+  /** 这次整理真正喂给模型的碎片 id，重跑「重新整理」要用；空表示没整理过 */
+  sourceIds: number[];
   createdAt: number;
   updatedAt: number;
 }
@@ -359,6 +368,19 @@ export interface AskSession {
 /** stored 是正常成功状态；失败/重试不得销毁上一次可用内容。 */
 export type DocState = 'stored' | 'local' | 'parsing' | 'done' | 'failed';
 export type DocumentContentSource = 'text' | 'markdown' | 'pdf' | 'excel' | 'mineru' | 'legacy';
+
+/**
+ * 一篇文档从哪来。
+ *
+ * `file` = 用户导入的原件（有 file_uri，读的时候要么本地读、要么云解析）；
+ * `knowledge` = AI 整理碎片产出、经用户审阅后写入的知识文档（**没有原件**）。
+ *
+ * 为什么必须有这个字段，而不是「file_uri 为空就当知识」：
+ * 导入的原件被用户清掉之后 file_uri 也会变空，那时它是「原件没了但正文还在」，
+ * 和「本来就是整理出来的」是两件事 —— 前者要提示重新导入，后者要显示来源会话。
+ * 用一个字段同时表达两种状态，最后一定是两处判据对不上。
+ */
+export type DocumentOrigin = 'file' | 'knowledge';
 
 export interface DocumentMeta {
   id: number;
@@ -374,6 +396,12 @@ export interface DocumentMeta {
   indexedRevision: number;
   chunkCount: number;
   contentSource: DocumentContentSource | null;
+  origin: DocumentOrigin;
+  /**
+   * 列表里那一行摘要。**正文不进列表接口**（可能几十万字），
+   * 所以摘要必须在写入时就算好存下来；现算等于每次打开文档页把全文读一遍。
+   */
+  excerpt: string;
   createdAt: number;
   updatedAt: number;
 }

@@ -257,6 +257,25 @@ const MIGRATIONS: string[] = [
   CREATE INDEX IF NOT EXISTS idx_todos_parent ON todos(parent_id);
   DELETE FROM notes WHERE type IN ('daily', 'weekly');
   `,
+  // v12：整理产出落成「知识文档」（v0.16）。
+  //
+  //     origin 区分「导入的原件」和「整理出来的知识」：前者有 file_uri，
+  //     后者天生没有；而导入的原件被清掉之后 file_uri 也会变空 ——
+  //     只靠 file_uri 判不出来，所以必须单独一列。
+  //
+  //     excerpt 是列表里那一行摘要。**不能在列表查询时现算**：
+  //     正文可能几十万字，为了三行字把全文读进内存，等于把「列表不带正文」
+  //     这条规矩废掉。写入时算一次，之后一直用它。
+  //
+  //     ask_sessions 加 document_id / source_ids：会话要能跳到它整理出的那篇文档，
+  //     「重新整理」也要知道当初喂了哪些碎片 —— 这两件事都不能靠现查，
+  //     因为碎片可能已经被改过、合并过。
+  `
+  ALTER TABLE documents ADD COLUMN origin TEXT NOT NULL DEFAULT 'file';
+  ALTER TABLE documents ADD COLUMN excerpt TEXT NOT NULL DEFAULT '';
+  ALTER TABLE ask_sessions ADD COLUMN document_id INTEGER;
+  ALTER TABLE ask_sessions ADD COLUMN source_ids TEXT;
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -405,6 +424,8 @@ interface AskSessionRow {
   scope_json: string | null;
   archived: number;
   fragment_id: number | null;
+  document_id: number | null;
+  source_ids: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -419,6 +440,7 @@ interface AskSessionRow {
 function toAskSession(r: AskSessionRow): AskSession {
   const turns = parseJson(r.turns_json, []);
   const rawScope = parseJson(r.scope_json, null);
+  const rawSources = parseJson(r.source_ids, []);
   let scope: QaScope = { kind: 'records' };
   let scopeBroken = false;
   try {
@@ -434,6 +456,10 @@ function toAskSession(r: AskSessionRow): AskSession {
     scopeBroken,
     archived: r.archived === 1,
     fragmentId: r.fragment_id,
+    documentId: r.document_id ?? null,
+    sourceIds: Array.isArray(rawSources)
+      ? rawSources.filter((x): x is number => typeof x === 'number')
+      : [],
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -454,6 +480,8 @@ interface DocumentRow {
   indexed_revision: number;
   chunk_count: number;
   content_source: string | null;
+  origin: string | null;
+  excerpt: string | null;
   created_at: number;
   updated_at: number;
 }
@@ -474,6 +502,10 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
     indexedRevision: r.indexed_revision ?? 0,
     chunkCount: r.chunk_count ?? 0,
     contentSource: (r.content_source as DocumentMeta['contentSource']) ?? null,
+    // 迁移前的老行没有这两列（值为 null）：一律当「导入的原件、没有摘要」，
+    // 而不是当知识文档 —— 反过来会让所有老文档的卡片都变成空摘要
+    origin: (r.origin as DocumentMeta['origin']) ?? 'file',
+    excerpt: r.excerpt ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -603,6 +635,17 @@ export const repo: Repo = {
     const rows = db().getAllSync<FragmentRow>(
       'SELECT * FROM fragments ORDER BY created_at DESC LIMIT ?',
       [limit],
+    );
+    return rows.map(toFragment);
+  },
+
+  async findFragmentsByIds(ids) {
+    if (!ids.length) return [];
+    // 一次查完：ids 是「当初那批」，可能几十条，逐条查就是几十次往返
+    const marks = ids.map(() => '?').join(',');
+    const rows = db().getAllSync<FragmentRow>(
+      `SELECT * FROM fragments WHERE id IN (${marks})`,
+      ids,
     );
     return rows.map(toFragment);
   },
@@ -1141,6 +1184,20 @@ export const repo: Repo = {
     db().runSync('UPDATE ask_sessions SET fragment_id = ? WHERE id = ?', [fragmentId, id]);
   },
 
+  /**
+   * 记下「这场会话整理出的那篇文档」。
+   *
+   * `documentId` 传 null 是「解绑」：文档在文档区被删了，会话上的徽标不能
+   * 继续指着一个不存在的 id —— 点进去会是一片空白，用户会以为内容丢了。
+   */
+  async markAskSessionDocument(id, documentId, sourceIds) {
+    db().runSync('UPDATE ask_sessions SET document_id = ?, source_ids = ? WHERE id = ?', [
+      documentId,
+      sourceIds && sourceIds.length ? JSON.stringify(sourceIds) : null,
+      id,
+    ]);
+  },
+
   async deleteAskSession(id) {
     db().runSync('DELETE FROM ask_sessions WHERE id = ?', [id]);
   },
@@ -1150,8 +1207,44 @@ export const repo: Repo = {
     const rows = db().getAllSync<DocumentRow>(
       `SELECT id, name, ext, size, file_uri, pages, char_count, state, error,
               content_revision, indexed_revision, chunk_count, content_source,
-              created_at, updated_at
+              origin, excerpt, created_at, updated_at
          FROM documents ORDER BY updated_at DESC`,
+    );
+    return rows.map((r) => toDocumentMeta(r));
+  },
+
+  /**
+   * 文档检索：标题、摘要、正文三处都查。
+   *
+   * 为什么不一上来就查切片索引：知识文档刚写进来时切片可能还没建完，
+   * 而用户搜的是「我刚才整理的那篇」—— 用正文 LIKE 一定能搜到，
+   * 索引只是更准，不该成为「搜不到」的原因。
+   * 正文只在 LIKE 里用，**不返回**：返回体仍然只有 meta。
+   */
+  async searchDocuments(query, limit = 50) {
+    const q = query.trim();
+    const cols = `id, name, ext, size, file_uri, pages, char_count, state, error,
+              content_revision, indexed_revision, chunk_count, content_source,
+              origin, excerpt, created_at, updated_at`;
+    // 空查询不与 LIKE '%%' 混在一起：那样索引用不上，几万篇文档时会明显卡
+    if (!q) {
+      return db()
+        .getAllSync<DocumentRow>(
+          `SELECT ${cols} FROM documents ORDER BY updated_at DESC LIMIT ?`,
+          [limit],
+        )
+        .map((r) => toDocumentMeta(r));
+    }
+    const like = `%${q.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+    const rows = db().getAllSync<DocumentRow>(
+      `SELECT id, name, ext, size, file_uri, pages, char_count, state, error,
+              content_revision, indexed_revision, chunk_count, content_source,
+              origin, excerpt, created_at, updated_at
+         FROM documents
+        WHERE name LIKE ? ESCAPE '\\' OR excerpt LIKE ? ESCAPE '\\' OR body_md LIKE ? ESCAPE '\\'
+        ORDER BY updated_at DESC
+        LIMIT ?`,
+      [like, like, like, limit],
     );
     return rows.map((r) => toDocumentMeta(r));
   },
@@ -1164,9 +1257,20 @@ export const repo: Repo = {
   async insertDocument(input) {
     const now = Date.now();
     const res = db().runSync(
-      `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, '', NULL, 0, ?, NULL, ?, ?)`,
-      [input.name, input.ext, input.size, input.fileUri, input.state, now, now],
+      `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error,
+                              origin, excerpt, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '', NULL, 0, ?, NULL, ?, ?, ?, ?)`,
+      [
+        input.name,
+        input.ext,
+        input.size,
+        input.fileUri,
+        input.state,
+        input.origin ?? 'file',
+        input.excerpt ?? '',
+        now,
+        now,
+      ],
     );
     return Number(res.lastInsertRowId);
   },
@@ -1177,6 +1281,10 @@ export const repo: Repo = {
     if (patch.bodyMd !== undefined) {
       sets.push('body_md = ?', 'char_count = ?');
       params.push(patch.bodyMd, patch.bodyMd.length);
+    }
+    if (patch.excerpt !== undefined) {
+      sets.push('excerpt = ?');
+      params.push(patch.excerpt);
     }
     if (patch.pages !== undefined) {
       sets.push('pages = ?');
@@ -1194,6 +1302,10 @@ export const repo: Repo = {
     sets.push('updated_at = ?');
     params.push(Date.now(), id);
     db().runSync(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`, params);
+  },
+
+  async clearAskSessionDocuments(documentId) {
+    db().runSync('UPDATE ask_sessions SET document_id = NULL WHERE document_id = ?', [documentId]);
   },
 
   async deleteDocument(id) {

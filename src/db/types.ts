@@ -58,6 +58,14 @@ export interface Repo {
 
   listFragments(limit?: number): Promise<Fragment[]>;
   /**
+   * 按 id 取碎片，顺序不保证。
+   *
+   * 存在的理由只有一个：会话要能「重新整理」当初那批碎片。
+   * 用 `listFragments(limit)` 再自己筛是错的 —— limit 一旦小于总数，
+   * 较早的碎片就查不到，重新整理会静默少一半材料。
+   */
+  findFragmentsByIds(ids: number[]): Promise<Fragment[]>;
+  /**
    * 取出 `[from, to)` 区间内的全部碎片，按时间升序。
    * 周期总结必须拿到该周期的**完整**内容，用 limit 截断会漏掉月初的记录。
    */
@@ -205,6 +213,15 @@ export interface Repo {
   }): Promise<number>;
   setAskSessionArchived(id: number, archived: boolean): Promise<void>;
   markAskSessionConverted(id: number, fragmentId: number): Promise<void>;
+  /**
+   * 记下这场会话整理出的知识文档（传 null = 解绑）。
+   * `sourceIds` 是当初喂给模型的碎片，供「重新整理」复现同一批输入。
+   */
+  markAskSessionDocument(
+    id: number,
+    documentId: number | null,
+    sourceIds?: number[],
+  ): Promise<void>;
   deleteAskSession(id: number): Promise<void>;
 
   saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
@@ -213,15 +230,26 @@ export interface Repo {
   /* ---- 文档（v0.10.0） ---- */
   /** 列表，按更新时间倒序。**不含正文** —— 文档的 Markdown 可能几十万字 */
   listDocuments(): Promise<DocumentMeta[]>;
+  /**
+   * 按关键词找文档：标题、摘要、正文三处都查。
+   * 空查询等价于 `listDocuments()`，但走的是同一条 SQL，界面不用分支。
+   */
+  searchDocuments(query: string, limit?: number): Promise<DocumentMeta[]>;
   /** 取一篇文档的完整内容。不存在返回 null */
   findDocument(id: number): Promise<Document | null>;
-  /** 新建一条文档记录（原文件已经复制好），返回 id */
+  /**
+   * 新建一条文档记录（原文件已经复制好，或者是整理产出的知识文档），返回 id。
+   * 知识文档传 `origin: 'knowledge'` 且 `fileUri: null`，正文随后由
+   * `replaceDocumentContent` 写进去（不在这里写，免得绕过切片与版本号）。
+   */
   insertDocument(input: {
     name: string;
     ext: string;
     size: number;
     fileUri: string | null;
     state: DocumentMeta['state'];
+    origin?: DocumentMeta['origin'];
+    excerpt?: string;
   }): Promise<number>;
   /**
    * 更新解析结果。只传要改的字段。
@@ -229,10 +257,23 @@ export interface Repo {
    */
   updateDocument(
     id: number,
-    patch: { bodyMd?: string; pages?: number | null; state?: DocumentMeta['state']; error?: string | null },
+    patch: {
+      bodyMd?: string;
+      excerpt?: string;
+      pages?: number | null;
+      state?: DocumentMeta['state'];
+      error?: string | null;
+    },
   ): Promise<void>;
   /** 删除文档记录。原文件由调用方删，repo 不碰文件系统 */
   deleteDocument(id: number): Promise<void>;
+  /**
+   * 文档被删之后，把指向它的会话标记解开。
+   *
+   * 不解的话历史行上那个「已写入文档」徽标还指着一条不存在的记录，
+   * 点进去是一片空白 —— 用户会以为整理出来的内容丢了，其实只是文档被删了。
+   */
+  clearAskSessionDocuments(documentId: number): Promise<void>;
 
   /* ---- 文档内容与切片（v0.12） ---- */
   /**
