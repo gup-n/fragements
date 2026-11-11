@@ -521,13 +521,17 @@ export function TimelineScreen({
       return;
     }
     try {
-      const perm =
-        from === 'camera'
-          ? await ImagePicker.requestCameraPermissionsAsync()
-          : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        setToast(from === 'camera' ? '没给相机权限，去系统设置里打开' : '没给相册权限，去系统设置里打开');
-        return;
+      /*
+       * 只有相机要权限。相册走的是系统 Photo Picker，Android 13+ 根本不需要
+       * READ_MEDIA_IMAGES —— 手动去 request 反而会拿到 denied（清单里没有这个权限），
+       * 然后把自己挡在门外。
+       */
+      if (from === 'camera') {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) {
+          setToast('没给相机权限，去系统设置里打开');
+          return;
+        }
       }
       const res =
         from === 'camera'
@@ -563,6 +567,13 @@ export function TimelineScreen({
       });
       inputRef.current?.focus();
       scrollToTopSoon();
+    } catch (e) {
+      /*
+       * 存图 / 插库都可能失败（存储满、权限、数据库锁）。
+       * 原来这里没有 catch，异常直接冒到 onPress 的 promise 里 ——
+       * 表现是「点了发送，什么都没发生，输入框里的字还在」。
+       */
+      setToast(e instanceof Error ? `没记上：${e.message}` : '没记上，再试一次');
     } finally {
       setSending(false);
     }

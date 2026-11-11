@@ -20,11 +20,16 @@ function imagesDir(): Directory {
   return dir;
 }
 
-/** 库里存的相对名 → 能给 <Image> 用的绝对 uri */
+/**
+ * 库里存的相对名 → 能给 <Image> 用的绝对 uri。
+ *
+ * **刻意不建目录**：这个函数在渲染期被调用（每一行都要拼一次 uri），
+ * 顺手 `create` 一个目录既是副作用也是白跑。目录由 `saveFragmentImage` 负责建。
+ */
 export function fragmentImageUri(name: string | null | undefined): string | null {
   if (!name) return null;
   try {
-    return new File(imagesDir(), name).uri;
+    return new File(Paths.document, IMG_DIR, name).uri;
   } catch {
     return null;
   }

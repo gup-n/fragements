@@ -123,7 +123,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | 文件 | 行 | 干什么 |
 |---|---|---|
 | `App.tsx` | 523 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1642 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
+| `src/screens/TimelineScreen.tsx` | 1653 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
 | `src/screens/AskScreen.tsx` | 2772 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
 | `src/screens/ReviewScreen.tsx` | 276 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
 | `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
@@ -155,7 +155,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/db/repo.web.ts` | 844 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
-| `src/db/fragmentImages.ts` | 90 | 碎片配图文件层：存到私有目录（相对名入库）、读 base64、删除；失败不抛 |
+| `src/db/fragmentImages.ts` | 95 | 碎片配图文件层：存到私有目录（相对名入库）、读 base64、删除；失败不抛 |
 | `src/db/docFiles.ts` | 327 | 文档文件层：选文件、复制进私有目录、读纯文本、`content://` 交给系统打开 |
 
 ### 文档层（v0.12.0 起）
