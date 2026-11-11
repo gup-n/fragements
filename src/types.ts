@@ -33,6 +33,20 @@ export interface Fragment {
    * 因为一个字都没留下，说它「已整理」是在骗人。
    */
   organizedAt: number | null;
+  /**
+   * 配图的文件名（相对 `fragment-images/` 目录）。null = 纯文字碎片。
+   *
+   * 只存文件名不存绝对路径：换机、迁移、App 私有目录前缀变化时，
+   * 绝对路径会集体失效，而文件名永远能拼回去。
+   */
+  imagePath: string | null;
+  /**
+   * 图片的文字层：模型把图里的字抄下来 / 描述画面。null = 还没解析过。
+   *
+   * 空字符串是**有意义的**：表示「解析过了，图里确实没读出东西」。
+   * 这两种状态在界面上必须区分 —— 前者可以重试，后者重试也没用。
+   */
+  imageText: string | null;
 }
 
 export interface Todo {

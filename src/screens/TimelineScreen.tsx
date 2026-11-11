@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
+  Image,
   Platform,
   Pressable,
   SectionList,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
+import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, Note } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { NoteBody } from '../components/NoteBody';
@@ -21,7 +23,9 @@ import { SwipeRow } from '../components/SwipeRow';
 import { Toast } from '../components/Toast';
 import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { countHits } from '../util/highlight';
+import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
+import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
  * 时间轴上混着两种东西：碎片和周期总结。
@@ -63,6 +67,24 @@ type DisplaySection = Section & {
 };
 
 /**
+ * 折叠状态下分区头那一行预览。
+ *
+ * 收起的日期 / 月份必须能让人判断「里面大概是什么」——
+ * 否则用户只能一天天点开看，折叠就只是把内容藏起来。
+ */
+function previewOfItem(item: TimelineItem): string {
+  if (item.kind === 'fragment') {
+    const text = item.fragment.content.replace(/\s+/g, ' ').trim();
+    if (text) return text;
+    // 纯图碎片没有正文：折叠起来的时候至少要看得见「这里有一张图」，
+    // 否则那一行是空白，用户会以为碎片丢了
+    const pic = (item.fragment.imageText ?? '').replace(/\s+/g, ' ').trim();
+    return pic ? `[图片] ${pic}` : '[图片]';
+  }
+  return item.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim();
+}
+
+/**
  * 冷启动只自动聚焦一次。放在模块作用域而不是 useRef，
  * 是因为从设置页/知识库返回时会卸载再挂载，用 ref 会反复弹键盘。
  */
@@ -97,7 +119,8 @@ interface Props {
    */
   draft: string;
   onDraftChange: (text: string) => void;
-  onAdd: (text: string) => Promise<void>;
+  /** `imageUri` 有值就是「这条带一张图」，图由上层存盘并异步解析 */
+  onAdd: (text: string, imageUri?: string) => Promise<void>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
@@ -108,6 +131,11 @@ interface Props {
   /** 文档库（v0.10.0）。入口在页头「问」的左边 */
   onOpenDocs: () => void;
   onSeed?: () => Promise<void>;
+  /** 正在读图的碎片 id。行上要说「正在读图里的字」，而不是让用户干等 */
+  imageBusy: Set<number>;
+  /** 读图失败的原因（id → 一句话）。必须能就地重试 */
+  imageFail: Record<string, string>;
+  onReparseImage: (fragment: Fragment) => void;
 }
 
 export function TimelineScreen({
@@ -125,6 +153,9 @@ export function TimelineScreen({
   onOpenReview,
   onOpenDocs,
   onSeed,
+  imageBusy,
+  imageFail,
+  onReparseImage,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -144,6 +175,13 @@ export function TimelineScreen({
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
+  /**
+   * 待发送的图（选择器给的临时 uri）。发送时才落盘 ——
+   * 选了又删掉的图不该在私有目录里留一份。
+   */
+  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  /** 加图的方式菜单（拍照 / 相册）。不用 Modal：本项目一律 absolute + 自接返回键 */
+  const [imageMenu, setImageMenu] = useState(false);
   const [query, setQuery] = useState('');
   /**
    * 事项筛选。和搜索框是叠乘关系（先筛后搜）。
@@ -163,6 +201,16 @@ export function TimelineScreen({
    * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
    */
   const [collapsedDays, setCollapsedDays] = useState<Set<string> | null>(null);
+  /**
+   * 展开的「月里面的某一天」。空集合 = 全部收起。
+   *
+   * v0.18 把更早的月份折成「N月记录」，展开后虽然分出了天，但那些天被
+   * `locked` 掉了、点不动 —— 用户 2026-11-11 报「似乎这里只有单级折叠」。
+   * 现在天默认是**收起**（一行日期 + 条数 + 首条摘要），点一下才铺开，
+   * 跟本月按天分区是同一套手感。默认收起而不是默认铺开，是因为展开一个月
+   * 本来就是「先看看这个月都有哪几天」。
+   */
+  const [openedDays, setOpenedDays] = useState<Set<string>>(new Set());
   /**
    * 详情页。只存 id 序列 + 起点，不存碎片快照 ——
    * 存快照的话编辑保存后这里还是旧内容，详情页看起来「没变」，得关掉重开才刷新。
@@ -189,12 +237,13 @@ export function TimelineScreen({
   useEffect(() => {
     if (!deleteTarget && !fullEdit) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (deleteTarget) setDeleteTarget(null);
+      if (imageMenu) setImageMenu(false);
+      else if (deleteTarget) setDeleteTarget(null);
       else if (fullEdit) setFullEdit(false);
       return true;
     });
     return () => sub.remove();
-  }, [deleteTarget, fullEdit]);
+  }, [deleteTarget, fullEdit, imageMenu]);
 
   // 卸载时把还没到点的定时器清掉，否则回调落在已卸载的组件上
   useEffect(() => () => {
@@ -341,9 +390,7 @@ export function TimelineScreen({
   const displaySections = useMemo<DisplaySection[]>(() => {
     const pickPreview = (sec: Section): string => {
       const first = sec.data[0];
-      if (first?.kind === 'fragment') return first.fragment.content.replace(/\s+/g, ' ');
-      if (first?.kind === 'note') return first.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim();
-      return '';
+      return first ? previewOfItem(first) : '';
     };
 
     const out: DisplaySection[] = [];
@@ -353,17 +400,19 @@ export function TimelineScreen({
         /*
          * 展开的月 = 一个月头 + 若干天。月头只画一次（点它收回去），
          * 数据全部下放到天分区 —— 不再是一大坨没有日期分隔的流水。
+         * 每个天分区自己还能再折一层，这就是两级折叠。
          */
         out.push({ ...sec, data: [], total: sec.data.length, preview: '', headerOnly: true });
         const byDay = new Map<string, DisplaySection>();
         for (const item of sec.data) {
-          const key = dayKey(item.at);
+          const key = `d:${dayKey(item.at)}`;
+          const spread = openedDays.has(key);
           let bucket = byDay.get(key);
           if (!bucket) {
             const day = new Date(item.at);
             day.setHours(0, 0, 0, 0);
             bucket = {
-              key: `d:${key}`,
+              key,
               title: dayLabel(item.at),
               sub: daySubLabel(item.at),
               order: day.getTime(),
@@ -376,8 +425,13 @@ export function TimelineScreen({
             byDay.set(key, bucket);
             out.push(bucket);
           }
-          bucket.data.push(item);
           bucket.total += 1;
+          if (!spread) {
+            // 收起时只留一句预览：这一行要能替用户判断「要不要点开」
+            if (!bucket.preview) bucket.preview = previewOfItem(item);
+            continue;
+          }
+          bucket.data.push(item);
         }
         continue;
       }
@@ -389,7 +443,7 @@ export function TimelineScreen({
       });
     }
     return out;
-  }, [sections, collapsedKeys]);
+  }, [sections, collapsedKeys, openedDays]);
 
   /** 详情页的翻页序列：与当前列表顺序一致，搜索时就是搜索结果 */
   const flat = useMemo(() => {
@@ -450,14 +504,54 @@ export function TimelineScreen({
     return n;
   }, [hitCounts]);
 
-  const canSend = draft.trim().length > 0 && !sending;
+  // 只有图没有字也能发：随手拍一张报错屏，不写备注是最常见的用法
+  const canSend = (draft.trim().length > 0 || !!pendingImage) && !sending;
+
+  /**
+   * 选一张图。`camera` 走系统相机，`library` 走相册。
+   *
+   * 压缩只靠 `quality`：图片落盘时统一转 JPEG，`quality` 才会真的生效。
+   * 不引 `expo-image-manipulator` —— 多一个原生模块，只为省几百 KB，
+   * 而这张图只在「转成文字」那一次被传上去，之后就不再传了。
+   */
+  async function pickImage(from: 'camera' | 'library') {
+    setImageMenu(false);
+    if (Platform.OS === 'web') {
+      setToast('网页版加不了图片，在手机上用可以');
+      return;
+    }
+    try {
+      const perm =
+        from === 'camera'
+          ? await ImagePicker.requestCameraPermissionsAsync()
+          : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setToast(from === 'camera' ? '没给相机权限，去系统设置里打开' : '没给相册权限，去系统设置里打开');
+        return;
+      }
+      const res =
+        from === 'camera'
+          ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ['images'],
+              quality: 0.5,
+              allowsMultipleSelection: false,
+            });
+      if (res.canceled || !res.assets?.length) return;
+      setPendingImage(res.assets[0].uri);
+    } catch (e) {
+      setToast(e instanceof Error ? `打不开相册：${e.message}` : '选图失败');
+    }
+  }
 
   async function submit() {
     const text = draft.trim();
-    if (!text || sending) return;
+    const picture = pendingImage;
+    if ((!text && !picture) || sending) return;
     setSending(true);
     try {
-      await onAdd(text);
+      await onAdd(text, picture ?? undefined);
+      setPendingImage(null);
       onDraftChange('');
       // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
       // 折叠一个「刚往里写了东西的日期」没有任何意义。
@@ -505,7 +599,17 @@ export function TimelineScreen({
    * 而在时间轴上，「把这句话拿到别处去」比「就地改」常见得多。
    */
   async function copyFragment(f: Fragment) {
-    await Clipboard.setStringAsync(f.content);
+    /*
+     * 纯图碎片没有正文。复制一个空串，用户粘出来是一片空白，
+     * 却收到「已复制」的提示 —— 那是在骗他。有图文字就复制图文字。
+     */
+    const text = f.content.trim() || (f.imageText ?? '').trim();
+    if (!text) {
+      setOpenRow(null);
+      showToast('这条只有图片，没有可复制的文字');
+      return;
+    }
+    await Clipboard.setStringAsync(text);
     if (Platform.OS !== 'web') {
       try {
         const Haptics = require('expo-haptics');
@@ -539,6 +643,16 @@ export function TimelineScreen({
   /** 再点同一个事项就取消 —— 否则筛选开了没法用同一个手势关掉 */
   function toggleFilter(value: string) {
     setFilter((prev) => (prev && prev.value === value ? null : { kind: 'project', value }));
+  }
+
+  /** 展开 / 收起「月里面的某一天」。和 toggleDay 分开：两套折叠层级各记各的 */
+  function toggleNestedDay(key: string) {
+    setOpenedDays((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
@@ -728,12 +842,15 @@ export function TimelineScreen({
             // 一滚动就把滑开的操作区收起来：敞着一行往下翻，看着像忘了关
             onScrollBeginDrag={() => setOpenRow(null)}
             renderSectionHeader={({ section }) => {
-              const closed = collapsedKeys.has(section.key);
               /*
-               * 展开的月里那些天是「已经展开的东西」，再点一下收起来只会让
-               * 月头显示「N 条」而下面空着，用户会以为是 bug。所以它们只当分隔线用。
+               * 两级折叠各记各的：月头看 collapsedKeys，月里的天看 openedDays。
+               * 两者默认都是收起，但含义不同 —— 月是「先看这个月有哪几天」，
+               * 天是「再看那天写了什么」。
                */
-              const locked = searching || !!section.nested;
+              const closed = section.nested
+                ? !openedDays.has(section.key)
+                : collapsedKeys.has(section.key);
+              const locked = searching;
               return (
                 <Pressable
                   style={({ pressed }) => [
@@ -742,7 +859,9 @@ export function TimelineScreen({
                     pressed && !locked && styles.sectionHeaderPressed,
                   ]}
                   onPress={() => {
-                    if (!locked) toggleDay(section.key);
+                    if (locked) return;
+                    if (section.nested) toggleNestedDay(section.key);
+                    else toggleDay(section.key);
                   }}
                   disabled={locked}
                 >
@@ -887,6 +1006,37 @@ export function TimelineScreen({
                         </>
                       );
                     })()}
+                    {/*
+                      配图。缩略图 + 一行状态。
+                      图里的字还在读时必须说出来 —— 否则用户看到的就是一张图，
+                      永远不知道「模型其实还没看过它」。
+                    */}
+                    {fragment.imagePath ? (
+                      <View style={styles.imageRow}>
+                        <Image
+                          source={{ uri: fragmentImageUri(fragment.imagePath) ?? undefined }}
+                          style={styles.imageThumb}
+                          resizeMode="cover"
+                        />
+                        <View style={styles.imageSide}>
+                          {imageBusy.has(fragment.id) ? (
+                            <Text style={styles.imageNote}>正在读图里的字…</Text>
+                          ) : imageFail[String(fragment.id)] ? (
+                            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
+                              <Text style={[styles.imageNote, styles.imageNoteErr]} numberOfLines={2}>
+                                没读出文字 · 点这里重试
+                              </Text>
+                            </Pressable>
+                          ) : fragment.imageText ? (
+                            <Text style={styles.imageNote} numberOfLines={3}>
+                              {shortPreview(fragment.imageText, 90)}
+                            </Text>
+                          ) : (
+                            <Text style={styles.imageNote}>还没读图里的字</Text>
+                          )}
+                        </View>
+                      </View>
+                    ) : null}
                     {(hitCount > 0 ||
                       fragment.project ||
                       fragment.source !== 'app' ||
@@ -956,12 +1106,42 @@ export function TimelineScreen({
         )}
 
         <View style={[styles.composerWrap, { paddingBottom: 10 + keyboardHeight }]}>
+          {/*
+            选好的图。放在输入框上方而不是塞进输入框里：
+            缩略图要大一点才能确认「是不是这张」，塞进一行里只能做成一枚小图标。
+          */}
+          {pendingImage ? (
+            <View style={styles.pendingRow}>
+              <Image source={{ uri: pendingImage }} style={styles.pendingThumb} />
+              <Text style={styles.pendingHint} numberOfLines={2}>
+                发出去之后会自动把图里的字读出来{'\n'}可以顺手写一句它是什么
+              </Text>
+              <Pressable
+                onPress={() => setPendingImage(null)}
+                hitSlop={10}
+                style={styles.pendingRemove}
+                accessibilityLabel="不发了"
+              >
+                <Ionicons name="close" size={14} color={c.text2} />
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={styles.composer}>
+            {/* 加图入口在最左边：从「写一条」到「拍一张」是同一个动作的两半 */}
+            <Pressable
+              onPress={() => setImageMenu((v) => !v)}
+              hitSlop={8}
+              style={styles.expandIcon}
+              accessibilityLabel="加一张图片"
+            >
+              <Ionicons name="image-outline" size={17} color={c.text2} />
+            </Pressable>
             <TextInput
               ref={inputRef}
               value={draft}
               onChangeText={onDraftChange}
-              placeholder="随手记一条…"
+              placeholder={pendingImage ? '这张图是什么？可留空' : '随手记一条…'}
               placeholderTextColor={c.text3}
               style={styles.input}
               multiline
@@ -982,6 +1162,23 @@ export function TimelineScreen({
               <Ionicons name="arrow-up" size={18} color={canSend ? c.onAccent : c.text3} />
             </Pressable>
           </View>
+
+          {/* 拍照 / 相册。弹出层用 absolute，不用 Modal —— 键盘弹着的时候 Modal 会错位 */}
+          {imageMenu ? (
+            <View style={styles.imageSheet}>
+              <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('camera')}>
+                <Ionicons name="camera-outline" size={18} color={c.text2} />
+                <Text style={styles.imageSheetText}>拍一张</Text>
+              </Pressable>
+              <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('library')}>
+                <Ionicons name="images-outline" size={18} color={c.text2} />
+                <Text style={styles.imageSheetText}>从相册选</Text>
+              </Pressable>
+              <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
+                <Text style={styles.imageSheetText}>取消</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
       </View>
 
@@ -1000,6 +1197,9 @@ export function TimelineScreen({
           doneIds={doneIds}
           notes={notes}
           highlightQuery={detail.query}
+          imageBusy={imageBusy}
+          imageFail={imageFail}
+          onReparseImage={onReparseImage}
           onClose={() => setDetail(null)}
           onSave={onEdit}
           onDelete={onDelete}
@@ -1171,6 +1371,23 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   dotMuted: { backgroundColor: c.hair },
   rowBody: { flex: 1, paddingBottom: 18, paddingLeft: 2 },
+  /** 配图那一行：缩略图 + 右侧状态文字 */
+  imageRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 7,
+  },
+  imageThumb: {
+    width: 62,
+    height: 62,
+    borderRadius: R.btn,
+    backgroundColor: c.hairSoft,
+  },
+  imageSide: { flex: 1 },
+  imageNote: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  imageNoteErr: { color: c.danger },
+
   content: { fontSize: 15, lineHeight: 23, color: c.text },
   expandBtn: { marginTop: 6, alignSelf: 'flex-start' },
   expandText: { fontSize: 12.5, color: c.accent },
@@ -1278,6 +1495,50 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
+  /** 待发送的图：缩略图 + 一句说明 + 取消 */
+  pendingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  pendingThumb: { width: 56, height: 56, borderRadius: R.btn, backgroundColor: c.hairSoft },
+  pendingHint: { flex: 1, fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  pendingRemove: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.hairSoft,
+  },
+  /** 加图菜单贴在输入框上方 */
+  imageSheet: {
+    position: 'absolute',
+    left: 16,
+    bottom: '100%',
+    marginBottom: 6,
+    minWidth: 150,
+    backgroundColor: c.card,
+    borderRadius: R.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hair,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  imageSheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  imageSheetCancel: { paddingHorizontal: 14, paddingVertical: 11 },
+  imageSheetText: { fontSize: 13.5, color: c.text },
   composer: {
     flexDirection: 'row',
     alignItems: 'flex-end',

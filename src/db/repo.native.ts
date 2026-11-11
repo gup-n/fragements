@@ -284,6 +284,16 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE fragments ADD COLUMN organized_at INTEGER;
   `,
+  // v15：碎片配图（v0.19）。
+  //
+  //     image_path 只存相对名，绝对路径交回给文件层拼 —— 换机 / 迁移时
+  //     前缀会变，存死路径等于让所有配图一起失效。
+  //     image_text 是模型给的文字层：整理、问答、搜索都只读它，不再反复送图。
+  //     **空串和 NULL 不是一回事**：NULL = 还没解析，'' = 解析过了但没读出内容。
+  `
+  ALTER TABLE fragments ADD COLUMN image_path TEXT;
+  ALTER TABLE fragments ADD COLUMN image_text TEXT;
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -320,6 +330,8 @@ interface FragmentRow {
   merged_into: number | null;
   nature: string | null;
   organized_at: number | null;
+  image_path: string | null;
+  image_text: string | null;
 }
 
 function toFragment(r: FragmentRow): Fragment {
@@ -334,6 +346,8 @@ function toFragment(r: FragmentRow): Fragment {
     mergedInto: r.merged_into,
     nature: (r.nature as FragmentNature) ?? null,
     organizedAt: r.organized_at ?? null,
+    imagePath: r.image_path ?? null,
+    imageText: r.image_text ?? null,
   };
 }
 
@@ -566,11 +580,17 @@ function indexFragment(
   content: string,
   tags: string[],
   project: string | null,
+  imageText: string | null = null,
 ) {
   d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
+  /*
+   * 有配图时把文字层拼进索引。加不加分隔符都行，但加上之后
+   * 用户在搜索结果里看到的命中位置不会把正文和图片文字连成一句。
+   */
+  const body = imageText ? `${content}\n[图片] ${imageText}` : content;
   d.runSync('INSERT INTO fragment_fts(rowid, text) VALUES (?, ?)', [
     id,
-    indexText(content, tags, project),
+    indexText(body, tags, project),
   ]);
 }
 
@@ -719,17 +739,27 @@ export const repo: Repo = {
     return countOf(db(), `SELECT COUNT(*) AS n FROM fragments WHERE ${where}`);
   },
 
-  async insertFragment(content, source, createdAt) {
+  async insertFragment(content, source, createdAt, image) {
     const d = db();
     const text = content.trim();
     const row = createdAt ?? Date.now();
     const res = d.runSync(
-      'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
-      [text, row, source, 'inbox'],
+      `INSERT INTO fragments (content, created_at, source, status, image_path, image_text)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [text, row, source, 'inbox', image?.path ?? null, image?.text ?? null],
     );
     const id = Number(res.lastInsertRowId);
-    indexFragment(d, id, text, [], null);
+    // 图里的文字也要进索引：不然「搜图里的报错码」永远搜不到
+    indexFragment(d, id, text, [], null, image?.text ?? null);
     return id;
+  },
+
+  async setFragmentImageText(id, text) {
+    const d = db();
+    d.runSync('UPDATE fragments SET image_text = ? WHERE id = ?', [text, id]);
+    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
+    // 重建索引：这段文字是这条碎片内容的一部分，必须能被搜到
+    if (row) indexFragment(d, id, row.content, parseTags(row.tags), row.project, text);
   },
 
   async updateFragmentContent(id, content) {
@@ -737,7 +767,7 @@ export const repo: Repo = {
     const text = content.trim();
     d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [text, id]);
     const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
-    if (row) indexFragment(d, id, text, parseTags(row.tags), row.project);
+    if (row) indexFragment(d, id, text, parseTags(row.tags), row.project, row.image_text);
   },
 
   async markFragmentsOrganized(ids, at) {
@@ -754,6 +784,11 @@ export const repo: Repo = {
 
   async deleteFragment(id) {
     const d = db();
+    // 先取配图名：删完这行就再也查不到文件在哪了，那张图会永远占着空间
+    const mine = d.getFirstSync<{ image_path: string | null }>(
+      'SELECT image_path FROM fragments WHERE id = ?',
+      [id],
+    );
     d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
     d.runSync('DELETE FROM fragments WHERE id = ?', [id]);
     // 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
@@ -762,6 +797,7 @@ export const repo: Repo = {
       "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
       [id],
     );
+    return mine?.image_path ?? null;
   },
 
   async applyTags(id, labels, project) {

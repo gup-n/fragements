@@ -56,6 +56,7 @@ const tscArgs = [
   'src/util/knowledgeDoc.ts',
   'src/util/batch.ts',
   'src/util/jsonRepair.ts',
+  'src/util/fragmentText.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -84,6 +85,7 @@ const { routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js')
 const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
 const batch = require(path.join(outDir, 'util', 'batch.js'));
 const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
+const text = require(path.join(outDir, 'util', 'fragmentText.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -475,6 +477,60 @@ check('语法错时给出位置，不是只说「不合法的 JSON」', () => {
   eq(r.ok, false, '确实解析不了');
   assert(typeof r.problem.at === 'number', '要有下标');
   assert(r.problem.near.includes('title'), `附近原文要能定位：${r.problem.near}`);
+});
+
+// ---------------------------------------------------------------------------
+// 3.8 配图的文字层（v0.19）
+// ---------------------------------------------------------------------------
+check('纯文字碎片原样返回，不会被加上任何标记', () => {
+  eq(text.fragmentText({ content: '换盘先跑 SMART', imageText: null }), '换盘先跑 SMART', '正文');
+});
+
+check('有图文字时拼在正文后面，中间用分隔标记', () => {
+  const out = text.fragmentText({ content: '这块主板', imageText: 'B760M 迫击炮' });
+  assert(out.includes('这块主板'), '正文要在');
+  assert(out.includes('B760M 迫击炮'), '图文字要在');
+  assert(out.includes(text.IMAGE_MARK), '要有标记区分两块内容');
+});
+
+check('只有图文字没有正文时也能读', () => {
+  const out = text.fragmentText({ content: '   ', imageText: '蓝屏 0x0000007B' });
+  eq(out, `${text.IMAGE_MARK} 蓝屏 0x0000007B`, '只有图文字');
+});
+
+check('空串（解析过但没读出东西）不算内容', () => {
+  eq(text.fragmentText({ content: '', imageText: '' }), '', '空');
+  eq(text.hasReadableText({ content: '', imageText: '' }), false, '不能进整理材料');
+});
+
+check('纯图还没解析：既没有正文也没有图文字', () => {
+  eq(text.fragmentText({ content: '', imageText: null }), '', '空');
+  eq(text.hasReadableText({ content: '', imageText: null }), false, '不能进材料');
+});
+
+check('装箱预算把图文字算进去，不是只算正文', () => {
+  const frag = (id, content, imageText) => ({
+    id,
+    content,
+    imageText,
+    createdAt: id,
+    source: 'manual',
+    status: 'inbox',
+    tags: [],
+    project: null,
+    mergedInto: null,
+    nature: null,
+    organizedAt: null,
+    imagePath: imageText ? 'x.jpg' : null,
+  });
+  // 三条各 100 字正文 + 100 字图文字 = 每条实际 200+ 字
+  const pool = [
+    frag(1, 'a'.repeat(100), 'b'.repeat(100)),
+    frag(2, 'a'.repeat(100), 'b'.repeat(100)),
+    frag(3, 'a'.repeat(100), 'b'.repeat(100)),
+  ];
+  // 预算 500：只算正文会收满 3 条（300），算上图文字就是 2 条（约 440）
+  eq(batch.packFragments(pool, 40, 500).length, 2, '图文字要占预算');
 });
 
 // ---------------------------------------------------------------------------

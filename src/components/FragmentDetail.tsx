@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   BackHandler,
   FlatList,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -30,6 +31,7 @@ import { dayKey, daySubLabel, formatTime, monthKey, periodLabel } from '../util/
 import { countHits } from '../util/highlight';
 import { parseBlocks } from '../util/mdBlocks';
 import { useKeyboardHeight } from '../util/keyboard';
+import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
  * ScrollView 的实例类型。RN 0.88 里 `typeof ScrollView` 是组件本身，
@@ -55,6 +57,10 @@ interface Props {
   /** 保存正文。父组件负责写库并刷新，这里拿 Promise 是为了显示保存中状态 */
   onSave: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
+  /** 图里的字还在读时为 true */
+  imageBusy: Set<number>;
+  imageFail: Record<string, string>;
+  onReparseImage: (fragment: Fragment) => void;
 }
 
 export function FragmentDetail({
@@ -66,6 +72,9 @@ export function FragmentDetail({
   onClose,
   onSave,
   onDelete,
+  imageBusy,
+  imageFail,
+  onReparseImage,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   /**
@@ -382,6 +391,9 @@ export function FragmentDetail({
               width={width}
               done={doneIds.has(item.id)}
               notes={notes}
+              imageBusy={imageBusy.has(item.id)}
+              imageFail={imageFail[String(item.id)]}
+              onReparseImage={onReparseImage}
               highlight={highlightQuery}
               registerScroll={registerScroll}
               registerBlock={registerBlock}
@@ -433,6 +445,9 @@ function Page({
   done,
   notes,
   highlight,
+  imageBusy,
+  imageFail,
+  onReparseImage,
   registerScroll,
   registerBlock,
 }: {
@@ -441,10 +456,40 @@ function Page({
   done: boolean;
   notes: Note[];
   highlight?: string;
+  imageBusy: boolean;
+  imageFail?: string;
+  onReparseImage: (fragment: Fragment) => void;
   registerScroll: (id: number, view: ScrollViewInstance | null) => void;
   registerBlock: (id: number, blockIndex: number, y: number) => void;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
+  /**
+   * 配图的原始宽高比。
+   *
+   * 不写死成 4:3：手机拍的报错屏常常是 9:19，写死会把主要内容裁掉；
+   * 拿不到尺寸时退回 4:3，至少不塌成 0 高。
+   */
+  const imgUri = fragmentImageUri(fragment.imagePath);
+  const [imgAspect, setImgAspect] = useState<number | null>(null);
+  useEffect(() => {
+    if (!imgUri) {
+      setImgAspect(null);
+      return;
+    }
+    let alive = true;
+    Image.getSize(
+      imgUri,
+      (w, h) => {
+        if (alive && w > 0) setImgAspect(h / w);
+      },
+      () => {
+        if (alive) setImgAspect(null);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [imgUri]);
   const merged = fragment.mergedInto !== null;
   const hasMeta = !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
@@ -476,6 +521,48 @@ function Page({
             </View>
           ) : null}
           {merged ? <Text style={styles.merged}>已合并到另一条</Text> : null}
+        </View>
+      ) : null}
+
+      {imgUri ? (
+        <View style={styles.imageBox}>
+          <Image
+            source={{ uri: imgUri }}
+            style={[
+              styles.imageBig,
+              {
+                width: Math.max(0, width - 44),
+                height: Math.max(0, width - 44) * (imgAspect ?? 0.75),
+              },
+            ]}
+            resizeMode="contain"
+          />
+          {/* 状态行就在图下面：读者下一眼看到的就是「它读出来没有」 */}
+          {imageBusy ? (
+            <Text style={styles.imageState}>正在读图里的字…</Text>
+          ) : imageFail ? (
+            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
+              <Text style={[styles.imageState, styles.imageStateErr]} numberOfLines={3}>
+                没读出文字：{imageFail} · 点这里重试
+              </Text>
+            </Pressable>
+          ) : fragment.imageText ? (
+            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
+              <Text style={styles.imageState}>图里的字 · 点一下重读</Text>
+            </Pressable>
+          ) : (
+            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
+              <Text style={styles.imageState}>还没读过这张图 · 点一下让它读</Text>
+            </Pressable>
+          )}
+        </View>
+      ) : null}
+
+      {/* 图里的字单独一块：用户要能核对模型抄得对不对，而不是只能信 */}
+      {fragment.imageText ? (
+        <View style={styles.imageTextBox}>
+          <Text style={styles.imageTextLabel}>图里的字</Text>
+          <NoteBody text={fragment.imageText} style={styles.imageTextBody} variant="reading" selectable />
         </View>
       ) : null}
 
@@ -583,6 +670,24 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   content: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48 },
+  /** 配图：大图 + 一行状态。按原始比例给高度，不裁剪 */
+  imageBox: { marginBottom: 16, gap: 6 },
+  imageBig: { borderRadius: R.card, backgroundColor: c.hairSoft, alignSelf: 'center' },
+  imageState: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  imageStateErr: { color: c.danger },
+  /** 「图里的字」单独一块，方便核对模型抄得对不对 */
+  imageTextBox: {
+    marginBottom: 16,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 12,
+    borderRadius: R.card,
+    backgroundColor: c.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hair,
+  },
+  imageTextLabel: { fontSize: 11, color: c.text3, letterSpacing: 0.4, marginBottom: 6 },
+  imageTextBody: { fontSize: 14, lineHeight: 23, color: c.text2 },
   badges: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   doneBadge: {
     flexDirection: 'row',

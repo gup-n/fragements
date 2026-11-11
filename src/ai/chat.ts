@@ -98,7 +98,27 @@ export interface ChatProgress {
   content?: string;
 }
 
-export type ChatMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+/**
+ * 多模态的一小块。
+ *
+ * DeepSeek 官方从 V4.1-Flash 起就认图片（`deepseek-flash` 就是默认模型），
+ * 格式和 OpenAI 完全一致：`content` 从字符串换成 blocks 数组，
+ * 图片用 `image_url` 带 data URL。**图片只能出现在 user 消息里**，
+ * 放进 system / assistant 会直接 400。
+ */
+export type ChatContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
+ * `content` 放宽成两种形态：绝大多数调用还是纯字符串，
+ * 只有「带一张图」的那一轮用 blocks。这样既不用把每个调用点都改一遍，
+ * 也不会因为类型太窄而逼着调用方自己拼 any。
+ */
+export type ChatMessage = {
+  role: 'system' | 'user' | 'assistant';
+  content: string | ChatContentPart[];
+};
 
 export interface ChatOutcome {
   /** 拼完的正文 */

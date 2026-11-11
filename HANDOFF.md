@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-10 更新到 v0.16.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.18.1（versionCode 48）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.19.0（versionCode 49）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -24,7 +24,7 @@ v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、�
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.18.1 / versionCode 48 |
+| 版本 | v0.19.0 / versionCode 49 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -41,7 +41,7 @@ v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、�
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
 | 自动化测试 | 没有单测框架，但有一组机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run test:docs`（阅读器 47 / 任务 8 / 问答 16）、`npm run test:todos`（待办与小结 18 项）、`npm run test:ask`（指令路由与整理草稿 21 项）、`npm run check:docs`、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，125 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，135 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 月总结格式 | **一张按天的「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限（v0.16，见 `TEXTS.md` 1.3） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
@@ -122,9 +122,9 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `App.tsx` | 438 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1381 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
-| `src/screens/AskScreen.tsx` | 2766 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
+| `App.tsx` | 523 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
+| `src/screens/TimelineScreen.tsx` | 1642 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
+| `src/screens/AskScreen.tsx` | 2772 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
 | `src/screens/ReviewScreen.tsx` | 276 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
 | `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
 | `src/screens/SettingsScreen.tsx` | 1082 | 外观、AI 接口（官方只填 Key + 余额 + 跳转，第三方折叠）、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
@@ -134,14 +134,15 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/ai/chat.ts` | 538 | **唯一请求层**：四段超时、SSE 解析调用、`finish_reason` 判定、错误映射；`AiError.detail` 带原始证据 |
+| `src/ai/chat.ts` | 558 | **唯一请求层**：四段超时、SSE 解析调用、`finish_reason` 判定、错误映射；`AiError.detail` 带原始证据 |
 | `src/ai/stream.ts` | 148 | SSE 逐块解析（`reasoning_content` 与 `content` 分开） |
 | `src/ai/config.ts` | 35 | 读写 AI 配置 |
 | `src/ai/keyStore.ts` | 37 | API Key 存 SecureStore |
-| `src/ai/knowledge.ts` | 359 | **整理成文档**：只收知识的判据、多篇拆分、材料装填（70/30 截断）、已有待办去重、`extractKnowledge` / `reviseDraft` |
-| `src/ai/qa.ts` | 676 | 「问」：四路检索 + 上下文碎片、预算装填、并行联网、引用反查与快照 |
+| `src/ai/knowledge.ts` | 363 | **整理成文档**：只收知识的判据、多篇拆分、材料装填（70/30 截断）、已有待办去重、`extractKnowledge` / `reviseDraft` |
+| `src/ai/qa.ts` | 677 | 「问」：四路检索 + 上下文碎片、预算装填、并行联网、引用反查与快照 |
 | `src/ai/summarize.ts` | 302 | 月总结 prompt（表格 + 重要事件）与素材装填 |
 | `src/ai/search.ts` | 162 | `/v1/tools/search`，退避重试、结果兜底 |
+| `src/ai/vision.ts` | 86 | 图片转文字层：原样抄字 / 保留结构 / 没字就描述；只在加图那一次调用 |
 | `src/ai/balance.ts` | 122 | 官方余额：`GET /user/balance`、只认官方域名、失败不拦任何功能 |
 | `src/ai/mineru.ts` | 648 | 文档解析两条通道：轻量（免 Token，≤10 MB/20 页）+ 精准 `/api/v4`（Token，≤200 MB/200 页）；签名上传 PUT（不带 Content-Type）、状态轮询、zip 只解 `full.md`、错误码映射 |
 
@@ -149,11 +150,12 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/db/types.ts` | 317 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
-| `src/db/repo.native.ts` | 1516 | SQLite 实现 + 迁移 v1–v11 + FTS 索引维护 + 标签重写 + 问答会话 |
-| `src/db/repo.web.ts` | 826 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
+| `src/db/types.ts` | 329 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
+| `src/db/repo.native.ts` | 1552 | SQLite 实现 + 迁移 v1–v11 + FTS 索引维护 + 标签重写 + 问答会话 |
+| `src/db/repo.web.ts` | 844 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
 | `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
 | `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
+| `src/db/fragmentImages.ts` | 90 | 碎片配图文件层：存到私有目录（相对名入库）、读 base64、删除；失败不抛 |
 | `src/db/docFiles.ts` | 327 | 文档文件层：选文件、复制进私有目录、读纯文本、`content://` 交给系统打开 |
 
 ### 文档层（v0.12.0 起）
@@ -209,7 +211,8 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/util/organizePlan.ts` | 465 | **唯一业务判据**：`mergeBatchResult`、`buildTagGroups`、`finalizePlan`、`appendSummary` |
 | `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
 | `src/util/jsonRepair.ts` | 193 | 模型 JSON 的宽容解析：剥围栏 / 括号配对切片 / 修非法转义与裸控制字符 / 报出位置 |
-| `src/util/batch.ts` | 67 | `packFragments`（条数 + 字数双上限，至少收一条）、`sliceBatches`（整理全部分批，上限 10 批）、`pendingOnly` |
+| `src/util/fragmentText.ts` | 35 | 碎片全文 = 正文 + 图片文字层；整理 / 问答 / 装箱 / 预览共用同一个判据 |
+| `src/util/batch.ts` | 71 | `packFragments`（条数 + 字数双上限，至少收一条）、`sliceBatches`（整理全部分批，上限 10 批）、`pendingOnly` |
 | `src/util/qaNote.ts` | 20 | 会话转碎片：AI 精要包装 `buildQaFragment` + 完整转录兜底 `buildQaNote` + 来源清单 |
 | `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
 | `src/util/mdBuild.ts` | 112 | 导出拼接（时间轴 + 待办 + 标签索引）。纯函数，只为和 `mdParse` 做往返测试 |
@@ -227,7 +230,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `src/components/KnowledgeDraft.tsx` | 569 | 整理草稿卡：步骤日志、思考折叠、产出小卡（查看 / 编辑走整页）、待办勾选、**写入权限位**、已写入标记、「还有 N 条，继续」 |
 | `src/components/DraftDocPage.tsx` | 242 | 草稿单篇整页：阅读（真渲染器）/ 编辑（Markdown 源）切换、标题与正文、加入文档库 |
-| `src/components/FragmentDetail.tsx` | 682 | 全屏详情：左右滑、整屏内联编辑、当天小结；搜索命中高亮与逐处跳转 |
+| `src/components/FragmentDetail.tsx` | 787 | 全屏详情：左右滑、整屏内联编辑、当天小结；搜索命中高亮与逐处跳转 |
 | `src/components/DocViewer.tsx` | 803 | 文档阅读器：Markdown 阅读、打开原文件、重新解析、删除（二次确认） |
 | `src/components/SummarySheet.tsx` | 744 | 月度总结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
 | `src/components/TodoPanel.tsx` | 551 | 待办列表：两层缩进、勾选级联、折叠、多选合并、已合并撤回 |
@@ -248,7 +251,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 | `src/components/Toast.tsx` | 55 | 复制 / 归档 / 删除成功的轻提示；不自己计时 |
 | `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 整理页折叠 / 轨迹 |
 | `src/components/ReasoningFold.tsx` | 83 | 「问」页每轮答案上方的深度思考折叠块；最新一轮默认展开 |
-| `src/types.ts` | 475 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9、`kind` 区分整理轮 v0.18） |
+| `src/types.ts` | 489 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9、`kind` 区分整理轮 v0.18） |
 | `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
 | `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
 
@@ -627,7 +630,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-125 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+135 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**

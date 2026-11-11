@@ -15,6 +15,7 @@
  * - 改写草稿时只动用户点到的部分。整篇重写会让上一轮已经改好的措辞丢掉。
  */
 import type { AiConfig, Fragment, QaTurn } from '../types';
+import { fragmentText } from '../util/fragmentText';
 import {
   AiError,
   clipRaw,
@@ -124,7 +125,10 @@ function stamp(at: number): string {
 /** 材料正文。带编号是为了让模型能引用具体某条，也让审阅时对得上 */
 export function formatFragments(list: Fragment[]): string {
   return list
-    .map((f, i) => `【${i + 1}】${stamp(f.createdAt)}${f.tags.length ? ` #${f.tags.join(' #')}` : ''}\n${f.content}`)
+    .map(
+      (f, i) =>
+        `【${i + 1}】${stamp(f.createdAt)}${f.tags.length ? ` #${f.tags.join(' #')}` : ''}\n${fragmentText(f)}`,
+    )
     .join('\n\n');
 }
 

@@ -22,6 +22,9 @@ import { DocsScreen } from './src/screens/DocsScreen';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { dayKey } from './src/util/date';
+import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
+import { describeImage } from './src/ai/vision';
+import { loadAiConfig } from './src/ai/config';
 
 type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
@@ -133,6 +136,16 @@ function Shell({ booted }: { booted: boolean }) {
    * 开机因为网络断了一下就弹个错误框，比不检查还烦人。
    */
   const [update, setUpdate] = useState<ReleaseInfo | null>(null);
+  /**
+   * 正在解析配图的碎片 id。
+   *
+   * 解析是异步的（要调模型，几秒钟），而图本身已经进库了。界面上必须
+   * 分开表达这两件事：**记录已经存好**，只是图片里的字还在读。
+   * 混成一句「保存中」会让用户以为记录没记上。
+   */
+  const [imageBusy, setImageBusy] = useState<Set<number>>(new Set());
+  /** 图解析失败的原因（id → 一句人话）。行上要能点重试，不能只在日志里 */
+  const [imageFail, setImageFail] = useState<Record<number, string>>({});
 
   /*
    * 启动 3 秒后查一次新版本。
@@ -215,10 +228,68 @@ function Shell({ booted }: { booted: boolean }) {
     return () => sub.remove();
   }, [route, settingsFrom]);
 
+  /**
+   * 把一张图的文字读出来，写回那一条。
+   *
+   * 顺序很重要：**先存图、先插碎片，再解析**。反过来的话模型一失败，
+   * 用户刚拍的那张图和写的那句话就一起没了 —— 而记录应用最不能丢的就是这个。
+   *
+   * 失败要留痕：`imageFail` 存一句原因，行上显示「没读出文字 · 重试」。
+   * 静默失败会让用户以为「这张图就是没字」。
+   */
+  const parseImageFor = useCallback(
+    async (id: number, path: string, hint: string) => {
+      setImageBusy((prev) => new Set(prev).add(id));
+      try {
+        const config = await loadAiConfig();
+        const base64 = await readImageBase64(path);
+        const text = await describeImage({ base64, config, hint });
+        await repo.setFragmentImageText(id, text);
+        setImageFail((prev) => {
+          if (!(id in prev)) return prev;
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+        await reload();
+      } catch (e) {
+        setImageFail((prev) => ({
+          ...prev,
+          [id]: e instanceof Error ? e.message : '图片没读出来',
+        }));
+      } finally {
+        setImageBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [reload],
+  );
+
   const handleAdd = useCallback(
-    async (text: string) => {
-      await repo.insertFragment(text, 'app');
-      await reload();
+    async (text: string, imageUri?: string) => {
+      if (imageUri) {
+        /*
+         * 配图：先落盘再插库。文件存成了但插库失败，会留下一张没人引用的图 ——
+         * 比起「记录里有条指向空文件的碎片」，前者只是浪费几百 KB。
+         */
+        const path = await saveFragmentImage(imageUri);
+        let id: number;
+        try {
+          id = await repo.insertFragment(text, 'app', undefined, { path });
+        } catch (e) {
+          await removeFragmentImage(path);
+          throw e;
+        }
+        await reload();
+        // 解析不 await：用户已经可以去记下一条了
+        void parseImageFor(id, path, text);
+      } else {
+        await repo.insertFragment(text, 'app');
+        await reload();
+      }
       if (!isWeb) {
         try {
           const Haptics = require('expo-haptics');
@@ -228,7 +299,16 @@ function Shell({ booted }: { booted: boolean }) {
         }
       }
     },
-    [reload],
+    [parseImageFor, reload],
+  );
+
+  /** 详情页里的「重新解析」：同一张图再读一遍 */
+  const handleReparseImage = useCallback(
+    (fragment: Fragment) => {
+      if (!fragment.imagePath) return;
+      void parseImageFor(fragment.id, fragment.imagePath, fragment.content);
+    },
+    [parseImageFor],
   );
 
   const handleEdit = useCallback(
@@ -241,7 +321,9 @@ function Shell({ booted }: { booted: boolean }) {
 
   const handleDelete = useCallback(
     async (id: number) => {
-      await repo.deleteFragment(id);
+      // 先把文件名捞回来，删完那行就再也找不到这张图了 —— 会一直占着空间
+      const imagePath = await repo.deleteFragment(id);
+      await removeFragmentImage(imagePath);
       await reload();
     },
     [reload],
@@ -339,6 +421,9 @@ function Shell({ booted }: { booted: boolean }) {
                   draft={draft}
                   onDraftChange={setDraft}
                   onAdd={handleAdd}
+                  imageBusy={imageBusy}
+                  imageFail={imageFail}
+                  onReparseImage={handleReparseImage}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}

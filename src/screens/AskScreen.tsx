@@ -72,6 +72,7 @@ import {
 } from '../util/knowledgeDoc';
 import { routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
 import { packFragments, sliceBatches } from '../util/batch';
+import { hasReadableText } from '../util/fragmentText';
 import { writeKnowledgeDocument } from '../documents/knowledge';
 import { KnowledgeDraftCard, type AgentStep, type SavedDoc } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
@@ -1608,7 +1609,12 @@ export function AskScreen({
     if (contextFragment) return [contextFragment];
     try {
       const list = await repo.listFragmentsBetween(0, Date.now() + 86_400_000);
-      const usable = list.filter((f) => f.mergedInto === null && f.content.trim());
+      /*
+       * 「有可读内容」= 正文或图片文字层至少有一个。
+       * 纯图且还没解析出来的碎片不能进材料：模型只会看到一个空块，
+       * 却照样占掉字数预算。
+       */
+      const usable = list.filter((f) => f.mergedInto === null && hasReadableText(f));
       if (!all) {
         // 升序列表的尾部才是最近的；反转之后装箱，超长的那条才不会挤掉后面的
         return packFragments(usable.slice().reverse(), 40, 16_000);

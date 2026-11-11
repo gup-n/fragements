@@ -28,6 +28,7 @@ import type {
   WebHit,
 } from '../types';
 import { dayKey, formatTime, monthStart, weekStart } from '../util/date';
+import { fragmentText } from '../util/fragmentText';
 import { flattenTodos } from '../util/todoTree';
 import { tokenizeText } from '../util/tokenize';
 import { normalizeQaScope } from '../util/qaScope';
@@ -209,7 +210,7 @@ export async function retrieveLocal(
   let chars = 0;
   for (const f of picked) {
     if (fragments.length >= MAX_FRAGMENTS) break;
-    const cost = Math.min(f.content.length, PER_FRAGMENT_CHARS);
+    const cost = Math.min(fragmentText(f).length, PER_FRAGMENT_CHARS);
     if (fragments.length && chars + cost > fragBudget) break;
     fragments.push(f);
     chars += cost;
@@ -280,7 +281,7 @@ export function buildMaterials(r: Retrieval, web: WebHit[]): string {
       const tags = f.tags.length ? ` #${f.tags.join(' #')}` : '';
       const project = f.project ? ` · ${f.project}` : '';
       out.push(`[F${f.id}] ${dayKey(f.createdAt)} ${formatTime(f.createdAt)}${tags}${project}`);
-      out.push(clip(f.content, PER_FRAGMENT_CHARS));
+      out.push(clip(fragmentText(f), PER_FRAGMENT_CHARS));
       out.push('');
     }
   } else {
@@ -352,7 +353,7 @@ function buildCitations(
       kind: 'F',
       id: f.id,
       label: `${dayKey(f.createdAt)} ${formatTime(f.createdAt)} · 碎片${tags}`,
-      body: citeBody(f.content, 2_000),
+      body: citeBody(fragmentText(f), 2_000),
     });
   }
 

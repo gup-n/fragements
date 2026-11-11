@@ -10,6 +10,7 @@
  * 于是点几次「继续重构」拿到的都是同一批。
  */
 import type { Fragment } from '../types';
+import { fragmentText } from './fragmentText';
 
 /**
  * 按「条数 + 字数」双上限装箱。
@@ -22,9 +23,12 @@ export function packFragments(list: Fragment[], limit: number, budget: number): 
   let chars = 0;
   for (const f of list) {
     if (out.length >= limit) break;
-    if (out.length && chars + f.content.length > budget) break;
+    // 按「正文 + 图片文字」算长度：只算正文会让带图的碎片被低估，
+    // 一个装了 40 张截图的批次能把 16k 字预算撑到三四万字
+    const size = fragmentText(f).length;
+    if (out.length && chars + size > budget) break;
     out.push(f);
-    chars += f.content.length;
+    chars += size;
   }
   return out;
 }

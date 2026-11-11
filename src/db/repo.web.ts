@@ -192,7 +192,12 @@ export const repo: Repo = {
     return (await this.listFragmentIds(scope)).length;
   },
 
-  async insertFragment(content, source: FragmentSource, createdAt?: number) {
+  async insertFragment(
+    content,
+    source: FragmentSource,
+    createdAt?: number,
+    image?: { path: string; text?: string | null },
+  ) {
     const d = load();
     const id = nextId(d);
     d.fragments.push({
@@ -206,9 +211,20 @@ export const repo: Repo = {
       mergedInto: null,
       nature: null,
       organizedAt: null,
+      // 网页版没有相册和拍照，字段留着不填 —— 但它必须存在，
+      // 否则同一个 Fragment 类型在两个端上形状不同，界面代码没法共用
+      imagePath: image?.path ?? null,
+      imageText: image?.text ?? null,
     });
     persist();
     return id;
+  },
+
+  async setFragmentImageText(id, text) {
+    const d = load();
+    const f = d.fragments.find((x) => x.id === id);
+    if (f) f.imageText = text;
+    persist();
   },
 
   async updateFragmentContent(id, content) {
@@ -228,6 +244,7 @@ export const repo: Repo = {
 
   async deleteFragment(id) {
     const d = load();
+    const gone = d.fragments.find((x) => x.id === id);
     d.fragments = d.fragments.filter((x) => x.id !== id);
     // 并进它的那几条落回未整理，否则会变成「指向不存在的 id + status=merged」的孤儿
     d.fragments.forEach((x) => {
@@ -237,6 +254,7 @@ export const repo: Repo = {
       }
     });
     persist();
+    return gone?.imagePath ?? null;
   },
 
   async applyTags(id, labels, project) {
