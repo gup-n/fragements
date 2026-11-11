@@ -655,7 +655,7 @@ export function TimelineScreen({
               </View>
               <Text style={styles.emptyTitle}>还没有碎片</Text>
               <Text style={styles.emptyBody}>
-                想到什么就在下面写一句，{'\n'}不用管分类，AI 会在你点「整理」时帮你归置。
+                想到什么就在下面写一句，{'\n'}不用管分类。攒够了去「问」里说一句整理，它会提炼成知识文档。
               </Text>
               {Platform.OS === 'web' && onSeed ? (
                 <Pressable onPress={onSeed} hitSlop={8} style={styles.seedBtn}>

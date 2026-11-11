@@ -617,6 +617,10 @@ export function AskScreen({
       setCite(null);
       return;
     }
+    if (sessionDocs) {
+      setSessionDocs(null);
+      return;
+    }
     if (deleteSession) {
       setDeleteSession(null);
       return;
@@ -642,6 +646,7 @@ export function AskScreen({
     onClose,
     openDocId,
     persistSession,
+    sessionDocs,
     summaryOpen,
     turns,
   ]);
