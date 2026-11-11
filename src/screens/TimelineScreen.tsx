@@ -33,16 +33,35 @@ type TimelineItem =
   | { kind: 'note'; id: number; at: number; note: Note };
 
 /**
- * key 是 YYYY-MM-DD（日分区）或 `week:2026-W43`（周分区），折叠状态按它记；
- * order 决定分区在时间轴上的位置 —— 周分区用「周末 + 1ms」，压在该周所有日分区之上。
+ * key 是 YYYY-MM-DD（日分区）或 `m:2026-10:note|frag`（月分区），折叠状态按它记；
+ * order 决定分区在时间轴上的位置 —— 月分区用「这个月最后一毫秒 + 1ms」。
  */
-type Section = { key: string; title: string; sub: string; order: number; data: TimelineItem[] };
+type Section = {
+  key: string;
+  title: string;
+  sub: string;
+  order: number;
+  data: TimelineItem[];
+  /**
+   * `day` = 按天；`month` = 折叠成的整月（小结 / 记录两块）。
+   * 展开的月要还原成天 —— 用户 2026-11-11：「10 月记录全放在一起，
+   * 展开后应该是要有具体天数的」。
+   */
+  level: 'day' | 'month';
+};
 
 /**
  * 交给 SectionList 的版本：折叠时 data 清空（header 仍然渲染），
  * 所以条数和预览必须提前算好带上，不能等渲染时再读 data。
  */
-type DisplaySection = Section & { total: number; preview: string };
+type DisplaySection = Section & {
+  total: number;
+  preview: string;
+  /** 从展开的月里拆出来的天：头部小一号、不再单独折叠 */
+  nested?: boolean;
+  /** 展开的月只画一个头，数据全在下面的天分区里 */
+  headerOnly?: boolean;
+};
 
 /**
  * 冷启动只自动聚焦一次。放在模块作用域而不是 useRef，
@@ -240,6 +259,7 @@ export function TimelineScreen({
           sub: daySubLabel(at),
           order: day.getTime(),
           data: [],
+          level: 'day',
         };
         map.set(key, bucket);
       }
@@ -262,6 +282,7 @@ export function TimelineScreen({
           sub: '整月',
           order: end + (kind === 'note' ? 1 : 0),
           data: [],
+          level: 'month',
         };
         map.set(key, bucket);
       }
@@ -316,26 +337,58 @@ export function TimelineScreen({
     return new Set(sections.filter((s) => s.key !== todayKey).map((s) => s.key));
   }, [sections, collapsedDays, narrowed, todayKey]);
 
-  const displaySections = useMemo<DisplaySection[]>(
-    () =>
-      sections.map((sec) => {
-        const first = sec.data[0];
-        const preview =
-          first?.kind === 'fragment'
-            ? first.fragment.content.replace(/\s+/g, ' ')
-            : first?.kind === 'note'
-              ? first.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim()
-              : '';
-        const collapsed = collapsedKeys.has(sec.key);
-        return {
-          ...sec,
-          data: collapsed ? [] : sec.data,
-          total: sec.data.length,
-          preview: collapsed ? preview : '',
-        };
-      }),
-    [sections, collapsedKeys],
-  );
+  const displaySections = useMemo<DisplaySection[]>(() => {
+    const pickPreview = (sec: Section): string => {
+      const first = sec.data[0];
+      if (first?.kind === 'fragment') return first.fragment.content.replace(/\s+/g, ' ');
+      if (first?.kind === 'note') return first.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim();
+      return '';
+    };
+
+    const out: DisplaySection[] = [];
+    for (const sec of sections) {
+      const collapsed = collapsedKeys.has(sec.key);
+      if (sec.level === 'month' && !collapsed) {
+        /*
+         * 展开的月 = 一个月头 + 若干天。月头只画一次（点它收回去），
+         * 数据全部下放到天分区 —— 不再是一大坨没有日期分隔的流水。
+         */
+        out.push({ ...sec, data: [], total: sec.data.length, preview: '', headerOnly: true });
+        const byDay = new Map<string, DisplaySection>();
+        for (const item of sec.data) {
+          const key = dayKey(item.at);
+          let bucket = byDay.get(key);
+          if (!bucket) {
+            const day = new Date(item.at);
+            day.setHours(0, 0, 0, 0);
+            bucket = {
+              key: `d:${key}`,
+              title: dayLabel(item.at),
+              sub: daySubLabel(item.at),
+              order: day.getTime(),
+              data: [],
+              level: 'day',
+              total: 0,
+              preview: '',
+              nested: true,
+            };
+            byDay.set(key, bucket);
+            out.push(bucket);
+          }
+          bucket.data.push(item);
+          bucket.total += 1;
+        }
+        continue;
+      }
+      out.push({
+        ...sec,
+        data: collapsed ? [] : sec.data,
+        total: sec.data.length,
+        preview: collapsed ? pickPreview(sec) : '',
+      });
+    }
+    return out;
+  }, [sections, collapsedKeys]);
 
   /** 详情页的翻页序列：与当前列表顺序一致，搜索时就是搜索结果 */
   const flat = useMemo(() => {
@@ -542,7 +595,7 @@ export function TimelineScreen({
         </View>
 
         <View style={styles.headerActions}>
-          {/* 文档入口在「问」左边：两种都是「翻已有内容」，摆在一起才不会来回找 */}
+          {/* 文档、回顾、设置，最后是加大一号的「问」 */}
           <IconButton
             name="documents-outline"
             size={19}
@@ -551,15 +604,6 @@ export function TimelineScreen({
             diameter={34}
             onPress={onOpenDocs}
             accessibilityLabel="文档：上传并阅读文档"
-          />
-          <IconButton
-            name="chatbubble-ellipses-outline"
-            size={19}
-            tone="soft"
-            color={c.text2}
-            diameter={34}
-            onPress={() => onOpenAsk()}
-            accessibilityLabel="问：查自己的记录"
           />
           <IconButton
             name="checkmark-circle-outline"
@@ -578,6 +622,19 @@ export function TimelineScreen({
             diameter={34}
             onPress={onOpenSettings}
             accessibilityLabel="设置"
+          />
+          {/*
+            问 放在最右边、也比别人大一圈（用户 2026-11-11 要求）：
+            它是这一页真正的常用动作 —— 记完就想问，整理也在这里发起。
+          */}
+          <IconButton
+            name="chatbubble-ellipses-outline"
+            size={23}
+            tone="accent"
+            color={c.accentText}
+            diameter={42}
+            onPress={() => onOpenAsk()}
+            accessibilityLabel="问：查自己的记录，或者让它整理"
           />
         </View>
       </View>
@@ -676,23 +733,31 @@ export function TimelineScreen({
             onScrollBeginDrag={() => setOpenRow(null)}
             renderSectionHeader={({ section }) => {
               const closed = collapsedKeys.has(section.key);
+              /*
+               * 展开的月里那些天是「已经展开的东西」，再点一下收起来只会让
+               * 月头显示「N 条」而下面空着，用户会以为是 bug。所以它们只当分隔线用。
+               */
+              const locked = searching || !!section.nested;
               return (
                 <Pressable
                   style={({ pressed }) => [
                     styles.sectionHeader,
-                    pressed && !searching && styles.sectionHeaderPressed,
+                    section.nested && styles.sectionHeaderNested,
+                    pressed && !locked && styles.sectionHeaderPressed,
                   ]}
                   onPress={() => {
-                    if (!searching) toggleDay(section.key);
+                    if (!locked) toggleDay(section.key);
                   }}
-                  disabled={searching}
+                  disabled={locked}
                 >
                   <View style={styles.sectionHeaderRow}>
-                    <Text style={styles.sectionTitle}>{section.title}</Text>
-                    <Text style={styles.sectionSub}>
+                    <Text style={[styles.sectionTitle, section.nested && styles.sectionTitleNested]}>
+                      {section.title}
+                    </Text>
+                    <Text style={[styles.sectionSub, section.nested && styles.sectionSubNested]}>
                       {section.sub} · {section.total} 条
                     </Text>
-                    {searching ? null : (
+                    {locked ? null : (
                       <Ionicons
                         name={closed ? 'chevron-forward' : 'chevron-down'}
                         size={15}
@@ -1073,8 +1138,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     backgroundColor: c.page,
   },
   sectionHeaderPressed: { backgroundColor: c.hairSoft },
+  /** 展开的月里拆出来的天：往左缩一点、小一号，视觉上挂在月头下面 */
+  sectionHeaderNested: { paddingLeft: 32, paddingTop: 11, paddingBottom: 6 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { fontSize: 13.5, color: c.text, fontWeight: '600', letterSpacing: 0.3 },
+  sectionTitleNested: { fontSize: 12.5, color: c.text2, fontWeight: '500' },
+  sectionSubNested: { color: c.text3 },
   sectionSub: {
     flex: 1,
     fontSize: 11,

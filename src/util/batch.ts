@@ -39,3 +39,29 @@ export function pendingOnly(list: Fragment[], doneIds: Set<number>): Fragment[] 
   if (!doneIds.size) return list;
   return list.filter((f) => !doneIds.has(f.id));
 }
+
+/**
+ * 一次「整理全部」最多跑几批（每批 40 条 ≈ 400 条）。
+ *
+ * 不是读不下的问题，是**一轮要用户盯着屏幕等**的问题：10 批就是好几分钟连跑。
+ * 剩下的交给游标，卡片上写「还有 N 条，继续」—— 不静默丢弃。
+ */
+export const MAX_BATCHES = 10;
+
+/**
+ * 候选碎片切成几次请求。
+ *
+ * 单次整理也走这里，只是切完只剩一批 —— 两条路径共用同一个切法，
+ * 免得「全部」和「最近一批」在边界上给出不一样的条数。
+ */
+export function sliceBatches(pool: Fragment[], maxBatches = MAX_BATCHES): Fragment[][] {
+  const out: Fragment[][] = [];
+  let rest = pool;
+  for (let i = 0; i < maxBatches && rest.length; i += 1) {
+    const batch = packFragments(rest, 40, 16_000);
+    if (!batch.length) break;
+    out.push(batch);
+    rest = rest.slice(batch.length);
+  }
+  return out;
+}

@@ -303,6 +303,16 @@ export interface QaTurn {
   reasoning?: string;
   truncated?: boolean;
   documentCoverage?: DocumentCoverage[];
+  /**
+   * v0.18：这一轮是「整理」而不是问答。
+   *
+   * 整理也必须进历史 —— 否则用户整理完退出，下次回来只看到一堆问答，
+   * 那场整理就像没发生过。但要和问答分开：
+   * - 问答把它当上下文会污染答案（模型会以为用户问过这个）；
+   * - 界面上它该显示成一条整理记录，不是一问一答两个气泡。
+   * 老数据没有这个字段，一律当 `qa`。
+   */
+  kind?: 'qa' | 'organize';
 }
 
 export interface DocumentCoverage {

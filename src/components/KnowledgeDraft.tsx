@@ -19,10 +19,9 @@
  *   用等宽文本框预览，表格是对不齐的，而表格恰恰最容易写坏。
  * - **报错不省略**：错误卡带「查看详情」，里面是服务端/模型的原话。
  */
-import React, { useState } from 'react';
+import React from 'react';
 import {
   ActivityIndicator,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -78,6 +77,11 @@ interface Props {
   saving: boolean;
   saved: SavedDoc[];
   onOpenDoc: (id: number) => void;
+  /** 打开整页查看/编辑某一篇。卡片本身不再就地展开 —— 那会把对话滚到底 */
+  onOpenDraft: (index: number, mode: 'read' | 'edit') => void;
+  /** 还有多少条碎片没进这一轮（「全部整理」被单轮上限截断时） */
+  leftover: number;
+  onContinueAll: () => void;
   /** index 为 null 表示写入全部；否则只写那一篇 */
   onApprove: (index: number | null) => void;
   onDiscard: () => void;
@@ -106,17 +110,19 @@ export function KnowledgeDraftCard({
   saving,
   saved,
   onOpenDoc,
+  onOpenDraft,
+  leftover,
+  onContinueAll,
   onApprove,
   onDiscard,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
-  /** 展开阅读的是哪一篇 */
-  const [open, setOpen] = useState<number | null>(null);
-  /** 正在编辑哪一篇 */
-  const [editing, setEditing] = useState<number | null>(null);
 
   const todos = keptTodos(draft);
   const docs = draft.docs;
+  /** 卡片上最多列 8 篇：再多就该分几次整理了，一屏几十张卡反而找不到 */
+  const shownDocs = docs.slice(0, 8);
+  const docCardsHidden = docs.length - shownDocs.length;
   const shape = todoShape(draft);
   const isTodosOnly = draft.mode === 'todos';
   const savedMap = new Map(saved.map((s) => [s.index, s]));
@@ -211,6 +217,14 @@ export function KnowledgeDraftCard({
 
       {!!note && !busy ? <Text style={styles.note}>{note}</Text> : null}
 
+      {/* 这一轮被单轮上限截断时，必须有看得见的「接着来」—— 藏起来等于没做 */}
+      {leftover > 0 && !busy ? (
+        <Pressable style={styles.moreBtn} onPress={onContinueAll} disabled={saving} hitSlop={4}>
+          <Ionicons name="layers-outline" size={13} color={c.accentText} />
+          <Text style={styles.moreText}>还有 {leftover} 条碎片没整理，继续</Text>
+        </Pressable>
+      ) : null}
+
       {/* ---- 错误：带详情 ---- */}
       {error ? (
         <View style={styles.errWrap}>
@@ -228,25 +242,22 @@ export function KnowledgeDraftCard({
       {!isTodosOnly && docs.length ? (
         <View style={styles.docsBlock}>
           <Text style={styles.label}>产出</Text>
-          {docs.map((doc, i) => {
+          {shownDocs.map((doc, i) => {
             const done = savedMap.get(i);
-            const expanded = open === i;
-            const editingThis = editing === i;
             const problem = docProblem(doc);
-            const body = doc.bodyMd;
             return (
               <View key={`doc-${i}`} style={styles.docCard}>
+                {/*
+                  点整行就是「看这一篇」。以前点一下是在卡片里展开正文，
+                  结果把下面的按钮全推走、ScrollView 跟着滚到底 —— 用户点「查看」，
+                  视线被甩到页面底部。现在一律开整页。
+                */}
                 <Pressable
                   style={styles.docHead}
-                  onPress={() => setOpen(expanded ? null : i)}
+                  onPress={() => onOpenDraft(i, 'read')}
                   accessibilityRole="button"
-                  accessibilityLabel={expanded ? '收起这篇' : '展开这篇'}
+                  accessibilityLabel={`打开《${doc.title || '未命名文档'}》`}
                 >
-                  <Ionicons
-                    name={expanded ? 'chevron-down' : 'chevron-forward'}
-                    size={13}
-                    color={c.text3}
-                  />
                   <View style={styles.docHeadBody}>
                     <Text style={styles.docTitle} numberOfLines={2}>
                       {doc.title || '未命名文档'}
@@ -255,53 +266,19 @@ export function KnowledgeDraftCard({
                       {doc.summary || '（没有摘要）'}
                     </Text>
                   </View>
-                  <Text style={styles.docChars}>{charsOf(body)} 字</Text>
-                  {done ? (
-                    <Ionicons name="checkmark-circle" size={14} color={c.tealText} />
-                  ) : null}
-                </Pressable>
-
-                {expanded ? (
-                  <View style={styles.docBody}>
-                    {editingThis ? (
-                      <>
-                        <Text style={styles.fieldLabel}>标题</Text>
-                        <TextInput
-                          value={doc.title}
-                          onChangeText={(title) => patchDoc(i, { title })}
-                          placeholder="这篇文档叫什么"
-                          placeholderTextColor={c.text3}
-                          style={styles.titleInput}
-                          maxLength={40}
-                          editable={!saving}
-                        />
-                        <Text style={styles.fieldLabel}>正文（Markdown）</Text>
-                        <TextInput
-                          value={doc.bodyMd}
-                          onChangeText={(bodyMd) => patchDoc(i, { bodyMd })}
-                          placeholder="Markdown 正文，表格用 | 列 | 列 |"
-                          placeholderTextColor={c.text3}
-                          style={styles.bodyInput}
-                          multiline
-                          textAlignVertical="top"
-                          editable={!saving}
-                        />
-                      </>
+                  <View style={styles.docCharsBox}>
+                    <Text style={styles.docChars}>{charsOf(doc.bodyMd)} 字</Text>
+                    {done ? (
+                      <Ionicons name="checkmark-circle" size={13} color={c.tealText} />
                     ) : (
-                      <View style={styles.previewBox}>
-                        <NoteBody text={body} variant="reading" />
-                      </View>
+                      <Ionicons name="chevron-forward" size={13} color={c.text3} />
                     )}
                   </View>
-                ) : null}
+                </Pressable>
 
                 <View style={styles.docActions}>
-                  <Pressable
-                    style={styles.miniBtn}
-                    onPress={() => setOpen(expanded ? null : i)}
-                    hitSlop={4}
-                  >
-                    <Text style={styles.miniText}>{expanded ? '收起' : '查看'}</Text>
+                  <Pressable style={styles.miniBtn} onPress={() => onOpenDraft(i, 'read')} hitSlop={4}>
+                    <Text style={styles.miniText}>查看</Text>
                   </Pressable>
                   {done ? (
                     <Pressable style={styles.miniBtn} onPress={() => onOpenDoc(done.id)} hitSlop={4}>
@@ -311,14 +288,11 @@ export function KnowledgeDraftCard({
                     <>
                       <Pressable
                         style={styles.miniBtn}
-                        onPress={() => {
-                          setOpen(i);
-                          setEditing(editingThis ? null : i);
-                        }}
+                        onPress={() => onOpenDraft(i, 'edit')}
                         hitSlop={4}
                         disabled={busy || saving}
                       >
-                        <Text style={styles.miniText}>{editingThis ? '改好了' : '编辑'}</Text>
+                        <Text style={styles.miniText}>编辑</Text>
                       </Pressable>
                       <Pressable
                         style={[styles.miniPrimary, (!allowDoc || !!problem || busy || saving) && styles.off]}
@@ -335,6 +309,9 @@ export function KnowledgeDraftCard({
               </View>
             );
           })}
+          {docCardsHidden > 0 ? (
+            <Text style={styles.note}>还有 {docCardsHidden} 篇没列出来，先处理上面这几篇再继续。</Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -465,6 +442,16 @@ const makeStyles = (c: Palette) =>
     reasonWrap: { marginTop: 2 },
 
     note: { fontSize: 11.5, lineHeight: 18, color: c.text3 },
+    moreBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 6,
+      paddingVertical: 9,
+      borderRadius: R.btn,
+      backgroundColor: c.accentBg,
+    },
+    moreText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
     errWrap: { marginTop: -6 },
 
     /* 产出 */
@@ -481,30 +468,8 @@ const makeStyles = (c: Palette) =>
     docHeadBody: { flex: 1, gap: 2 },
     docTitle: { fontSize: 13.5, color: c.text, fontWeight: '600', lineHeight: 19 },
     docSummary: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
-    docChars: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'], marginTop: 2 },
-    docBody: { gap: 4 },
-    previewBox: { backgroundColor: c.card, borderRadius: R.btn, padding: 10 },
-    fieldLabel: { fontSize: 10.5, color: c.text3, marginTop: 2 },
-    titleInput: {
-      fontSize: 14,
-      color: c.text,
-      fontWeight: '600',
-      paddingVertical: 7,
-      paddingHorizontal: 9,
-      borderRadius: R.btn,
-      backgroundColor: c.card,
-    },
-    bodyInput: {
-      minHeight: 130,
-      maxHeight: 300,
-      fontSize: 12,
-      lineHeight: 19,
-      color: c.text,
-      padding: 9,
-      borderRadius: R.btn,
-      backgroundColor: c.card,
-      fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
-    },
+    docChars: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
+    docCharsBox: { alignItems: 'flex-end', gap: 4, marginTop: 1 },
     docActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
     miniBtn: {
       paddingHorizontal: 9,

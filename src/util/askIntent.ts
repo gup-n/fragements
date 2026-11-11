@@ -74,6 +74,18 @@ export function routeAsk(raw: string): IntentResult {
   return { task: 'answer', rest, matched: '' };
 }
 
+/**
+ * 这句话是不是在说「全都整理」。
+ *
+ * 单独拎出来是因为它决定**读多少**：说「整理一下」取最近的一批，
+ * 说「整理所有碎片」就得把库里剩下的都过一遍。用户 2026-11-11 报的问题
+ * 正是这个 —— 他说了「所有」，结果只看了最近 40 条。
+ */
+export function wantsAll(text: string | undefined): boolean {
+  if (!text) return false;
+  return /所有|全部|一切|全库|整个库|每一条|每条|逐个/.test(text);
+}
+
 /** 三种任务在界面上的名字。统一在这里，免得两处写不一样的词 */
 export const TASK_LABEL: Record<AskTask, string> = {
   answer: '回答问题',

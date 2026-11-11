@@ -57,6 +57,14 @@ export const TITLE_MAX = 24;
 const EXCERPT_MAX = 110;
 /** 一次最多收几篇。再多就不是「整理」而是「拆碎」了 */
 export const MAX_DOCS = 4;
+/**
+ * 「整理全部」时跨批合并的上限。
+ *
+ * 单批 4 篇，10 批最多 40 篇 —— 那是「文档区被这次整理灌满」，用户要花一个下午
+ * 逐篇读。所以合并后只留 12 篇，剩下的在卡片上如实说「还有 N 篇没列出来」。
+ * 这不是丢数据：被丢的只是**这一轮没展示的**，碎片原文一个字没动。
+ */
+export const MAX_DOCS_ALL = 12;
 
 export function emptyDraft(mode: DraftMode, sourceIds: number[] = []): KnowledgeDraft {
   return { docs: [], todos: [], sourceIds, mode, note: '' };
@@ -217,6 +225,74 @@ export function todoShape(draft: KnowledgeDraft): { top: number; sub: number } {
 }
 
 /**
+ * 「整理全部」时一批一批跑，结果往同一份草稿里并。
+ *
+ * 为什么需要去重而不是直接拼：分批是按「装箱」切的，同一个主题很可能跨在两批的
+ * 边界上 —— 第 3 批写《群晖换盘》，第 4 批又写一篇同名的。直接拼起来，用户会在
+ * 卡片上看到两篇一样的东西，然后逐篇读一遍才发现重复。
+ *
+ * 判重只用**标题**和**待办原文**，不做语义比较：语义相似度判错一次，用户就会
+ * 丢掉一整篇他还没看过的东西。标题相同才合并，其余一律保留 —— 宁可多一篇，
+ * 不能悄悄少一篇。
+ */
+export function mergeDrafts(
+  base: KnowledgeDraft,
+  next: KnowledgeDraft,
+  maxDocs = MAX_DOCS_ALL,
+): { draft: KnowledgeDraft; dropped: number } {
+  const docs = base.docs.slice();
+  const seen = new Set(docs.map((d) => (d.title || d.bodyMd.slice(0, 12)).trim().toLowerCase()));
+  let dropped = 0;
+  for (const d of next.docs) {
+    const key = (d.title || d.bodyMd.slice(0, 12)).trim().toLowerCase();
+    if (seen.has(key)) {
+      dropped += 1;
+      continue;
+    }
+    if (docs.length >= maxDocs) {
+      dropped += 1;
+      continue;
+    }
+    seen.add(key);
+    docs.push(d);
+  }
+
+  const todos = base.todos.slice();
+  const byText = new Map(todos.map((t) => [todoKey(t.text), t]));
+  for (const t of next.todos) {
+    const key = todoKey(t.text);
+    const hit = byText.get(key);
+    if (!hit) {
+      todos.push(t);
+      byText.set(key, t);
+      continue;
+    }
+    // 同一件事在两批里各拆了一半步骤：补上缺的那几步，而不是整条丢掉
+    const have = new Set(hit.children.map((c) => todoKey(c.text)));
+    for (const c of t.children) {
+      if (!have.has(todoKey(c.text))) hit.children.push(c);
+    }
+    if (!hit.due && t.due) hit.due = t.due;
+  }
+
+  return {
+    draft: {
+      docs,
+      todos,
+      sourceIds: Array.from(new Set([...base.sourceIds, ...next.sourceIds])),
+      mode: base.mode,
+      note: next.note || base.note,
+    },
+    dropped,
+  };
+}
+
+/** 待办判重的键：空白折叠 + 小写。标点和语序不动 —— 那是用户的原话 */
+function todoKey(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
  * 写入前能检查出来的问题。返回 null 表示可以写。
  *
  * 只拦「写进去一定是废的」那几种：没有正文、没有勾任何东西。
@@ -261,6 +337,30 @@ export function draftToDocument(
     origin: 'knowledge',
     excerpt: doc.summary || excerptOf(bodyMd),
   };
+}
+
+/**
+ * 整理写进历史的那句话。
+ *
+ * 只说结果，不复述过程：历史行的预览位置只够两行，
+ * 「整理出 2 篇文档：《A》《B》，3 条待办」比「AI 正在深度思考」有用得多。
+ * 也**不写「成功」**：没有产出时就说没有，别让它看起来像跑了点什么。
+ */
+export function describeForHistory(draft: KnowledgeDraft, leftover = 0): string {
+  const docs = draft.docs.filter((d) => d.bodyMd.trim());
+  const todos = draft.todos.filter((t) => t.text.trim());
+  if (!docs.length && !todos.length) return '这批碎片里没有可沉淀的知识，没有生成文档。';
+  const bits: string[] = [];
+  if (docs.length) {
+    const names = docs.map((d) => `《${d.title.trim() || '未命名'}》`).join('、');
+    bits.push(`整理出 ${docs.length} 篇文档：${names}`);
+  }
+  if (todos.length) {
+    const n = todos.reduce((sum, t) => sum + 1 + t.children.filter((c) => c.text.trim()).length, 0);
+    bits.push(`${n} 条待办`);
+  }
+  const tail = leftover ? `；还有 ${leftover} 条碎片没整理` : '';
+  return `${bits.join('，')}${tail}。`;
 }
 
 /** 会话行上的徽标文案。已有文档才显示，否则返回 null */

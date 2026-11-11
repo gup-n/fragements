@@ -54,6 +54,7 @@ const tscArgs = [
   '--ignoreConfig',
   'src/util/askIntent.ts',
   'src/util/knowledgeDoc.ts',
+  'src/util/batch.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -78,8 +79,9 @@ try {
   process.exit(1);
 }
 
-const { routeAsk } = require(path.join(outDir, 'util', 'askIntent.js'));
+const { routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
 const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
+const batch = require(path.join(outDir, 'util', 'batch.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -312,6 +314,107 @@ check('整理提示词要求多篇输出与两层的待办', () => {
   assert(src.includes('"children"'), '缺少待办子步骤');
   assert(src.includes('已有待办'), '缺少去重上下文');
   assert(src.includes('MAX_DOCS') || src.includes('最多 ${'), '缺少篇数上限的约束');
+});
+
+// ---------------------------------------------------------------------------
+// 3.6 v0.18：整理全部、跨批合并、写进历史的那句话
+// ---------------------------------------------------------------------------
+check('说「所有」才算全部：光说「整理一下」只取最近一批', () => {
+  eq(wantsAll('把所有这些碎片整理一下'), true, '所有这些碎片');
+  eq(wantsAll('整理全部记录'), true, '全部记录');
+  eq(wantsAll('把整个库过一遍'), true, '整个库');
+  eq(wantsAll('整理一下'), false, '光说整理');
+  eq(wantsAll(undefined), false, '没有指令');
+});
+
+check('「整理所有碎片」真的会切多批，不是只看 40 条', () => {
+  const pool = Array.from({ length: 130 }, (_, i) => ({
+    id: i + 1,
+    content: 'x'.repeat(20),
+    createdAt: i,
+    source: 'manual',
+    status: 'inbox',
+    tags: [],
+    project: null,
+    mergedInto: null,
+    nature: null,
+  }));
+  const batches = batch.sliceBatches(pool);
+  eq(batches.length, 4, '130 条 / 每批 40 条 = 4 批');
+  eq(batches.reduce((n, b) => n + b.length, 0), 130, '一条都不能漏');
+  eq(batches[0].length, 40, '每批 40 条');
+});
+
+check('批数有上限，超出的留给下一次（不静默吞掉）', () => {
+  const pool = Array.from({ length: 600 }, (_, i) => ({
+    id: i + 1,
+    content: 'x',
+    createdAt: i,
+    source: 'manual',
+    status: 'inbox',
+    tags: [],
+    project: null,
+    mergedInto: null,
+    nature: null,
+  }));
+  const batches = batch.sliceBatches(pool, 3);
+  eq(batches.length, 3, '最多 3 批');
+  assert(pool.length - batches.reduce((n, b) => n + b.length, 0) > 0, '应当有剩余条数交给游标');
+});
+
+check('跨批合并：同名文档不重复，超上限的计入 dropped', () => {
+  const a = doc.normalizeDraft({ docs: [{ title: '换盘顺序', body_md: 'A' }] }, 'knowledge', [1]);
+  const b = doc.normalizeDraft(
+    { docs: [{ title: '换盘顺序', body_md: 'B' }, { title: '报错含义', body_md: 'C' }] },
+    'knowledge',
+    [2],
+  );
+  const { draft, dropped } = doc.mergeDrafts(a, b);
+  eq(draft.docs.length, 2, '同名只留一篇，另一篇照收');
+  eq(dropped, 1, '被挡掉一篇要能报出来');
+  eq(draft.sourceIds.length, 2, '来源 id 要并起来');
+});
+
+check('跨批合并：同一件事不会因为分两批就出现两条', () => {
+  const a = doc.normalizeDraft(
+    { todos: [{ text: '换盘', children: [{ text: '跑 SMART 长检' }] }] },
+    'todos',
+    [],
+  );
+  const b = doc.normalizeDraft(
+    { todos: [{ text: '换盘 ', children: [{ text: '跑 SMART 长检' }, { text: '确认热备' }] }] },
+    'todos',
+    [],
+  );
+  const { draft } = doc.mergeDrafts(a, b);
+  eq(draft.todos.length, 1, '还是同一件事');
+  eq(draft.todos[0].children.length, 2, '缺的那一步要补齐');
+});
+
+check('写进历史的那句话只说结果', () => {
+  const d = doc.normalizeDraft(
+    {
+      docs: [{ title: '换盘顺序', body_md: 'x' }],
+      todos: [{ text: '换盘', children: [{ text: '长检' }] }],
+    },
+    'knowledge',
+    [],
+  );
+  const line = doc.describeForHistory(d);
+  assert(line.includes('1 篇文档'), `缺少篇数：${line}`);
+  assert(line.includes('《换盘顺序》'), `缺少标题：${line}`);
+  assert(line.includes('2 条待办'), `待办要含子项：${line}`);
+  assert(!line.includes('失败'), '不该出现失败字样');
+});
+
+check('什么都没有时不假装整理成功', () => {
+  const line = doc.describeForHistory(doc.emptyDraft('knowledge', []), 0);
+  assert(line.includes('没有可沉淀的知识'), `应当如实说没有：${line}`);
+});
+
+check('被截断时如实报还剩多少条', () => {
+  const d = doc.normalizeDraft({ docs: [{ title: 'x', body_md: 'y' }] }, 'knowledge', []);
+  assert(doc.describeForHistory(d, 320).includes('320 条'), '剩余条数要出现');
 });
 
 // ---------------------------------------------------------------------------

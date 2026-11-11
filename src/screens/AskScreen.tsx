@@ -23,6 +23,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
   PanResponder,
   Platform,
   Pressable,
@@ -31,6 +32,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
   type ScrollViewInstance,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -57,20 +59,23 @@ import {
 import {
   docNameOf,
   docProblem,
+  describeForHistory,
   draftProblem,
   emptyDraft,
   excerptOf,
   keptDocs,
   keptTodos,
+  mergeDrafts,
   type DraftDoc,
   type DraftMode,
   type KnowledgeDraft,
 } from '../util/knowledgeDoc';
-import { routeAsk, TASK_SEED } from '../util/askIntent';
-import { packFragments } from '../util/batch';
+import { routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
+import { packFragments, sliceBatches } from '../util/batch';
 import { writeKnowledgeDocument } from '../documents/knowledge';
 import { KnowledgeDraftCard, type AgentStep, type SavedDoc } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
+import { DraftDocPage } from '../components/DraftDocPage';
 import { SummarySheet } from '../components/SummarySheet';
 import { DocViewer } from '../components/DocViewer';
 import { normalizeQaScope } from '../util/qaScope';
@@ -112,6 +117,24 @@ interface ErrInfo {
 
 const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
+/**
+ * 「整理全部」的游标：上一次整理到哪一条（fragment id）。
+ *
+ * 没有它，第二次说「整理所有碎片」会从头再来一遍 —— 用户以为在往下推进，
+ * 实际上把同样的前 400 条又烧了一遍。碎片 id 单调递增，用它当游标最省事。
+ */
+const ALL_CURSOR_KEY = 'organize.cursor';
+/** 草稿里已经抽出来的待办 → 去重上下文。分多批时必须带上，否则每批都抽一遍 */
+function todoSnapshotsOf(draft: KnowledgeDraft): TodoSnapshot[] {
+  return draft.todos
+    .filter((t) => t.text.trim())
+    .map((t) => ({
+      text: t.text,
+      done: false,
+      due: t.due,
+      children: t.children.map((c) => c.text).filter((c) => c.trim().length > 0),
+    }));
+}
 
 function citeKey(kind: string, id: number) {
   return `${kind}${id}`;
@@ -322,6 +345,14 @@ export function AskScreen({
   const [sessionTitle, setSessionTitle] = useState<string | null>(null);
   const sessionIdRef = useRef<number | null>(null);
   /**
+   * 当前轮次，供异步路径（整理写完历史）读取。
+   *
+   * 整理是跑在 `startDraft` 的闭包里的：等模型回来时，`turns` 可能还是几分钟前
+   * 那一份。用它去拼「已有轮次 + 这次整理」，会把期间问过的一轮悄悄抹掉。
+   */
+  const turnsRef = useRef<QaTurn[]>([]);
+  turnsRef.current = turns;
+  /**
    * 当前范围，供 `persistSession` 这类不在渲染闭包里的路径读取。
    * 每帧同步一次：保存必须用「产生这些轮次的那个范围」，
    * 不能等异步回来时再读 state（那时可能已经是新会话的范围了）。
@@ -367,6 +398,10 @@ export function AskScreen({
   const [allowTodos, setAllowTodos] = useState(true);
   /** 已经写进文档库的那几篇（按草稿下标），卡片上逐篇打勾 */
   const [savedDocs, setSavedDocs] = useState<SavedDoc[]>([]);
+  /** 打开整页查看/编辑草稿里的第几篇。null = 没开 */
+  const [draftDoc, setDraftDoc] = useState<{ index: number; mode: 'read' | 'edit' } | null>(null);
+  /** 「整理全部」被这一轮的上限截断时还剩多少条，卡片上要看得见 */
+  const [leftover, setLeftover] = useState(0);
   /** 点「+」但本来就在新会话里：顶部闪一条提示，别让人以为按钮坏了 */
   const [newHint, setNewHint] = useState(false);
   /**
@@ -402,6 +437,7 @@ export function AskScreen({
   historyRef.current = historyOpen;
   overlayRef.current =
     historyOpen ||
+    draftDoc !== null ||
     !!actionSession ||
     !!deleteSession ||
     !!sessionDocs ||
@@ -593,6 +629,10 @@ export function AskScreen({
    * 会话已经每轮自动存过，这里不再问「要不要留纪要」。
    */
   const attemptClose = useCallback(() => {
+    if (draftDoc !== null) {
+      setDraftDoc(null);
+      return;
+    }
     if (openDocId !== null) {
       setOpenDocId(null);
       return;
@@ -642,6 +682,7 @@ export function AskScreen({
     cite,
     deleteSession,
     draft,
+    draftDoc,
     historyOpen,
     onClose,
     openDocId,
@@ -656,50 +697,145 @@ export function AskScreen({
     return () => registerClose(null);
   }, [attemptClose, registerClose]);
 
-  /**
-   * 左滑打开历史。
-   *
-   * 用 capture 阶段抢横向手势：ScrollView 会先接竖直滚动，但横向滑它不接，
-   * 父层不 capture 的话这个手势会被吞掉。阈值 28px、且横向明显大于纵向才接管。
-   */
+  const { width: screenW } = useWindowDimensions();
+  const widthRef = useRef(screenW);
+  widthRef.current = screenW;
+
+  /** PanResponder 只建一次，里面读的是 ref 上的最新 openHistory */
   const openHistoryRef = useRef(openHistory);
   openHistoryRef.current = openHistory;
-  const pan = useRef(
+
+  /**
+   * 历史会话的抽屉：0 = 完全收起，1 = 完全展开。
+   *
+   * 用户 2026-11-11 的原话是「左滑右滑搞错了，从左往右滑动，问的界面自然而然的
+   * 打开历史会话界面，以及我要的仿真效果没有实现」。两件事：
+   * - 方向反了：把「左滑」改成「从左往右滑」（手指往右拖）；
+   * - 没有仿真：上一版是「滑够 28px 就整块跳出来」，中间没有过渡。
+   * 所以这里用动画值，不是布尔值 —— 手指拖多少，抽屉就跟出来多少；
+   * 问答页同时往右让出一点，像推一页纸，而不是切一张图。
+   */
+  const historyAnim = useRef(new Animated.Value(0)).current;
+  const [historyMounted, setHistoryMounted] = useState(false);
+  /** 正在拖的时候不要被「按状态补动画」的 effect 抢走 */
+  const draggingRef = useRef(false);
+
+  const dragProgress = (dx: number) =>
+    Math.max(0, Math.min(1, dx / Math.max(1, widthRef.current)));
+
+  const springTo = useCallback(
+    (to: number, done?: () => void) => {
+      Animated.spring(historyAnim, {
+        toValue: to,
+        useNativeDriver: true,
+        speed: 18,
+        bounciness: 0,
+      }).start(done);
+    },
+    [historyAnim],
+  );
+
+  /**
+   * 状态变化 → 补齐动画。
+   *
+   * 只有 `historyOpen` 变了才跑：拖动过程中改动的是动画值本身，不是状态，
+   * 所以不会出现「手指还按着，页面自己滑走」。
+   */
+  useEffect(() => {
+    if (draggingRef.current) return;
+    if (historyOpen) {
+      setHistoryMounted(true);
+      springTo(1);
+      return;
+    }
+    Animated.timing(historyAnim, {
+      toValue: 0,
+      duration: 180,
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      // 关到一半又被打开：别把正在展开的抽屉卸掉，会闪一下
+      if (finished && !historyRef.current) setHistoryMounted(false);
+    });
+  }, [historyAnim, historyOpen, springTo]);
+
+  /**
+   * 问答页上「从左往右」滑 → 把历史拉出来。
+   *
+   * 阈值只用来决定「要不要接管这个手势」（12px，且横向明显大于纵向），
+   * 真正开不开，看松手时拖到了多宽。
+   */
+  const openPan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponderCapture: (_, g) =>
-        !busyRef.current &&
-        !overlayRef.current &&
-        g.dx < -28 &&
-        Math.abs(g.dx) > Math.abs(g.dy) * 1.6,
-      onPanResponderMove: () => undefined,
-      onPanResponderRelease: () => {
-        if (!busyRef.current && !overlayRef.current) openHistoryRef.current();
+        !busyRef.current && !overlayRef.current && g.dx > 12 && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderGrant: () => {
+        draggingRef.current = true;
+        // 手指一动就挂上，否则拖到一半什么都没有，就不是仿真了
+        setHistoryMounted(true);
       },
-      onPanResponderTerminate: () => undefined,
+      onPanResponderMove: (_, g) => historyAnim.setValue(dragProgress(g.dx)),
+      onPanResponderRelease: (_, g) => {
+        draggingRef.current = false;
+        if (dragProgress(g.dx) > 0.3 || g.vx > 0.35) {
+          openHistoryRef.current();
+          return;
+        }
+        Animated.timing(historyAnim, {
+          toValue: 0,
+          duration: 160,
+          useNativeDriver: true,
+        }).start(() => {
+          if (!historyRef.current) setHistoryMounted(false);
+        });
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        Animated.timing(historyAnim, {
+          toValue: 0,
+          duration: 160,
+          useNativeDriver: true,
+        }).start(() => {
+          if (!historyRef.current) setHistoryMounted(false);
+        });
+      },
     }),
   ).current;
 
-  /** 历史页上还叠着别的面板时，右滑不该把历史一起关掉 */
+  /** 历史页上还叠着别的面板时，拖动不该把历史一起关掉 */
   const sheetOpenRef = useRef(false);
   sheetOpenRef.current = !!actionSession || !!deleteSession || !!sessionDocs;
 
   /**
-   * 历史页右滑返回问答。
+   * 历史页上「从右往左」滑 → 退回去。
    *
-   * 和问答页「左滑打开历史」是同一对手势（用户要求的「像小说阅读器：
-   * 左滑进去、右滑退出来」）。阈值同样 28px，且横向必须明显大于纵向，
-   * 否则纵向翻历史列表时会被误判成返回。
+   * 和打开是同一对手势（推出来、推回去），全程跟着手指，松手时才决定去留。
+   * 阈值不放在进入条件里：进入看 12px，去留看拖过的比例和速度。
    */
-  const historyPan = useRef(
+  const closePan = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponderCapture: (_, g) =>
         historyRef.current &&
         !sheetOpenRef.current &&
-        g.dx > 28 &&
-        Math.abs(g.dx) > Math.abs(g.dy) * 1.6,
-      onPanResponderMove: () => undefined,
-      onPanResponderRelease: () => setHistoryOpen(false),
-      onPanResponderTerminate: () => undefined,
+        g.dx < -12 &&
+        Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onPanResponderGrant: () => {
+        draggingRef.current = true;
+      },
+      onPanResponderMove: (_, g) =>
+        historyAnim.setValue(Math.max(0, 1 - dragProgress(-g.dx))),
+      onPanResponderRelease: (_, g) => {
+        draggingRef.current = false;
+        const left = 1 - dragProgress(-g.dx);
+        if (left < 0.72 || g.vx < -0.35) {
+          setHistoryOpen(false);
+          return;
+        }
+        springTo(1);
+      },
+      onPanResponderTerminate: () => {
+        draggingRef.current = false;
+        springTo(1);
+      },
     }),
   ).current;
 
@@ -739,6 +875,7 @@ export function AskScreen({
     setElapsed(0);
     setCite(null);
     setHistoryOpen(false);
+    setDraftDoc(null);
     setActionSession(null);
     setDeleteSession(null);
     draftGenRef.current += 1;
@@ -783,6 +920,8 @@ export function AskScreen({
     setActionSession(null);
     setDeleteSession(null);
     setCite(null);
+    setDraftDoc(null);
+    setLeftover(0);
     setInput('');
     setError(null);
     setWebNote('');
@@ -878,7 +1017,8 @@ export function AskScreen({
 
       const run = await askQuestion({
         question,
-        turns,
+        // 整理轮不参与问答上下文：它不是用户问过的问题，塞进去会让模型答偏
+        turns: turns.filter((t) => t.kind !== 'organize'),
         config: { ...config, thinking: thinkingOn },
         thinking: thinkingOn,
         // 文档模式不联网：来源必须是用户选的那几份
@@ -1009,14 +1149,69 @@ export function AskScreen({
   }
 
   /**
-   * 发起一次整理（v0.17）。
+   * 把这次整理写成一条会话轮次。
    *
-   * 两种材料来源：碎片（受当前范围约束）和会话（从历史里点「整理成文档」）。
-   * 无论哪种，**写库都发生在用户点「加入文档库」之后** —— 这一步之前
-   * 数据一个字都不会变，包括模型自己觉得写得很好也不行。
+   * 两个细节必须对：
+   * - **挂到正确的那场会话**：从历史里对别的会话点「重新整理」时，当前打开的
+   *   可能是另一场，写到当前会话上等于整理记录跑错了地方；
+   * - **把新 id 交回草稿**：新会话的第一次动作就是整理时，`draftSession` 原本是
+   *   null，不更新的话文档写进去之后历史行上不会出现「已写入」徽标，
+   *   点「重新整理」也没有来源碎片可用。
+   */
+  async function recordOrganize(turn: QaTurn, session?: AskSession): Promise<number | null> {
+    if (session) {
+      try {
+        const id = await repo.saveAskSession({
+          id: session.id,
+          title: session.title,
+          turns: [...session.turns, turn],
+          scope: session.scope,
+          createdAt: session.createdAt,
+        });
+        await loadHistory();
+        return id;
+      } catch {
+        return null;
+      }
+    }
+
+    const gen = sessionGenRef.current;
+    const next = [...turnsRef.current, turn];
+    const title =
+      (sessionTitle ?? turn.question).replace(/\s+/g, ' ').trim().slice(0, 32) || '整理';
+    try {
+      const id = await repo.saveAskSession({
+        id: sessionIdRef.current ?? undefined,
+        title,
+        turns: next,
+        scope: scopeRef.current,
+        createdAt: startedAtRef.current,
+      });
+      // 保存期间用户换了会话：只落库，不再改当前界面
+      if (sessionGenRef.current === gen) {
+        sessionIdRef.current = id;
+        setSessionId(id);
+        setSessionTitle(title);
+        setTurns(next);
+        dirtyRef.current = false;
+      }
+      await loadHistory();
+      return id;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 发起一次整理（v0.18）。
    *
-   * 过程日志的每一行都必须是真的：读了 N 条、拆出 M 篇、正在写《x》。
-   * 不写「正在分析…」这种谁也验证不了的空话 —— 那就又回到「一个转圈」了。
+   * 和上一版的三处差别，都是用户用过之后提出来的：
+   * 1. **「整理所有碎片」真的是所有**。上一版无论说什么都只取最近 40 条 ——
+   *    用户明确说了「所有」，结果只看到 40 条的结果，还以为整理失败了。
+   *    现在按批循环，游标落库，中途退出下次接着来。
+   * 2. **整理也是对话**。整理完退出，历史里找不到这场整理；现在会写一条
+   *    `kind: 'organize'` 的轮次，带产出摘要和来源碎片。
+   * 3. **每一步都得是真的**：第几批、读了几条、拆了几篇、还差多少。
    */
   async function startDraft(
     mode: DraftMode,
@@ -1024,8 +1219,16 @@ export function AskScreen({
       instruction?: string;
       turns?: QaTurn[];
       session?: AskSession;
-      /** 指定要整理的那批碎片（重新整理时用当初那批）。不传就自己取最近的一批 */
+      /** 指定要整理的那批碎片（重新整理时用当初那批）。不传就自己取 */
       fragments?: Fragment[];
+      /** 强制「整理全部」。不传就看指令里有没有说「所有 / 全部」 */
+      all?: boolean;
+      /**
+       * 接着上一次的草稿继续（「还有 N 条，继续」走这条）。
+       *
+       * 必须接着而不是重来：上一轮产出的文档还没写库，重来等于把它们从卡片上抹掉。
+       */
+      append?: boolean;
     } = {},
   ) {
     if (draftBusy || busy) return;
@@ -1035,85 +1238,159 @@ export function AskScreen({
       return;
     }
 
+    const all = opts.all ?? (opts.fragments ? false : wantsAll(opts.instruction));
+    const append = !!opts.append && !!draft;
     const gen = ++draftGenRef.current;
     setDraftErr(null);
     setDraftNote('');
     setDraftReasoning('');
     setDraftRecv(0);
     setDraftElapsed(0);
-    setSavedDocs([]);
+    setLeftover(0);
     setInput('');
-    setDraft(emptyDraft(mode, []));
-    setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
+    if (append) {
+      // 接着上一轮的草稿：文档还在等用户过目，步骤日志也留着
+      pushStep({ text: '继续整理剩下的碎片…', state: 'running' });
+    } else {
+      setSavedDocs([]);
+      setDraft(emptyDraft(mode, []));
+      setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
+    }
     setDraftSession(opts.session?.id ?? sessionIdRef.current);
     setDraftBusy(true);
 
     try {
       const config = await loadAiConfig();
-      let source: KnowledgeSource;
       let sourceIds: number[] = [];
+      let batches: Fragment[][] = [];
+      let restCount = 0;
       let hint = '';
 
       if (opts.turns) {
-        source = { kind: 'session', turns: opts.turns };
         hint = `这场会话的 ${opts.turns.length} 轮问答`;
       } else {
-        const picked = opts.fragments ?? (await pickFragments(context));
-        if (!picked.length) {
-          setDraft(null);
-          setDraftSteps([]);
-          showToast('还没有可整理的碎片，先记点什么');
+        const pool = opts.fragments ?? (await pickFragments(context, all));
+        if (!pool.length) {
+          // 「继续」时草稿里还有没写库的产出，不能因为这次没材料就把它清掉
+          if (!append) {
+            setDraft(null);
+            setDraftSteps([]);
+          } else {
+            markLastStep({ text: '没有剩下的碎片了', state: 'done' });
+          }
+          setDraftBusy(false);
+          showToast(
+            all ? '没有待整理的碎片：要么已经整理过，要么还没记' : '还没有可整理的碎片，先记点什么',
+          );
           return;
         }
-        sourceIds = picked.map((f) => f.id);
-        source = { kind: 'fragments', fragments: picked };
+        batches = sliceBatches(pool);
+        restCount = pool.length - batches.reduce((n, b) => n + b.length, 0);
+        sourceIds = pool.map((f) => f.id);
         hint = opts.fragments
-          ? `当初那 ${picked.length} 条碎片`
-          : `最近 ${picked.length} 条碎片`;
+          ? `当初那 ${pool.length} 条碎片`
+          : all
+            ? `${append ? '剩下的' : '全部'} ${pool.length} 条碎片（分 ${batches.length} 批）`
+            : `最近 ${batches[0].length} 条碎片`;
       }
       if (draftGenRef.current !== gen) return;
 
       const existing = await loadTodoSnapshots();
       if (draftGenRef.current !== gen) return;
-      setDraftSteps([
-        { text: `读到${hint}${existing.length ? `，${existing.length} 条已有待办` : ''}`, state: 'done' },
-        { text: '正在提炼可复用的知识…', state: 'running' },
-      ]);
+      if (append) {
+        markLastStep({ text: `又读到${hint}，正在提炼…`, state: 'running' });
+      } else {
+        setDraftSteps([
+          { text: `读到${hint}${existing.length ? `，${existing.length} 条已有待办` : ''}`, state: 'done' },
+          {
+            text: batches.length > 1 ? '第 1 批：正在提炼可复用的知识…' : '正在提炼可复用的知识…',
+            state: 'running',
+          },
+        ]);
+      }
 
-      const out = await extractKnowledge({
-        source,
-        mode,
-        instruction: opts.instruction,
-        existingTodos: existing,
-        config,
-        onProgress: (patch) => {
-          if (draftGenRef.current !== gen) return;
-          if (patch.content !== undefined) {
-            const n = patch.content.length;
-            setDraftRecv(n);
-            markLastStep({ text: `正在写出结果…（已收到 ${n} 字）` });
+      let acc = append && draft ? { ...draft, mode } : emptyDraft(mode, []);
+      let truncated = false;
+      let dropped = 0;
+
+      for (let i = 0; i < batches.length; i += 1) {
+        if (draftGenRef.current !== gen) return;
+        const batch = batches[i];
+        const label = batches.length > 1 ? `第 ${i + 1}/${batches.length} 批：` : '';
+        if (i > 0) pushStep({ text: `${label}正在提炼…`, state: 'running' });
+
+        const out = await extractKnowledge({
+          source: { kind: 'fragments', fragments: batch },
+          mode,
+          instruction: opts.instruction,
+          // 前几批抽出来的待办一并带上，否则同一件事每一批都会再抽一遍
+          existingTodos: [...existing, ...todoSnapshotsOf(acc)],
+          config,
+          onProgress: (patch) => {
+            if (draftGenRef.current !== gen) return;
+            if (patch.content !== undefined) {
+              setDraftRecv(patch.content.length);
+              markLastStep({ text: `${label}正在写出结果…（已收到 ${patch.content.length} 字）` });
+            }
+            if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
+          },
+        });
+        if (draftGenRef.current !== gen) return;
+
+        const merged = mergeDrafts(acc, out.draft);
+        acc = merged.draft;
+        dropped += merged.dropped;
+        truncated = truncated || out.truncated;
+        const newDocs = out.draft.docs.length;
+        const newTodos = out.draft.todos.filter((t) => t.text.trim()).length;
+        markLastStep({
+          text: `${label}整理出 ${newDocs} 篇、${newTodos} 件事`,
+          state: 'done',
+        });
+        // 每跑完一批就落游标，卡片也同步长出这一批的产出
+        setDraft({ ...acc });
+        if (all && batch.length) {
+          try {
+            await repo.setSetting(ALL_CURSOR_KEY, String(batch[batch.length - 1].id));
+          } catch {
+            /* 游标记不住只会让下次重做这一批，不影响这次结果 */
           }
-          if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
-        },
-      });
-      if (draftGenRef.current !== gen) return;
+        }
+      }
 
-      setDraft({ ...out.draft, sourceIds });
-      // 日志如实报：拆了几篇、几条待办。没有就说没有，不写「0 篇文档」
+      const docN = acc.docs.filter((d) => d.bodyMd.trim()).length;
+      const todoN = acc.todos.filter((t) => t.text.trim()).length;
       const bits: string[] = [];
-      if (out.draft.docs.length) bits.push(`${out.draft.docs.length} 篇文档`);
-      const todoN = out.draft.todos.filter((t) => t.text.trim()).length;
+      if (docN) bits.push(`${docN} 篇文档`);
       if (todoN) bits.push(`${todoN} 件事`);
-      setDraftSteps([
-        { text: `读到${hint}`, state: 'done' },
+      setDraftSteps((prev) => [
+        ...prev,
         {
-          text: bits.length ? `整理出 ${bits.join('、')}，等你过目` : '材料里没有可沉淀的知识',
+          text: bits.length
+            ? `整理完成：${bits.join('、')}${dropped ? `（${dropped} 篇同名或超上限，没重复列）` : ''}`
+            : '材料里没有可沉淀的知识',
           state: 'done',
         },
       ]);
-      setDraftNote(
-        out.truncated ? '材料太多，中间省略了一部分，可能漏掉一些细节' : '',
+      setLeftover(restCount);
+      const noteBits: string[] = [];
+      if (truncated) noteBits.push('材料太多，中间省略了一部分，可能漏掉一些细节');
+      if (restCount) noteBits.push(`还有 ${restCount} 条没整理，点下面「继续」接着来`);
+      setDraftNote(noteBits.join('；'));
+
+      // 整理也是对话：写进历史，退出之后还能找回来
+      const question =
+        (opts.instruction ?? '').trim() || (mode === 'todos' ? '整理待办' : '整理碎片');
+      const sid = await recordOrganize(
+        {
+          question,
+          answer: describeForHistory(acc, restCount),
+          sourceIds: acc.sourceIds.length ? acc.sourceIds : sourceIds,
+          kind: 'organize',
+        },
+        opts.session,
       );
+      if (sid !== null && draftGenRef.current === gen) setDraftSession(sid);
     } catch (e) {
       if (draftGenRef.current !== gen) return;
       setDraftErr(errorDetailOf(e));
@@ -1160,6 +1437,7 @@ export function AskScreen({
   function discardDraft() {
     draftGenRef.current += 1;
     setDraft(null);
+    setDraftDoc(null);
     setDraftBusy(false);
     setDraftErr(null);
     setDraftNote('');
@@ -1297,16 +1575,30 @@ export function AskScreen({
   /**
    * 取这一轮要整理的碎片。
    *
-   * 从某条碎片进来就只整理那一条（用户点的就是它）；否则取最近的一批。
-   * 用 `packFragments` 而不是 `slice`：一条超长碎片会把整批挤掉，
-   * 这一点在「整理」里已经踩过一次（见 util/batch.ts）。
+   * 从某条碎片进来就只整理那一条（用户点的就是它）。
+   * 否则：
+   * - 普通「整理」取最近的一批（40 条 / 16,000 字）；
+   * - **「整理所有碎片」取全部**，从游标之后接着来。
+   *
+   * 用 `listFragmentsBetween` 而不是 `listFragments()`：后者默认 500 条上限，
+   * 「所有」会被悄悄截掉一批 —— 正是用户这次报的问题（只看了最近 40 条）。
    */
-  async function pickFragments(contextFragment: Fragment | null): Promise<Fragment[]> {
+  async function pickFragments(contextFragment: Fragment | null, all = false): Promise<Fragment[]> {
     if (contextFragment) return [contextFragment];
     try {
-      const all = await repo.listFragments(200);
-      const usable = all.filter((f) => f.mergedInto === null);
-      return packFragments(usable, 40, 16_000);
+      const list = await repo.listFragmentsBetween(0, Date.now() + 86_400_000);
+      const usable = list.filter((f) => f.mergedInto === null && f.content.trim());
+      if (!all) {
+        // 升序列表的尾部才是最近的；反转之后装箱，超长的那条才不会挤掉后面的
+        return packFragments(usable.slice().reverse(), 40, 16_000);
+      }
+      let cursor = 0;
+      try {
+        cursor = Number(await repo.getSetting(ALL_CURSOR_KEY)) || 0;
+      } catch {
+        cursor = 0;
+      }
+      return usable.filter((f) => f.id > cursor);
     } catch {
       return [];
     }
@@ -1372,6 +1664,8 @@ export function AskScreen({
   }
 
   const hasContent = turns.length > 0;
+  /** 草稿整页正在看的那一篇。草稿被改（或丢弃）时它会变成 undefined，整页自动关掉 */
+  const draftDocCurrent = draft && draftDoc ? draft.docs[draftDoc.index] ?? null : null;
   const docMode = scope.kind === 'documents';
   /** 范围必须一直看得见：隐私边界不能只写在代码里 */
   const scopeLine = docMode
@@ -1451,280 +1745,339 @@ export function AskScreen({
     );
   }
 
+  /*
+   * 抽屉跟手时，问答页往右让出一点、压暗一点 —— 这是「仿真」的另一半。
+   * 用 useMemo 固定插值节点：每帧新建一个节点会让原生动画重新挂一次，看起来是一跳。
+   */
+  const { contentX, historyX, dimOpacity } = useMemo(
+    () => ({
+      contentX: historyAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, screenW * 0.16],
+      }),
+      historyX: historyAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [-screenW, 0],
+      }),
+      dimOpacity: historyAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: [0, 0.3],
+      }),
+    }),
+    [historyAnim, screenW],
+  );
+
   return (
-    <View style={styles.root} {...pan.panHandlers}>
-      {/* 已经在新对话里再点「+」：按钮没坏，只是没什么可新建的 */}
-      {newHint ? (
-        <View style={styles.newHint} pointerEvents="none">
-          <Text style={styles.newHintText}>已在新对话中</Text>
-        </View>
-      ) : null}
-      <ScreenHeader
-        title="问"
-        subtitle={hasContent ? `${turns.length} 轮问答` : undefined}
-        onBack={openHistory}
-        backIcon="time-outline"
-        backLabel="历史会话"
-        right={
-          <View style={styles.headerRight}>
-            <IconButton
-              name="add"
-              size={21}
-              tone="soft"
-              onPress={newSession}
-              accessibilityLabel="新建会话"
-            />
-            <IconButton
-              name="close"
-              size={20}
-              tone="soft"
-              onPress={attemptClose}
-              disabled={busy}
-              accessibilityLabel="关闭"
-            />
-          </View>
-        }
-      />
-      {/* 范围常驻在标题下面：一旦滚走，用户就不记得这次到底问了什么 */}
-      <View style={styles.scopeBar}>
-        <Ionicons
-          name={docMode ? 'documents-outline' : 'albums-outline'}
-          size={13}
-          color={c.text3}
-        />
-        <Text style={styles.scopeText} numberOfLines={2}>
-          {scopeLine}
-        </Text>
-        {docMode ? <Text style={styles.scopeTag}>不联网</Text> : null}
-      </View>
-      {scopeProblem ? <Text style={styles.scopeWarn}>{scopeProblem}</Text> : null}
-
-      <ScrollView
-        ref={scrollRef}
-        contentContainerStyle={[styles.content, !hasContent && !pendingQ && styles.contentEmpty]}
-        keyboardShouldPersistTaps="handled"
-        onContentSizeChange={scrollToEnd}
-      >
-        {!hasContent && !pendingQ && !draft ? (
-          <View style={styles.empty}>
-            <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
-            <Text style={styles.emptyTitle}>{docMode ? '就这几份文档提问' : '问、或者让它整理'}</Text>
-            <Text style={styles.emptyBody}>
-              {docMode
-                ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
-                : '提问会先在你的碎片里找依据，再把答案写出来。\n整理只提炼能复用的知识，按主题拆成几篇，写之前先给你看。'}
-            </Text>
-
-            {!docMode ? (
-              <View style={styles.hints}>
-                <Pressable
-                  style={styles.hint}
-                  onPress={() => void startDraft('knowledge', { instruction: TASK_SEED.organize })}
-                  disabled={draftBusy || busy}
-                >
-                  <Ionicons name="sparkles-outline" size={16} color={c.accentText} />
-                  <View style={styles.hintBody}>
-                    <Text style={styles.hintTitle}>整理碎片</Text>
-                    <Text style={styles.hintText}>只收做法、结论和参数，按主题拆成几篇</Text>
-                  </View>
-                </Pressable>
-
-                <Pressable
-                  style={styles.hint}
-                  onPress={() => void startDraft('todos', { instruction: TASK_SEED.todos })}
-                  disabled={draftBusy || busy}
-                >
-                  <Ionicons name="checkbox-outline" size={16} color={c.accentText} />
-                  <View style={styles.hintBody}>
-                    <Text style={styles.hintTitle}>整理待办</Text>
-                    <Text style={styles.hintText}>抽成两层的待办，已经有的不重复</Text>
-                  </View>
-                </Pressable>
-
-                <Pressable
-                  style={styles.hint}
-                  onPress={() => setSummaryOpen(true)}
-                  disabled={draftBusy || busy}
-                >
-                  <Ionicons name="calendar-outline" size={16} color={c.accentText} />
-                  <View style={styles.hintBody}>
-                    <Text style={styles.hintTitle}>写月小结</Text>
-                    <Text style={styles.hintText}>按日期把一个月的事列成表，另挑要紧的写进展</Text>
-                  </View>
-                </Pressable>
-              </View>
-            ) : null}
+    <View style={styles.root} {...openPan.panHandlers}>
+      <Animated.View style={[styles.flex, { transform: [{ translateX: contentX }] }]}>
+        {/* 已经在新对话里再点「+」：按钮没坏，只是没什么可新建的 */}
+        {newHint ? (
+          <View style={styles.newHint} pointerEvents="none">
+            <Text style={styles.newHintText}>已在新对话中</Text>
           </View>
         ) : null}
-
-        {turns.map((t, i) => (
-          <View key={`${i}-${t.question.slice(0, 8)}`}>
-            <View style={styles.qRow}>
-              <View style={styles.qBubble}>
-                <Text style={styles.qText}>{t.question}</Text>
-              </View>
-            </View>
-            {t.reasoning ? (
-              <ReasoningFold
-                text={t.reasoning}
-                defaultOpen={openReasoningKey === `${i}-${t.question.slice(0, 8)}`}
+        <ScreenHeader
+          title="问"
+          subtitle={hasContent ? `${turns.length} 轮问答` : undefined}
+          onBack={openHistory}
+          backIcon="time-outline"
+          backLabel="历史会话"
+          right={
+            <View style={styles.headerRight}>
+              <IconButton
+                name="add"
+                size={21}
+                tone="soft"
+                onPress={newSession}
+                accessibilityLabel="新建会话"
               />
-            ) : null}
-            <TurnAnswer turn={t} onCite={setCite} />
-          </View>
-        ))}
-
-        {pendingQ ? (
-          <View>
-            <View style={styles.qRow}>
-              <View style={styles.qBubble}>
-                <Text style={styles.qText}>{pendingQ}</Text>
-              </View>
+              <IconButton
+                name="close"
+                size={20}
+                tone="soft"
+                onPress={attemptClose}
+                disabled={busy}
+                accessibilityLabel="关闭"
+              />
             </View>
-            <View style={styles.aRow}>
-              {received > 0 ? (
-                <Text style={styles.aText}>正在读资料组织回答…（已收到 {received} 字）</Text>
-              ) : (
-                <View style={styles.thinkingRow}>
-                  <ActivityIndicator size="small" color={c.text3} />
-                  <Text style={styles.thinkingText}>
-                    {thinkingOn ? '在想…' : docMode ? '在读选定的文档…' : '在读你的记录…'}
+          }
+        />
+        {/* 范围常驻在标题下面：一旦滚走，用户就不记得这次到底问了什么 */}
+        <View style={styles.scopeBar}>
+          <Ionicons
+            name={docMode ? 'documents-outline' : 'albums-outline'}
+            size={13}
+            color={c.text3}
+          />
+          <Text style={styles.scopeText} numberOfLines={2}>
+            {scopeLine}
+          </Text>
+          {docMode ? <Text style={styles.scopeTag}>不联网</Text> : null}
+        </View>
+        {scopeProblem ? <Text style={styles.scopeWarn}>{scopeProblem}</Text> : null}
+
+        <ScrollView
+          ref={scrollRef}
+          contentContainerStyle={[styles.content, !hasContent && !pendingQ && styles.contentEmpty]}
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => {
+            // 只在「正在生成」时跟到底。展开内容、弹键盘也会改高度，
+            // 无条件滚到底就是用户说的「打开和编辑自动跳转底部」
+            if (busy || pendingQ) scrollToEnd();
+          }}
+        >
+          {!hasContent && !pendingQ && !draft ? (
+            <View style={styles.empty}>
+              <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
+              <Text style={styles.emptyTitle}>{docMode ? '就这几份文档提问' : '问、或者让它整理'}</Text>
+              <Text style={styles.emptyBody}>
+                {docMode
+                  ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
+                  : '提问会先在你的碎片里找依据，再把答案写出来。\n整理只提炼能复用的知识，按主题拆成几篇，写之前先给你看。'}
+              </Text>
+
+              {!docMode ? (
+                <View style={styles.hints}>
+                  <Pressable
+                    style={styles.hint}
+                    onPress={() => void startDraft('knowledge', { instruction: TASK_SEED.organize })}
+                    disabled={draftBusy || busy}
+                  >
+                    <Ionicons name="sparkles-outline" size={16} color={c.accentText} />
+                    <View style={styles.hintBody}>
+                      <Text style={styles.hintTitle}>整理碎片</Text>
+                      <Text style={styles.hintText}>只收做法、结论和参数，按主题拆成几篇</Text>
+                    </View>
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.hint}
+                    onPress={() => void startDraft('todos', { instruction: TASK_SEED.todos })}
+                    disabled={draftBusy || busy}
+                  >
+                    <Ionicons name="checkbox-outline" size={16} color={c.accentText} />
+                    <View style={styles.hintBody}>
+                      <Text style={styles.hintTitle}>整理待办</Text>
+                      <Text style={styles.hintText}>抽成两层的待办，已经有的不重复</Text>
+                    </View>
+                  </Pressable>
+
+                  <Pressable
+                    style={styles.hint}
+                    onPress={() => setSummaryOpen(true)}
+                    disabled={draftBusy || busy}
+                  >
+                    <Ionicons name="calendar-outline" size={16} color={c.accentText} />
+                    <View style={styles.hintBody}>
+                      <Text style={styles.hintTitle}>写月小结</Text>
+                      <Text style={styles.hintText}>按日期把一个月的事列成表，另挑要紧的写进展</Text>
+                    </View>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {turns.map((t, i) =>
+            t.kind === 'organize' ? (
+              /*
+               * 整理轮不画成一问一答：它问的不是问题，是动作。
+               * 一张窄卡（说了什么 + 产出了什么）才让人一眼认出「这条是整理」。
+               */
+              <View key={`${i}-org`} style={styles.orgTurn}>
+                <View style={styles.orgHead}>
+                  <Ionicons name="sparkles-outline" size={13} color={c.accentText} />
+                  <Text style={styles.orgTitle} numberOfLines={2}>
+                    {t.question}
                   </Text>
                 </View>
-              )}
-            </View>
-          </View>
-        ) : null}
-
-        {busy && reasoning ? (
-          <ReasoningStream
-            title="思考过程"
-            text={reasoning}
-            received={received}
-            elapsed={elapsed}
-            thinking={thinkingOn}
-            height={180}
-          />
-        ) : null}
-
-        {draft ? (
-          <KnowledgeDraftCard
-            draft={draft}
-            onChange={setDraft}
-            busy={draftBusy}
-            received={draftRecv}
-            elapsed={draftElapsed}
-            reasoning={draftReasoning}
-            error={draftErr}
-            note={draftNote}
-            steps={draftSteps}
-            allowDoc={allowDoc}
-            allowTodos={allowTodos}
-            onAllowDoc={setAllowDoc}
-            onAllowTodos={setAllowTodos}
-            saving={savingDraft}
-            saved={savedDocs}
-            onOpenDoc={(id) => {
-              setDocReload((n) => n + 1);
-              setOpenDocId(id);
-            }}
-            onApprove={(index) => void approveDraft(index)}
-            onDiscard={discardDraft}
-            onRetry={() => {
-              // 重试＝用同一个来源再跑一遍。材料的取法和第一次完全一致
-              if (draft?.mode === 'todos') void startDraft('todos');
-              else void startDraft('knowledge');
-            }}
-          />
-        ) : null}
-
-        {!!webNote && !busy ? <Text style={styles.webNote}>{webNote}</Text> : null}
-        {error ? (
-          <AgentError
-            title="回答失败"
-            message={error.message}
-            code={error.code}
-            detail={error.detail}
-            onRetry={() => {
-              if (lastQ) void send(lastQ);
-            }}
-          />
-        ) : null}
-      </ScrollView>
-
-      <View style={[styles.footer, keyboardHeight > 0 && { paddingBottom: 8 }]}>
-        {context ? (
-          <View style={styles.contextBar}>
-            <Ionicons name="link-outline" size={13} color={c.accentText} />
-            <Text style={styles.contextText} numberOfLines={1}>
-              围绕这条记录：{context.content.replace(/\s+/g, ' ')}
-            </Text>
-            <Pressable
-              onPress={() => setContext(null)}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="移除这条上下文"
-            >
-              <Ionicons name="close" size={13} color={c.text3} />
-            </Pressable>
-          </View>
-        ) : null}
-
-        <View style={styles.toggleRow}>
-          <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking}>
-            <Ionicons
-              name="bulb-outline"
-              size={13}
-              color={thinkingOn ? c.accentText : c.text3}
-            />
-            <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
-          </Pressable>
-          {docMode ? (
-            // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
-            <View style={[styles.toggle, styles.toggleOff]} accessibilityLabel="文档模式不联网">
-              <Ionicons name="cloud-offline-outline" size={13} color={c.text3} />
-              <Text style={styles.toggleText}>不联网</Text>
-            </View>
-          ) : (
-            <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb}>
-              <Ionicons
-                name="globe-outline"
-                size={13}
-                color={webOn ? c.accentText : c.text3}
-              />
-              <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
-            </Pressable>
+                <Text style={styles.orgAnswer}>{t.answer}</Text>
+              </View>
+            ) : (
+              <View key={`${i}-${t.question.slice(0, 8)}`}>
+                <View style={styles.qRow}>
+                  <View style={styles.qBubble}>
+                    <Text style={styles.qText}>{t.question}</Text>
+                  </View>
+                </View>
+                {t.reasoning ? (
+                  <ReasoningFold
+                    text={t.reasoning}
+                    defaultOpen={openReasoningKey === `${i}-${t.question.slice(0, 8)}`}
+                  />
+                ) : null}
+                <TurnAnswer turn={t} onCite={setCite} />
+              </View>
+            ),
           )}
-          {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
+
+          {pendingQ ? (
+            <View>
+              <View style={styles.qRow}>
+                <View style={styles.qBubble}>
+                  <Text style={styles.qText}>{pendingQ}</Text>
+                </View>
+              </View>
+              <View style={styles.aRow}>
+                {received > 0 ? (
+                  <Text style={styles.aText}>正在读资料组织回答…（已收到 {received} 字）</Text>
+                ) : (
+                  <View style={styles.thinkingRow}>
+                    <ActivityIndicator size="small" color={c.text3} />
+                    <Text style={styles.thinkingText}>
+                      {thinkingOn ? '在想…' : docMode ? '在读选定的文档…' : '在读你的记录…'}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          ) : null}
+
+          {busy && reasoning ? (
+            <ReasoningStream
+              title="思考过程"
+              text={reasoning}
+              received={received}
+              elapsed={elapsed}
+              thinking={thinkingOn}
+              height={180}
+            />
+          ) : null}
+
+          {draft ? (
+            <KnowledgeDraftCard
+              draft={draft}
+              onChange={setDraft}
+              busy={draftBusy}
+              received={draftRecv}
+              elapsed={draftElapsed}
+              reasoning={draftReasoning}
+              error={draftErr}
+              note={draftNote}
+              steps={draftSteps}
+              allowDoc={allowDoc}
+              allowTodos={allowTodos}
+              onAllowDoc={setAllowDoc}
+              onAllowTodos={setAllowTodos}
+              saving={savingDraft}
+              saved={savedDocs}
+              onOpenDoc={(id) => {
+                setDocReload((n) => n + 1);
+                setOpenDocId(id);
+              }}
+              onOpenDraft={(index, mode) => setDraftDoc({ index, mode })}
+              leftover={leftover}
+              onContinueAll={() =>
+                void startDraft(draft?.mode ?? 'knowledge', { all: true, append: true })
+              }
+              onApprove={(index) => void approveDraft(index)}
+              onDiscard={discardDraft}
+              onRetry={() => {
+                // 重试＝用同一个来源再跑一遍。材料的取法和第一次完全一致
+                if (draft?.mode === 'todos') void startDraft('todos');
+                else void startDraft('knowledge');
+              }}
+            />
+          ) : null}
+
+          {!!webNote && !busy ? <Text style={styles.webNote}>{webNote}</Text> : null}
+          {error ? (
+            <AgentError
+              title="回答失败"
+              message={error.message}
+              code={error.code}
+              detail={error.detail}
+              onRetry={() => {
+                if (lastQ) void send(lastQ);
+              }}
+            />
+          ) : null}
+        </ScrollView>
+
+        <View style={[styles.footer, keyboardHeight > 0 && { paddingBottom: 8 }]}>
+          {context ? (
+            <View style={styles.contextBar}>
+              <Ionicons name="link-outline" size={13} color={c.accentText} />
+              <Text style={styles.contextText} numberOfLines={1}>
+                围绕这条记录：{context.content.replace(/\s+/g, ' ')}
+              </Text>
+              <Pressable
+                onPress={() => setContext(null)}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="移除这条上下文"
+              >
+                <Ionicons name="close" size={13} color={c.text3} />
+              </Pressable>
+            </View>
+          ) : null}
+
+          <View style={styles.toggleRow}>
+            <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking}>
+              <Ionicons
+                name="bulb-outline"
+                size={13}
+                color={thinkingOn ? c.accentText : c.text3}
+              />
+              <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
+            </Pressable>
+            {docMode ? (
+              // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
+              <View style={[styles.toggle, styles.toggleOff]} accessibilityLabel="文档模式不联网">
+                <Ionicons name="cloud-offline-outline" size={13} color={c.text3} />
+                <Text style={styles.toggleText}>不联网</Text>
+              </View>
+            ) : (
+              <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb}>
+                <Ionicons
+                  name="globe-outline"
+                  size={13}
+                  color={webOn ? c.accentText : c.text3}
+                />
+                <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
+              </Pressable>
+            )}
+            {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
+          </View>
+
+          <View style={styles.inputRow}>
+            <TextInput
+              value={input}
+              onChangeText={setInput}
+              placeholder={draft ? '说要改哪里，比如「第二段并进第一段」…' : '问点什么，或者让它整理…'}
+              placeholderTextColor={c.text3}
+              style={styles.input}
+              multiline
+              maxLength={500}
+              editable={!busy}
+            />
+            <Pressable
+              onPress={() => void send()}
+              // 范围有问题时按钮直接不可用：原因就写在上面的红字里
+              disabled={!input.trim() || busy || !!scopeProblem}
+              style={[styles.send, canSend && styles.sendOn]}
+              hitSlop={6}
+            >
+              <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />
+            </Pressable>
+          </View>
+          <View style={{ height: keyboardHeight }} />
         </View>
 
-        <View style={styles.inputRow}>
-          <TextInput
-            value={input}
-            onChangeText={setInput}
-            placeholder={draft ? '说要改哪里，比如「第二段并进第一段」…' : '问点什么，或者让它整理…'}
-            placeholderTextColor={c.text3}
-            style={styles.input}
-            multiline
-            maxLength={500}
-            editable={!busy}
-          />
-          <Pressable
-            onPress={() => void send()}
-            // 范围有问题时按钮直接不可用：原因就写在上面的红字里
-            disabled={!input.trim() || busy || !!scopeProblem}
-            style={[styles.send, canSend && styles.sendOn]}
-            hitSlop={6}
-          >
-            <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />
-          </Pressable>
-        </View>
-        <View style={{ height: keyboardHeight }} />
-      </View>
+      </Animated.View>
 
-      {/* ---------------- 历史会话 ---------------- */}
-      {historyOpen ? (
-        <View style={styles.historyPage} {...historyPan.panHandlers}>
+      {/* ---------------- 历史会话（右滑拉出来的抽屉） ---------------- */}
+
+      {/* 抽屉推出来时把下面的问答页压暗，眼睛才知道「上面这一层」 */}
+      {historyMounted ? (
+        <Animated.View pointerEvents="none" style={[styles.scrim, { opacity: dimOpacity }]} />
+      ) : null}
+
+      {historyMounted ? (
+        <Animated.View
+          style={[styles.historyPage, { transform: [{ translateX: historyX }] }]}
+          {...closePan.panHandlers}
+        >
           <ScreenHeader
             title="历史会话"
             subtitle={`${sessions.filter((s) => !s.archived).length} 个会话`}
@@ -1770,7 +2123,7 @@ export function AskScreen({
               ) : null}
             </ScrollView>
           )}
-        </View>
+        </Animated.View>
       ) : null}
 
       {/* ---------------- 会话操作 ---------------- */}
@@ -1960,6 +2313,30 @@ export function AskScreen({
             }}
           />
         </View>
+      ) : null}
+
+      {/* ---------------- 草稿里的某一篇：整页看 / 整页改 ---------------- */}
+      {draft && draftDoc && draftDocCurrent ? (
+        <DraftDocPage
+          doc={draftDocCurrent}
+          index={draftDoc.index}
+          total={draft.docs.length}
+          initialMode={draftDoc.mode}
+          saved={savedDocs.some((d) => d.index === draftDoc.index)}
+          canWrite={allowDoc}
+          problem={docProblem(draftDocCurrent)}
+          saving={savingDraft}
+          onChange={(patch) => {
+            const at = draftDoc.index;
+            setDraft((prev) =>
+              prev
+                ? { ...prev, docs: prev.docs.map((d, i) => (i === at ? { ...d, ...patch } : d)) }
+                : prev,
+            );
+          }}
+          onApprove={() => void approveDraft(draftDoc.index)}
+          onClose={() => setDraftDoc(null)}
+        />
       ) : null}
 
       {cite ? <CitationSheet cite={cite} onClose={() => setCite(null)} /> : null}
@@ -2166,6 +2543,30 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sendOn: { backgroundColor: c.accent },
 
   /* ---- 历史会话 ---- */
+  flex: { flex: 1 },
+  /** 抽屉下面那层压暗。transparent 里带 alpha，深浅主题都不用换色 */
+  scrim: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#000000',
+  },
+  /** 整理轮：一条记录，不是一问一答 */
+  orgTurn: {
+    backgroundColor: c.card,
+    borderRadius: R.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.accentHair,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginTop: 12,
+    gap: 4,
+  },
+  orgHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  orgTitle: { flex: 1, fontSize: 12.5, lineHeight: 18, color: c.text, fontWeight: '600' },
+  orgAnswer: { fontSize: 12, lineHeight: 18, color: c.text2 },
   historyPage: {
     position: 'absolute',
     top: 0,
