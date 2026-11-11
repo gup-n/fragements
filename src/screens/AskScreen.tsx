@@ -936,6 +936,12 @@ export function AskScreen({
     setDraftErr(null);
     setSavedDocs([]);
     setContext(null);
+    /*
+     * 换了一整场会话，应该直接看到最新一轮。
+     * 以前这是靠 `onContentSizeChange` 无条件滚到底兜着的，现在那个只跟生成过程，
+     * 所以这里显式补一次（等这一帧渲染完再跳）。
+     */
+    setTimeout(scrollToEnd, 120);
   }
 
   async function toggleThinking() {

@@ -124,7 +124,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `App.tsx` | 438 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
 | `src/screens/TimelineScreen.tsx` | 1370 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、标签筛选、输入框、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
-| `src/screens/AskScreen.tsx` | 2745 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
+| `src/screens/AskScreen.tsx` | 2751 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
 | `src/screens/ReviewScreen.tsx` | 280 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
 | `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
 | `src/screens/SettingsScreen.tsx` | 1085 | 外观、AI 接口（官方只填 Key + 余额 + 跳转，第三方折叠）、测试连接、索引健康度与自检、导出导入、统计、下载地址 |
