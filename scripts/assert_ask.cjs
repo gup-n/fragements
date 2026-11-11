@@ -57,6 +57,7 @@ const tscArgs = [
   'src/util/batch.ts',
   'src/util/jsonRepair.ts',
   'src/util/fragmentText.ts',
+  'src/util/urls.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -86,6 +87,7 @@ const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
 const batch = require(path.join(outDir, 'util', 'batch.js'));
 const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
 const text = require(path.join(outDir, 'util', 'fragmentText.js'));
+const urls = require(path.join(outDir, 'util', 'urls.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -531,6 +533,51 @@ check('装箱预算把图文字算进去，不是只算正文', () => {
   ];
   // 预算 500：只算正文会收满 3 条（300），算上图文字就是 2 条（约 440）
   eq(batch.packFragments(pool, 40, 500).length, 2, '图文字要占预算');
+});
+
+// ---------------------------------------------------------------------------
+// 3.9 联网：链接要认出来，不能当关键词去搜（v0.19.1）
+// ---------------------------------------------------------------------------
+check('一句话里的链接能被认出来', () => {
+  const got = urls.extractUrls('帮我看看这个 https://example.com/a?b=1 说的对不对');
+  eq(got.length, 1, '一条链接');
+  eq(got[0], 'https://example.com/a?b=1', '原样取出');
+});
+
+check('微信分享那种尾巴不会粘进链接', () => {
+  const got = urls.extractUrls('https://mp.weixin.qq.com/s/abc123 复制打开抖音，看看【某某】');
+  eq(got[0], 'https://mp.weixin.qq.com/s/abc123', '不带后面的中文');
+});
+
+check('链接末尾的句号括号会被剪掉', () => {
+  eq(urls.extractUrls('看这个（https://example.com/x）。').at(0), 'https://example.com/x', '剪标点');
+  eq(urls.extractUrls('见 <https://example.com/y>').at(0), 'https://example.com/y', '去尖括号');
+});
+
+check('裸域名不算链接，那条是「搜这个词」不是「读这个站」', () => {
+  eq(urls.extractUrls('example.com 这个站怎么进').length, 0, '不猜裸域名');
+});
+
+check('同一个链接不重复算', () => {
+  eq(urls.extractUrls('https://a.com/x 和 https://a.com/x').length, 1, '去重');
+});
+
+check('剥掉链接后剩下用户真正想问的话', () => {
+  eq(urls.stripUrls('https://example.com/a 这个报错是什么意思'), '这个报错是什么意思', '剩正文');
+});
+
+check('搜索 query 不带链接，超长时在标点处断', () => {
+  const q = urls.searchQueryOf('https://example.com/a ' + '很长的描述，'.repeat(30));
+  assert(!q.includes('http'), `query 里不该有链接：${q.slice(0, 40)}`);
+  assert(q.length <= 128, `不能超过 128 字符，实际 ${q.length}`);
+  // 截断只能取原句的前缀：不能把中间的字重新拼起来，也不能带上省略号去搜
+  const clean = urls.stripUrls('https://example.com/a ' + '很长的描述，'.repeat(30));
+  assert(clean.startsWith(q), '截断结果应当是原句前缀');
+  assert(!q.includes('…'), '不该带省略号');
+});
+
+check('query 全是链接时返回空串，由调用方决定不去搜', () => {
+  eq(urls.searchQueryOf('https://example.com/a'), '', '空');
 });
 
 // ---------------------------------------------------------------------------

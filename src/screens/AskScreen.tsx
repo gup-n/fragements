@@ -1070,11 +1070,18 @@ export function AskScreen({
               : '',
         );
       } else {
+        /*
+         * 联网的提示要能分清三件事（原来全说成「没搜到有用的网页」）：
+         * 读了链接 / 搜到了网页 / 联网出错。用户看到的「根本没查」，
+         * 就是第三件事被说成了第二件。
+         */
         setWebNote(
           run.webError
-            ? `联网没搜成：${run.webError}。下面是只查你记录的结果。`
+            ? `联网没成：${run.webError}。下面只查了你的记录。`
             : run.web.length
-              ? `联网补了 ${run.web.length} 条网页资料`
+              ? run.web[0].kind === 'page'
+                ? `读了 ${run.web.length} 个链接，答案有引用网页内容`
+                : `联网补了 ${run.web.length} 条网页资料`
               : webOn
                 ? '联网开了，但没搜到有用的网页'
                 : '',

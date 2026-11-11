@@ -19,8 +19,17 @@ import { AiError } from './chat';
 const MAX_QUERY = 128;
 /** 一次要几条。count 不影响计费，多拿几条让模型有得挑 */
 const DEFAULT_COUNT = 8;
-/** 相关度下限。官方说 rerank_score ≥ 1.5 才算优质，1.0 以下基本是噪音 */
-const MIN_SCORE = 1.0;
+/**
+ * 相关度下限。
+ *
+ * 官方的 rerank_score 是 0–3，≥1.5 算优质。这里只把 **0.5 以下**当噪音丢掉，
+ * 而不是按 1.0 一刀切：低分不等于无关（长尾问题、中文冷门术语普遍分低），
+ * 一刀切的后果是「明明有几条相关的，界面却说没搜到」—— 用户没法判断
+ * 是真没搜到还是被过滤了。
+ */
+const MIN_SCORE = 0.5;
+/** 无论如何留几条。分数全被过滤时，也要给模型几条自己判断 */
+const MIN_KEEP = 3;
 /** 单次请求超时。搜索是同步接口，正常一两秒就回 */
 const TIMEOUT_MS = 25_000;
 /** 408 / 429 / 5xx 可以重试，其余 4xx 重试多少次都一样 */
@@ -83,12 +92,23 @@ function normalize(payload: any, limit: number): WebHit[] {
   // 只有服务端给了分数才按分数筛。一个分数都没给时不能把结果全清空
   const hasScore = out.some((h) => h.score > 0);
   const kept = hasScore ? out.filter((h) => h.score === 0 || h.score >= MIN_SCORE) : out;
+  /*
+   * 兜底：过滤后一条不剩、但原始结果不空时，保留前面几条。
+   * 原来这里会返回空数组，界面于是显示「没搜到有用的网页」——
+   * 而其实是「搜到了，只是分数都不高」。这两句话对用户的意义完全不同。
+   */
+  if (!kept.length && out.length) return out.slice(0, Math.min(MIN_KEEP, out.length));
   return kept.slice(0, limit);
 }
 
 type Attempt = { ok: true; hits: WebHit[] } | { ok: false; error: AiError; retryable: boolean };
 
-async function callOnce(config: AiConfig, query: string, count: number): Promise<Attempt> {
+async function callOnce(
+  config: AiConfig,
+  query: string,
+  count: number,
+  oriQuestion?: string,
+): Promise<Attempt> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
@@ -98,8 +118,20 @@ async function callOnce(config: AiConfig, query: string, count: number): Promise
         'Content-Type': 'application/json',
         Authorization: `Bearer ${config.apiKey}`,
       },
-      // need_content 关掉：只要 summary。开了会连正文一起回，既慢又贵
-      body: JSON.stringify({ query, count, need_content: false }),
+      /*
+       * need_content 关掉：只要 summary。开了会连正文一起回，既慢又贵，
+       * 而且整页正文这个场景已经有 `/v1/tools/fetch` 专门负责。
+       *
+       * ori_question 是官方给的「原始问题」字段，帮助检索理解：
+       * query 是我们压缩过的关键词，模型看得到原句才知道用户在问什么。
+       * 超过 128 字符会被拒，所以和 query 一样截断。
+       */
+      body: JSON.stringify({
+        query,
+        count,
+        need_content: false,
+        ...(oriQuestion ? { ori_question: oriQuestion.replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY) } : {}),
+      }),
       signal: controller.signal,
     });
 
@@ -145,6 +177,8 @@ export async function searchWeb(
   config: AiConfig,
   query: string,
   count = DEFAULT_COUNT,
+  /** 用户的原始问题（可以带链接，会被截断）。只用于帮助检索理解 */
+  oriQuestion?: string,
 ): Promise<WebHit[]> {
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   const q = query.replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY);
@@ -153,7 +187,7 @@ export async function searchWeb(
   let last: AiError | null = null;
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) await delay(400 * 2 ** (attempt - 1));
-    const r = await callOnce(config, q, count);
+    const r = await callOnce(config, q, count, oriQuestion);
     if (r.ok) return r.hits;
     last = r.error;
     if (!r.retryable) throw r.error;

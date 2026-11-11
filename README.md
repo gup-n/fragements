@@ -11,7 +11,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App，旧数据不跟随） |
-| 当前版本 | v0.19.0（versionCode 49） |
+| 当前版本 | v0.19.1（versionCode 50） |
 | 目标设备 | vivo Y78（V2278A），`targetSdk 36` / `minSdk 24` |
 | 数据 | 本地 SQLite，无账号、无服务器、无云同步 |
 
@@ -102,6 +102,11 @@
 不会再看到「[F55]」这种只有模型知道是什么的字符串。回答里的表格、代码块、分隔线都会正常排版（v0.8.7）——
 说一句「列个表给我」，看到的是格子而不是一串竖线。两个开关跟 DeepSeek 手机 App 一样：
 **深度思考**（提高推理强度）、**联网搜索**（本地查不到就上网，与本地检索并行，失败不影响本地回答）。
+
+联网分两条路（v0.19.1）：**你发链接，它就去读那一页**（`/v1/tools/fetch`，整页 Markdown）；
+没发链接才按关键词搜（`/v1/tools/search`）。以前不管发什么都拿去搜，链接作为搜索词
+搜不出东西，界面就说「没搜到有用的网页」—— 看起来像没联网，其实是根本没去读。
+提示现在也分开说：`读了 1 个链接` / `联网补了 3 条网页资料` / `联网没成：<原因>`。
 深度思考的思维链**答完不会消失**：会收成一块「深度思考 · N 字」，点一下展开，刚答完那一轮默认展开（v0.8.9）。
 
 **历史会话**：每答完一轮自动存进历史，退出不再弹「要不要留纪要」。
@@ -232,7 +237,7 @@ Android 上 Expo 没有前台服务，切到后台后传输会继续（进程不
 | 检索 | SQLite FTS5 + **bigram 分词**（中文两字就能命中；`trigram` 对 <3 字查询不命中，别换） |
 | 密钥 | expo-secure-store（Android Keystore） |
 | 剪贴板 | expo-clipboard（长按复制碎片正文） |
-| AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，小结与问答走流式纯文本；联网走官方 `/v1/tools/search` |
+| AI | DeepSeek `deepseek-flash`，OpenAI 兼容协议；整理走流式 SSE + `response_format: json_object`，小结与问答走流式纯文本；联网走官方 `/v1/tools/search`（有链接时改为 `/v1/tools/fetch` 读整页） |
 | 导航 | 自实现轻量路由状态（5 个页面），不引 react-navigation |
 | Web | react-native-web + localStorage，**只用来跑编译校验**（`npm run build:web`），不是交付目标，也不做界面预览 |
 

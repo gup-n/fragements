@@ -36,6 +36,8 @@ import { citedKeys } from '../util/qaNote';
 import { repo } from '../db/repo';
 import { AiError, requestChat, type ChatMessage, type ChatProgress } from './chat';
 import { searchWeb } from './search';
+import { fetchPages } from './fetchPage';
+import { extractUrls, searchQueryOf } from '../util/urls';
 import {
   buildDocumentCitations,
   buildDocumentMaterials,
@@ -314,9 +316,14 @@ export function buildMaterials(r: Retrieval, web: WebHit[]): string {
     out.push('  和你的记录冲突时，先说明「你的记录里是…，网上有说法是…」，不要把两者混成一句。）');
     for (let i = 0; i < web.length; i++) {
       const h = web[i];
-      out.push(`[W${i + 1}] ${h.title}`);
+      // 标清楚是「读过的整页」还是「搜索摘要」：两者的可信度和细节量不一样
+      out.push(`[W${i + 1}] ${h.title}${h.kind === 'page' ? '（整页）' : '（搜索摘要）'}`);
       out.push(`链接：${h.url}`);
-      out.push(clip(h.summary, 800));
+      /*
+       * 整页给 6000 字、搜索摘要给 800 —— 两者体量差一个数量级。
+       * 整页被砍成 800 等于白读，而摘要占 6000 字的位置又纯属浪费。
+       */
+      out.push(clip(h.summary, h.kind === 'page' ? 6_000 : 800));
       out.push('');
     }
   } else {
@@ -384,7 +391,7 @@ function buildCitations(
       kind: 'W',
       id: i + 1,
       label: h.title || h.url,
-      body: citeBody(h.summary, 1_200),
+      body: citeBody(h.summary, h.kind === 'page' ? 2_400 : 1_200),
       url: h.url,
     });
   });
@@ -400,6 +407,8 @@ const SYSTEM_PROMPT = `你是一个私人记录问答助手。用户把平时的
    编号只能用资料里出现过的，不许自己编。一句话里最多带一个引用，别堆一串。
 3. **资料里没有的，就说没有**。用「你的记录里没有这件事」这种直白说法，然后可以说「如果要做，一般是这样」，但必须明确标出那是常识而不是你的记录。
 4. **绝不能把网页内容说成用户记过的事**。网页资料只能挂在 [W] 引用下，并且要和本地记录分开描述。
+   标了「（整页）」的是用户给的链接读回来的原文，可以说「这篇里写了…」；
+   标了「（搜索摘要）」的只有概述，**不能据此断言原文没提到的细节**。
 5. 不要凭印象补细节：时间、型号、金额、人名，资料里没写就不写。
 6. 用中文，简洁。能三句说清就不要写五句，不要用小标题包装一句结论。
 7. 不需要罗列「我查了哪些资料」，也不要复述资料原文。`;
@@ -525,16 +534,50 @@ async function askRecords(
   const { question, config, thinking, useWeb, contextIds, onProgress } = input;
   const plan = planInputBudget(SYSTEM_PROMPT, question, input.turns);
 
-  // 联网和本地检索并行：联网慢的时候不用等它才开始读本地
-  const webTask = useWeb
-    ? searchWeb(config, question).then(
-        (hits) => ({ hits, error: null as string | null }),
-        (e: unknown) => ({
-          hits: [] as WebHit[],
-          error: e instanceof Error ? e.message : '联网搜索失败',
-        }),
-      )
-    : Promise.resolve({ hits: [] as WebHit[], error: null as string | null });
+  /*
+   * 联网走两条完全不同的路，判据是「这句话里有没有链接」：
+   *
+   * - **有链接 → `/v1/tools/fetch` 读那一页**。用户发链接的意思是「你看看这个」，
+   *   不是「拿这个网址当关键词去搜」。之前所有情况都走 search，URL 作为 query
+   *   搜不出东西，界面于是说「没搜到有用的网页」—— 看起来像没联网，
+   *   其实是压根没去读。
+   * - **没链接 → `/v1/tools/search`**，query 用剥掉链接和标点后的关键词，
+   *   原句一并作为 `ori_question` 传上去帮检索理解。
+   *
+   * 两条都跟本地检索并行：联网慢的时候不用等它才开始读本地。
+   */
+  const urls = useWeb ? extractUrls(question) : [];
+  const webTask: Promise<{ hits: WebHit[]; error: string | null }> = !useWeb
+    ? Promise.resolve({ hits: [], error: null })
+    : urls.length
+      ? fetchPages(config, urls).then(
+          ({ pages, firstError, skipped }) => ({
+            hits: pages.map((p) => ({
+              title: p.title,
+              url: p.url,
+              summary: p.content,
+              score: 0,
+              kind: 'page' as const,
+            })),
+            error:
+              pages.length > 0
+                ? skipped > 0
+                  ? `一次最多读 2 个链接，还有 ${skipped} 个没读`
+                  : null
+                : (firstError ?? '这个链接读不出内容'),
+          }),
+          (e: unknown) => ({
+            hits: [] as WebHit[],
+            error: e instanceof Error ? e.message : '读网页失败',
+          }),
+        )
+      : searchWeb(config, searchQueryOf(question), undefined, question).then(
+          (hits) => ({ hits, error: null as string | null }),
+          (e: unknown) => ({
+            hits: [] as WebHit[],
+            error: e instanceof Error ? e.message : '联网搜索失败',
+          }),
+        );
 
   const retrieval = await retrieveLocal(question, plan.turns, contextIds, plan.materialBudget);
   const { hits: web, error: webError } = await webTask;
