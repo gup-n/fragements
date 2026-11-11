@@ -4,22 +4,46 @@
  * 这一份是**唯一判据**：模型返回的原始 JSON、界面上的可编辑文本、最终写库的内容，
  * 全都经过这里。散在三处各写一遍的后果是「界面显示 3 条待办、实际写进去 2 条」，
  * 而用户不会去数。
+ *
+ * v0.17 的两处形状变化，都是用户直接提出来的：
+ * 1. **一次整理可以产出多篇文档**。原来一篇「雷霆大正文」把换盘步骤、报错含义、
+ *    型号选择全塞在一起，找具体做法得从头读。现在按主题拆开，每篇一个场景。
+ * 2. **待办分两层**。整理一次抽出十几条平铺待办，看起来就是一堆碎片；
+ *    真正的「一件事分几步」在库里本来就有父子结构（todos.parent_id），只是没被用上。
  */
 import type { Document } from '../types';
 
 export type DraftMode = 'knowledge' | 'todos';
 
+/** 一条待办（含它自己的子步骤，子步骤不再有子步骤） */
 export interface DraftTodo {
   text: string;
   /** YYYY-MM-DD 或 null */
   due: string | null;
   /** 勾掉 = 这条不写。默认全勾 */
   keep: boolean;
+  /** 子步骤。只有一层，和 Todo.parentId 的两层约束对齐 */
+  children: DraftTodoChild[];
+}
+
+export interface DraftTodoChild {
+  text: string;
+  due: string | null;
+  keep: boolean;
+}
+
+/** 一篇待写入的文档 */
+export interface DraftDoc {
+  title: string;
+  bodyMd: string;
+  /** 一句话说明这篇讲什么。列表上用它，不截正文 */
+  summary: string;
+  /** 勾掉 = 这篇不写。默认全勾 */
+  keep: boolean;
 }
 
 export interface KnowledgeDraft {
-  title: string;
-  bodyMd: string;
+  docs: DraftDoc[];
   todos: DraftTodo[];
   /** 这次喂给模型的碎片 id，写库时记到会话上，供「重新整理」 */
   sourceIds: number[];
@@ -31,9 +55,11 @@ export interface KnowledgeDraft {
 /** 标题上限。手机上列表一行放得下的大致长度，超了会被截断成省略号 */
 export const TITLE_MAX = 24;
 const EXCERPT_MAX = 110;
+/** 一次最多收几篇。再多就不是「整理」而是「拆碎」了 */
+export const MAX_DOCS = 4;
 
 export function emptyDraft(mode: DraftMode, sourceIds: number[] = []): KnowledgeDraft {
-  return { title: '', bodyMd: '', todos: [], sourceIds, mode, note: '' };
+  return { docs: [], todos: [], sourceIds, mode, note: '' };
 }
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
@@ -55,27 +81,72 @@ export function dueValid(due: string | null | undefined): due is string {
   return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
 }
 
-/** 模型 JSON → 草稿。形状一律在这里收敛，界面上不接受 unknown */
+function toChild(raw: unknown): DraftTodoChild | null {
+  const t = obj(raw);
+  const text = str(t.text);
+  if (!text) return null;
+  return { text, due: dueValid(str(t.due)) ? str(t.due) : null, keep: true };
+}
+
+function toTodo(raw: unknown): DraftTodo | null {
+  const t = obj(raw);
+  const text = str(t.text);
+  if (!text) return null;
+  return {
+    text,
+    due: dueValid(str(t.due)) ? str(t.due) : null,
+    keep: true,
+    // 子项空文字不能留：列表上是一行空行，写进去是一条看不见的待办
+    children: arr(t.children).map(toChild).filter((x): x is DraftTodoChild => x !== null),
+  };
+}
+
+function toDoc(raw: unknown): DraftDoc | null {
+  const d = obj(raw);
+  const body = str(d.body_md) || str(d.body);
+  // 空正文的文档写进去就是一篇点开全白的记录，直接丢掉
+  if (!body) return null;
+  return {
+    title: clipTitle(str(d.title)),
+    bodyMd: body,
+    summary: str(d.summary) || excerptOf(body, 60),
+    keep: true,
+  };
+}
+
+/**
+ * 模型 JSON → 草稿。形状一律在这里收敛，界面上不接受 unknown。
+ *
+ * 兼容两种形状：
+ * - `{ docs: [...] }`（v0.17 起）
+ * - `{ title, body_md }`（v0.16 及更早的 prompt 只产一篇）
+ * 兼容旧形状不是为了向后兼容数据，而是因为第三方接口偶尔会照着旧的示例返回 ——
+ * 那时丢掉整篇正文，用户看到的是一次白跑。
+ */
 export function normalizeDraft(
   raw: unknown,
   mode: DraftMode,
   sourceIds: number[],
 ): KnowledgeDraft {
   const root = obj(raw);
-  const todos: DraftTodo[] = arr(root.todos)
-    .map((item) => obj(item))
-    .map((t) => ({
-      text: str(t.text),
-      due: dueValid(str(t.due)) ? str(t.due) : null,
-      keep: true,
-    }))
-    // 空文字不能留：列表上是一行空行，写进去是一条看不见的待办
-    .filter((t) => t.text.length > 0);
 
-  const body = str(root.body_md) || str(root.body);
+  const docs: DraftDoc[] = [];
+  const list = arr(root.docs ?? root.documents);
+  for (const item of list) {
+    const d = toDoc(item);
+    if (d) docs.push(d);
+  }
+  if (!docs.length) {
+    const single = toDoc(root);
+    if (single) docs.push(single);
+  }
+
+  const todos = arr(root.todos)
+    .map(toTodo)
+    .filter((t): t is DraftTodo => t !== null);
+
   return {
-    title: clipTitle(str(root.title)),
-    bodyMd: body,
+    docs: docs.slice(0, MAX_DOCS),
     todos,
     sourceIds,
     mode,
@@ -112,34 +183,60 @@ export function excerptOf(bodyMd: string, max = EXCERPT_MAX): string {
 }
 
 /** 文档名。没有标题时用日期兜底，绝不允许出现一篇没有名字的文档 */
-export function docNameOf(draft: KnowledgeDraft, now: number): string {
-  const t = clipTitle(draft.title);
+export function docNameOf(doc: DraftDoc, now: number, index = 0): string {
+  const t = clipTitle(doc.title);
   if (t) return t;
   const d = new Date(now);
-  return `整理 ${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(
     d.getDate(),
   ).padStart(2, '0')}`;
+  return index > 0 ? `整理 ${date}（${index + 1}）` : `整理 ${date}`;
+}
+
+export function keptDocs(draft: KnowledgeDraft): DraftDoc[] {
+  return draft.docs.filter((d) => d.keep && d.bodyMd.trim().length > 0);
 }
 
 export function keptTodos(draft: KnowledgeDraft): DraftTodo[] {
   return draft.todos.filter((t) => t.keep && t.text.trim());
 }
 
+/** 待办总条数（含子项）。界面上的「N 条」用它，含子项才是用户要写进去的条数 */
+export function countTodos(draft: KnowledgeDraft): number {
+  let n = 0;
+  for (const t of keptTodos(draft)) n += 1 + t.children.filter((c) => c.keep && c.text.trim()).length;
+  return n;
+}
+
+/** 主待办条数（不含子项）。进度日志里说「N 件事、M 个步骤」用它 */
+export function todoShape(draft: KnowledgeDraft): { top: number; sub: number } {
+  const kept = keptTodos(draft);
+  let sub = 0;
+  for (const t of kept) sub += t.children.filter((c) => c.keep && c.text.trim()).length;
+  return { top: kept.length, sub };
+}
+
 /**
  * 写入前能检查出来的问题。返回 null 表示可以写。
  *
- * 只拦「写进去一定是废的」那几种：没标题、没正文、没有勾任何东西。
+ * 只拦「写进去一定是废的」那几种：没有正文、没有勾任何东西。
  * 正文长短、语气一律不管 —— 那是用户的判断，不是代码该替他做的。
  */
 export function draftProblem(draft: KnowledgeDraft): string | null {
-  const hasBody = draft.bodyMd.trim().length > 0;
+  const docs = keptDocs(draft);
   const todos = keptTodos(draft);
   if (draft.mode === 'todos') {
     if (!todos.length) return '还没有勾选任何待办';
     return null;
   }
-  if (!hasBody && !todos.length) return '正文是空的，也没有勾选待办';
-  if (!hasBody) return '正文是空的';
+  if (!docs.length && !todos.length) return '没有可写入的文档，也没有勾选待办';
+  return null;
+}
+
+/** 单篇能不能写。卡片上那篇的按钮用它 */
+export function docProblem(doc: DraftDoc): string | null {
+  if (!doc.bodyMd.trim()) return '正文是空的';
+  if (!doc.title.trim()) return '还没起标题';
   return null;
 }
 
@@ -150,18 +247,19 @@ export function draftProblem(draft: KnowledgeDraft): string | null {
  * 界面上点「通过并写入」之后，先算出这个东西，再交给 repo。
  */
 export function draftToDocument(
-  draft: KnowledgeDraft,
+  doc: DraftDoc,
   now: number,
+  index = 0,
 ): Pick<Document, 'name' | 'ext' | 'size' | 'fileUri' | 'bodyMd' | 'origin' | 'excerpt'> {
-  const bodyMd = draft.bodyMd.trim();
+  const bodyMd = doc.bodyMd.trim();
   return {
-    name: docNameOf(draft, now),
+    name: docNameOf(doc, now, index),
     ext: 'md',
     size: bodyMd.length,
     fileUri: null,
     bodyMd,
     origin: 'knowledge',
-    excerpt: excerptOf(bodyMd),
+    excerpt: doc.summary || excerptOf(bodyMd),
   };
 }
 

@@ -1,73 +1,115 @@
 /**
- * 整理成知识文档：把一批碎片（或一场对话）交给模型，产出一篇**可编辑的草稿**。
+ * 整理成知识文档：把一批碎片（或一场对话）交给模型，产出一批**可编辑的草稿**。
  *
- * 和旧的「整理」有什么不同：
- * - 旧整理按批打标签、抽待办、合并重复，产出是一份「对碎片做什么」的计划；
- *   它的结果直接作用于时间轴，用户看到的是一堆勾选框。
- * - 这里产出的是一篇**文档**：它有自己的标题和正文，能反复读、能被搜索，
- *   而且**在写库之前一个字都不落地**。
+ * v0.17 按用户的两条反馈重写：
+ *
+ * 1. **只收知识**。上一版会把「买了把螺丝刀」「空调漏水报修」也整理进文档，
+ *    文档区于是变成第二个时间轴 —— 而用户要的是「浓缩就是精华」。
+ * 现在 prompt 里有一张「收 / 不收」清单和一句可执行的判据。
+ * 2. **拆成多篇**。一篇里塞进换盘步骤、报错含义、型号取舍，找具体做法得从头读。
+ *    现在按「将来会在什么场景下翻它」拆，每篇一个主题。
  *
  * 两个必须守住的边界：
- * 1. 只提炼材料里出现过的事实。模型很擅长"补全"一个看起来合理的结论，
- *    而这份文档是要被当成自己的知识反复读的 —— 编出来的部分会被当成真的。
- * 2. 改写草稿时只动用户点到的部分。整篇重写会让上一轮已经改好的措辞丢掉，
- *    用户会觉得"越改越差"。
+ * - 只提炼材料里出现过的事实。模型很擅长"补全"一个看起来合理的结论，
+ *   而这份文档是要被当成自己的知识反复读的 —— 编出来的部分会被当成真的。
+ * - 改写草稿时只动用户点到的部分。整篇重写会让上一轮已经改好的措辞丢掉。
  */
 import type { AiConfig, Fragment, QaTurn } from '../types';
-import { AiError, parseJsonLoose, requestChat, type ChatMessage, type ChatProgress } from './chat';
-import { normalizeDraft, type DraftMode, type KnowledgeDraft } from '../util/knowledgeDoc';
+import {
+  AiError,
+  clipRaw,
+  parseJsonLoose,
+  requestChat,
+  type ChatMessage,
+  type ChatProgress,
+} from './chat';
+import { MAX_DOCS, normalizeDraft, type DraftMode, type KnowledgeDraft } from '../util/knowledgeDoc';
 
 const INPUT_LIMIT = 16_000;
 
-const SYSTEM = `你在帮用户整理他自己的记录。用户会给你一批材料（他的碎片记录，或他与助手的对话），你要从中提炼出**值得长期留着**的知识，写成一篇 Markdown 文档。
+const SHAPE = `{
+  "docs": [
+    {"title": "文档标题", "summary": "一句话说这篇讲什么", "body_md": "Markdown 正文"}
+  ],
+  "todos": [
+    {"text": "要做的事", "due": "2026-11-30 或 null",
+     "children": [{"text": "这件事的一步", "due": null}]}
+  ],
+  "note": "一句话说明这次整理覆盖了什么，不超过 30 字"
+}`;
+
+const SYSTEM = `你在帮用户整理他自己的记录。用户会给你一批材料（他的碎片记录，或他与助手的对话）。你要从中提炼**可以复用的知识**，写成 Markdown 文档。
 
 只输出一个 JSON 对象，不要解释文字，不要 markdown 代码块。结构：
 
-{
-  "title": "文档标题",
-  "body_md": "Markdown 正文",
-  "todos": [{"text": "要做的事", "due": "2026-11-30 或 null"}],
-  "note": "一句话说明这份文档覆盖了什么，不超过 30 字"
-}
+${SHAPE}
 
-【只写材料里有的事】
-- 材料里没有的事实、数字、型号、命令、路径，一律不许补。
-- 可以归纳同类项、调换顺序、合并重复的说法；不许"顺着推"出一个结论。
-- 两条记录互相矛盾时不要调和：并列写出来，注明「两种说法」。
-- 原文里的具体数字、型号、命令、路径、报错信息**原样保留**，它们是这份文档的价值所在。
+【第一步：判断什么算知识】
+收：
+- 做法与顺序：一件事怎么做成，关键的先后和前提
+- 结论与判断：为什么这样、什么情况下不行、踩过的坑和它的成因
+- 事实与参数：型号、版本、命令、路径、配置项、报错原文及含义
+- 对比与取舍：几种方案的区别和适用条件
+不收（这一条最重要，宁缺勿滥）：
+- 生活琐事与一次性事件：「买了螺丝刀」「空调漏水报修」「明天带 U 盘」
+- 情绪、感想、吐槽、自我鼓励、对自己的评价
+- 计划、愿望、"回头试试"这类没有验证过的念头
+- 没有结论的疑问
+- 用户显然早已知晓、且材料里没有任何新信息的常识
+判据只有一句：**三个月后重读，还能照着做、或者用来做判断的，才是知识。**
+一条都不够格时，docs 给空数组，并在 note 里说明材料里没有可沉淀的知识。
 
-【正文怎么写】
-- 先给结论或做法，再给依据；不要开场白、不要"本文将介绍"。
-- 小节用 \`## \`，只在真的有两个以上层次时才用 \`### \`。
-- 能对比的东西用 Markdown 表格（\`| 列 | 列 |\` 加一行 \`|---|---|\`）；步骤用有序列表。
-- 长度由内容决定，不为凑字数扩写。一段话能说清就不要分三点。
+【第二步：怎么拆】
+- 一篇只讲一个主题；主题不同的拆开，最多 ${MAX_DOCS} 篇。
+- 按「将来会在什么场景下翻它」分，不按时间、不按来源条数分。
+- 只有一两句话能说的不单独成篇，并进最相关的那篇。
+
+【第三步：怎么写才浓缩】
+- 直接给结论和做法，删掉铺垫、过渡、客套，不要开场白。
+- 能对比、能列步骤的用 Markdown 表格（\`| 列 | 列 |\` 加一行 \`|---|---|\`）或有序列表。
+- 每篇 200~800 字。材料里就那么点东西时写短一点，**不要为凑篇幅扩写**。
+- 原文里的数字、型号、命令、路径、报错信息**原样保留**，它们是这份文档的价值。
+- 材料自相矛盾时不要调和：并列写出来，注明「两种说法」。
 
 【todos 怎么抽】
 - 只抽**材料里明确写了下一步动作**的条目（"还要…""下次…""待…""记得…"）。
 - 已经做完的事不是待办。愿望、猜测、"可能需要"都不是待办。
-- due 只有材料里写明日期时才填，格式 YYYY-MM-DD；没写就 null，不要猜。
+- **一件事分几步时用 children 表达**，不要把一件事拆成三条并列待办。
+  父项写「这件事本身」，children 写各步骤；没有步骤就用空数组。
+- 一条不超过 40 字，说清一件事。
+- due 只有材料里写明日期时才填（YYYY-MM-DD），没写就 null，不要猜。
+- **已经存在的待办不要重复给出**（见用户消息里的「已有待办」）。材料里只是提到了
+  一件已经在清单里的事，不算新待办。
 - 没有可抽的就给空数组。
 
 【title】
 - 不超过 24 字，是一个**主题**，不是一句话。
-- 「群晖换盘」可以，「关于群晖换盘的一些记录和心得」不行。`;
+- 「RAID5 降级处理」可以，「关于群晖换盘的一些记录和心得」不行。`;
 
-const TODOS_SYSTEM = `你在帮用户从一堆记录里抽出**待办事项**。用户会给你材料，你只输出 JSON：
+const TODOS_SYSTEM = `你在帮用户从一堆记录里抽出**待办事项**。用户会给你材料和他的已有待办。只输出 JSON：
 
-{
-  "title": "",
-  "body_md": "",
-  "todos": [{"text": "要做的事", "due": "2026-11-30 或 null"}],
-  "note": "一句话说明抽了几条、依据是什么，不超过 30 字"
-}
+${SHAPE}
 
 规则：
 - 只抽材料里**明确写了下一步动作**的条目；已经做完的不算，愿望和猜测也不算。
-- 一条待办说清一件事，不超过 40 字；同一件事的多个步骤合成一条，别拆碎。
+- **一件事分几步时用 children 表达**（父项是这件事，children 是步骤），
+  不要把一件事拆成几条并列待办 —— 那正是清单变得杂乱的原因。
+- 一条不超过 40 字，说清一件事；children 里的步骤不超过 30 字。
 - due 只有材料里写明日期时才填（YYYY-MM-DD），没写就给 null，不要猜。
+- **已有待办里出现过的不要再给**：同一件事哪怕措辞不同也不许重复。
+  用户已经在做、或者已经做完的事，材料里再提一次也不是新待办。
+- docs 一律给空数组（这一轮不要写文档）。
 - 一条都抽不出来就给空数组，并在 note 里说明为什么。`;
 
 export type KnowledgeSource = { kind: 'fragments'; fragments: Fragment[] } | { kind: 'session'; turns: QaTurn[] };
+
+/** 已有待办的一句话快照。整理时交给模型去重 —— 不给它看见，它只会把旧事再抽一遍 */
+export interface TodoSnapshot {
+  text: string;
+  done: boolean;
+  due: string | null;
+  children: string[];
+}
 
 function stamp(at: number): string {
   const d = new Date(at);
@@ -90,6 +132,24 @@ export function formatTurns(turns: QaTurn[]): string {
   return turns
     .map((t, i) => `【第 ${i + 1} 轮】\n问：${t.question}\n答：${t.answer}`)
     .join('\n\n');
+}
+
+/**
+ * 已有待办清单。已完成的和未完成的分开列 ——
+ * 模型需要知道「哪些已经做过」，否则一个月后它会反复整理出同一批旧事。
+ */
+export function formatExistingTodos(list: TodoSnapshot[]): string {
+  if (!list.length) return '（还没有任何待办）';
+  const line = (t: TodoSnapshot) =>
+    `- ${t.done ? '［已完成］' : ''}${t.text}${t.due ? `（${t.due}）` : ''}${
+      t.children.length ? `：${t.children.join('；')}` : ''
+    }`;
+  const open = list.filter((t) => !t.done);
+  const done = list.filter((t) => t.done);
+  const parts: string[] = [];
+  if (open.length) parts.push(`未完成：\n${open.map(line).join('\n')}`);
+  if (done.length) parts.push(`最近已完成（不要再整理出来）：\n${done.map(line).join('\n')}`);
+  return parts.join('\n\n');
 }
 
 /**
@@ -117,6 +177,8 @@ export interface ExtractOptions {
   mode: DraftMode;
   /** 用户在指令里额外说的要求（"只保留部署相关的"），可为空 */
   instruction?: string;
+  /** 已有待办。只给 todos 模式看，整理文档时也用得上（判断哪些是计划哪些是知识） */
+  existingTodos?: TodoSnapshot[];
   config: AiConfig;
   onProgress?: (patch: ChatProgress) => void;
 }
@@ -130,7 +192,7 @@ export interface ExtractOutcome {
 }
 
 export async function extractKnowledge(options: ExtractOptions): Promise<ExtractOutcome> {
-  const { source, mode, instruction, config, onProgress } = options;
+  const { source, mode, instruction, existingTodos, config, onProgress } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
 
   const count = source.kind === 'fragments' ? source.fragments.length : source.turns.length;
@@ -148,8 +210,10 @@ export async function extractKnowledge(options: ExtractOptions): Promise<Extract
         '',
         text,
         '',
+        `已有待办（用于去重，不要重复输出）：\n${formatExistingTodos(existingTodos ?? [])}`,
+        '',
         ask ? `另外，用户对这次整理的要求：${ask}` : '',
-        mode === 'todos' ? '请按系统提示抽出待办。' : '请按系统提示写出这篇文档。',
+        mode === 'todos' ? '请按系统提示抽出待办。' : '请按系统提示写出文档。',
       ]
         .filter(Boolean)
         .join('\n'),
@@ -159,7 +223,7 @@ export async function extractKnowledge(options: ExtractOptions): Promise<Extract
   const outcome = await requestChat(config, messages, onProgress, {
     json: true,
     // 文档可能很长。思考链和正文共用这个额度，给少了会「想到一半停住」。
-    maxTokens: mode === 'todos' ? 6_000 : 12_000,
+    maxTokens: mode === 'todos' ? 8_000 : 16_000,
     effort: mode === 'todos' ? 'low' : 'high',
   });
 
@@ -167,29 +231,51 @@ export async function extractKnowledge(options: ExtractOptions): Promise<Extract
     throw new AiError(
       'truncated',
       '这篇的输出被截断了（思考过程和正文共用额度）。把范围缩小一点，或者在设置里调低思考强度再试。',
+      { stage: '整理', raw: outcome.content },
     );
   }
 
   const sourceIds = source.kind === 'fragments' ? source.fragments.map((f) => f.id) : [];
-  const draft = normalizeDraft(parseJsonLoose(outcome.content), mode, sourceIds);
+  /*
+   * 解析失败时把**模型的原文**一起带出去。
+   * 「返回的不是合法 JSON」这句话本身没法排查 —— 到底是截断了、被拒答了，
+   * 还是把 JSON 包在解释文字里，只有原文能看出来。
+   */
+  let parsed: unknown;
+  try {
+    parsed = parseJsonLoose(outcome.content);
+  } catch {
+    throw new AiError('format', '模型返回的不是合法 JSON。展开详情看它到底写了什么。', {
+      stage: '解析',
+      raw: clipRaw(outcome.content),
+      finish: outcome.finishReason,
+    });
+  }
+  const draft = normalizeDraft(parsed, mode, sourceIds);
 
-  if (mode === 'knowledge' && !draft.bodyMd) {
-    throw new AiError('format', '模型没有写出正文。可以再试一次，或者先把范围缩小到几条。');
+  if (mode === 'knowledge' && !draft.docs.length && !draft.todos.length) {
+    // 模型可能确实判断「这些材料里没有知识」。这不算错误，要说清楚而不是让人反复重试
+    throw new AiError(
+      'format',
+      '这次没有整理出可沉淀的知识。可能是这批碎片都是待办或琐事 —— 换个范围，或者直接说「整理待办」。',
+      { stage: '整理', raw: outcome.content },
+    );
   }
 
   return { draft, reasoning: outcome.reasoning, truncated, used: count };
 }
 
-const REVISE_SYSTEM = `你在改一篇用户已经看过、正在修改的文档草稿。用户会给你当前草稿和一句修改要求。
+const REVISE_SYSTEM = `你在改一批用户已经看过、正在修改的文档草稿和待办。用户会给你当前草稿和一句修改要求。
 
-只输出 JSON：{"title": "...", "body_md": "...", "todos": [...], "note": "一句话说明改了什么"}
+只输出 JSON：${SHAPE}
 
 规则：
-- **只改用户点到的地方**。没提到的段落、小节、顺序、措辞一律原样保留 ——
+- **只改用户点到的地方**。没提到的篇、段落、顺序、措辞一律原样保留 ——
   整篇重写会让用户上一轮改好的东西消失，那是最让人恼火的一种"帮忙"。
-- 用户说"短一点"就删冗余，不要删事实；用户说"详细点"只展开材料里已有的内容，不许编。
+- 用户说"第一篇并进第二篇"就真的合并，其余篇不许动。
+- 用户说"短一点"就删冗余，不要删事实；说"详细点"只展开材料里已有的内容，不许编。
 - 表格仍然用 GFM 格式；改完要保证表格每行的竖线数量一致。
-- todos 没被要求改就原样返回。`;
+- todos 没被要求改就原样返回（含 children）。`;
 
 export interface ReviseOptions {
   draft: KnowledgeDraft;
@@ -211,9 +297,16 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
         '当前草稿：',
         JSON.stringify(
           {
-            title: draft.title,
-            body_md: draft.bodyMd,
-            todos: draft.todos.map((t) => ({ text: t.text, due: t.due })),
+            docs: draft.docs.map((d) => ({
+              title: d.title,
+              summary: d.summary,
+              body_md: d.bodyMd,
+            })),
+            todos: draft.todos.map((t) => ({
+              text: t.text,
+              due: t.due,
+              children: t.children.map((c) => ({ text: c.text, due: c.due })),
+            })),
           },
           null,
           2,
@@ -226,18 +319,33 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
 
   const outcome = await requestChat(config, messages, onProgress, {
     json: true,
-    maxTokens: 12_000,
+    maxTokens: 16_000,
     effort: 'low',
   });
 
   if (outcome.finishReason === 'length') {
-    throw new AiError('truncated', '这次修改被截断了。可以再发一次，或者只改一小段。');
+    throw new AiError('truncated', '这次修改被截断了。可以再发一次，或者只改一小段。', {
+      stage: '改稿',
+      raw: outcome.content,
+    });
   }
 
-  const next = normalizeDraft(parseJsonLoose(outcome.content), draft.mode, draft.sourceIds);
-  // 模型偶尔会返回空正文（只回了 note）。这种情况下保留原文，别让用户点一下修改就丢一篇
-  if (!next.bodyMd) next.bodyMd = draft.bodyMd;
-  if (!next.title) next.title = draft.title;
+  let parsed: unknown;
+  try {
+    parsed = parseJsonLoose(outcome.content);
+  } catch {
+    throw new AiError('format', '改稿返回的不是合法 JSON。展开详情看它写了什么。', {
+      stage: '改稿解析',
+      raw: clipRaw(outcome.content),
+      finish: outcome.finishReason,
+    });
+  }
+  const next = normalizeDraft(parsed, draft.mode, draft.sourceIds);
+  /*
+   * 模型偶尔只回一句 note（尤其当它认为"没什么要改"时）。
+   * 这种情况下保留原文，别让用户点一下修改就丢一篇 —— 但也不会把空数组当成"删光了"。
+   */
+  if (!next.docs.length) next.docs = draft.docs;
   if (!next.todos.length) next.todos = draft.todos;
   return next;
 }

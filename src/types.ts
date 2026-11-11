@@ -353,8 +353,13 @@ export interface AskSession {
    *
    * 存 id 不存标题：标题可能在文档区被改，会话行上的徽标要跟着变。
    * 跳转也用它 —— 没有这个字段，用户看到「已整理」却不知道整理到哪去了。
+   *
+   * v0.17 起一次整理可以产出多篇，这里保存**第一篇**（老字段照旧可读），
+   * 全部 id 在 `documentIds` 里。
    */
   documentId: number | null;
+  /** 这场会话写进去的全部文档 id，顺序即整理时的顺序。空数组 = 没写过 */
+  documentIds: number[];
   /** 这次整理真正喂给模型的碎片 id，重跑「重新整理」要用；空表示没整理过 */
   sourceIds: number[];
   createdAt: number;

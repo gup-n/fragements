@@ -24,6 +24,8 @@ import {
 import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/chat';
+import { balanceLine, fetchBalance, officialOrigin, type BalanceResult } from '../ai/balance';
+import { DEFAULT_AI_CONFIG } from '../types';
 import { exportMarkdown } from '../export/markdown';
 import { applyImport, pickMarkdown, previewImport, type ImportPreview } from '../db/importMd';
 import { looksBinary } from '../util/mdParse';
@@ -66,6 +68,11 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [thinking, setThinking] = useState(true);
   const [effort, setEffort] = useState<ReasoningEffort>('high');
   const [showKey, setShowKey] = useState(false);
+  /** 第三方接口设置。默认折叠起来 —— 绝大多数人只需要填一把 Key */
+  const [showCustom, setShowCustom] = useState(false);
+  /** 余额。null = 还没查 / 还没填 Key */
+  const [balance, setBalance] = useState<BalanceResult | null>(null);
+  const [balanceBusy, setBalanceBusy] = useState(false);
   const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0, tags: 0 });
   const [busy, setBusy] = useState<
     'idle' | 'saving' | 'testing' | 'exporting' | 'indexing' | 'picking' | 'importing'
@@ -112,12 +119,47 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setAutoCheckOn(await getAutoCheck());
       setDownloadBaseOn(await getDownloadBase());
       setMineruTokenOn(await getMineruToken());
+      /*
+       * 余额先查一次。查不到不提示：设置页一打开就飘一条红字说「余额查询失败」，
+       * 而用户只是来看看主题色的，那种体验比不显示更糟。
+       */
+      if (cfg.apiKey) {
+        void fetchBalance(cfg).then(setBalance);
+      }
       setStats(await repo.stats());
       // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
       setIndexState(await repo.searchIndexStats());
       setProbe(await repo.selfTestSearch(5));
     })();
   }, []);
+
+  /**
+   * 官方接口 = baseUrl 的域名是 api.deepseek.com。
+   *
+   * 不另存一个 provider 字段：两份状态迟早对不上（改了地址忘了改 provider，
+   * 界面显示「官方」而请求打去了第三方）。地址就是唯一判据。
+   */
+  const official = officialOrigin(baseUrl) !== null;
+
+  /** 查余额。失败不拦任何操作，只是这一行字 */
+  async function refreshBalance(force = false) {
+    if (!apiKey.trim()) {
+      setBalance({ kind: 'error', message: '还没填 API Key' });
+      return;
+    }
+    setBalanceBusy(true);
+    try {
+      setBalance(await fetchBalance({ baseUrl, model, apiKey, thinking, effort }, force));
+    } finally {
+      setBalanceBusy(false);
+    }
+  }
+
+  function switchToOfficial() {
+    setBaseUrl(DEFAULT_AI_CONFIG.baseUrl);
+    setModel(DEFAULT_AI_CONFIG.model);
+    setMsg({ kind: 'ok', text: '已切回官方地址和默认模型，记得点保存' });
+  }
 
   async function handleSave() {
     setBusy('saving');
@@ -378,28 +420,23 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
         <Text style={styles.groupTitle}>AI 接口</Text>
         <View style={styles.card}>
-          <Field label="Base URL">
-            <TextInput
-              value={baseUrl}
-              onChangeText={setBaseUrl}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="https://api.deepseek.com/v1"
-              placeholderTextColor={c.text3}
-              style={styles.input}
-            />
-          </Field>
-          <Field label="模型">
-            <TextInput
-              value={model}
-              onChangeText={setModel}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="deepseek-flash"
-              placeholderTextColor={c.text3}
-              style={styles.input}
-            />
-          </Field>
+          {/*
+            默认就是官方：只需要一把 Key。地址和模型不是「配置项」，
+            而是「换服务商时才要动的东西」，收进下面的折叠区。
+          */}
+          <View style={styles.officialHead}>
+            <Ionicons name="shield-checkmark-outline" size={15} color={c.accentText} />
+            <Text style={styles.officialTitle}>DeepSeek 官方</Text>
+            <View style={{ flex: 1 }} />
+            {official ? (
+              <Text style={styles.officialTag}>当前</Text>
+            ) : (
+              <Pressable onPress={switchToOfficial} hitSlop={6}>
+                <Text style={styles.linkText}>切回官方</Text>
+              </Pressable>
+            )}
+          </View>
+
           <Field label="API Key" last>
             <View style={styles.keyRow}>
               <TextInput
@@ -420,7 +457,89 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 />
               </Pressable>
             </View>
+            <Text style={styles.fieldHint}>
+              只填这一项就能用。Key 在 platform.deepseek.com 的「API keys」里创建。
+            </Text>
           </Field>
+
+          {/* 余额。只有官方地址查得到；第三方接口这里会说清原因，而不是转圈 */}
+          <View style={styles.balanceRow}>
+            <Ionicons name="wallet-outline" size={14} color={c.text3} />
+            <Text style={styles.balanceText} numberOfLines={2}>
+              {balanceBusy
+                ? '正在查余额…'
+                : balance
+                  ? balanceLine(balance)
+                  : apiKey.trim()
+                    ? '还没查余额'
+                    : '填了 Key 才能查余额'}
+            </Text>
+            <Pressable
+              onPress={() => void refreshBalance(true)}
+              hitSlop={8}
+              accessibilityLabel="刷新余额"
+            >
+              {balanceBusy ? (
+                <ActivityIndicator size="small" color={c.text3} />
+              ) : (
+                <Ionicons name="refresh" size={13} color={c.text3} />
+              )}
+            </Pressable>
+          </View>
+
+          <View style={styles.linkRow}>
+            <Pressable
+              style={styles.linkBtn}
+              onPress={() => {
+                Linking.openURL('https://platform.deepseek.com/api_keys').catch(() => undefined);
+              }}
+            >
+              <Ionicons name="key-outline" size={12} color={c.accentText} />
+              <Text style={styles.linkText}>去领 Key</Text>
+            </Pressable>
+            <Pressable
+              style={styles.linkBtn}
+              onPress={() => {
+                Linking.openURL('https://platform.deepseek.com/top_up').catch(() => undefined);
+              }}
+            >
+              <Ionicons name="card-outline" size={12} color={c.accentText} />
+              <Text style={styles.linkText}>充值</Text>
+            </Pressable>
+            <Pressable
+              style={styles.linkBtn}
+              onPress={() => {
+                Linking.openURL('https://platform.deepseek.com/usage').catch(() => undefined);
+              }}
+            >
+              <Ionicons name="stats-chart-outline" size={12} color={c.accentText} />
+              <Text style={styles.linkText}>用量</Text>
+            </Pressable>
+          </View>
+
+          {balance?.kind === 'error' && balance.raw ? (
+            <Text style={styles.hintErr} numberOfLines={4}>
+              {balance.raw}
+            </Text>
+          ) : null}
+
+          <View style={styles.modelField}>
+            <Text style={styles.fieldLabel}>模型</Text>
+            <View style={styles.chipRow}>
+              {([
+                ['deepseek-flash', 'Flash（默认）'],
+                ['deepseek-v4-pro', 'Pro（更强）'],
+              ] as const).map(([id, label]) => (
+                <Pressable
+                  key={id}
+                  style={[styles.chip, model === id && styles.chipOn]}
+                  onPress={() => setModel(id)}
+                >
+                  <Text style={[styles.chipText, model === id && styles.chipTextOn]}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
 
           <View style={styles.btnRow}>
             <Pressable style={styles.ghostBtn} onPress={handleSave} disabled={busy !== 'idle'}>
@@ -443,6 +562,46 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </Text>
           )}
 
+          {/* 第三方接口：默认收起。打开它的人才需要看 Base URL */}
+          <Pressable style={styles.customToggle} onPress={() => setShowCustom((v) => !v)}>
+            <Ionicons
+              name={showCustom ? 'chevron-down' : 'chevron-forward'}
+              size={13}
+              color={c.text3}
+            />
+            <Text style={styles.customToggleText}>使用第三方接口（OpenAI 兼容）</Text>
+          </Pressable>
+
+          {showCustom ? (
+            <View style={styles.customBox}>
+              <Field label="Base URL">
+                <TextInput
+                  value={baseUrl}
+                  onChangeText={setBaseUrl}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder={DEFAULT_AI_CONFIG.baseUrl}
+                  placeholderTextColor={c.text3}
+                  style={styles.input}
+                />
+              </Field>
+              <Field label="模型" last>
+                <TextInput
+                  value={model}
+                  onChangeText={setModel}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder={DEFAULT_AI_CONFIG.model}
+                  placeholderTextColor={c.text3}
+                  style={styles.input}
+                />
+              </Field>
+              <Text style={styles.fieldHint}>
+                第三方网关一般不认 DeepSeek 的思考参数，输出额度也小得多（8K 上限），
+                也查不到账户余额。整理长文档时容易半路截断。
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <Text style={styles.groupTitle}>整理行为</Text>
@@ -825,6 +984,55 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
+
+  /* ---- AI 接口：官方区块 ---- */
+  officialHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  officialTitle: { fontSize: 13, color: c.text, fontWeight: '600' },
+  officialTag: {
+    fontSize: 10,
+    lineHeight: 14,
+    color: c.accentText,
+    backgroundColor: c.accentBg,
+    borderRadius: R.pill,
+    paddingHorizontal: 7,
+    overflow: 'hidden',
+  },
+  balanceRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    borderRadius: R.btn,
+    backgroundColor: c.hairSoft,
+  },
+  balanceText: { flex: 1, fontSize: 12, lineHeight: 18, color: c.text2 },
+  linkRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+  linkBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: R.pill,
+    backgroundColor: c.accentBg,
+  },
+  linkText: { fontSize: 11.5, color: c.accentText, fontWeight: '500' },
+  modelField: { marginTop: 12, gap: 6 },
+
+  /* ---- AI 接口：第三方折叠 ---- */
+  customToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hair,
+  },
+  customToggleText: { fontSize: 12, color: c.text3 },
+  customBox: { marginTop: 4 },
 
   chipRow: { flexDirection: 'row', gap: 7 },
   chip: {

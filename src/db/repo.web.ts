@@ -111,6 +111,11 @@ function load(): WebDb {
         turns: Array.isArray(s.turns) ? s.turns : [],
         // v0.16 之前没有这两列：补 null / 空数组，与 native v12 迁移同口径
         documentId: s.documentId ?? null,
+        documentIds: Array.isArray(s.documentIds)
+          ? s.documentIds
+          : s.documentId != null
+            ? [s.documentId]
+            : [],
         sourceIds: Array.isArray(s.sourceIds) ? s.sourceIds : [],
       };
     });
@@ -621,6 +626,7 @@ export const repo: Repo = {
       archived: input.archived ?? false,
       fragmentId: input.fragmentId ?? null,
       documentId: null,
+      documentIds: [],
       sourceIds: [],
       createdAt: input.createdAt,
       updatedAt: now,
@@ -644,11 +650,13 @@ export const repo: Repo = {
     persist();
   },
 
-  async markAskSessionDocument(id, documentId, sourceIds) {
+  async markAskSessionDocument(id, documentIds, sourceIds) {
     const d = load();
     const s = d.askSessions.find((x) => x.id === id);
     if (s) {
-      s.documentId = documentId;
+      const ids = documentIds ?? [];
+      s.documentId = ids.length ? ids[0] : null;
+      s.documentIds = ids;
       if (sourceIds) s.sourceIds = sourceIds;
     }
     persist();
@@ -753,7 +761,10 @@ export const repo: Repo = {
   async clearAskSessionDocuments(documentId) {
     const d = load();
     for (const s of d.askSessions) {
-      if (s.documentId === documentId) s.documentId = null;
+      // 多篇文档里删掉一篇：只摘掉这一篇，其余还在，徽标上的数量也要跟着少一
+      const ids = (s.documentIds ?? []).filter((x) => x !== documentId);
+      s.documentIds = ids;
+      s.documentId = ids.length ? ids[0] : null;
     }
     persist();
   },

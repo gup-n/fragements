@@ -155,19 +155,94 @@ check('合法日期保留', () => {
 check('标题超长会被截断，不是原样写库', () => {
   const long = '关于群晖换盘这件事从头到尾的完整记录以及后续的维护计划安排';
   const d = doc.normalizeDraft({ title: long, body_md: 'x' }, 'knowledge', []);
-  assert(d.title.length <= doc.TITLE_MAX, `标题长度 ${d.title.length} 超过上限`);
-  assert(d.title.endsWith('…'), '截断要有省略号');
+  assert(d.docs[0].title.length <= doc.TITLE_MAX, `标题长度 ${d.docs[0].title.length} 超过上限`);
+  assert(d.docs[0].title.endsWith('…'), '截断要有省略号');
 });
 
 check('没有标题时用日期兜底', () => {
   const d = doc.normalizeDraft({ body_md: '正文' }, 'knowledge', []);
-  const name = doc.docNameOf(d, new Date(2026, 10, 10).getTime());
+  const name = doc.docNameOf(d.docs[0], new Date(2026, 10, 10).getTime());
   eq(name, '整理 2026-11-10', '兜底标题');
 });
 
 check('正文写成 body 也能认（模型偶尔换字段名）', () => {
   const d = doc.normalizeDraft({ title: 'x', body: '用 body 字段' }, 'knowledge', []);
-  eq(d.bodyMd, '用 body 字段', '正文');
+  eq(d.docs[0].bodyMd, '用 body 字段', '正文');
+});
+
+check('一次整理可以拆成多篇，各归各的', () => {
+  const d = doc.normalizeDraft(
+    {
+      docs: [
+        { title: 'RAID5 降级处理', summary: '先看存储池再拔盘', body_md: '## 顺序\n先确认降级位置。' },
+        { title: '换盘前要跑的检查', body_md: 'SMART 长检。' },
+      ],
+    },
+    'knowledge',
+    [7],
+  );
+  eq(d.docs.length, 2, '两篇都要留下');
+  eq(d.docs[0].title, 'RAID5 降级处理', '第一篇标题');
+  eq(d.docs[0].summary, '先看存储池再拔盘', '摘要原样保留');
+  // 没给摘要时用正文兜底，列表上不能是一行空白
+  eq(d.docs[1].summary, 'SMART 长检。', '缺摘要时兜底');
+  eq(d.sourceIds[0], 7, '来源 id 要带上');
+});
+
+check('篇数超过上限会被砍掉', () => {
+  const docs = Array.from({ length: 8 }, (_, i) => ({ title: `t${i}`, body_md: `b${i}` }));
+  eq(doc.normalizeDraft({ docs }, 'knowledge', []).docs.length, doc.MAX_DOCS, '上限');
+});
+
+check('空正文的篇直接丢掉，不留白文档', () => {
+  const d = doc.normalizeDraft(
+    { docs: [{ title: '空的', body_md: '   ' }, { title: '有内容', body_md: 'ok' }] },
+    'knowledge',
+    [],
+  );
+  eq(d.docs.length, 1, '只留能读的那篇');
+  eq(d.docs[0].title, '有内容', '留下的是哪篇');
+});
+
+// ---------------------------------------------------------------------------
+// 2.5 待办的两层结构
+// ---------------------------------------------------------------------------
+check('待办的子步骤会被解析，默认都勾着', () => {
+  const d = doc.normalizeDraft(
+    {
+      todos: [
+        {
+          text: '把群晖那块盘换掉',
+          due: '2026-11-20',
+          children: [{ text: '先跑 SMART 长检' }, { text: '确认热备位置' }],
+        },
+      ],
+    },
+    'todos',
+    [],
+  );
+  eq(d.todos.length, 1, '一件事');
+  eq(d.todos[0].children.length, 2, '两个步骤');
+  eq(d.todos[0].children[0].keep, true, '子项默认勾选');
+  eq(doc.countTodos(d), 3, '含子项的总条数');
+});
+
+check('子步骤里的空文字与非法日期会被挡掉', () => {
+  const d = doc.normalizeDraft(
+    { todos: [{ text: 'a', children: [{ text: '  ' }, { text: 'b', due: '2026-13-40' }] }] },
+    'todos',
+    [],
+  );
+  eq(d.todos[0].children.length, 1, '只剩一条有效步骤');
+  eq(d.todos[0].children[0].due, null, '非法日期清空');
+});
+
+check('勾掉子项后总条数跟着变', () => {
+  const d = doc.normalizeDraft({ todos: [{ text: 'a', children: [{ text: 'b' }] }] }, 'todos', []);
+  eq(doc.countTodos(d), 2, '两条');
+  d.todos[0].children[0].keep = false;
+  eq(doc.countTodos(d), 1, '勾掉后只剩父项');
+  eq(doc.todoShape(d).sub, 0, '步骤数归零');
 });
 
 // ---------------------------------------------------------------------------
@@ -186,9 +261,8 @@ check('摘要按长度截断并加省略号', () => {
   eq(ex.length, 51, '50 字 + 省略号');
 });
 
-check('空正文不许写', () => {
-  const d = { ...doc.emptyDraft('knowledge', []), title: '标题', bodyMd: '  ' };
-  eq(doc.draftProblem(d), '正文是空的，也没有勾选待办', '提示');
+check('什么都没有时不许写', () => {
+  eq(doc.draftProblem(doc.emptyDraft('knowledge', [])), '没有可写入的文档，也没有勾选待办', '提示');
 });
 
 check('只抽待办时，一条都没勾不许写', () => {
@@ -202,9 +276,42 @@ check('勾掉的待办不算进写入', () => {
   eq(doc.keptTodos(d).length, 1, '只写勾着的那条');
 });
 
-check('正文有内容就能写，长度不设下限', () => {
-  const d = { ...doc.emptyDraft('knowledge', []), title: 't', bodyMd: '一句话。' };
+check('文档有正文就能写，长度不设下限', () => {
+  const d = doc.normalizeDraft({ docs: [{ title: 't', body_md: '一句话。' }] }, 'knowledge', []);
   eq(doc.draftProblem(d), null, '应当允许');
+});
+
+check('单篇缺标题时那张卡不许写', () => {
+  const d = doc.normalizeDraft({ docs: [{ title: '', body_md: 'x' }] }, 'knowledge', []);
+  eq(doc.docProblem(d.docs[0]), '还没起标题', '提示');
+});
+
+check('勾掉的篇不参与写入', () => {
+  const d = doc.normalizeDraft(
+    { docs: [{ title: 'a', body_md: '1' }, { title: 'b', body_md: '2' }] },
+    'knowledge',
+    [],
+  );
+  d.docs[1].keep = false;
+  eq(doc.keptDocs(d).length, 1, '只写勾着的那篇');
+});
+
+// ---------------------------------------------------------------------------
+// 3.5 提示词契约：只收知识、拆多篇、待办带去重
+// ---------------------------------------------------------------------------
+check('整理提示词有「什么算知识」的判据与不收清单', () => {
+  const src = fs.readFileSync(path.join(root, 'src', 'ai', 'knowledge.ts'), 'utf8');
+  assert(src.includes('三个月后重读'), '缺少可执行的判据');
+  assert(src.includes('情绪、感想'), '缺少「不收感想」');
+  assert(src.includes('生活琐事'), '缺少「不收生活琐事」');
+});
+
+check('整理提示词要求多篇输出与两层的待办', () => {
+  const src = fs.readFileSync(path.join(root, 'src', 'ai', 'knowledge.ts'), 'utf8');
+  assert(src.includes('"docs"'), '缺少 docs 数组');
+  assert(src.includes('"children"'), '缺少待办子步骤');
+  assert(src.includes('已有待办'), '缺少去重上下文');
+  assert(src.includes('MAX_DOCS') || src.includes('最多 ${'), '缺少篇数上限的约束');
 });
 
 // ---------------------------------------------------------------------------

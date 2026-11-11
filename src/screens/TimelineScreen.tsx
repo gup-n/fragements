@@ -71,7 +71,6 @@ interface Props {
   fragments: Fragment[];
   /** 周期总结，按 period 落回时间轴对应日期 */
   notes: Note[];
-  inboxCount: number;
   /** 已完成待办对应的碎片 id，用来在时间轴上打「已完成」标记 */
   doneIds: Set<number>;
   /**
@@ -84,7 +83,6 @@ interface Props {
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
-  onOpenOrganize: () => void;
   onOpenSettings: () => void;
   /** 带上碎片 id 时，「问」页会把这它作为上下文 */
   onOpenAsk: (fragmentId?: number) => void;
@@ -97,7 +95,6 @@ interface Props {
 export function TimelineScreen({
   fragments,
   notes,
-  inboxCount,
   doneIds,
   draft,
   onDraftChange,
@@ -105,7 +102,6 @@ export function TimelineScreen({
   onEdit,
   onDelete,
   onDeleteNote,
-  onOpenOrganize,
   onOpenSettings,
   onOpenAsk,
   onOpenReview,
@@ -114,7 +110,7 @@ export function TimelineScreen({
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
-  /** 页头现在有 4 个图标 + 整理按钮。窄屏先让副标题让路，不要把品牌名压成省略号 */
+  /** 页头有 4 个图标。窄屏先让副标题让路，不要把品牌名压成省略号 */
   const tightHeader = width < 380;
   const [sending, setSending] = useState(false);
   /**
@@ -214,10 +210,25 @@ export function TimelineScreen({
     );
   }, [fragments, query, filter]);
 
+  /**
+   * 分区。
+   *
+   * 两级结构（用户 2026-11-11 要求）：
+   * - **本月**按天分，今天展开、其余日期折叠 —— 找「上周三记了什么」按日期最快；
+   * - **更早**按月分，每个月两块：「N月小结」「N月记录」——
+   *   往前翻三个月的时候，一屏里塞十几个日期头，其实全是为了找那个月记了什么。
+   *
+   * 搜索/筛选时一律回到按天分：命中的东西藏在「10月记录」里，等于没搜到。
+   */
   const sections = useMemo(() => {
     const map = new Map<string, Section>();
+    const monthOf = (at: number) => {
+      const d = new Date(at);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    };
+    const thisMonth = monthOf(Date.now());
 
-    const push = (at: number, item: TimelineItem) => {
+    const pushDay = (at: number, item: TimelineItem) => {
       const key = dayKey(at);
       let bucket = map.get(key);
       if (!bucket) {
@@ -235,24 +246,46 @@ export function TimelineScreen({
       bucket.data.push(item);
     };
 
+    /**
+     * 月分区的 order 用「这个月最后一毫秒」，小结比记录再大 1ms ——
+     * 排序是倒序，所以同一月里小结排在上面，整月的顺序也和日期一致。
+     */
+    const pushMonth = (at: number, item: TimelineItem, kind: 'note' | 'frag') => {
+      const d = new Date(at);
+      const key = `m:${monthOf(at)}:${kind}`;
+      let bucket = map.get(key);
+      if (!bucket) {
+        const end = new Date(d.getFullYear(), d.getMonth() + 1, 0).getTime() + 86_399_999;
+        bucket = {
+          key,
+          title: `${d.getMonth() + 1}月${kind === 'note' ? '小结' : '记录'}`,
+          sub: '整月',
+          order: end + (kind === 'note' ? 1 : 0),
+          data: [],
+        };
+        map.set(key, bucket);
+      }
+      bucket.data.push(item);
+    };
+
+    const place = (at: number, item: TimelineItem, kind: 'note' | 'frag') => {
+      if (narrowed || monthOf(at) === thisMonth) pushDay(at, item);
+      else pushMonth(at, item, kind);
+    };
+
     for (const f of visibleFragments) {
-      push(f.createdAt, { kind: 'fragment', id: f.id, at: f.createdAt, fragment: f });
+      place(f.createdAt, { kind: 'fragment', id: f.id, at: f.createdAt, fragment: f }, 'frag');
     }
 
-    // 搜索 / 筛选时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条，
-    // 反而看不清到底哪条碎片命中了。要翻小结请直接看时间轴。
+    // 搜索 / 筛选时只查碎片原文 —— 把小结也混进来，结果会在日期头下面孤零零挂一条
     if (!narrowed) {
       for (const n of notes) {
         /*
          * 按 period 落回它覆盖的那一天，而不是它被生成的那天 ——
          * 否则「9 月的总结」会飘到 11 月的时间轴上。
-         *
-         * v0.15 之前周总结独占一个 `week:` 分区压在该周最上方。日、周两种
-         * 粒度下线后那段分支再也不会命中（weekly 的数据已被迁移删掉），
-         * 留着只会让人以为周总结还在，所以一起删了。
          */
         const at = periodAnchor(n.period) ?? n.createdAt;
-        push(at, { kind: 'note', id: n.id, at, note: n });
+        place(at, { kind: 'note', id: n.id, at, note: n }, 'note');
       }
     }
 
@@ -261,7 +294,6 @@ export function TimelineScreen({
       bucket.data.sort((a, b) => {
         // 小结排当天最前：它是这一天的一句话结论，先看结论再看零碎
         if (a.kind !== b.kind) return a.kind === 'note' ? -1 : 1;
-        // 同一天有多条总结时，粒度大的先显示（月 > 周 > 日）
         if (a.kind === 'note' && b.kind === 'note') {
           const rank = NOTE_RANK[a.note.type] - NOTE_RANK[b.note.type];
           if (rank !== 0) return rank;
@@ -270,7 +302,6 @@ export function TimelineScreen({
       });
     }
 
-    // 时间轴新在上；order 是分区在时间轴上的位置，周分区用「周末 + 1ms」压过整周
     return out.sort((a, b) => b.order - a.order);
   }, [visibleFragments, notes, narrowed]);
 
@@ -548,24 +579,6 @@ export function TimelineScreen({
             onPress={onOpenSettings}
             accessibilityLabel="设置"
           />
-          {/* 主入口：有未读时实心蓝底，没有的时候退成描边，一眼看出「现在该不该整理」 */}
-          <Pressable
-            style={({ pressed }) => [
-              styles.organizeBtn,
-              inboxCount > 0 && styles.organizeBtnOn,
-              pressed && { opacity: 0.7 },
-            ]}
-            onPress={onOpenOrganize}
-          >
-            <Ionicons
-              name="sparkles"
-              size={14}
-              color={inboxCount > 0 ? c.onAccent : c.accentText}
-            />
-            <Text style={[styles.organizeText, inboxCount > 0 && styles.organizeTextOn]}>
-              整理{inboxCount > 0 ? ` ${inboxCount > 99 ? '99+' : inboxCount}` : ''}
-            </Text>
-          </Pressable>
         </View>
       </View>
 
@@ -1014,20 +1027,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   brand: { fontSize: 22, color: c.text, fontWeight: '600', letterSpacing: 0.8 },
   brandSub: { fontSize: 12, color: c.text3, marginTop: 2 },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  organizeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginLeft: 6,
-    backgroundColor: c.accentBg,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: R.pill,
-  },
-  organizeBtnOn: { backgroundColor: c.accent },
-  organizeText: { fontSize: 13, color: c.accentText, fontWeight: '600' },
-  organizeTextOn: { color: c.onAccent },
-
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
     paddingHorizontal: 20,

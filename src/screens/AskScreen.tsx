@@ -46,22 +46,31 @@ import type {
 import { R, useThemedStyles, type Palette } from '../theme';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
-import { AiError } from '../ai/chat';
+import { AiError, type AiErrorDetail } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
-import { extractKnowledge, reviseDraft, type KnowledgeSource } from '../ai/knowledge';
+import {
+  extractKnowledge,
+  reviseDraft,
+  type KnowledgeSource,
+  type TodoSnapshot,
+} from '../ai/knowledge';
 import {
   docNameOf,
+  docProblem,
   draftProblem,
   emptyDraft,
   excerptOf,
+  keptDocs,
   keptTodos,
+  type DraftDoc,
   type DraftMode,
   type KnowledgeDraft,
 } from '../util/knowledgeDoc';
 import { routeAsk, TASK_SEED } from '../util/askIntent';
 import { packFragments } from '../util/batch';
 import { writeKnowledgeDocument } from '../documents/knowledge';
-import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
+import { KnowledgeDraftCard, type AgentStep, type SavedDoc } from '../components/KnowledgeDraft';
+import { AgentError, errorDetailOf } from '../components/AgentError';
 import { SummarySheet } from '../components/SummarySheet';
 import { DocViewer } from '../components/DocViewer';
 import { normalizeQaScope } from '../util/qaScope';
@@ -92,6 +101,13 @@ interface Props {
    * **只用于新会话**：历史会话以它自己保存的范围为准，不能被这里覆盖。
    */
   initialScope?: QaScope;
+}
+
+/** 一次失败的全部信息：一句人话 + 可展开的原始证据 */
+interface ErrInfo {
+  message: string;
+  code?: string;
+  detail?: AiErrorDetail;
 }
 
 const THINK_KEY = 'qa.thinking';
@@ -276,6 +292,8 @@ export function AskScreen({
   const [docNames, setDocNames] = useState<string[]>([]);
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState('');
+  /** 最后一句话。失败卡上的「重试」用它，否则输入框已清空就重发不出去 */
+  const [lastQ, setLastQ] = useState('');
   const [busy, setBusy] = useState(false);
   /** 正在回答的那个问题，先上屏让用户看到自己问了什么 */
   const [pendingQ, setPendingQ] = useState('');
@@ -284,7 +302,13 @@ export function AskScreen({
   const [openReasoningKey, setOpenReasoningKey] = useState<string | null>(null);
   const [received, setReceived] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const [error, setError] = useState('');
+  /**
+   * 问答失败时的完整信息。
+   *
+   * 原来这里只是一个字符串，于是「模型名不存在」「余额不足」这类
+   * 重试也不会好的错误，在界面上和「网络抖了一下」长得一模一样。
+   */
+  const [error, setError] = useState<ErrInfo | null>(null);
   const [webNote, setWebNote] = useState('');
   const [thinkingOn, setThinkingOn] = useState(true);
   const [webOn, setWebOn] = useState(false);
@@ -319,24 +343,32 @@ export function AskScreen({
   const [sessions, setSessions] = useState<AskSession[]>([]);
   const [actionSession, setActionSession] = useState<AskSession | null>(null);
   const [deleteSession, setDeleteSession] = useState<AskSession | null>(null);
+  /** 一场会话整理出的多篇文档，点「已写入 N 篇」时列出来 */
+  const [sessionDocs, setSessionDocs] = useState<AskSession | null>(null);
+  /** 文档 id → 标题。只在打开那个列表时查一次 */
+  const [docTitles, setDocTitles] = useState<Map<number, string>>(new Map());
   const [working, setWorking] = useState<'' | 'archive' | 'delete'>('');
 
   /* ---- 整理草稿（v0.16） ---- */
   /** 当前草稿。null = 没有正在整理的稿子 */
   const [draft, setDraft] = useState<KnowledgeDraft | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
-  const [draftErr, setDraftErr] = useState('');
+  const [draftErr, setDraftErr] = useState<ErrInfo | null>(null);
   /** 材料被截断的提示，必须显示：少看了内容就可能漏了结论 */
   const [draftNote, setDraftNote] = useState('');
   const [draftRecv, setDraftRecv] = useState(0);
   const [draftElapsed, setDraftElapsed] = useState(0);
   const [draftReasoning, setDraftReasoning] = useState('');
+  /** 过程日志。整理这件事现在是「看得见在干什么」的，不再只报一个字数 */
+  const [draftSteps, setDraftSteps] = useState<AgentStep[]>([]);
   const [savingDraft, setSavingDraft] = useState(false);
   /** 写入权限。默认开，但一定要看得见、关得掉 */
   const [allowDoc, setAllowDoc] = useState(true);
   const [allowTodos, setAllowTodos] = useState(true);
-  /** 写进去之后的那篇文档：卡片变成「已写入」，可以一键打开 */
-  const [writtenDoc, setWrittenDoc] = useState<{ id: number; name: string } | null>(null);
+  /** 已经写进文档库的那几篇（按草稿下标），卡片上逐篇打勾 */
+  const [savedDocs, setSavedDocs] = useState<SavedDoc[]>([]);
+  /** 点「+」但本来就在新会话里：顶部闪一条提示，别让人以为按钮坏了 */
+  const [newHint, setNewHint] = useState(false);
   /**
    * 这份草稿属于哪场会话。
    *
@@ -372,10 +404,25 @@ export function AskScreen({
     historyOpen ||
     !!actionSession ||
     !!deleteSession ||
+    !!sessionDocs ||
     !!cite ||
     !!draft ||
     summaryOpen ||
     openDocId !== null;
+
+  const newHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 顶部闪一条「已在新对话中」。
+   *
+   * 1.6 秒：够读完这行字，又不至于一直杵在那里挡视线。
+   * 半透明黑 + 白字，和底部的 Toast 刻意不同 —— 一个在说「你做了什么」，
+   * 一个在说「什么都没发生」，位置和质感都该区分开。
+   */
+  const flashNewHint = useCallback(() => {
+    setNewHint(true);
+    if (newHintTimer.current) clearTimeout(newHintTimer.current);
+    newHintTimer.current = setTimeout(() => setNewHint(false), 1600);
+  }, []);
 
   const showToast = useCallback((text: string) => {
     setToast(text);
@@ -386,6 +433,7 @@ export function AskScreen({
   useEffect(
     () => () => {
       if (toastTimer.current) clearTimeout(toastTimer.current);
+      if (newHintTimer.current) clearTimeout(newHintTimer.current);
     },
     [],
   );
@@ -455,6 +503,30 @@ export function AskScreen({
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   }, []);
+
+  /**
+   * 点历史行上的「已写入」徽标。
+   *
+   * 一篇就直接打开，多篇先列出来 —— 原来这里直接打开 document_id，
+   * 多篇之后那个字段只代表第一篇，点进去看到的是「A」，而用户以为整理出的是 B。
+   */
+  async function openSessionDocs(s: AskSession) {
+    const ids = s.documentIds.length ? s.documentIds : s.documentId ? [s.documentId] : [];
+    if (!ids.length) return;
+    if (ids.length === 1) {
+      setDocReload((n) => n + 1);
+      setOpenDocId(ids[0]);
+      return;
+    }
+    setSessionDocs(s);
+    try {
+      const all = await repo.listDocuments();
+      const byId = new Map(all.map((d) => [d.id, d.name]));
+      setDocTitles(byId);
+    } catch {
+      /* 读不到标题就显示编号，仍然能点进去 */
+    }
+  }
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -538,7 +610,7 @@ export function AskScreen({
       draftGenRef.current += 1;
       setDraft(null);
       setDraftBusy(false);
-      setWrittenDoc(null);
+      setSavedDocs([]);
       return;
     }
     if (cite) {
@@ -602,9 +674,46 @@ export function AskScreen({
     }),
   ).current;
 
+  /** 历史页上还叠着别的面板时，右滑不该把历史一起关掉 */
+  const sheetOpenRef = useRef(false);
+  sheetOpenRef.current = !!actionSession || !!deleteSession || !!sessionDocs;
+
+  /**
+   * 历史页右滑返回问答。
+   *
+   * 和问答页「左滑打开历史」是同一对手势（用户要求的「像小说阅读器：
+   * 左滑进去、右滑退出来」）。阈值同样 28px，且横向必须明显大于纵向，
+   * 否则纵向翻历史列表时会被误判成返回。
+   */
+  const historyPan = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, g) =>
+        historyRef.current &&
+        !sheetOpenRef.current &&
+        g.dx > 28 &&
+        Math.abs(g.dx) > Math.abs(g.dy) * 1.6,
+      onPanResponderMove: () => undefined,
+      onPanResponderRelease: () => setHistoryOpen(false),
+      onPanResponderTerminate: () => undefined,
+    }),
+  ).current;
+
   /** 新建一场。旧会话已经自动存好，这里只重置当前视图 */
   function newSession() {
     if (busy) return;
+    /*
+     * 已经站在一个空会话里再点「+」，什么都不会发生 —— 但按钮必须有反应，
+     * 否则用户会以为它坏了。所以先把面板收起、输入清空，再闪一条提示。
+     */
+    if (!turns.length && !draft) {
+      setHistoryOpen(false);
+      setActionSession(null);
+      setDeleteSession(null);
+      setInput('');
+      setError(null);
+      flashNewHint();
+      return;
+    }
     // 先落上一场（此时 scopeRef 还是上一场的范围），再回到页面范围
     void persistSession(turns);
     // 先让上一场的保存拿到旧代次，再切代次；否则它回来会改到新会话上
@@ -616,7 +725,7 @@ export function AskScreen({
     setSessionTitle(null);
     startedAtRef.current = Date.now();
     setInput('');
-    setError('');
+    setError(null);
     setWebNote('');
     setPendingQ('');
     setReasoning('');
@@ -630,8 +739,8 @@ export function AskScreen({
     draftGenRef.current += 1;
     setDraft(null);
     setDraftBusy(false);
-    setDraftErr('');
-    setWrittenDoc(null);
+    setDraftErr(null);
+    setSavedDocs([]);
     setContext(null);
     // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
     setScope(pageScope.scope);
@@ -670,7 +779,7 @@ export function AskScreen({
     setDeleteSession(null);
     setCite(null);
     setInput('');
-    setError('');
+    setError(null);
     setWebNote('');
     setPendingQ('');
     setReasoning('');
@@ -680,8 +789,8 @@ export function AskScreen({
     draftGenRef.current += 1;
     setDraft(null);
     setDraftBusy(false);
-    setDraftErr('');
-    setWrittenDoc(null);
+    setDraftErr(null);
+    setSavedDocs([]);
     setContext(null);
   }
 
@@ -705,12 +814,12 @@ export function AskScreen({
     }
   }
 
-  async function send() {
-    const question = input.trim();
+  async function send(raw?: string) {
+    const question = (raw ?? input).trim();
     if (!question || busy || draftBusy) return;
     if (scopeProblem) {
       // 边界不清楚就不发：宁可让用户回去重选，也不要拿错的范围去查
-      setError(scopeProblem);
+      setError({ message: scopeProblem });
       return;
     }
 
@@ -742,9 +851,10 @@ export function AskScreen({
 
     const docMode = scope.kind === 'documents';
     setInput('');
+    setLastQ(question);
     setPendingQ(question);
     setBusy(true);
-    setError('');
+    setError(null);
     setWebNote(docMode ? '正在读选定的文档…' : webOn ? '正在同时搜本地和网络…' : '');
     setReasoning('');
     setReceived(0);
@@ -822,7 +932,7 @@ export function AskScreen({
         }
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : '回答失败，再试一次');
+      setError(errorDetailOf(e));
     } finally {
       setPendingQ('');
       setBusy(false);
@@ -845,33 +955,91 @@ export function AskScreen({
     }
   }
 
+  /** 追加一行过程日志 */
+  const pushStep = useCallback((step: AgentStep) => {
+    setDraftSteps((prev) => [...prev, step]);
+  }, []);
+
+  /** 改最后一行（「正在写…」→「已写入」），不新增噪音 */
+  const markLastStep = useCallback((patch: Partial<AgentStep>) => {
+    setDraftSteps((prev) => {
+      if (!prev.length) return prev;
+      const next = prev.slice();
+      next[next.length - 1] = { ...next[next.length - 1], ...patch };
+      return next;
+    });
+  }, []);
+
   /**
-   * 发起一次整理（v0.16）。
+   * 已有待办的快照，交给模型去重。
+   *
+   * 只取「未完成」和「最近完成的 12 条」：
+   * - 未完成的必须全给，否则模型会把同一件事再抽一遍 —— 这正是
+   *   「已经做完的事反复被整理出来」的根因：模型根本不知道待办清单里有什么。
+   * - 已完成的不可能全给（几年下来上千条），但最近那批最有参考价值。
+   * 子项一并带上，否则模型看到父项会以为「这件事还没拆过」。
+   */
+  async function loadTodoSnapshots(): Promise<TodoSnapshot[]> {
+    try {
+      const all = await repo.listTodos();
+      const byParent = new Map<number, string[]>();
+      for (const t of all) {
+        if (t.parentId === null || t.mergedInto !== null) continue;
+        const list = byParent.get(t.parentId) ?? [];
+        list.push(t.text);
+        byParent.set(t.parentId, list);
+      }
+      const tops = all.filter((t) => t.parentId === null && t.mergedInto === null);
+      const open = tops.filter((t) => !t.done);
+      const done = tops.filter((t) => t.done).slice(0, 12);
+      return [...open, ...done].map((t) => ({
+        text: t.text,
+        done: t.done,
+        due: t.dueAt,
+        children: byParent.get(t.id) ?? [],
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * 发起一次整理（v0.17）。
    *
    * 两种材料来源：碎片（受当前范围约束）和会话（从历史里点「整理成文档」）。
-   * 无论哪种，**写库都发生在用户点「通过并写入」之后** —— 这一步之前
+   * 无论哪种，**写库都发生在用户点「加入文档库」之后** —— 这一步之前
    * 数据一个字都不会变，包括模型自己觉得写得很好也不行。
+   *
+   * 过程日志的每一行都必须是真的：读了 N 条、拆出 M 篇、正在写《x》。
+   * 不写「正在分析…」这种谁也验证不了的空话 —— 那就又回到「一个转圈」了。
    */
   async function startDraft(
     mode: DraftMode,
-    opts: { instruction?: string; turns?: QaTurn[]; session?: AskSession } = {},
+    opts: {
+      instruction?: string;
+      turns?: QaTurn[];
+      session?: AskSession;
+      /** 指定要整理的那批碎片（重新整理时用当初那批）。不传就自己取最近的一批 */
+      fragments?: Fragment[];
+    } = {},
   ) {
     if (draftBusy || busy) return;
-    if (!opts.turns && docMode) {
+    if (!opts.turns && !opts.fragments && docMode) {
       // 文档范围是「只问这几份文档」的契约。整理要读碎片正文，跨过去就是越界。
       showToast('这次的范围是文档，整理碎片请新开一场会话');
       return;
     }
 
     const gen = ++draftGenRef.current;
-    setDraftErr('');
+    setDraftErr(null);
     setDraftNote('');
     setDraftReasoning('');
     setDraftRecv(0);
     setDraftElapsed(0);
-    setWrittenDoc(null);
+    setSavedDocs([]);
     setInput('');
     setDraft(emptyDraft(mode, []));
+    setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
     setDraftSession(opts.session?.id ?? sessionIdRef.current);
     setDraftBusy(true);
 
@@ -883,43 +1051,68 @@ export function AskScreen({
 
       if (opts.turns) {
         source = { kind: 'session', turns: opts.turns };
+        hint = `这场会话的 ${opts.turns.length} 轮问答`;
       } else {
-        const picked = await pickFragments(context);
+        const picked = opts.fragments ?? (await pickFragments(context));
         if (!picked.length) {
           setDraft(null);
+          setDraftSteps([]);
           showToast('还没有可整理的碎片，先记点什么');
           return;
         }
         sourceIds = picked.map((f) => f.id);
         source = { kind: 'fragments', fragments: picked };
-        hint = `这次读了最近 ${picked.length} 条碎片`;
+        hint = opts.fragments
+          ? `当初那 ${picked.length} 条碎片`
+          : `最近 ${picked.length} 条碎片`;
       }
+      if (draftGenRef.current !== gen) return;
+
+      const existing = await loadTodoSnapshots();
+      if (draftGenRef.current !== gen) return;
+      setDraftSteps([
+        { text: `读到${hint}${existing.length ? `，${existing.length} 条已有待办` : ''}`, state: 'done' },
+        { text: '正在提炼可复用的知识…', state: 'running' },
+      ]);
 
       const out = await extractKnowledge({
         source,
         mode,
         instruction: opts.instruction,
+        existingTodos: existing,
         config,
         onProgress: (patch) => {
           if (draftGenRef.current !== gen) return;
-          if (patch.content !== undefined) setDraftRecv(patch.content.length);
+          if (patch.content !== undefined) {
+            const n = patch.content.length;
+            setDraftRecv(n);
+            markLastStep({ text: `正在写出结果…（已收到 ${n} 字）` });
+          }
           if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
         },
       });
       if (draftGenRef.current !== gen) return;
 
       setDraft({ ...out.draft, sourceIds });
+      // 日志如实报：拆了几篇、几条待办。没有就说没有，不写「0 篇文档」
+      const bits: string[] = [];
+      if (out.draft.docs.length) bits.push(`${out.draft.docs.length} 篇文档`);
+      const todoN = out.draft.todos.filter((t) => t.text.trim()).length;
+      if (todoN) bits.push(`${todoN} 件事`);
+      setDraftSteps([
+        { text: `读到${hint}`, state: 'done' },
+        {
+          text: bits.length ? `整理出 ${bits.join('、')}，等你过目` : '材料里没有可沉淀的知识',
+          state: 'done',
+        },
+      ]);
       setDraftNote(
-        [
-          hint,
-          out.truncated ? '材料太多，中间省略了一部分，这篇可能漏掉一些细节' : '',
-        ]
-          .filter(Boolean)
-          .join(' · '),
+        out.truncated ? '材料太多，中间省略了一部分，可能漏掉一些细节' : '',
       );
     } catch (e) {
       if (draftGenRef.current !== gen) return;
-      setDraftErr(e instanceof Error ? e.message : '整理失败，再试一次');
+      setDraftErr(errorDetailOf(e));
+      markLastStep({ state: 'fail' });
     } finally {
       if (draftGenRef.current === gen) setDraftBusy(false);
     }
@@ -930,10 +1123,11 @@ export function AskScreen({
     if (!draft || draftBusy || savingDraft) return;
     const gen = draftGenRef.current;
     setInput('');
-    setDraftErr('');
+    setDraftErr(null);
     setDraftRecv(0);
     setDraftElapsed(0);
     setDraftBusy(true);
+    pushStep({ text: '正在按你说的改…', state: 'running' });
     try {
       const config = await loadAiConfig();
       const next = await reviseDraft({
@@ -947,10 +1141,12 @@ export function AskScreen({
       });
       if (draftGenRef.current !== gen) return;
       setDraft(next);
-      setDraftNote('已按你说的改过；不满意可以继续说');
+      markLastStep({ text: '已按你说的改过', state: 'done' });
+      setDraftNote('不满意可以继续说；改好的每一篇都可以单独加入文档库');
     } catch (e) {
       if (draftGenRef.current !== gen) return;
-      setDraftErr(e instanceof Error ? e.message : '没改成，再试一次');
+      setDraftErr(errorDetailOf(e));
+      markLastStep({ state: 'fail' });
     } finally {
       if (draftGenRef.current === gen) setDraftBusy(false);
     }
@@ -960,70 +1156,134 @@ export function AskScreen({
     draftGenRef.current += 1;
     setDraft(null);
     setDraftBusy(false);
-    setDraftErr('');
+    setDraftErr(null);
     setDraftNote('');
-    setWrittenDoc(null);
+    setDraftSteps([]);
+    setSavedDocs([]);
     setDraftSession(null);
   }
 
   /**
-   * 通过并写入。
+   * 写入文档库 / 待办。
    *
-   * 顺序不能反：先写文档、再写待办、最后改会话标记。文档写失败就整体中止，
-   * 不留「待办进去了、文档没进去」的半个结果 —— 用户没法从界面上判断缺了哪一半。
+   * `only` 是草稿里某一篇的下标 —— 卡片上每篇的「加入文档库」走这条；
+   * null 表示「全部」。
+   *
+   * 顺序：文档 → 待办 → 会话标记。文档写失败就中止，不留「待办进去了、
+   * 文档没进去」的半个结果 —— 用户没法从界面上判断缺了哪一半。
    */
-  async function approveDraft() {
+  async function approveDraft(only: number | null) {
     if (!draft || savingDraft || draftBusy) return;
-    const problem = draftProblem(draft);
-    if (problem) {
-      setDraftErr(problem);
-      return;
+
+    const single = only !== null ? draft.docs[only] : null;
+    if (single) {
+      const problem = docProblem(single);
+      if (problem) {
+        setDraftErr({ message: problem });
+        return;
+      }
+      if (!allowDoc) {
+        setDraftErr({ message: '「允许写入文档区」是关着的，先打开它' });
+        return;
+      }
+    } else {
+      const problem = draftProblem(draft);
+      if (problem) {
+        setDraftErr({ message: problem });
+        return;
+      }
     }
-    const writeDoc = allowDoc && draft.mode === 'knowledge' && draft.bodyMd.trim().length > 0;
-    const todos = allowTodos ? keptTodos(draft) : [];
-    if (!writeDoc && !todos.length) {
-      setDraftErr('两个权限都关掉了，没有可写的内容');
+
+    const already = new Set(savedDocs.map((s) => s.index));
+    const docTargets = (
+      single
+        ? [{ index: only as number, doc: single }]
+        : allowDoc && draft.mode === 'knowledge'
+          ? keptDocs(draft).map((doc) => ({ index: draft.docs.indexOf(doc), doc }))
+          : []
+    ).filter((t) => !already.has(t.index));
+
+    const todoTargets = single ? [] : allowTodos ? keptTodos(draft) : [];
+    if (!docTargets.length && !todoTargets.length) {
+      setDraftErr({
+        message: '没有可写入的内容：权限关掉了，或者这些都已经写过了',
+      });
       return;
     }
 
     setSavingDraft(true);
-    setDraftErr('');
+    setDraftErr(null);
     try {
-      let docId: number | null = null;
-      if (writeDoc) {
-        docId = await writeKnowledgeDocument({
-          title: docNameOf(draft, Date.now()),
-          bodyMd: draft.bodyMd,
-          excerpt: excerptOf(draft.bodyMd),
+      const now = Date.now();
+      const written: SavedDoc[] = [];
+
+      for (const target of docTargets) {
+        const name = docNameOf(target.doc, now, target.index);
+        pushStep({ text: `正在写入《${name}》`, state: 'running' });
+        const id = await writeKnowledgeDocument({
+          title: name,
+          bodyMd: target.doc.bodyMd,
+          excerpt: target.doc.summary || excerptOf(target.doc.bodyMd),
         });
+        written.push({ index: target.index, id, name });
+        markLastStep({ text: `已写入《${name}》`, state: 'done' });
       }
-      for (const t of todos) {
-        await repo.insertTodo({
-          text: t.text,
-          dueAt: t.due,
-          sourceFragmentId: null,
-          parentId: null,
-        });
+
+      let todoCount = 0;
+      if (todoTargets.length) {
+        pushStep({ text: `正在写入 ${todoTargets.length} 件事`, state: 'running' });
+        for (const t of todoTargets) {
+          // 父项先落库拿到 id，子项才有地方挂。两层结构靠的就是这一步
+          const parentId = await repo.insertTodo({
+            text: t.text,
+            dueAt: t.due,
+            sourceFragmentId: null,
+            parentId: null,
+          });
+          todoCount += 1;
+          for (const ch of t.children) {
+            if (!ch.keep || !ch.text.trim()) continue;
+            await repo.insertTodo({
+              text: ch.text,
+              dueAt: ch.due,
+              sourceFragmentId: null,
+              parentId,
+            });
+            todoCount += 1;
+          }
+        }
+        markLastStep({ text: `已写入 ${todoCount} 条待办`, state: 'done' });
       }
-      // 会话上记下「这场整理出了哪篇」：历史列表要能跳过去
-      if (draftSession !== null) {
-        await repo.markAskSessionDocument(draftSession, docId, draft.sourceIds);
-        await loadHistory();
+
+      // 会话上记下「这场整理出了哪几篇」：历史列表要能逐个跳过去
+      const allIds = [...savedDocs.map((s) => s.id), ...written.map((w) => w.id)];
+      if (draftSession !== null && allIds.length) {
+        try {
+          await repo.markAskSessionDocument(draftSession, allIds, draft.sourceIds);
+          await loadHistory();
+        } catch {
+          /* 标记失败不影响已经写进去的文档 */
+        }
       }
       try {
         await onSaved();
       } catch {
         /* 刷新失败不影响已经写进去的东西 */
       }
-      if (docId !== null) {
-        setWrittenDoc({ id: docId, name: docNameOf(draft, Date.now()) });
-        setDraft({ ...draft, todos: [] });
-      } else {
-        discardDraft();
-        showToast(`已写入 ${todos.length} 条待办`);
-      }
+
+      setSavedDocs([...savedDocs, ...written]);
+      /*
+       * 只写了一篇时不动草稿的其余部分：另外两篇还在等用户看，
+       * 待办也还没写。清空它们等于「点了一篇，别的都没了」。
+       */
+      if (!single) setDraft({ ...draft, todos: [] });
+      const said: string[] = [];
+      if (written.length) said.push(`${written.length} 篇文档`);
+      if (todoCount) said.push(`${todoCount} 条待办`);
+      showToast(said.length ? `已写入 ${said.join('、')}` : '没有写入任何东西');
     } catch (e) {
-      setDraftErr(e instanceof Error ? e.message : '写入失败，再试一次');
+      setDraftErr(errorDetailOf(e));
+      markLastStep({ state: 'fail' });
     } finally {
       setSavingDraft(false);
     }
@@ -1047,7 +1307,12 @@ export function AskScreen({
     }
   }
 
-  /** 从历史会话重新整理：优先用当初那批碎片，它们被删了才退回会话原文 */
+  /**
+   * 从历史会话重新整理。
+   *
+   * 优先用当初那批碎片（`sourceIds`），它们被删了才退回会话原文 ——
+   * 用会话原文重整理，等于把「AI 当时的回答」再提炼一遍，第二轮会越来越空。
+   */
   async function reorganize(s: AskSession) {
     setActionSession(null);
     if (draft || draftBusy) {
@@ -1063,34 +1328,7 @@ export function AskScreen({
       }
     }
     if (fragments.length) {
-      draftGenRef.current += 1;
-      setDraft(emptyDraft('knowledge', fragments.map((f) => f.id)));
-      setDraftSession(s.id);
-      setDraftBusy(true);
-      setDraftErr('');
-      const gen = draftGenRef.current;
-      try {
-        const config = await loadAiConfig();
-        const out = await extractKnowledge({
-          source: { kind: 'fragments', fragments },
-          mode: 'knowledge',
-          config,
-          onProgress: (patch) => {
-            if (draftGenRef.current !== gen) return;
-            if (patch.content !== undefined) setDraftRecv(patch.content.length);
-            if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
-          },
-        });
-        if (draftGenRef.current !== gen) return;
-        setDraft({ ...out.draft, sourceIds: fragments.map((f) => f.id) });
-        setDraftNote(`用当初那 ${fragments.length} 条碎片重新整理了一遍`);
-      } catch (e) {
-        if (draftGenRef.current === gen) {
-          setDraftErr(e instanceof Error ? e.message : '重新整理失败');
-        }
-      } finally {
-        if (draftGenRef.current === gen) setDraftBusy(false);
-      }
+      await startDraft('knowledge', { fragments, session: s });
       return;
     }
     if (!s.turns.length) {
@@ -1169,13 +1407,15 @@ export function AskScreen({
             <Text style={styles.histTitle} numberOfLines={1}>
               {s.title}
             </Text>
-            {s.documentId ? (
+            {s.documentIds.length || s.documentId ? (
               <Pressable
-                onPress={() => setOpenDocId(s.documentId)}
+                onPress={() => void openSessionDocs(s)}
                 hitSlop={6}
                 accessibilityLabel="打开这场会话整理出的文档"
               >
-                <Text style={styles.histBadge}>已写入文档</Text>
+                <Text style={styles.histBadge}>
+                  {s.documentIds.length > 1 ? `已写入 ${s.documentIds.length} 篇` : '已写入文档'}
+                </Text>
               </Pressable>
             ) : s.fragmentId ? (
               <Text style={styles.histBadge}>已整理</Text>
@@ -1208,6 +1448,12 @@ export function AskScreen({
 
   return (
     <View style={styles.root} {...pan.panHandlers}>
+      {/* 已经在新对话里再点「+」：按钮没坏，只是没什么可新建的 */}
+      {newHint ? (
+        <View style={styles.newHint} pointerEvents="none">
+          <Text style={styles.newHintText}>已在新对话中</Text>
+        </View>
+      ) : null}
       <ScreenHeader
         title="问"
         subtitle={hasContent ? `${turns.length} 轮问答` : undefined}
@@ -1261,7 +1507,7 @@ export function AskScreen({
             <Text style={styles.emptyBody}>
               {docMode
                 ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
-                : '提问会先在你的碎片里找依据，再把答案写出来。\n整理会读最近的碎片，产出一篇文档，写之前先给你看。'}
+                : '提问会先在你的碎片里找依据，再把答案写出来。\n整理只提炼能复用的知识，按主题拆成几篇，写之前先给你看。'}
             </Text>
 
             {!docMode ? (
@@ -1274,7 +1520,7 @@ export function AskScreen({
                   <Ionicons name="sparkles-outline" size={16} color={c.accentText} />
                   <View style={styles.hintBody}>
                     <Text style={styles.hintTitle}>整理碎片</Text>
-                    <Text style={styles.hintText}>把最近记的东西汇成一篇能反复读的文档</Text>
+                    <Text style={styles.hintText}>只收做法、结论和参数，按主题拆成几篇</Text>
                   </View>
                 </Pressable>
 
@@ -1286,7 +1532,7 @@ export function AskScreen({
                   <Ionicons name="checkbox-outline" size={16} color={c.accentText} />
                   <View style={styles.hintBody}>
                     <Text style={styles.hintTitle}>整理待办</Text>
-                    <Text style={styles.hintText}>只从碎片里抽出「下一步要做什么」</Text>
+                    <Text style={styles.hintText}>抽成两层的待办，已经有的不重复</Text>
                   </View>
                 </Pressable>
 
@@ -1366,17 +1612,18 @@ export function AskScreen({
             reasoning={draftReasoning}
             error={draftErr}
             note={draftNote}
+            steps={draftSteps}
             allowDoc={allowDoc}
             allowTodos={allowTodos}
             onAllowDoc={setAllowDoc}
             onAllowTodos={setAllowTodos}
             saving={savingDraft}
-            writtenId={writtenDoc?.id ?? null}
+            saved={savedDocs}
             onOpenDoc={(id) => {
               setDocReload((n) => n + 1);
               setOpenDocId(id);
             }}
-            onApprove={() => void approveDraft()}
+            onApprove={(index) => void approveDraft(index)}
             onDiscard={discardDraft}
             onRetry={() => {
               // 重试＝用同一个来源再跑一遍。材料的取法和第一次完全一致
@@ -1387,7 +1634,17 @@ export function AskScreen({
         ) : null}
 
         {!!webNote && !busy ? <Text style={styles.webNote}>{webNote}</Text> : null}
-        {!!error ? <Text style={styles.errText}>{error}</Text> : null}
+        {error ? (
+          <AgentError
+            title="回答失败"
+            message={error.message}
+            code={error.code}
+            detail={error.detail}
+            onRetry={() => {
+              if (lastQ) void send(lastQ);
+            }}
+          />
+        ) : null}
       </ScrollView>
 
       <View style={[styles.footer, keyboardHeight > 0 && { paddingBottom: 8 }]}>
@@ -1448,7 +1705,7 @@ export function AskScreen({
             editable={!busy}
           />
           <Pressable
-            onPress={send}
+            onPress={() => void send()}
             // 范围有问题时按钮直接不可用：原因就写在上面的红字里
             disabled={!input.trim() || busy || !!scopeProblem}
             style={[styles.send, canSend && styles.sendOn]}
@@ -1462,7 +1719,7 @@ export function AskScreen({
 
       {/* ---------------- 历史会话 ---------------- */}
       {historyOpen ? (
-        <View style={styles.historyPage}>
+        <View style={styles.historyPage} {...historyPan.panHandlers}>
           <ScreenHeader
             title="历史会话"
             subtitle={`${sessions.filter((s) => !s.archived).length} 个会话`}
@@ -1551,17 +1808,23 @@ export function AskScreen({
               <Text style={styles.sheetActionText}>整理成文档（AI 提炼）</Text>
             </Pressable>
 
-            {actionSession.documentId ? (
+            {actionSession.documentIds.length || actionSession.documentId ? (
               <Pressable
                 style={styles.sheetAction}
                 onPress={() => {
-                  setOpenDocId(actionSession.documentId);
+                  const s2 = actionSession;
                   setActionSession(null);
+                  if (s2) void openSessionDocs(s2);
                 }}
                 disabled={working !== ''}
               >
                 <Ionicons name="document-text-outline" size={18} color={c.text2} />
-                <Text style={styles.sheetActionText}>打开整理出的文档</Text>
+                <Text style={styles.sheetActionText}>
+                  打开整理出的文档
+                  {actionSession.documentIds.length > 1
+                    ? `（${actionSession.documentIds.length} 篇）`
+                    : ''}
+                </Text>
               </Pressable>
             ) : null}
 
@@ -1590,6 +1853,44 @@ export function AskScreen({
             </Pressable>
 
             <Pressable style={styles.sheetCancel} onPress={() => setActionSession(null)}>
+              <Text style={styles.sheetCancelText}>取消</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
+
+      {/* ---------------- 一场会话整理出的多篇文档 ---------------- */}
+      {sessionDocs ? (
+        <View style={styles.sheetOverlay}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSessionDocs(null)} />
+          <View style={styles.sheet}>
+            <Text style={styles.sheetTitle} numberOfLines={2}>
+              这场会话整理出的文档
+            </Text>
+            <Text style={styles.sheetSub}>点一篇打开；文档区里可以继续改或删</Text>
+            {(sessionDocs.documentIds.length
+              ? sessionDocs.documentIds
+              : sessionDocs.documentId
+                ? [sessionDocs.documentId]
+                : []
+            ).map((id) => (
+              <Pressable
+                key={id}
+                style={styles.sheetAction}
+                onPress={() => {
+                  setSessionDocs(null);
+                  setDocReload((n) => n + 1);
+                  setOpenDocId(id);
+                }}
+              >
+                <Ionicons name="document-text-outline" size={18} color={c.text2} />
+                <Text style={[styles.sheetActionText, { flex: 1 }]} numberOfLines={1}>
+                  {docTitles.get(id) ?? `文档 ${id}`}
+                </Text>
+                <Ionicons name="chevron-forward" size={13} color={c.text3} />
+              </Pressable>
+            ))}
+            <Pressable style={styles.sheetCancel} onPress={() => setSessionDocs(null)}>
               <Text style={styles.sheetCancelText}>取消</Text>
             </Pressable>
           </View>
@@ -1664,6 +1965,23 @@ export function AskScreen({
 
 const makeStyles = (c: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
+  /**
+   * 「已在新对话中」的提示条。
+   *
+   * 半透明黑浮在页头下方：它说的是「什么都没发生」，不能长得像一条错误，
+   * 也不能像底部 Toast 那样占着输入框的位置。
+   */
+  newHint: {
+    position: 'absolute',
+    top: 58,
+    alignSelf: 'center',
+    zIndex: 30,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    borderRadius: R.pill,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+  },
+  newHintText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 20 },
   /** 没内容时把「问点什么」放在可视区中间，而不是贴着顶部 */
   contentEmpty: { flexGrow: 1, justifyContent: 'center', paddingBottom: 90 },

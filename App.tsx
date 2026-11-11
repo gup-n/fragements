@@ -126,7 +126,6 @@ function Shell({ booted }: { booted: boolean }) {
   const [notes, setNotes] = useState<Note[]>([]);
   /** 已完成待办对应的碎片 id，用来打「已完成」标记 */
   const [doneIds, setDoneIds] = useState<Set<number>>(new Set());
-  const [inboxCount, setInboxCount] = useState(0);
   /**
    * 待提示的新版本。null = 没有。
    *
@@ -163,14 +162,12 @@ function Shell({ booted }: { booted: boolean }) {
   }, []);
 
   const reload = useCallback(async () => {
-    const [list, inbox, noteList, done] = await Promise.all([
+    const [list, noteList, done] = await Promise.all([
       repo.listFragments(),
-      repo.countInbox(),
       repo.listNotes(120),
       repo.listDoneTodoSourceIds(),
     ]);
     setFragments(list);
-    setInboxCount(inbox);
     setNotes(noteList);
     setDoneIds(new Set(done));
   }, []);
@@ -338,7 +335,6 @@ function Shell({ booted }: { booted: boolean }) {
                 <TimelineScreen
                   fragments={fragments}
                   notes={notes}
-                  inboxCount={inboxCount}
                   doneIds={doneIds}
                   draft={draft}
                   onDraftChange={setDraft}
@@ -346,12 +342,6 @@ function Shell({ booted }: { booted: boolean }) {
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}
-                  // v0.16：整理页并进「问」。这里只负责把入口指过去，具体整理什么由页内指令决定
-                  onOpenOrganize={() => {
-                    setAskContextId(null);
-                    setAskDocIds(null);
-                    setRoute('ask');
-                  }}
                   onOpenSettings={() => {
                     setSettingsFrom('timeline');
                     setRoute('settings');

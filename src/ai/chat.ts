@@ -24,11 +24,40 @@ export type AiErrorCode =
 
 export class AiError extends Error {
   code: AiErrorCode;
-  constructor(code: AiErrorCode, message: string) {
+  /**
+   * 出错时手上的一切证据。
+   *
+   * 为什么必须留着：用户看到的永远是一句人话，但排查时需要的恰恰是
+   * 「HTTP 几几几」「finish_reason 是什么」「模型到底吐了什么」。
+   * 这些以前在 throw 的一瞬间就丢掉了，于是界面上只剩「整理失败，再试一次」，
+   * 而重试一百次也不会变。
+   */
+  detail: AiErrorDetail;
+  constructor(code: AiErrorCode, message: string, detail: AiErrorDetail = {}) {
     super(message);
     this.code = code;
+    this.detail = detail;
     this.name = 'AiError';
   }
+}
+
+export interface AiErrorDetail {
+  /** 哪一步失败：连接 / 请求 / 读流 / 解析 / 整理 / 改稿 */
+  stage?: string;
+  /** 服务端或模型返回的原文，原样贴出来 */
+  raw?: string;
+  /** HTTP 状态码 */
+  status?: number;
+  /** 模型停下的原因 */
+  finish?: string | null;
+}
+
+/** 原始返回最多留这么多字。再长贴到手机上也没人读，而且会拖慢渲染 */
+const RAW_KEEP = 4_000;
+
+export function clipRaw(text: string): string {
+  if (text.length <= RAW_KEEP) return text;
+  return `${text.slice(0, RAW_KEEP)}\n……（后面还有 ${text.length - RAW_KEEP} 字，已省略）`;
 }
 
 /**
@@ -167,20 +196,47 @@ export function parseJsonLoose(text: string): unknown {
   }
 }
 
-function mapHttpError(status: number, detail: string): AiError {
-  if (status === 401 || status === 403) return new AiError('auth', `API Key 无效或已过期${detail ? `（${detail}）` : ''}`);
-  if (status === 402) return new AiError('quota', 'DeepSeek 账户余额不足，请先充值');
-  if (status === 429) return new AiError('rate', '请求太频繁，等几秒再试');
-  if (status >= 500) return new AiError('server', `DeepSeek 服务端异常（${status}），稍后重试`);
-  return new AiError('server', `请求失败 ${status}${detail ? `：${detail}` : ''}`);
+function mapHttpError(status: number, detail: string, raw = ''): AiError {
+  const tail = detail ? `（${detail}）` : '';
+  const base = { status, raw: clipRaw(raw || detail), stage: '请求' };
+  if (status === 401 || status === 403) {
+    return new AiError('auth', `API Key 无效或已过期${tail}`, base);
+  }
+  if (status === 402) {
+    return new AiError('quota', `DeepSeek 账户余额不足，请先充值${tail}`, base);
+  }
+  if (status === 429) return new AiError('rate', `请求太频繁，等几秒再试${tail}`, base);
+  if (status >= 500) {
+    return new AiError('server', `DeepSeek 服务端异常（${status}），稍后重试${tail}`, base);
+  }
+  return new AiError('server', `请求失败 ${status}${detail ? `：${detail}` : ''}`, base);
 }
 
-async function errorDetail(res: Response): Promise<string> {
+/** 非 2xx 一律走这里：状态码 + 服务端原文一起带走 */
+async function httpError(res: Response): Promise<AiError> {
+  const d = await errorDetail(res);
+  return mapHttpError(res.status, d.message, d.raw);
+}
+/**
+ * 把错误响应体整段带回来。
+ *
+ * 老版本只取 `body.error.message`，遇到网关返回 HTML 或者
+ * `{"code":40001,"msg":"..."}` 这类非 OpenAI 形状时，detail 恒为空 ——
+ * 界面于是只剩一个状态码，而真正的原因（比如「模型名不存在」）被丢掉了。
+ */
+async function errorDetail(res: Response): Promise<{ message: string; raw: string }> {
   try {
-    const body = await res.json();
-    return body?.error?.message ?? '';
+    const text = await res.text();
+    try {
+      const body = JSON.parse(text);
+      const msg = body?.error?.message ?? body?.message ?? body?.msg ?? '';
+      return { message: typeof msg === 'string' ? msg : '', raw: text };
+    } catch {
+      // 不是 JSON：可能是网关的 HTML 报错页，原样留着比丢掉有用
+      return { message: '', raw: text };
+    }
   } catch {
-    return '';
+    return { message: '', raw: '' };
   }
 }
 
@@ -194,6 +250,11 @@ class TimeoutGuard {
 
   get signal() {
     return this.controller.signal;
+  }
+
+  /** 先到点的那个阶段。报错详情里要写明是连接超时还是空闲超时 */
+  get firedKey() {
+    return this.fired;
   }
 
   arm(key: string, ms: number) {
@@ -238,10 +299,14 @@ class TimeoutGuard {
 }
 
 function toNetworkError(e: any, guard?: TimeoutGuard): AiError {
+  const detail = {
+    stage: '连接',
+    raw: `${e?.name ?? 'Error'}: ${e?.message ?? ''}${guard?.firedKey ? `（超时阶段：${guard.firedKey}）` : ''}`,
+  };
   if (e?.name === 'AbortError' || e?.name === 'TimeoutError') {
-    return new AiError('network', guard?.message() ?? '请求被中断了');
+    return new AiError('network', guard?.message() ?? '请求被中断了', detail);
   }
-  return new AiError('network', '连不上 DeepSeek，检查手机网络或 Base URL 是否填对');
+  return new AiError('network', '连不上 DeepSeek，检查手机网络或 Base URL 是否填对', detail);
 }
 
 /**
@@ -328,7 +393,7 @@ async function postChatStream(
     }
 
     guard.disarm('connect');
-    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
+    if (!res.ok) throw await httpError(res);
 
     // 响应头到手之后，只要还在吐字就不算超时
     guard.arm('first', FIRST_TOKEN_TIMEOUT_MS);
@@ -376,7 +441,7 @@ async function postChatOnce(config: AiConfig, body: Record<string, unknown>): Pr
       signal: guard.signal,
     });
     guard.disarm('connect');
-    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
+    if (!res.ok) throw await httpError(res);
 
     const payload = await res.json();
     const choice = payload?.choices?.[0];
@@ -425,9 +490,23 @@ export async function requestChat(
   }
 
   if (!outcome.content.trim()) {
+    /*
+     * 空结果是最需要证据的一种失败：到底是撞了额度、被过滤，还是模型只想不说？
+     * 以前这里只留一句人话，用户没法判断该重试还是该改设置。
+     * 现在把「思维链尾巴 + finish_reason」一起带走，界面上可以展开看。
+     */
+    const raw = [
+      outcome.reasoning.trim()
+        ? `【思维链最后 1500 字】\n${outcome.reasoning.slice(-1500)}`
+        : '【思维链】为空',
+      `【正文】${outcome.content.trim() ? clipRaw(outcome.content) : '（空）'}`,
+      `【finish_reason】${outcome.finishReason ?? '服务端没返回这个字段'}`,
+      `【max_tokens】${maxTokens.toLocaleString()}`,
+    ].join('\n\n');
     throw new AiError(
       outcome.finishReason === 'length' ? 'truncated' : 'format',
       describeFinish(outcome.finishReason, maxTokens),
+      { stage: '模型输出', raw, finish: outcome.finishReason },
     );
   }
   return outcome;
@@ -443,7 +522,7 @@ export async function testConnection(config: AiConfig): Promise<string> {
       headers: { Authorization: `Bearer ${config.apiKey}` },
       signal: guard.signal,
     });
-    if (!res.ok) throw mapHttpError(res.status, await errorDetail(res));
+    if (!res.ok) throw await httpError(res);
     const body = await res.json();
     const models: string[] = Array.isArray(body?.data) ? body.data.map((m: any) => m?.id).filter(Boolean) : [];
     return models.length ? `连接正常，可用模型：${models.slice(0, 4).join('、')}` : '连接正常';

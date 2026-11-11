@@ -276,6 +276,15 @@ const MIGRATIONS: string[] = [
   ALTER TABLE ask_sessions ADD COLUMN document_id INTEGER;
   ALTER TABLE ask_sessions ADD COLUMN source_ids TEXT;
   `,
+  // v13：一次整理可以产出多篇文档（v0.17）。
+  //
+  //     document_id 保留（存第一篇），document_ids 存全部。
+  //     为什么两列并存而不是把 document_id 改成 JSON：
+  //     老版本写的行读出来是整数，直接改语义会让「已整理」的历史全部失效；
+  //     而多一篇字段的代价只是一列可能为 NULL 的文本。
+  `
+  ALTER TABLE ask_sessions ADD COLUMN document_ids TEXT;
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -425,6 +434,7 @@ interface AskSessionRow {
   archived: number;
   fragment_id: number | null;
   document_id: number | null;
+  document_ids: string | null;
   source_ids: string | null;
   created_at: number;
   updated_at: number;
@@ -441,6 +451,10 @@ function toAskSession(r: AskSessionRow): AskSession {
   const turns = parseJson(r.turns_json, []);
   const rawScope = parseJson(r.scope_json, null);
   const rawSources = parseJson(r.source_ids, []);
+  const rawDocs = parseJson(r.document_ids, []);
+  const documentIds = Array.isArray(rawDocs)
+    ? rawDocs.filter((x): x is number => typeof x === 'number')
+    : [];
   let scope: QaScope = { kind: 'records' };
   let scopeBroken = false;
   try {
@@ -457,6 +471,15 @@ function toAskSession(r: AskSessionRow): AskSession {
     archived: r.archived === 1,
     fragmentId: r.fragment_id,
     documentId: r.document_id ?? null,
+    /*
+     * 老会话只有 document_id 一列。那时一次只产一篇，所以它就是全部 ——
+     * 不在这里回填的话，升级后打开历史会看到「已整理」却点不到文档。
+     */
+    documentIds: documentIds.length
+      ? documentIds
+      : r.document_id !== null && r.document_id !== undefined
+        ? [r.document_id]
+        : [],
     sourceIds: Array.isArray(rawSources)
       ? rawSources.filter((x): x is number => typeof x === 'number')
       : [],
@@ -1185,17 +1208,23 @@ export const repo: Repo = {
   },
 
   /**
-   * 记下「这场会话整理出的那篇文档」。
+   * 记下「这场会话整理出的那些文档」。
    *
-   * `documentId` 传 null 是「解绑」：文档在文档区被删了，会话上的徽标不能
+   * `documentIds` 传空数组是「解绑」：文档在文档区被删了，会话上的徽标不能
    * 继续指着一个不存在的 id —— 点进去会是一片空白，用户会以为内容丢了。
+   * document_id 存第一篇，是为了让只认这一个字段的老代码还能跳过去。
    */
-  async markAskSessionDocument(id, documentId, sourceIds) {
-    db().runSync('UPDATE ask_sessions SET document_id = ?, source_ids = ? WHERE id = ?', [
-      documentId,
-      sourceIds && sourceIds.length ? JSON.stringify(sourceIds) : null,
-      id,
-    ]);
+  async markAskSessionDocument(id, documentIds, sourceIds) {
+    const ids = documentIds ?? [];
+    db().runSync(
+      'UPDATE ask_sessions SET document_id = ?, document_ids = ?, source_ids = ? WHERE id = ?',
+      [
+        ids.length ? ids[0] : null,
+        ids.length ? JSON.stringify(ids) : null,
+        sourceIds && sourceIds.length ? JSON.stringify(sourceIds) : null,
+        id,
+      ],
+    );
   },
 
   async deleteAskSession(id) {
@@ -1305,6 +1334,24 @@ export const repo: Repo = {
   },
 
   async clearAskSessionDocuments(documentId) {
+    /*
+     * 一篇文档被删了，会话上的 document_ids 里也要把它摘掉 ——
+     * 只清 document_id 的话，一篇三篇里有文档被删，徽标还会说「3 篇」，
+     * 点进去有一篇打不开。摘完一篇不剩就把两列一起置空。
+     */
+    const rows = db().getAllSync<{ id: number; document_ids: string | null }>(
+      'SELECT id, document_ids FROM ask_sessions WHERE document_ids IS NOT NULL',
+    );
+    for (const row of rows) {
+      const ids = parseJson(row.document_ids, []);
+      if (!Array.isArray(ids) || !ids.includes(documentId)) continue;
+      const next = ids.filter((x): x is number => typeof x === 'number' && x !== documentId);
+      db().runSync('UPDATE ask_sessions SET document_id = ?, document_ids = ? WHERE id = ?', [
+        next.length ? next[0] : null,
+        next.length ? JSON.stringify(next) : null,
+        row.id,
+      ]);
+    }
     db().runSync('UPDATE ask_sessions SET document_id = NULL WHERE document_id = ?', [documentId]);
   },
 

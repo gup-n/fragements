@@ -214,12 +214,13 @@ export interface Repo {
   setAskSessionArchived(id: number, archived: boolean): Promise<void>;
   markAskSessionConverted(id: number, fragmentId: number): Promise<void>;
   /**
-   * 记下这场会话整理出的知识文档（传 null = 解绑）。
+   * 记下这场会话整理出的知识文档（传空数组 = 解绑）。
+   * v0.17 起一次整理可能产出多篇，所以传的是 id 列表。
    * `sourceIds` 是当初喂给模型的碎片，供「重新整理」复现同一批输入。
    */
   markAskSessionDocument(
     id: number,
-    documentId: number | null,
+    documentIds: number[],
     sourceIds?: number[],
   ): Promise<void>;
   deleteAskSession(id: number): Promise<void>;
