@@ -55,6 +55,7 @@ const tscArgs = [
   'src/util/askIntent.ts',
   'src/util/knowledgeDoc.ts',
   'src/util/batch.ts',
+  'src/util/jsonRepair.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -82,6 +83,7 @@ try {
 const { routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
 const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
 const batch = require(path.join(outDir, 'util', 'batch.js'));
+const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -415,6 +417,64 @@ check('什么都没有时不假装整理成功', () => {
 check('被截断时如实报还剩多少条', () => {
   const d = doc.normalizeDraft({ docs: [{ title: 'x', body_md: 'y' }] }, 'knowledge', []);
   assert(doc.describeForHistory(d, 320).includes('320 条'), '剩余条数要出现');
+});
+
+// ---------------------------------------------------------------------------
+// 3.7 模型 JSON 的宽容解析（v0.18.1）
+// ---------------------------------------------------------------------------
+check('合法的 JSON 原样解析，不算「修过」', () => {
+  const r = json.parseJsonLenient('{"docs":[{"title":"a"}]}');
+  eq(r.ok, true, '应当成功');
+  eq(r.repaired, false, '没坏就别修');
+  eq(r.value.docs[0].title, 'a', '内容');
+});
+
+check('Windows 路径少转义一个反斜杠也能读出来', () => {
+  // 模型写的 `\\server\queue` 少转义了一次 → \s \q 都是非法转义，JSON.parse 必挂
+  const r = json.parseJsonLenient('{"path":"\\wsus-nbwyt\\NFCC新刷卡打印机"}');
+  eq(r.ok, true, `应当被修复：${JSON.stringify(r)}`);
+  eq(r.repaired, true, '要标出「修过」');
+  eq(r.value.path, '\\wsus-nbwyt\\NFCC新刷卡打印机', '反斜杠按字面保留');
+});
+
+check('字符串里的裸换行会被补成 \\n', () => {
+  const r = json.parseJsonLenient('{"a":"第一行\n第二行"}');
+  eq(r.ok, true, '应当被修复');
+  eq(r.value.a, '第一行\n第二行', '内容不变');
+});
+
+check('尾逗号这种笔误会被删掉', () => {
+  const r = json.parseJsonLenient('{"docs":[{"title":"a"},],"note":"x",}');
+  eq(r.ok, true, `应当被修复：${JSON.stringify(r)}`);
+  eq(r.value.docs.length, 1, '内容不变');
+  eq(r.value.note, 'x', '保留后面的字段');
+});
+
+check('包在代码围栏和解释文字里也能取出 JSON', () => {
+  const raw = '好的，整理如下：\n```json\n{"docs":[]}\n```\n还需要我补充吗？';
+  const r = json.parseJsonLenient(raw);
+  eq(r.ok, true, '应当成功');
+  eq(Array.isArray(r.value.docs), true, '取到的是对象本体');
+});
+
+check('正文里带花括号不影响切片', () => {
+  const r = json.parseJsonLenient('说明如下 {"a":"含 } 的字符串"} 后面还有字');
+  eq(r.ok, true, '应当成功');
+  eq(r.value.a, '含 } 的字符串', '内容完整');
+});
+
+check('截断的 JSON 不硬修，要说清是末尾断掉', () => {
+  const r = json.parseJsonLenient('{"docs":[{"title":"a","body_md":"写到一半');
+  eq(r.ok, false, '不能假装成功');
+  assert(/断掉|截断/.test(r.problem.reason), `原因要说准：${r.problem.reason}`);
+  assert(r.problem.near.length > 0, '要给出附近原文');
+});
+
+check('语法错时给出位置，不是只说「不合法的 JSON」', () => {
+  const r = json.parseJsonLenient('{"docs":[{"title":"a" "body_md":"b"}]}');
+  eq(r.ok, false, '确实解析不了');
+  assert(typeof r.problem.at === 'number', '要有下标');
+  assert(r.problem.near.includes('title'), `附近原文要能定位：${r.problem.near}`);
 });
 
 // ---------------------------------------------------------------------------

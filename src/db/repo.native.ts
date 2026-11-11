@@ -25,16 +25,7 @@ import type {
 import { normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
-import {
-  buildFtsQuery,
-  cleanTag,
-  dedupeTags,
-  indexText,
-  likeNeedle,
-  normalizeTag,
-  sameTag,
-  tokenizeText,
-} from '../util/tokenize';
+import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -285,6 +276,14 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE ask_sessions ADD COLUMN document_ids TEXT;
   `,
+  // v14：哪些碎片已经整理过（v0.18.1）。
+  //
+  //     标签拆掉之后，时间轴上没有任何东西能说明「这条已经整理成文档了」，
+  //     用户只能靠记忆，于是同一批碎片被反复整理。这一列只在**产出真正写进库**
+  //     之后才置位 —— 草稿被放弃的那次不留痕迹，因为它什么都没留下。
+  `
+  ALTER TABLE fragments ADD COLUMN organized_at INTEGER;
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -320,6 +319,7 @@ interface FragmentRow {
   project: string | null;
   merged_into: number | null;
   nature: string | null;
+  organized_at: number | null;
 }
 
 function toFragment(r: FragmentRow): Fragment {
@@ -333,6 +333,7 @@ function toFragment(r: FragmentRow): Fragment {
     project: r.project,
     mergedInto: r.merged_into,
     nature: (r.nature as FragmentNature) ?? null,
+    organizedAt: r.organized_at ?? null,
   };
 }
 
@@ -739,6 +740,18 @@ export const repo: Repo = {
     if (row) indexFragment(d, id, text, parseTags(row.tags), row.project);
   },
 
+  async markFragmentsOrganized(ids, at) {
+    const list = Array.from(new Set(ids.map(Number).filter((n) => Number.isFinite(n))));
+    if (!list.length) return;
+    const d = db();
+    // 一次整理的来源可能有几百条，按 400 切（老 SQLite 的绑定变量上限是 999）
+    for (let i = 0; i < list.length; i += 400) {
+      const slice = list.slice(i, i + 400);
+      const ph = slice.map(() => '?').join(',');
+      d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ph})`, [at, ...slice]);
+    }
+  },
+
   async deleteFragment(id) {
     const d = db();
     d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
@@ -868,52 +881,6 @@ export const repo: Repo = {
     }
 
     return { checked, hit, viaDuplicate, misses };
-  },
-
-  async listFragmentsByTag(tag, limit = 50) {
-    const like = likeNeedle(tag);
-    if (!like) return [];
-    const rows = db().getAllSync<FragmentRow>(
-      `SELECT * FROM fragments
-        WHERE merged_into IS NULL AND tags LIKE ? ESCAPE '\\'
-        ORDER BY created_at DESC LIMIT ?`,
-      [like, limit],
-    );
-    return rows.map(toFragment);
-  },
-
-  async listTags() {
-    const rows = db().getAllSync<{ tags: string }>(
-      'SELECT tags FROM fragments WHERE merged_into IS NULL',
-    );
-    const map = new Map<string, { name: string; count: number }>();
-    for (const r of rows) {
-      for (const raw of parseTags(r.tags)) {
-        const key = normalizeTag(raw);
-        if (!key) continue;
-        const hit = map.get(key);
-        if (hit) hit.count += 1;
-        else map.set(key, { name: raw, count: 1 });
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  },
-
-  async renameTag(from, to) {
-    const target = cleanTag(to);
-    if (!normalizeTag(target)) return { changed: 0 };
-    return rewriteTags((tag) => (sameTag(tag, from) ? target : tag));
-  },
-
-  async deleteTag(name) {
-    return rewriteTags((tag) => (sameTag(tag, name) ? null : tag));
-  },
-
-  async mergeTags(from, to) {
-    const target = cleanTag(to);
-    if (!normalizeTag(target) || !from.length) return { changed: 0 };
-    const set = new Set(from.map(normalizeTag).filter(Boolean));
-    return rewriteTags((tag) => (set.has(normalizeTag(tag)) ? target : tag));
   },
 
   async rebuildSearchIndex() {
@@ -1534,53 +1501,16 @@ export const repo: Repo = {
   async stats() {
     const d = db();
     const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragments');
-    const inbox = countOf(d, "SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'");
+    // 「还没整理」= 从没进过某次整理并落库。不是 status：v0.7 之后没人改它了
+    const pending = countOf(
+      d,
+      'SELECT COUNT(*) AS n FROM fragments WHERE organized_at IS NULL AND merged_into IS NULL',
+    );
     // 被合并掉的待办还在表里（只是隐藏了），不能算进「未完成」
     const todoOpen = countOf(
       d,
       'SELECT COUNT(*) AS n FROM todos WHERE done = 0 AND merged_into IS NULL',
     );
-    const tags = await repo.listTags();
-    return { total, inbox, todoOpen, tags: tags.length };
+    return { total, pending, todoOpen };
   },
 };
-
-/**
- * 标签改名/删除/合并的唯一实现。
- *
- * 标签不是实体表，而是 `fragments.tags` 里的字符串；所以只能逐条重写数组。
- * `map` 返回 null 表示删掉这个标签。写完顺手重建这一条的 FTS 文本 ——
- * 否则搜旧标签还能搜到，搜新标签搜不到。
- */
-function rewriteTags(map: (tag: string) => string | null): { changed: number } {
-  const d = db();
-  const rows = d.getAllSync<FragmentRow>('SELECT * FROM fragments');
-  let changed = 0;
-
-  d.execSync('BEGIN');
-  try {
-    for (const row of rows) {
-      const before = parseTags(row.tags);
-      const after: string[] = [];
-      const seen = new Set<string>();
-      for (const tag of before) {
-        const next = map(tag);
-        if (!next) continue;
-        const name = cleanTag(next);
-        const key = normalizeTag(name);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        after.push(name);
-      }
-      if (before.length === after.length && before.every((t, i) => t === after[i])) continue;
-      d.runSync('UPDATE fragments SET tags = ? WHERE id = ?', [JSON.stringify(after), row.id]);
-      indexFragment(d, row.id, row.content, after, row.project);
-      changed++;
-    }
-    d.execSync('COMMIT');
-  } catch (e) {
-    d.execSync('ROLLBACK');
-    throw e;
-  }
-  return { changed };
-}

@@ -14,7 +14,6 @@ import type {
   OrganizeSession,
   QaScope,
   QaTurn,
-  TagStat,
   Todo,
 } from '../types';
 
@@ -93,21 +92,13 @@ export interface Repo {
    * 结果已按相关度排序；调用方不再自己排序。
    */
   searchFragments(query: string, limit?: number): Promise<Fragment[]>;
-  /** 某个标签下的碎片，按时间倒序。问「工作标签下有什么」时用 */
-  listFragmentsByTag(tag: string, limit?: number): Promise<Fragment[]>;
-
   /**
-   * 标签列表与使用次数。
-   * v0.7 不建 tags 表 —— 标签仍然是 fragments.tags 里的字符串，
-   * 但这里提供唯一入口，避免各处自己 GROUP BY / JSON.parse。
+   * 把这些碎片标成「已整理」。整理产出真正写进库之后才调。
+   *
+   * 传空数组什么都不做 —— 一条都没读过的时候不该整片刷新。
    */
-  listTags(): Promise<TagStat[]>;
-  /** 改名：把 from 换成 to。只改标签数组，不动正文 */
-  renameTag(from: string, to: string): Promise<{ changed: number }>;
-  /** 删除一个标签：从所有碎片里移除它 */
-  deleteTag(name: string): Promise<{ changed: number }>;
-  /** 合并：把 from 里的所有标签换成 to（to 已存在就是合并，不存在就是改名） */
-  mergeTags(from: string[], to: string): Promise<{ changed: number }>;
+  markFragmentsOrganized(ids: number[], at: number): Promise<void>;
+
   /**
    * 重建全文索引。迁移回填失败或数据异常时由设置页兜底。
    * 返回重建完的索引条数 —— 界面上要和库里总数对比，
@@ -304,7 +295,14 @@ export interface Repo {
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;
 
-  stats(): Promise<{ total: number; inbox: number; todoOpen: number; tags: number }>;
+  /**
+   * 首页/设置页的数字。
+   *
+   * `pending` 是「还没整理过」的条数（`organized_at IS NULL`），不是旧的
+   * `status='inbox'` —— v0.7 之后没有任何东西会把 status 改成 tagged，
+   * 拿它当「待整理」等于永远等于总数，那个数字就是在骗人。
+   */
+  stats(): Promise<{ total: number; pending: number; todoOpen: number }>;
 }
 
 export function parseTags(raw: unknown): string[] {

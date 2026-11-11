@@ -1544,6 +1544,21 @@ export function AskScreen({
         markLastStep({ text: `已写入 ${todoCount} 条待办`, state: 'done' });
       }
 
+      /*
+       * 这一批碎片从此算「已整理」。
+       *
+       * 只在**真的写进库之后**才标：草稿被放弃的那次一个字都没留下，
+       * 标成「已整理」等于骗用户「这批已经处理过了」。
+       * 时间轴上因此能一眼看出哪些还没整理过（标签拆掉后唯一的依据）。
+       */
+      if (draft.sourceIds.length) {
+        try {
+          await repo.markFragmentsOrganized(draft.sourceIds, now);
+        } catch {
+          /* 标不上只是徽标不显示，不影响已经写进去的内容 */
+        }
+      }
+
       // 会话上记下「这场整理出了哪几篇」：历史列表要能逐个跳过去
       const allIds = [...savedDocs.map((s) => s.id), ...written.map((w) => w.id)];
       if (draftSession !== null && allIds.length) {

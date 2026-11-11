@@ -14,7 +14,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import type { Fragment, Note } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
-import { TagPill } from '../components/TagPill';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
 import { FragmentDetail } from '../components/FragmentDetail';
@@ -147,12 +146,18 @@ export function TimelineScreen({
   const [fullEdit, setFullEdit] = useState(false);
   const [query, setQuery] = useState('');
   /**
-   * 标签 / 事项筛选。和搜索框是叠乘关系（先筛后搜）。
+   * 事项筛选。和搜索框是叠乘关系（先筛后搜）。
    *
-   * 标签一直是「AI 打好了但只能看」的状态 —— 这个 state 让它变成可用：
-   * 点一下胶囊就只看同类。再点一次同一个标签取消。
+   * 点一下事项名就只看同类，再点一次取消。
    */
-  const [filter, setFilter] = useState<{ kind: 'tag' | 'project'; value: string } | null>(null);
+  /**
+   * 只按「事项」筛。
+   *
+   * v0.7 起 AI 就不再打标签了，标签模块（胶囊 / 按标签筛 / 回顾页的标签页）
+   * 一直留着旧数据当摆设 —— 用户 2026-11-11 报「标签去掉了但模块还在」。
+   * 现在整块拆掉：数据列保留（不销毁历史），只是不再有任何入口。
+   */
+  const [filter, setFilter] = useState<{ kind: 'project'; value: string } | null>(null);
   /**
    * 折叠过的日期。null 表示「还没手动动过」—— 这时用默认规则（只展开今天）。
    * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
@@ -211,21 +216,17 @@ export function TimelineScreen({
 
   /**
    * 搜索直接在内存里过滤，不走 SQLite：碎片本来就全量躺在 props 里，
-   * 再压一个查询接口下去，反而拿不到 tags / project 这几个内存字段的匹配。
+   * 再压一个查询接口下去，反而拿不到 project 这个内存字段的匹配。
+   *
+   * 只搜「看得见的东西」。以前还搜 tags，但标签已经不在界面上显示了 ——
+   * 靠一个看不见的字段命中，用户只会觉得「搜到了什么？哪儿呢」。
    */
   const visibleFragments = useMemo(() => {
-    const base = filter
-      ? fragments.filter((f) =>
-          filter.kind === 'tag' ? f.tags.includes(filter.value) : f.project === filter.value,
-        )
-      : fragments;
+    const base = filter ? fragments.filter((f) => f.project === filter.value) : fragments;
     const q = query.trim().toLowerCase();
     if (!q) return base;
     return base.filter(
-      (f) =>
-        f.content.toLowerCase().includes(q) ||
-        (f.project ?? '').toLowerCase().includes(q) ||
-        f.tags.some((t) => t.toLowerCase().includes(q)),
+      (f) => f.content.toLowerCase().includes(q) || (f.project ?? '').toLowerCase().includes(q),
     );
   }, [fragments, query, filter]);
 
@@ -424,7 +425,8 @@ export function TimelineScreen({
     if (!narrowed) return null;
     return {
       total: visibleFragments.length,
-      inbox: visibleFragments.filter((f) => f.status === 'inbox').length,
+      // 「还没整理」按 organizedAt 算。用 status 的话永远是全部条数（v0.7 之后没人改它）
+      pending: visibleFragments.filter((f) => !f.organizedAt).length,
     };
   }, [narrowed, visibleFragments]);
 
@@ -534,11 +536,9 @@ export function TimelineScreen({
     setDetail({ ids: flat.map((x) => x.id), index: i < 0 ? 0 : i, query: q });
   }
 
-  /** 再点同一个标签就取消 —— 否则筛选开了没法用同一个手势关掉 */
-  function toggleFilter(kind: 'tag' | 'project', value: string) {
-    setFilter((prev) =>
-      prev && prev.kind === kind && prev.value === value ? null : { kind, value },
-    );
+  /** 再点同一个事项就取消 —— 否则筛选开了没法用同一个手势关掉 */
+  function toggleFilter(value: string) {
+    setFilter((prev) => (prev && prev.value === value ? null : { kind: 'project', value }));
   }
 
   /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
@@ -645,7 +645,7 @@ export function TimelineScreen({
           <TextInput
             value={query}
             onChangeText={setQuery}
-            placeholder="搜索碎片原文、标签、事项"
+            placeholder="搜索碎片原文、事项"
             placeholderTextColor={c.text3}
             style={styles.searchInput}
             returnKeyType="search"
@@ -666,11 +666,7 @@ export function TimelineScreen({
               accessibilityRole="button"
               accessibilityLabel="取消筛选"
             >
-              <Ionicons
-                name={filter.kind === 'tag' ? 'pricetag' : 'folder-open'}
-                size={11}
-                color={c.accentText}
-              />
+              <Ionicons name="folder-open" size={11} color={c.accentText} />
               <Text style={styles.filterText} numberOfLines={1}>
                 {filter.value}
               </Text>
@@ -683,7 +679,7 @@ export function TimelineScreen({
             {searchStat.total === 0
               ? '没有匹配的碎片'
               : !searching
-                ? `找到 ${searchStat.total} 条${searchStat.inbox > 0 ? ` · ${searchStat.inbox} 条还没整理` : ''}`
+                ? `找到 ${searchStat.total} 条${searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''}`
                 : hitTotal > 0
                   ? // 有正文命中就报处数：用户搜「NAS」，想知道的是「一共有几处用得上」
                     `找到 ${searchStat.total} 条 · ${hitTotal} 处`
@@ -702,7 +698,7 @@ export function TimelineScreen({
               </View>
               <Text style={styles.emptyTitle}>没有匹配的碎片</Text>
               <Text style={styles.emptyBody}>
-                {filter ? '换个标签看看，或者点上面的胶囊清掉筛选' : '换个词试试，记的时候不用斟酌措辞'}
+                {filter ? '换个事项看看，或者点上面的胶囊清掉筛选' : '换个词试试，记的时候不用斟酌措辞'}
               </Text>
             </View>
           ) : (
@@ -892,11 +888,11 @@ export function TimelineScreen({
                       );
                     })()}
                     {(hitCount > 0 ||
-                      fragment.tags.length > 0 ||
                       fragment.project ||
                       fragment.source !== 'app' ||
                       merged ||
-                      done) && (
+                      done ||
+                      !!fragment.organizedAt) && (
                       <View style={styles.metaRow}>
                         {/* 命中处数。点它进详情并从第一处开始跳 —— 正文长的时候，
                             「找到了但不知道在哪」比搜不到更难受 */}
@@ -919,19 +915,22 @@ export function TimelineScreen({
                             <Text style={styles.doneBadgeText}>已完成</Text>
                           </View>
                         ) : null}
-                        {fragment.tags.map((t) => (
-                          <TagPill
-                            key={t}
-                            label={t}
-                            small
-                            onPress={() => toggleFilter('tag', t)}
-                          />
-                        ))}
+                        {/*
+                          「已整理」：这条的产出已经进过文档库。
+                          标签拆掉之后这是唯一能看出整理状态的东西，
+                          所以给它一点颜色（青），但不能盖过「已完成」。
+                        */}
+                        {!!fragment.organizedAt ? (
+                          <View style={styles.orgBadge}>
+                            <Ionicons name="sparkles" size={10} color={c.accentText} />
+                            <Text style={styles.orgBadgeText}>已整理</Text>
+                          </View>
+                        ) : null}
                         {fragment.project ? (
                           <Text
                             style={styles.project}
                             numberOfLines={1}
-                            onPress={() => toggleFilter('project', fragment.project as string)}
+                            onPress={() => toggleFilter(fragment.project as string)}
                             accessibilityRole="button"
                             accessibilityLabel={`按事项 ${fragment.project} 筛选`}
                           >
@@ -1021,7 +1020,7 @@ export function TimelineScreen({
             <Text style={styles.dialogBody} numberOfLines={3}>
               {deleteTarget.content}
             </Text>
-            <Text style={styles.dialogHint}>删除后无法恢复。已整理出的标签和事项不会跟着消失。</Text>
+            <Text style={styles.dialogHint}>删除后无法恢复。已经整理进文档的内容不会跟着消失。</Text>
             <View style={styles.dialogActions}>
               <Pressable onPress={() => setDeleteTarget(null)} hitSlop={8}>
                 <Text style={styles.muted}>取消</Text>
@@ -1191,6 +1190,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingVertical: 2,
   },
   doneBadgeText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
+  /** 「已整理」：和「已完成」并排时不抢戏，用主色淡淡的底 */
+  orgBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: c.accentBg,
+    borderRadius: R.pill,
+    paddingLeft: 5,
+    paddingRight: 8,
+    paddingVertical: 2,
+  },
+  orgBadgeText: { fontSize: 10.5, lineHeight: 15, color: c.accentText },
   /**
    * 命中处数徽标。观感贴着小号 TagPill，但颜色固定走 amber 系 ——
    * 标签色是按标签名算的，命中数是系统信息，不该跟着标签的配色跑。

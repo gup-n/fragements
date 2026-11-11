@@ -244,8 +244,15 @@ export async function extractKnowledge(options: ExtractOptions): Promise<Extract
   let parsed: unknown;
   try {
     parsed = parseJsonLoose(outcome.content);
-  } catch {
-    throw new AiError('format', '模型返回的不是合法 JSON。展开详情看它到底写了什么。', {
+  } catch (e) {
+    /*
+     * 把具体原因（哪一字、什么毛病）留在人话里。
+     * 「不是合法 JSON」等于什么都没说 —— 用户既不知道要不要重试，
+     * 也不知道下次该怎么改（截断要缩小范围，语法问题重试通常就好）。
+     */
+    // 截断在上面已经拦过了，走到这里的都是「内容完整但语法有问题」
+    const why = e instanceof AiError ? e.message : '模型返回的不是合法 JSON';
+    throw new AiError('format', `${why}。展开详情能看到原文和出错位置。`, {
       stage: '解析',
       raw: clipRaw(outcome.content),
       finish: outcome.finishReason,
@@ -333,8 +340,9 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
   let parsed: unknown;
   try {
     parsed = parseJsonLoose(outcome.content);
-  } catch {
-    throw new AiError('format', '改稿返回的不是合法 JSON。展开详情看它写了什么。', {
+  } catch (e) {
+    const why = e instanceof AiError ? e.message : '改稿返回的不是合法 JSON';
+    throw new AiError('format', `${why}。展开详情能看到原文和出错位置。`, {
       stage: '改稿解析',
       raw: clipRaw(outcome.content),
       finish: outcome.finishReason,

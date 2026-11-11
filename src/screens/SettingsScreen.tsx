@@ -73,7 +73,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   /** 余额。null = 还没查 / 还没填 Key */
   const [balance, setBalance] = useState<BalanceResult | null>(null);
   const [balanceBusy, setBalanceBusy] = useState(false);
-  const [stats, setStats] = useState({ total: 0, inbox: 0, todoOpen: 0, tags: 0 });
+  const [stats, setStats] = useState({ total: 0, pending: 0, todoOpen: 0 });
   const [busy, setBusy] = useState<
     'idle' | 'saving' | 'testing' | 'exporting' | 'indexing' | 'picking' | 'importing'
   >('idle');
@@ -250,15 +250,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
     setBusy('importing');
     setIoMsg(null);
     try {
-      const { inserted, tagged } = await applyImport(importPreview.fresh);
+      const { inserted } = await applyImport(importPreview.fresh);
       setImportPreview(null);
       setStats(await repo.stats());
       onChanged();
       setIoMsg({
         kind: 'ok',
-        text: tagged
-          ? `已导入 ${inserted} 条，其中 ${tagged} 条带标签（直接算已整理）`
-          : `已导入 ${inserted} 条`,
+        text: `已导入 ${inserted} 条`,
       });
     } catch (e) {
       // 不回滚：已经写进去的靠判重挡着，重试不会产生重复
@@ -669,9 +667,8 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
         <View style={styles.card}>
           <View style={styles.statRow}>
             <Stat num={stats.total} label="总条数" />
-            <Stat num={stats.inbox} label="待整理" />
+            <Stat num={stats.pending} label="待整理" />
             <Stat num={stats.todoOpen} label="未完成待办" />
-            <Stat num={stats.tags} label="标签" />
           </View>
 
           <View style={styles.indexBox}>

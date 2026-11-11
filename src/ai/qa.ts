@@ -193,18 +193,6 @@ export async function retrieveLocal(
     }
   }
 
-  // 标签意图：问题里出现了某个已有标签名，就把那个标签下的记录并进来。
-  // 只在标签名足够长（≥2 字）时才算，避免「工作」这种词在无关问题里误命中
-  try {
-    const tags = await repo.listTags();
-    const mentioned = tags
-      .filter((t) => t.name.length >= 2 && question.includes(t.name))
-      .slice(0, 2);
-    for (const t of mentioned) push(await repo.listFragmentsByTag(t.name, 20));
-  } catch {
-    /* 同上 */
-  }
-
   // 上一轮引用过的碎片带进来，否则「那第二条呢」接不上
   const prevIds = turns.flatMap((t) => t.sourceIds).slice(-12);
   if (prevIds.length) {

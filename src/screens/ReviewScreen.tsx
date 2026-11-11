@@ -1,5 +1,5 @@
 /**
- * 回顾页：待办 / 小结 / 标签。
+ * 回顾页：待办 / 小结。
  *
  * v0.15 的两处改动都在这一页上：
  *
@@ -22,7 +22,6 @@ import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
 import { NoteBody } from '../components/NoteBody';
 import { NoteViewer } from '../components/NoteViewer';
 import { SummarySheet } from '../components/SummarySheet';
-import { TagPanel } from '../components/TagPanel';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { TodoEditor } from '../components/TodoEditor';
 import { TodoPanel } from '../components/TodoPanel';
@@ -33,7 +32,7 @@ interface Props {
   onChanged?: () => void | Promise<void>;
 }
 
-type Tab = 'todo' | 'note' | 'tag';
+type Tab = 'todo' | 'note';
 
 /** 编辑层的目标。`todo` 为 null 表示新建，`parentId` 表示加到哪条下面 */
 interface EditorTarget {
@@ -103,7 +102,6 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
         {([
           ['todo', `待办${pending.length ? ` ${pending.length}` : ''}`],
           ['note', '小结'],
-          ['tag', '标签'],
         ] as [Tab, string][]).map(([key, label]) => (
           <Pressable
             key={key}
@@ -126,8 +124,6 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
           onReload={reload}
           onOpenEditor={(todo, parentId) => setEditor({ todo, parentId })}
         />
-      ) : tab === 'tag' ? (
-        <TagPanel onChanged={onChanged} />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Pressable

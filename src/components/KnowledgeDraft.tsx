@@ -159,9 +159,28 @@ export function KnowledgeDraftCard({
         : '这次没有可沉淀的内容';
 
   const doneCount = saved.length;
-  const writable = isTodosOnly
-    ? !!todos.length && allowTodos
-    : (allowDoc && !!keptDocs(draft).length) || (allowTodos && !!todos.length);
+  /**
+   * 这一下会写进去什么。
+   *
+   * 按钮原来固定写「全部加入文档库」，可权限位关掉之后它实际只写待办 ——
+   * 用户点了「加入文档库」，结果待办多了一堆、文档区什么也没有（v0.18.1 报的）。
+   * 所以文案必须由**实际会写的东西**算出来，不是由模式和篇数猜。
+   */
+  const pendingDocs = isTodosOnly ? 0 : Math.max(0, keptDocs(draft).length - saved.length);
+  const pendingTodos = allowTodos ? todos.length : 0;
+  const writable = pendingDocs > 0 || pendingTodos > 0;
+
+  const writeLabel = saving
+    ? '写入中…'
+    : doneCount && !pendingDocs && !pendingTodos
+      ? '全部已完成'
+      : pendingDocs && pendingTodos
+        ? `写入 ${pendingDocs} 篇文档 + ${pendingTodos} 条待办`
+        : pendingDocs
+          ? `全部加入文档库（${pendingDocs} 篇）`
+          : pendingTodos
+            ? `写入 ${pendingTodos} 条待办`
+            : '没有可写入的内容';
 
   return (
     <View style={styles.card}>
@@ -402,13 +421,7 @@ export function KnowledgeDraftCard({
           disabled={!writable || busy || saving}
         >
           <Text style={styles.solidText}>
-            {saving
-              ? '写入中…'
-              : doneCount
-                ? '全部已完成'
-                : isTodosOnly
-                  ? '写入这些待办'
-                  : `全部加入文档库${docs.length > 1 ? `（${docs.length} 篇）` : ''}`}
+            {writeLabel}
           </Text>
         </Pressable>
       </View>

@@ -20,7 +20,7 @@ import type {
 import { emptyPlan, normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
-import { cleanTag, dedupeTags, normalizeTag, sameTag, tokenizeText } from '../util/tokenize';
+import { dedupeTags, tokenizeText } from '../util/tokenize';
 
 /**
  * 浏览器预览用的存储实现，数据落在 localStorage。
@@ -205,6 +205,7 @@ export const repo: Repo = {
       project: null,
       mergedInto: null,
       nature: null,
+      organizedAt: null,
     });
     persist();
     return id;
@@ -214,6 +215,14 @@ export const repo: Repo = {
     const d = load();
     const f = d.fragments.find((x) => x.id === id);
     if (f) f.content = content.trim();
+    persist();
+  },
+
+  async markFragmentsOrganized(ids, at) {
+    if (!ids.length) return;
+    const d = load();
+    const set = new Set(ids);
+    for (const f of d.fragments) if (set.has(f.id)) f.organizedAt = at;
     persist();
   },
 
@@ -287,44 +296,6 @@ export const repo: Repo = {
       .sort((a, b) => b.score - a.score || b.f.createdAt - a.f.createdAt)
       .slice(0, limit)
       .map((x) => x.f);
-  },
-
-  async listFragmentsByTag(tag, limit = 50) {
-    return active(load())
-      .filter((f) => f.tags.some((t) => sameTag(t, tag)))
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .slice(0, limit);
-  },
-
-  async listTags(): Promise<TagStat[]> {
-    const map = new Map<string, { name: string; count: number }>();
-    for (const f of active(load())) {
-      for (const raw of f.tags) {
-        const key = normalizeTag(raw);
-        if (!key) continue;
-        const hit = map.get(key);
-        if (hit) hit.count += 1;
-        else map.set(key, { name: raw, count: 1 });
-      }
-    }
-    return Array.from(map.values()).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-  },
-
-  async renameTag(from, to) {
-    const target = cleanTag(to);
-    if (!normalizeTag(target)) return { changed: 0 };
-    return rewriteTags((tag) => (sameTag(tag, from) ? target : tag));
-  },
-
-  async deleteTag(name) {
-    return rewriteTags((tag) => (sameTag(tag, name) ? null : tag));
-  },
-
-  async mergeTags(from, to) {
-    const target = cleanTag(to);
-    const set = new Set(from.map(normalizeTag).filter(Boolean));
-    if (!normalizeTag(target) || !set.size) return { changed: 0 };
-    return rewriteTags((tag) => (set.has(normalizeTag(tag)) ? target : tag));
   },
 
   async rebuildSearchIndex() {
@@ -846,34 +817,10 @@ export const repo: Repo = {
     const d = load();
     return {
       total: d.fragments.length,
-      inbox: d.fragments.filter((f) => f.status === 'inbox').length,
+      // 「还没整理」= 从没进过某次整理并落库；口径和 native 版一致
+      pending: d.fragments.filter((f) => f.organizedAt === null && f.mergedInto === null).length,
       // 被合并掉的待办不算「未完成」，和 native 版口径保持一致
       todoOpen: d.todos.filter((t) => !t.done && t.mergedInto === null).length,
-      tags: (await this.listTags()).length,
     };
   },
 };
-
-function rewriteTags(map: (tag: string) => string | null): { changed: number } {
-  const d = load();
-  let changed = 0;
-  for (const f of d.fragments) {
-    const before = [...f.tags];
-    const after: string[] = [];
-    const seen = new Set<string>();
-    for (const tag of before) {
-      const next = map(tag);
-      if (!next) continue;
-      const name = cleanTag(next);
-      const key = normalizeTag(name);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      after.push(name);
-    }
-    if (before.length === after.length && before.every((t, i) => t === after[i])) continue;
-    f.tags = after;
-    changed++;
-  }
-  if (changed) persist();
-  return { changed };
-}

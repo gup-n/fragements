@@ -24,7 +24,6 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, Note } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
-import { TagPill } from './TagPill';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
 import { dayKey, daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
@@ -447,7 +446,7 @@ function Page({
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   const merged = fragment.mergedInto !== null;
-  const hasMeta = fragment.tags.length > 0 || !!fragment.project || fragment.source !== 'app';
+  const hasMeta = !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
   // 身份要稳：内联箭头每次渲染都会换新，React 会把 ref 先置 null 再挂回去
   const setScrollRef = useCallback(
@@ -462,12 +461,18 @@ function Page({
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
-      {done || merged ? (
+      {done || merged || !!fragment.organizedAt ? (
         <View style={styles.badges}>
           {done ? (
             <View style={styles.doneBadge}>
               <Ionicons name="checkmark" size={11} color={c.tealText} />
               <Text style={styles.doneText}>已完成</Text>
+            </View>
+          ) : null}
+          {!!fragment.organizedAt ? (
+            <View style={styles.orgBadge}>
+              <Ionicons name="sparkles" size={10} color={c.accentText} />
+              <Text style={styles.orgText}>已整理</Text>
             </View>
           ) : null}
           {merged ? <Text style={styles.merged}>已合并到另一条</Text> : null}
@@ -488,9 +493,6 @@ function Page({
 
       {hasMeta ? (
         <View style={styles.meta}>
-          {fragment.tags.map((t) => (
-            <TagPill key={t} label={t} />
-          ))}
           {fragment.project ? <Text style={styles.project}>{fragment.project}</Text> : null}
           {fragment.source !== 'app' ? (
             <View style={styles.source}>
@@ -593,6 +595,17 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingVertical: 3,
   },
   doneText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
+  orgBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: c.accentBg,
+    borderRadius: R.pill,
+    paddingLeft: 5,
+    paddingRight: 9,
+    paddingVertical: 3,
+  },
+  orgText: { fontSize: 10.5, lineHeight: 15, color: c.accentText },
   merged: { fontSize: 11, color: c.text3 },
 
   /* 详情页是「阅读」场景，字号和行高都比列表放宽一档 */

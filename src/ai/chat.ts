@@ -10,6 +10,7 @@ import { fetch as expoFetch } from 'expo/fetch';
 import type { AiConfig, ReasoningEffort } from '../types';
 import { DEFAULT_AI_CONFIG } from '../types';
 import { NoStreamError, readChatStream, type FinishReason } from './stream';
+import { parseJsonLenient } from '../util/jsonRepair';
 
 export type AiErrorCode =
   | 'nokey'
@@ -176,24 +177,25 @@ function endpoint(baseUrl: string) {
 }
 
 /** 从 ```json 围栏里、或从一大段文字里抠出 JSON 对象 */
+/**
+ * 模型的 JSON → 对象。
+ *
+ * 真正的宽容解析在 `util/jsonRepair.ts`（那是纯函数，能在 node 里断言）；
+ * 这里只负责把失败翻译成带证据的 `AiError`。v0.18.1 之前这里只有
+ * `JSON.parse` 加一次 `indexOf/lastIndexOf` 切片，于是模型少转义一个反斜杠
+ * （Windows 路径 `\\server\queue` 最容易踩）就整段报废，而报错只说
+ * 「不是合法 JSON，再试一次」—— 用户手上那份四五千字的原文里
+ * 根本看不出哪里不对。
+ */
 export function parseJsonLoose(text: string): unknown {
-  const cleaned = text.replace(/^\uFEFF/, '').trim();
-  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const body = fenced ? fenced[1].trim() : cleaned;
-  try {
-    return JSON.parse(body);
-  } catch {
-    const start = body.indexOf('{');
-    const end = body.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(body.slice(start, end + 1));
-      } catch {
-        /* 落到下面抛错 */
-      }
-    }
-    throw new AiError('format', '模型返回的不是合法 JSON，再试一次通常就好了');
-  }
+  const result = parseJsonLenient(text);
+  if (result.ok) return result.value;
+
+  const { at, near, reason } = result.problem;
+  throw new AiError('format', `模型返回的内容解析不了：${reason}（第 ${at} 字附近：${near}）`, {
+    stage: '解析',
+    raw: clipRaw(text),
+  });
 }
 
 function mapHttpError(status: number, detail: string, raw = ''): AiError {

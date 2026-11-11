@@ -24,6 +24,15 @@ export interface Fragment {
   mergedInto: number | null;
   /** AI 判定的内容性质，未整理时为 null。v0.7 起不再写 knowledge，保留字段兼容旧数据 */
   nature: FragmentNature | null;
+  /**
+   * 被哪一次整理读过、并且用户把那次的产出写进了库（毫秒时间戳）。null = 没整理过。
+   *
+   * 为什么需要这个字段（v0.18.1）：标签拆掉之后，时间轴上就再也看不出
+   * 「哪些已经整理过了」—— 用户只能靠记忆，于是同一批东西被反复整理。
+   * 它记的是「落库」而不是「读过」：草稿被放弃的那次不算，
+   * 因为一个字都没留下，说它「已整理」是在骗人。
+   */
+  organizedAt: number | null;
 }
 
 export interface Todo {
