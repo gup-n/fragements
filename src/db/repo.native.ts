@@ -421,8 +421,8 @@ function attachImages(d: SQLite.SQLiteDatabase, list: Fragment[]): Fragment[] {
   return list;
 }
 
-/** 这一条现有的全部文字层。索引和模型材料都读它 */
-function imageTextsOf(d: SQLite.SQLiteDatabase, fragmentId: number): string[] {
+/** 这一条现有的全部文字层（按加入顺序）。索引读它 */
+function storedImageTexts(d: SQLite.SQLiteDatabase, fragmentId: number): string[] {
   return d
     .getAllSync<{ text: string | null }>(
       'SELECT text FROM fragment_images WHERE fragment_id = ? ORDER BY ordinal ASC, id ASC',
@@ -686,7 +686,7 @@ function indexFragment(
 function reindexFragment(d: SQLite.SQLiteDatabase, id: number) {
   const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
   if (!row) return;
-  indexFragment(d, id, row.content, parseTags(row.tags), row.project, imageTextsOf(d, id));
+  indexFragment(d, id, row.content, parseTags(row.tags), row.project, storedImageTexts(d, id));
 }
 
 /**
