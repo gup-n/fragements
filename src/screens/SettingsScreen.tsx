@@ -439,16 +439,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const aiValue = official
     ? `DeepSeek 官方 · ${model === 'deepseek-v4-pro' ? 'Pro' : 'Flash'}`
     : model || '自定义接口';
-  const thinkValue = thinking ? `开 · ${EFFORT_LABEL[effort]}` : '关（更快更省钱）';
-  const mineruValue = mineruToken.trim() ? '已填 Token' : '未填 · 轻量解析';
   const dataValue = `${stats.total} 条 · ${stats.pending} 待整理`;
-  const indexValue = !indexState
-    ? '检查中'
-    : indexEmpty
-      ? '空库'
-      : indexHealthy
-        ? '正常'
-        : '需要重建';
 
   return (
     <View style={styles.root}>
@@ -462,30 +453,24 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       {/* ---------------- 模块菜单（根层） ---------------- */}
       {pane === 'root' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {/*
+            一行一个模块。原来「配置」拆成三行（模型服务 / 思考过程 / 文档解析）、
+            「数据」拆成三行，点进去都是同一页 —— 用户 2026-11-12 说这就是冗余：
+            菜单不该把一页里的分区当成三个入口摆三遍。
+            右侧那句值保留：不点进去也能知道现在是什么。
+          */}
           <GroupTitle text="配置" />
           <View style={styles.cardTight}>
             <MenuRow
-              icon="hardware-chip-outline"
-              label="模型服务"
+              icon="options-outline"
+              label="接口与模型"
               value={aiValue}
-              onPress={() => setPane('config')}
-            />
-            <MenuRow
-              icon="bulb-outline"
-              label="思考过程"
-              value={thinkValue}
-              onPress={() => setPane('config')}
-            />
-            <MenuRow
-              icon="document-text-outline"
-              label="文档解析"
-              value={mineruValue}
               onPress={() => setPane('config')}
               last
             />
           </View>
           <Text style={styles.groupHint}>
-            模型地址、Key、MinerU Token 都在「配置」里，换服务商也只在这一处改。
+            模型地址、Key、思考过程与强度、MinerU Token 都在这一页；换服务商也只在这一处改。
           </Text>
 
           <GroupTitle text="外观" />
@@ -504,26 +489,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
           <View style={styles.cardTight}>
             <MenuRow
               icon="albums-outline"
-              label="碎片数据"
+              label="数据与备份"
               value={dataValue}
-              onPress={() => setPane('data')}
-            />
-            <MenuRow
-              icon="swap-vertical-outline"
-              label="导入导出"
-              value="Markdown"
-              onPress={() => setPane('data')}
-            />
-            <MenuRow
-              icon="search-outline"
-              label="搜索索引"
-              value={indexValue}
-              tone={!indexState || indexEmpty || indexHealthy ? 'normal' : 'warn'}
               onPress={() => setPane('data')}
               last
             />
           </View>
-          <Text style={styles.groupHint}>数据只在手机本地，没有账号也不上传。</Text>
+          <Text style={styles.groupHint}>条数、索引健康度、导出导入都在这一页；数据只在手机本地。</Text>
 
           <GroupTitle text="关于" />
           <View style={styles.cardTight}>
@@ -532,18 +504,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               label="关于碎片"
               value={'v' + APP_VERSION}
               onPress={() => setPane('about')}
-            />
-            <MenuRow
-              icon="cloud-download-outline"
-              label="检查更新"
-              value={checkMsg || '点这里检查'}
-              tone={checkState === 'error' ? 'warn' : checkState === 'update' ? 'link' : 'normal'}
-              busy={checking}
-              onPress={() => {
-                // 根层点「检查更新」就直接查，不逼人多点一次进子页
-                setPane('about');
-                void handleCheckUpdate();
-              }}
               last
             />
           </View>

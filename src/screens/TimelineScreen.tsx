@@ -28,6 +28,7 @@ import { countHits } from '../util/highlight';
 import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
 import { imageStateOf, imageTextsOf } from '../util/fragmentText';
+import { imageToken, removeToken, stripImageTokens } from '../util/inlineImages';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -77,7 +78,8 @@ type DisplaySection = Section & {
  */
 function previewOfItem(item: TimelineItem): string {
   if (item.kind === 'fragment') {
-    const text = item.fragment.content.replace(/\s+/g, ' ').trim();
+    // 正文里的 `![](img:12)` 是给渲染层看的定位标记，预览里要换成一句人话
+    const text = stripImageTokens(item.fragment.content).replace(/\s+/g, ' ').trim();
     if (text) return text;
     // 纯图碎片没有正文：折叠起来的时候至少要看得见「这里有一张图」，
     // 否则那一行是空白，用户会以为碎片丢了
@@ -123,8 +125,11 @@ interface Props {
    */
   draft: string;
   onDraftChange: (text: string) => void;
-  /** `imageUris` 有值就是「这条带图」，图由上层存盘并逐张异步解析（可以多张） */
-  onAdd: (text: string, imageUris?: string[]) => Promise<void>;
+  /**
+   * `images` 有值就是「这条带图」，图由上层存盘并逐张异步解析。
+   * `key` 是长文里 `![](img:p1)` 这种待发标记的键，落库时换成真 id。
+   */
+  onAdd: (text: string, images?: { key: string; uri: string }[]) => Promise<void>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
@@ -140,8 +145,12 @@ interface Props {
   /** 读图失败的原因（配图 id → 一句话）。必须能就地重试 */
   imageFail: Record<string, string>;
   onReparseImage: (fragment: Fragment, imageId: number) => void;
-  /** 详情页里给已有碎片补图 */
-  onAddImages: (fragmentId: number, uris: string[], hint: string) => Promise<void>;
+  /** 详情页里给已有碎片补图。返回落库后的配图（id 用来在正文里插定位标记） */
+  onAddImages: (
+    fragmentId: number,
+    uris: string[],
+    hint: string,
+  ) => Promise<{ id: number; path: string }[]>;
   /** 详情页里删掉一张图 */
   onRemoveImage: (imageId: number) => Promise<void>;
 }
@@ -186,10 +195,17 @@ export function TimelineScreen({
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
   /**
-   * 待发送的图（选择器给的临时 uri）。发送时才落盘 ——
+   * 待发送的图（选择器给的临时 uri + 一个待发键）。发送时才落盘 ——
    * 选了又删掉的图不该在私有目录里留一份。
+   *
+   * 键（`p1` / `p2`…）是给长文里的定位标记用的：那时图还没入库、没有 id，
+   * 只能先写 `![](img:p1)`，发送落库时换成真 id（见 App 的 `handleAdd`）。
    */
-  const [pendingImages, setPendingImages] = useState<string[]>([]);
+  const [pending, setPending] = useState<{ key: string; uri: string }[]>([]);
+  /** 待发键的计数器。用 ref 而不是 state：连选几张时同一帧里读不到新 state */
+  const pendingSeq = useRef(0);
+  /** 输入框光标。插图插在光标处，不是一律追加到末尾 */
+  const [sel, setSel] = useState({ start: 0, end: 0 });
   /** 加图的方式菜单（拍照 / 相册）。不用 Modal：本项目一律 absolute + 自接返回键 */
   const [imageMenu, setImageMenu] = useState(false);
   const [query, setQuery] = useState('');
@@ -515,7 +531,7 @@ export function TimelineScreen({
   }, [hitCounts]);
 
   // 只有图没有字也能发：随手拍一张报错屏，不写备注是最常见的用法
-  const canSend = (draft.trim().length > 0 || pendingImages.length > 0) && !sending;
+  const canSend = (draft.trim().length > 0 || pending.length > 0) && !sending;
 
   /** 换成多图后最多几张：九宫格是用户在手机上最熟悉的张数上限，超过就说明该拆成几条了 */
   const MAX_IMAGES = 9;
@@ -526,8 +542,11 @@ export function TimelineScreen({
    * 压缩只靠 `quality`：图片落盘时统一转 JPEG，`quality` 才会真的生效。
    * 不引 `expo-image-manipulator` —— 多一个原生模块，只为省几百 KB，
    * 而这张图只在「转成文字」那一次被传上去，之后就不再传了。
+   *
+   * `inlineHere` = 从长文记录里点的：要给每张图在光标处留一行定位标记，
+   * 这样图长在那段文字中间，而不是全都堆到正文上方。
    */
-  async function pickImage(from: 'camera' | 'library') {
+  async function pickImage(from: 'camera' | 'library', inlineHere = false) {
     setImageMenu(false);
     if (Platform.OS === 'web') {
       setToast('网页版加不了图片，在手机上用可以');
@@ -546,7 +565,7 @@ export function TimelineScreen({
           return;
         }
       }
-      const room = MAX_IMAGES - pendingImages.length;
+      const room = MAX_IMAGES - pending.length;
       if (room <= 0) {
         setToast(`一条最多 ${MAX_IMAGES} 张图，再多就拆成两条记`);
         return;
@@ -561,8 +580,12 @@ export function TimelineScreen({
               selectionLimit: room,
             });
       if (res.canceled || !res.assets?.length) return;
-      const picked = res.assets.slice(0, room).map((a) => a.uri);
-      setPendingImages((prev) => [...prev, ...picked]);
+      const picked = res.assets.slice(0, room).map((a) => {
+        pendingSeq.current += 1;
+        return { key: `p${pendingSeq.current}`, uri: a.uri };
+      });
+      setPending((prev) => [...prev, ...picked]);
+      if (inlineHere) insertTokens(picked.map((p) => p.key));
       if (res.assets.length > room) {
         setToast(`只加了前 ${room} 张，一条最多 ${MAX_IMAGES} 张`);
       }
@@ -571,14 +594,33 @@ export function TimelineScreen({
     }
   }
 
+  /** 在光标处插一行图片标记（`![](img:p1)`），发出去之后换成真 id */
+  function insertTokens(keys: string[]) {
+    const at = Math.min(sel.start, draft.length);
+    const before = draft.slice(0, at);
+    const after = draft.slice(at);
+    const block = keys.map((k) => imageToken(k)).join('\n');
+    const lead = before && !before.endsWith('\n') ? '\n' : '';
+    const tail = after && !after.startsWith('\n') ? '\n' : '';
+    const next = `${before}${lead}${block}${tail}${after}`;
+    onDraftChange(next);
+    setSel({ start: at + lead.length + block.length, end: at + lead.length + block.length });
+  }
+
+  /** 去掉一张待发图：标记和缩略图一起删，否则正文里会留一行空标记 */
+  function dropPending(key: string) {
+    setPending((prev) => prev.filter((p) => p.key !== key));
+    onDraftChange(removeToken(draft, key));
+  }
+
   async function submit() {
     const text = draft.trim();
-    const pictures = pendingImages;
+    const pictures = pending;
     if ((!text && !pictures.length) || sending) return;
     setSending(true);
     try {
       await onAdd(text, pictures.length ? pictures : undefined);
-      setPendingImages([]);
+      setPending([]);
       onDraftChange('');
       // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
       // 折叠一个「刚往里写了东西的日期」没有任何意义。
@@ -637,7 +679,7 @@ export function TimelineScreen({
      * 纯图碎片没有正文。复制一个空串，用户粘出来是一片空白，
      * 却收到「已复制」的提示 —— 那是在骗他。有图文字就复制图文字。
      */
-    const text = f.content.trim() || imageTextsOf(f).join('\n\n');
+    const text = stripImageTokens(f.content).trim() || imageTextsOf(f).join('\n\n');
     if (!text) {
       setOpenRow(null);
       showToast('这条只有图片，没有可复制的文字');
@@ -726,6 +768,29 @@ export function TimelineScreen({
       else next.add(id);
       return next;
     });
+  }
+
+  /**
+   * 拍照 / 相册菜单。抽成函数是因为它要在两个地方出现：
+   * 底部输入区（图落到正文上方）和长文记录（图插在光标处）。
+   * `inlineHere` 决定选完图要不要一并插定位标记。
+   */
+  function imageMenuView(inlineHere: boolean) {
+    return (
+      <View style={[styles.imageSheet, inlineHere && styles.imageSheetFull]}>
+        <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('camera', inlineHere)}>
+          <Ionicons name="camera-outline" size={18} color={c.text2} />
+          <Text style={styles.imageSheetText}>拍一张</Text>
+        </Pressable>
+        <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('library', inlineHere)}>
+          <Ionicons name="images-outline" size={18} color={c.text2} />
+          <Text style={styles.imageSheetText}>从相册选（可多选）</Text>
+        </Pressable>
+        <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
+          <Text style={styles.imageSheetText}>取消</Text>
+        </Pressable>
+      </View>
+    );
   }
 
   return (
@@ -1015,13 +1080,19 @@ export function TimelineScreen({
                   </View>
                   <View style={styles.rowBody}>
                     {(() => {
+                      /*
+                       * 图片定位标记在这一行没有意义 —— 下面本来就有一排缩略图。
+                       * 不剥的话，「展开全文」旁边会多出一行「〔图片〕」，
+                       * 和缩略图说的是同一件事。
+                       */
+                      const shown = stripImageTokens(fragment.content);
                       // 60 字大约才三行，随手记详细一点就被折了，放宽到 100
-                      const long = fragment.content.length > 100 || fragment.content.includes('\n');
+                      const long = shown.length > 100 || shown.includes('\n');
                       const open = expandedIds.has(fragment.id);
                       return (
                         <>
                           <NoteBody
-                            text={fragment.content}
+                            text={shown}
                             numberOfLines={long && !open ? 3 : undefined}
                             style={styles.content}
                             muted={merged}
@@ -1191,7 +1262,8 @@ export function TimelineScreen({
               ref={inputRef}
               value={draft}
               onChangeText={onDraftChange}
-              placeholder={pendingImages.length ? '这张图是什么？可留空' : '随手记一条…'}
+              onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
+              placeholder={pending.length ? '这张图是什么？可留空' : '随手记一条…'}
               placeholderTextColor={c.text3}
               style={styles.input}
               multiline
@@ -1205,7 +1277,7 @@ export function TimelineScreen({
               选好的图。横排缩略图，每张右上角一个叉 ——
               缩略图要大一点才能确认「是不是这张」，塞进一行里只能做成一枚小图标。
             */}
-            {pendingImages.length ? (
+            {pending.length ? (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -1213,11 +1285,11 @@ export function TimelineScreen({
                 contentContainerStyle={styles.pendingStripContent}
                 keyboardShouldPersistTaps="handled"
               >
-                {pendingImages.map((uri, i) => (
-                  <View key={`${uri}-${i}`} style={styles.pendingItem}>
-                    <Image source={{ uri }} style={styles.pendingThumb} />
+                {pending.map((p, i) => (
+                  <View key={p.key} style={styles.pendingItem}>
+                    <Image source={{ uri: p.uri }} style={styles.pendingThumb} />
                     <Pressable
-                      onPress={() => setPendingImages((prev) => prev.filter((_, k) => k !== i))}
+                      onPress={() => dropPending(p.key)}
                       hitSlop={8}
                       style={styles.pendingRemove}
                       accessibilityLabel={`不发第 ${i + 1} 张`}
@@ -1229,15 +1301,25 @@ export function TimelineScreen({
               </ScrollView>
             ) : null}
 
+            {/*
+              工具行：展开在左，图片和发布在右（用户 2026-11-12 要求把图片图标挪到右边）。
+              发布贴最右是肌肉记忆的位置，图片紧挨着它才不会让人去左边找。
+            */}
             <View style={styles.composerBar}>
               <Pressable
-                onPress={() => setFullEdit(true)}
+                onPress={() => {
+                  // 光标默认落在末尾：展开长文时人通常是接着往下写
+                  setSel({ start: draft.length, end: draft.length });
+                  setFullEdit(true);
+                }}
                 hitSlop={8}
                 style={styles.toolBtn}
                 accessibilityLabel="展开成整页写"
               >
                 <Ionicons name="expand-outline" size={18} color={c.text2} />
               </Pressable>
+
+              <View style={styles.flex} />
 
               <Pressable
                 onPress={() => setImageMenu((v) => !v)}
@@ -1246,14 +1328,12 @@ export function TimelineScreen({
                 accessibilityLabel="加图片"
               >
                 <Ionicons name="image-outline" size={18} color={c.text2} />
-                {pendingImages.length ? (
+                {pending.length ? (
                   <View style={styles.toolBadge}>
-                    <Text style={styles.toolBadgeText}>{pendingImages.length}</Text>
+                    <Text style={styles.toolBadgeText}>{pending.length}</Text>
                   </View>
                 ) : null}
               </Pressable>
-
-              <View style={styles.flex} />
 
               <Pressable
                 onPress={submit}
@@ -1268,21 +1348,7 @@ export function TimelineScreen({
           </View>
 
           {/* 拍照 / 相册。弹出层用 absolute，不用 Modal —— 键盘弹着的时候 Modal 会错位 */}
-          {imageMenu ? (
-            <View style={styles.imageSheet}>
-              <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('camera')}>
-                <Ionicons name="camera-outline" size={18} color={c.text2} />
-                <Text style={styles.imageSheetText}>拍一张</Text>
-              </Pressable>
-              <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('library')}>
-                <Ionicons name="images-outline" size={18} color={c.text2} />
-                <Text style={styles.imageSheetText}>从相册选（可多选）</Text>
-              </Pressable>
-              <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
-                <Text style={styles.imageSheetText}>取消</Text>
-              </Pressable>
-            </View>
-          ) : null}
+          {imageMenu && !fullEdit ? imageMenuView(false) : null}
         </View>
       </View>
 
@@ -1367,13 +1433,64 @@ export function TimelineScreen({
             ref={fullInputRef}
             value={draft}
             onChangeText={onDraftChange}
+            onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
             style={styles.fullInput}
             multiline
             placeholder="想写多少写多少。长一点也没关系，整理时 AI 会单独提炼要点。"
             placeholderTextColor={c.text3}
             maxLength={20000}
           />
-          <Text style={styles.fullCount}>{draft.length} 字</Text>
+
+          {/*
+            长文里的图必须能插在正文中间（用户 2026-11-12：
+            「我如果中间文本需要加一张图片就无法做到」）。
+            所以这里单独给一条插图入口：选完就把 `![](img:p1)` 写进光标处。
+          */}
+          {pending.length ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.fullThumbs}
+              contentContainerStyle={styles.fullThumbsContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {pending.map((p, i) => (
+                <View key={p.key} style={styles.pendingItem}>
+                  <Image source={{ uri: p.uri }} style={styles.pendingThumb} />
+                  <Pressable
+                    onPress={() => dropPending(p.key)}
+                    hitSlop={8}
+                    style={styles.pendingRemove}
+                    accessibilityLabel={`不发第 ${i + 1} 张`}
+                  >
+                    <Ionicons name="close" size={12} color="#FFFFFF" />
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
+          ) : null}
+
+          <View style={styles.fullBar}>
+            <Text style={styles.fullCount}>
+              {draft.length} 字
+              {pending.length ? ` · ${pending.length} 张图插在光标处` : ''}
+            </Text>
+            <Pressable
+              onPress={() => setImageMenu((v) => !v)}
+              hitSlop={8}
+              style={styles.toolBtn}
+              accessibilityLabel="在光标处插图"
+            >
+              <Ionicons name="image-outline" size={18} color={c.text2} />
+              {pending.length ? (
+                <View style={styles.toolBadge}>
+                  <Text style={styles.toolBadgeText}>{pending.length}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          </View>
+
+          {imageMenu ? imageMenuView(true) : null}
         </View>
       ) : null}
     </View>
@@ -1739,7 +1856,22 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     textAlignVertical: 'top',
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  fullCount: { fontSize: 11, color: c.text3, textAlign: 'right', paddingHorizontal: 18, paddingBottom: 16 },
+  fullCount: { flex: 1, fontSize: 11, color: c.text3 },
+  /** 长文底栏：字数在左、插图在右，贴着键盘上沿 */
+  fullBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 18,
+    paddingTop: 8,
+    paddingBottom: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hair,
+  },
+  fullThumbs: { flexGrow: 0 },
+  fullThumbsContent: { gap: 8, paddingHorizontal: 18, paddingTop: 8 },
+  /** 长文里的加图菜单：贴着底栏上方弹出 */
+  imageSheetFull: { left: 16, right: 16, bottom: 64 },
 
   /** 覆盖整个内容区；安全区由外层 SafeAreaView 负责，这里只管层叠 */
   overlay: {

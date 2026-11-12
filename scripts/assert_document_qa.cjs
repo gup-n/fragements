@@ -23,6 +23,7 @@ const MODULES = [
   'src/types.ts',
   'src/util/date.ts',
   'src/util/mdBlocks.ts',
+  'src/util/inlineImages.ts',
   'src/util/tokenize.ts',
   'src/util/qaScope.ts',
   'src/util/qaNote.ts',

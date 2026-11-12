@@ -21,6 +21,7 @@ import { emptyPlan, normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
+import { stripImageTokens } from '../util/inlineImages';
 
 /**
  * 浏览器预览用的存储实现，数据落在 localStorage。
@@ -349,7 +350,8 @@ export const repo: Repo = {
     if (!tokens.length) return [];
     const scored: { f: Fragment; score: number }[] = [];
     for (const f of active(load())) {
-      const hay = `${f.content} ${f.tags.join(' ')} ${f.project ?? ''}`.toLowerCase();
+      // 正文里的 `![](img:12)` 是渲染用的定位标记，与 native 的 FTS 同口径剥掉
+      const hay = `${stripImageTokens(f.content)} ${f.tags.join(' ')} ${f.project ?? ''}`.toLowerCase();
       let score = 0;
       for (const t of tokens) if (hay.includes(t)) score += t.length >= 2 ? 2 : 1;
       if (score > 0) scored.push({ f, score });

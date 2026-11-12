@@ -168,7 +168,7 @@ export function TextReader({ document: doc, mode, text: providedText, notice }: 
           for (const row of blk.rows) for (const seg of row.flat()) n += countHits(segText(seg), q);
         } else if (blk.kind === 'code') {
           n += countHits(blk.text, q);
-        } else if (blk.kind !== 'hr') {
+        } else if (blk.kind !== 'hr' && blk.kind !== 'image') {
           for (const seg of blk.segs) n += countHits(segText(seg), q);
         }
       }

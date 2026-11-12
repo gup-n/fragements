@@ -15,6 +15,7 @@
  */
 
 import type { QaCiteKind } from '../types';
+import { imageIdOfLine } from './inlineImages';
 
 /**
  * 引用标记的来源种类：F = 碎片、N = 小结、T = 待办、W = 网络资料。
@@ -81,7 +82,18 @@ export interface CodeBlock {
   lang: string;
 }
 
-export type Block = TextBlock | TableBlock | CodeBlock | { kind: 'hr' };
+/**
+ * 正文里定位的一张配图（`![](img:12)` 单独一行）。
+ *
+ * 只带 id 不带路径：路径要经过文件层拼，解析层是纯函数，碰不到文件系统。
+ * 渲染层拿到 id 自己去找 URI，找不到就整块跳过。
+ */
+export interface ImageBlock {
+  kind: 'image';
+  id: number;
+}
+
+export type Block = TextBlock | TableBlock | CodeBlock | ImageBlock | { kind: 'hr' };
 
 /** 列数上限。再多一个手机屏也排不下，宁可让每列多换几行 */
 const MAX_COLS = 8;
@@ -211,7 +223,7 @@ export function collectCitations(text: string): CiteRef[] {
     if (b.kind === 'table') {
       for (const cell of b.head) take(cell);
       for (const row of b.rows) for (const cell of row) take(cell);
-    } else if (b.kind === 'code' || b.kind === 'hr') {
+    } else if (b.kind === 'code' || b.kind === 'hr' || b.kind === 'image') {
       continue;
     } else {
       take(b.segs);
@@ -361,6 +373,17 @@ export function parseBlocks(text: string, opts?: { literalCitations?: boolean })
     const line = lines[i].trim();
     if (!line) continue;
 
+    /*
+     * 配图定位。必须在代码围栏之后、其它规则之前判断 ——
+     * `![](img:12)` 里没有 `|`/`#` 之类会抢的东西，但它也不该被当成段落文字
+     * 原样显示出来（用户会看到一串尖括号和冒号）。
+     */
+    const pic = imageIdOfLine(line);
+    if (pic !== null) {
+      blocks.push({ kind: 'image', id: pic });
+      continue;
+    }
+
     const fence = line.match(/^```(\w*)/);
     if (fence) {
       const body: string[] = [];
@@ -448,6 +471,12 @@ export function flattenForPreview(blocks: Block[]): { segs: Seg[]; newlineBefore
     }
     if (b.kind === 'hr') {
       out.push({ segs: [{ text: '———', bold: false, code: false }], newlineBefore: false });
+      prevWasHeading = false;
+      continue;
+    }
+    if (b.kind === 'image') {
+      // 预览只有几行高，画不了图 —— 留个占位告诉读者「这里原本有张图」
+      out.push({ segs: [{ text: '〔图片〕', bold: false, code: false }], newlineBefore: false });
       prevWasHeading = false;
       continue;
     }

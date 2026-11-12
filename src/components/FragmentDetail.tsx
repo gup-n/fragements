@@ -38,6 +38,7 @@ import { countHits } from '../util/highlight';
 import { parseBlocks } from '../util/mdBlocks';
 import { useKeyboardHeight } from '../util/keyboard';
 import { imageStateOf, imageTextsOf } from '../util/fragmentText';
+import { imageToken, looseImages, removeImageToken } from '../util/inlineImages';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -69,8 +70,12 @@ interface Props {
   /** 读图失败的原因（配图 id → 一句话） */
   imageFail: Record<string, string>;
   onReparseImage: (fragment: Fragment, imageId: number) => void;
-  /** 给这条补图。uri 是选择器给的临时路径，落盘与解析都在上层 */
-  onAddImages: (fragmentId: number, uris: string[], hint: string) => Promise<void>;
+  /** 给这条补图。返回落库后的配图（id 用来在正文里插定位标记） */
+  onAddImages: (
+    fragmentId: number,
+    uris: string[],
+    hint: string,
+  ) => Promise<{ id: number; path: string }[]>;
   /** 删掉一张图（同时删文件） */
   onRemoveImage: (imageId: number) => Promise<void>;
 }
@@ -113,12 +118,16 @@ export function FragmentDetail({
   const [toast, setToast] = useState('');
   /** 待二次确认删除的那张图。图删掉就找不回来了，不能一步到位 */
   const [armedImage, setArmedImage] = useState<number | null>(null);
+  /** 编辑态光标位置。插图要插在光标处，而不是一律追加到末尾 */
+  const [sel, setSel] = useState({ start: 0, end: 0 });
 
   const fragment = items[current] ?? items[initialIndex];
 
   const startEdit = useCallback(() => {
     if (!fragment) return;
     setDraft(fragment.content);
+    // 光标默认在末尾：改一段长文时人通常是接着往下写的
+    setSel({ start: fragment.content.length, end: fragment.content.length });
     setArmedDelete(false);
     setArmedImage(null);
     setEditing(true);
@@ -197,7 +206,7 @@ export function FragmentDetail({
         for (const row of b.rows) for (const seg of row.flat()) n += countHits(seg.text, q);
       } else if (b.kind === 'code') {
         n = countHits(b.text, q);
-      } else if (b.kind !== 'hr') {
+      } else if (b.kind !== 'hr' && b.kind !== 'image') {
         for (const seg of b.segs) n += countHits(seg.text, q);
       }
       for (let k = 0; k < n; k++) at.push(bi);
@@ -304,19 +313,40 @@ export function FragmentDetail({
       if (res.canceled || !res.assets?.length) return;
       setAddingImage(true);
       try {
-        await onAddImages(
+        const added = await onAddImages(
           fragment.id,
           res.assets.map((a) => a.uri),
           draft.trim() || fragment.content,
         );
-        // 加完图必须能看见它 —— 阅读态停在原位就好，图就在正文上方
-        setToast(`加了 ${res.assets.length} 张图，正在读图里的字`);
+        /*
+         * 编辑态加图 = 在光标处留一行定位标记，图就长在这一段文字中间；
+         * 阅读态加图没有光标可依，图落到正文上方的「未定位」区。
+         */
+        if (editing && added.length) insertTokens(added.map((a) => a.id));
+        setToast(
+          editing
+            ? `加了 ${res.assets.length} 张图，插在光标处`
+            : `加了 ${res.assets.length} 张图，正在读图里的字`,
+        );
       } finally {
         setAddingImage(false);
       }
     } catch (e) {
       setToast(e instanceof Error ? `没加上：${e.message}` : '加图失败');
     }
+  }
+
+  /** 在光标处插一行 `![](img:id)`。多张时按顺序各占一行 */
+  function insertTokens(ids: number[]) {
+    const at = Math.min(sel.start, draft.length);
+    const before = draft.slice(0, at);
+    const after = draft.slice(at);
+    const block = ids.map((id) => imageToken(id)).join('\n');
+    const lead = before && !before.endsWith('\n') ? '\n' : '';
+    const tail = after && !after.startsWith('\n') ? '\n' : '';
+    const next = `${before}${lead}${block}${tail}${after}`;
+    setDraft(next);
+    setSel({ start: at + lead.length + block.length, end: at + lead.length + block.length });
   }
 
   async function removeImage(image: FragmentImage) {
@@ -326,6 +356,8 @@ export function FragmentDetail({
     }
     setArmedImage(null);
     await onRemoveImage(image.id);
+    // 正文里指向它的那一行也要去掉，否则会留一条看不见的标记
+    if (editing) setDraft((prev) => removeImageToken(prev, image.id));
     // 删掉的那张不在序列里了，全屏看图的下标要跟着收
     setViewer(null);
   }
@@ -446,6 +478,7 @@ export function FragmentDetail({
         <TextInput
           value={draft}
           onChangeText={setDraft}
+          onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
           style={styles.editInput}
           multiline
           autoFocus
@@ -461,7 +494,9 @@ export function FragmentDetail({
               {armedDelete ? '再点一次确认删除' : '删除这条碎片'}
             </Text>
           </Pressable>
-          <Text style={styles.editHint}>{armedImage ? '再点一次图上的叉号才会真删' : '返回键取消'}</Text>
+          <Text style={styles.editHint}>
+            {armedImage ? '再点一次图上的叉号才会真删' : '「加图」插在光标处'}
+          </Text>
         </View>
 
         {imageMenuLayer}
@@ -725,6 +760,8 @@ function Page({
   const hasMeta = !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
   const texts = imageTextsOf(fragment);
+  /** 正文里没用 `![](img:N)` 定位过的图 —— 铺在正文上方 */
+  const loose = looseImages(fragment);
   // 身份要稳：内联箭头每次渲染都会换新，React 会把 ref 先置 null 再挂回去
   const setScrollRef = useCallback(
     (view: ScrollViewInstance | null) => registerScroll(fragment.id, view),
@@ -757,12 +794,14 @@ function Page({
       ) : null}
 
       {/*
-        配图：竖着排，按原始比例给高度，一张都不裁。
-        点一下进全屏 —— 详情页的宽度就那么多，看截图里的字得能放大到整屏。
+        配图：**只画正文里没定位的那些**。已经在正文 `![](img:12)` 位置上的图
+        跟着文字走（见下面 NoteBody 的 `imageUri`），这里再画一遍就是同一张图出现两次。
+        竖着排，按原始比例给高度，一张都不裁；点一下进全屏。
       */}
-      {fragment.images.length ? (
+      {loose.length ? (
         <View style={styles.imageList}>
-          {fragment.images.map((img, i) => {
+          {loose.map((img) => {
+            const i = fragment.images.findIndex((x) => x.id === img.id);
             const st = imageStateOf(img, imageBusy, imageFail);
             const reason = imageFail[String(img.id)];
             return (
@@ -866,6 +905,15 @@ function Page({
         selectable
         muted={merged}
         highlight={highlight}
+        // 正文里 `![](img:12)` 那一行画成这张图；点它进同一个全屏看图
+        imageUri={(id) => {
+          const img = fragment.images.find((x) => x.id === id);
+          return img ? fragmentImageUri(img.path) : null;
+        }}
+        onImagePress={(id) => {
+          const i = fragment.images.findIndex((x) => x.id === id);
+          if (i >= 0) onOpenImage(i);
+        }}
         // 只有搜索进来才逐块渲染：平时合并成一个大 Text，行距更连贯
         onBlockLayout={highlight ? (bi, y) => registerBlock(fragment.id, bi, y) : undefined}
       />

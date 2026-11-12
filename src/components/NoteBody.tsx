@@ -14,8 +14,17 @@
  * - 加粗和行内代码不能抹掉：旧小结里还有 `- **换盘**：一句话`，
  *   而路径、命令混在正文里不分字形很难扫。
  */
-import React, { useMemo } from 'react';
-import { Platform, StyleSheet, Text, View, type StyleProp, type TextStyle } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Image,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type TextStyle,
+} from 'react-native';
 import { useThemedStyles, type Palette } from '../theme';
 import { findHits } from '../util/highlight';
 import {
@@ -44,7 +53,12 @@ type CiteProps = {
 };
 
 /** 连续的文字块合成一组，交给一个 Text 渲染 —— 否则每行都是独立 Text，行距会散 */
-type Group = { type: 'text'; blocks: TextBlock[] } | { type: 'table'; block: TableBlock } | { type: 'code'; text: string } | { type: 'hr' };
+type Group =
+  | { type: 'text'; blocks: TextBlock[] }
+  | { type: 'table'; block: TableBlock }
+  | { type: 'code'; text: string }
+  | { type: 'image'; id: number }
+  | { type: 'hr' };
 
 function group(blocks: Block[]): Group[] {
   const out: Group[] = [];
@@ -64,6 +78,9 @@ function group(blocks: Block[]): Group[] {
     } else if (b.kind === 'code') {
       flush();
       out.push({ type: 'code', text: b.text });
+    } else if (b.kind === 'image') {
+      flush();
+      out.push({ type: 'image', id: b.id });
     } else if (b.kind === 'hr') {
       flush();
       out.push({ type: 'hr' });
@@ -73,6 +90,49 @@ function group(blocks: Block[]): Group[] {
   }
   flush();
   return out;
+}
+
+/**
+ * 正文里的一张图。
+ *
+ * 高度按图片自己的宽高比算（`aspectRatio`），不写死 4:3 —— 手机截图多是 9:19，
+ * 写死会把主要内容裁掉一半。拿不到尺寸时退回 4:3，至少不塌成 0 高。
+ *
+ * **不在 `Text` 里**：RN 的 Text 里塞 Image 在安卓上会被压成 0 宽，
+ * 所以分块解析把图片当成独立块（`kind: 'image'`），不参与行内排版。
+ */
+function InlineImage({ uri, onPress }: { uri: string; onPress?: () => void }) {
+  const { styles } = useThemedStyles(makeStyles);
+  const [aspect, setAspect] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    Image.getSize(
+      uri,
+      (w, h) => {
+        if (alive && w > 0) setAspect(h / w);
+      },
+      () => undefined,
+    );
+    return () => {
+      alive = false;
+    };
+  }, [uri]);
+
+  const pic = (
+    <Image
+      source={{ uri }}
+      style={[styles.inlineImage, { aspectRatio: 1 / (aspect ?? 0.75) }]}
+      resizeMode="contain"
+      accessibilityLabel="正文里的配图"
+    />
+  );
+  if (!onPress) return pic;
+  return (
+    <Pressable onPress={onPress} accessibilityRole="imagebutton" accessibilityLabel="点开看大图">
+      {pic}
+    </Pressable>
+  );
 }
 
 /**
@@ -282,6 +342,15 @@ interface Props {
    * 屏幕上凭空少一段内容 —— 那是改用户的数据，不是显示问题。
    */
   literalCitations?: boolean;
+  /**
+   * 正文里 `![](img:12)` 的图去哪拿。给了才渲染图片块。
+   *
+   * 返回 null 表示这张图已经不在了（被删掉、文件丢了）—— 整块跳过，
+   * 不画一个空格子：那会让用户以为内容丢了。
+   */
+  imageUri?: (id: number) => string | null;
+  /** 点正文里的图。碎片详情用它进全屏看图 */
+  onImagePress?: (id: number) => void;
 }
 
 export function NoteBody({
@@ -296,6 +365,8 @@ export function NoteBody({
   highlight,
   onBlockLayout,
   literalCitations,
+  imageUri,
+  onImagePress,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const reading = variant === 'reading';
@@ -379,6 +450,17 @@ export function NoteBody({
     />
   );
 
+  /** 正文里的图。拿不到 uri 就不画（见 `imageUri` 的约定） */
+  const imageView = (id: number, key: React.Key) => {
+    const uri = imageUri?.(id);
+    if (!uri) return null;
+    return (
+      <View key={key} style={styles.imageBox}>
+        <InlineImage uri={uri} onPress={onImagePress ? () => onImagePress(id) : undefined} />
+      </View>
+    );
+  };
+
   // ---- 预览模式：一个 Text，靠 numberOfLines 截断 ----
   // 逐块渲染在这里没有意义：View 截不了行，卡片预览会被撑破
   if (numberOfLines !== undefined) {
@@ -434,6 +516,13 @@ export function NoteBody({
               </View>
             );
           }
+          if (b.kind === 'image') {
+            return (
+              <View key={bi} onLayout={measure}>
+                {imageView(b.id, bi)}
+              </View>
+            );
+          }
           return (
             <View key={bi} onLayout={measure}>
               <Text style={[styles.root, style, mutedStyle]} selectable={selectable}>
@@ -453,6 +542,7 @@ export function NoteBody({
         if (g.type === 'table') return tableView(g.block, gi);
         if (g.type === 'hr') return <View key={gi} style={styles.hr} />;
         if (g.type === 'code') return codeView(g.text, gi);
+        if (g.type === 'image') return imageView(g.id, gi);
 
         return (
           <Text key={gi} style={[styles.root, style, mutedStyle]} selectable={selectable}>
@@ -540,8 +630,15 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   trDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
 
-  td: { paddingHorizontal: 9, paddingVertical: 7, justifyContent: 'center', minWidth: 0 },
-  tdDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.hair },
+  /** 正文里的图：整宽、按自身比例给高，上下留一点气口 */
+  imageBox: { marginVertical: 8 },
+  inlineImage: {
+    width: '100%',
+    borderRadius: 10,
+    backgroundColor: c.hairSoft,
+  },
+
+  td: { paddingHorizontal: 9, paddingVertical: 7, justifyContent: 'center', minWidth: 0 },  tdDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.hair },
   tdText: { fontSize: 12.5, lineHeight: 19, color: c.text },
   tdTextReading: { fontSize: 14, lineHeight: 21, color: c.text },
   tdTextDense: { fontSize: 11.5, lineHeight: 17 },

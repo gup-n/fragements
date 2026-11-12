@@ -23,6 +23,7 @@ import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { dayKey } from './src/util/date';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
+import { resolvePendingTokens, stripImageTokens } from './src/util/inlineImages';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 
@@ -270,8 +271,8 @@ function Shell({ booted }: { booted: boolean }) {
   );
 
   const handleAdd = useCallback(
-    async (text: string, imageUris?: string[]) => {
-      if (imageUris?.length) {
+    async (text: string, images?: { key: string; uri: string }[]) => {
+      if (images?.length) {
         /*
          * 配图：先落盘再插库。文件存成了但插库失败，会留下一批没人引用的图 ——
          * 比起「记录里有条指向空文件的碎片」，前者只是浪费几百 KB。
@@ -279,20 +280,30 @@ function Shell({ booted }: { booted: boolean }) {
          */
         const paths: string[] = [];
         try {
-          for (const uri of imageUris) paths.push(await saveFragmentImage(uri));
+          for (const img of images) paths.push(await saveFragmentImage(img.uri));
           const id = await repo.insertFragment(
             text,
             'app',
             undefined,
             paths.map((path) => ({ path })),
           );
+          /*
+           * 长文里插过的图是 `![](img:p1)` 这种**待发标记**（那时还不知道库里的 id）。
+           * 现在图已经入库，把标记换成真 id —— 换不了就会在正文里留一行看不懂的东西。
+           */
+          const inserted = await repo.findFragmentsByIds([id]);
+          const rows = inserted[0]?.images ?? [];
+          const resolved = resolvePendingTokens(
+            text,
+            images.map((img, i) => ({ key: img.key, imageId: rows[i]?.id ?? 0 })),
+          );
+          if (resolved !== text) await repo.updateFragmentContent(id, resolved);
           await reload();
           // 解析不 await：用户已经可以去记下一条了。多张图**串行**解析 ——
           // 并发打出去会撞免费额度的限流，一失败就是整批都要重试
-          const inserted = await repo.findFragmentsByIds([id]);
-          const images = inserted[0]?.images ?? [];
+          const hint = stripImageTokens(resolved);
           void (async () => {
-            for (const img of images) await parseImage(img.id, img.path, text);
+            for (const img of rows) await parseImage(img.id, img.path, hint);
           })();
         } catch (e) {
           for (const path of paths) await removeFragmentImage(path);
@@ -314,7 +325,10 @@ function Shell({ booted }: { booted: boolean }) {
     [parseImage, reload],
   );
 
-  /** 详情页「加一张图」：先落盘、再插一行配图，然后异步读字 */
+  /**
+   * 详情页「加图」：先落盘、再插一行配图，然后异步读字。
+   * 返回新建的配图（正文要拿 id 插 `![](img:id)` 定位标记）。
+   */
   const handleAddImages = useCallback(
     async (fragmentId: number, uris: string[], hint: string) => {
       const added: { id: number; path: string }[] = [];
@@ -335,6 +349,7 @@ function Shell({ booted }: { booted: boolean }) {
       void (async () => {
         for (const a of added) await parseImage(a.id, a.path, hint);
       })();
+      return added;
     },
     [parseImage, reload],
   );

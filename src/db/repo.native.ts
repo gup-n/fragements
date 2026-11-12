@@ -27,6 +27,7 @@ import { normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
+import { stripImageTokens } from '../util/inlineImages';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -668,8 +669,9 @@ function indexFragment(
    * 有配图时把文字层拼进索引。加不加分隔符都行，但加上之后
    * 用户在搜索结果里看到的命中位置不会把正文和图片文字连成一句。
    * 多张图各占一行：两张图的字连成一句会造出原文里没有的句子。
+   * 正文里的 `![](img:12)` 是渲染用的定位标记，剥掉 —— 不该被搜到、也不该占索引体积。
    */
-  const body = [content, ...imageTexts.map((t) => `[图片] ${t}`)].join('\n');
+  const body = [stripImageTokens(content), ...imageTexts.map((t) => `[图片] ${t}`)].join('\n');
   d.runSync('INSERT INTO fragment_fts(rowid, text) VALUES (?, ?)', [
     id,
     indexText(body, tags, project),

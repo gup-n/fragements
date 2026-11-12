@@ -11,6 +11,7 @@
  * 连成一段，整理出来的文档里两件事就被合并了。
  */
 import type { Fragment, FragmentImage } from '../types';
+import { stripImageTokens } from './inlineImages';
 
 /**
  * 图片文字层的分段标记。
@@ -27,7 +28,8 @@ export function imageTextsOf(f: Pick<Fragment, 'images'>): string[] {
 
 /** 正文 + 每张图的文字。什么都没有时返回空串 */
 export function fragmentText(f: Pick<Fragment, 'content' | 'images'>): string {
-  const body = (f.content ?? '').trim();
+  // 正文里的 `![](img:12)` 是给渲染层的定位标记，喂给模型 / 索引 / 预览时是噪音
+  const body = stripImageTokens(f.content ?? '').trim();
   const pics = imageTextsOf(f);
   if (!pics.length) return body;
   const multi = (f.images ?? []).length > 1;

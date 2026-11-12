@@ -57,6 +57,8 @@ const tscArgs = [
   'src/util/batch.ts',
   'src/util/jsonRepair.ts',
   'src/util/fragmentText.ts',
+  'src/util/inlineImages.ts',
+  'src/util/mdBlocks.ts',
   'src/util/urls.ts',
   '--rootDir',
   'src',
@@ -88,6 +90,8 @@ const batch = require(path.join(outDir, 'util', 'batch.js'));
 const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
 const text = require(path.join(outDir, 'util', 'fragmentText.js'));
 const urls = require(path.join(outDir, 'util', 'urls.js'));
+const inline = require(path.join(outDir, 'util', 'inlineImages.js'));
+const mdBlocks = require(path.join(outDir, 'util', 'mdBlocks.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -551,6 +555,61 @@ check('装箱预算把图文字算进去，不是只算正文', () => {
   ];
   // 预算 500：只算正文会收满 3 条（300），算上图文字就是 2 条（约 440）
   eq(batch.packFragments(pool, 40, 500).length, 2, '图文字要占预算');
+});
+
+// ---------------------------------------------------------------------------
+// 3.8b 正文里的图片定位（v0.20.1）
+// ---------------------------------------------------------------------------
+check('正文里的图片标记能认出来，并按出现顺序返回 id', () => {
+  const body = '第一段\n![](img:12)\n第二段\n![](img:7)';
+  eq(inline.referencedImageIds(body).join(','), '12,7', '按出现顺序');
+  eq(inline.imageIdOfLine('  ![](img:3) '), 3, '容忍缩进与空格');
+  eq(inline.imageIdOfLine('![](img:p1)'), null, '待发键不是真图');
+  eq(inline.imageIdOfLine('看这张 ![](img:3)'), null, '行内混排不算定位');
+});
+
+check('剥离标记：正文、索引、导出用的是同一个函数', () => {
+  eq(inline.stripImageTokens('a\n![](img:12)\nb'), 'a\n\nb', '整行去掉');
+  eq(inline.stripImageTokens('前文 ![](img:12) 后文'), '前文  后文', '行内残留也去掉');
+});
+
+check('待发标记落库时换成真 id', () => {
+  const out = inline.resolvePendingTokens('a\n![](img:p1)\nb', [{ key: 'p1', imageId: 42 }]);
+  eq(out, 'a\n![](img:42)\nb', '换成真 id');
+  eq(inline.resolvePendingTokens('纯文字', [{ key: 'p1', imageId: 42 }]), '纯文字', '没标记就原样');
+});
+
+check('删图时正文里指向它的那一行也去掉', () => {
+  eq(inline.removeImageToken('a\n![](img:12)\nb', 12), 'a\nb', '整行去掉');
+  eq(inline.removeImageToken('a\n![](img:13)\nb', 12), 'a\n![](img:13)\nb', '别的图不动');
+});
+
+check('只有没定位的图才铺在正文上方', () => {
+  const imgs = [pic(1, 'x'), pic(2, 'y')];
+  const loose = inline.looseImages({ content: '![](img:1)', images: imgs });
+  eq(loose.length, 1, '已定位的不再重复铺一遍');
+  eq(loose[0].id, 2, '剩下的是没定位的那张');
+});
+
+check('分块把图片标记认成图片块，不当正文', () => {
+  const blocks = mdBlocks.parseBlocks('第一段\n![](img:5)\n第二段');
+  eq(blocks.length, 3, '三块');
+  eq(blocks[1].kind, 'image', '中间是图片块');
+  eq(blocks[1].id, 5, '带 id');
+});
+
+check('卡片预览里图片降级成占位文字，不吐出标记', () => {
+  const flat = mdBlocks.flattenForPreview(mdBlocks.parseBlocks('![](img:5)'));
+  assert(!JSON.stringify(flat).includes('img:5'), '预览不该出现标记原文');
+});
+
+check('图文字拼接前先剥标记，模型看不到 `![](img:12)`', () => {
+  const out = text.fragmentText({
+    content: '换盘前\n![](img:9)\n先跑 SMART',
+    images: [pic(9, 'SMART 截图')],
+  });
+  assert(!out.includes('img:9'), '材料里不该有标记');
+  assert(out.includes('换盘前') && out.includes('SMART 截图'), '正文与图文字都还在');
 });
 
 // ---------------------------------------------------------------------------

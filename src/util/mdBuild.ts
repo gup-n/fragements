@@ -12,6 +12,7 @@
 
 import type { Fragment, Todo } from '../types';
 import { dayKey, formatTime, weekdayCN } from './date';
+import { stripImageTokens } from './inlineImages';
 import { flattenTodos } from './todoTree';
 
 export interface ExportFile {
@@ -32,7 +33,9 @@ function daySections(fragments: Fragment[]) {
     const items = byDay.get(key)!.slice().sort((a, b) => a.createdAt - b.createdAt);
     const lines = items.map((f) => {
       // 正文压成一行：md 列表项里塞换行会把解析和阅读都搞乱
-      const text = f.content.replace(/\r?\n/g, ' ').trim();
+      // 正文里的 `![](img:12)` 是应用内定位标记，导出时整段去掉 ——
+      // 留在 Markdown 里就是一堆打不开的图片链接
+      const text = stripImageTokens(f.content).replace(/\r?\n/g, ' ').trim();
       const tags = f.tags.map((t) => `#${t}`).join(' ');
       const merged = f.mergedInto !== null ? '（已合并）' : '';
       const base = `- ${formatTime(f.createdAt)} ${text}${merged}`;
