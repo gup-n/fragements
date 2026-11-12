@@ -23,7 +23,7 @@ import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { dayKey } from './src/util/date';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
-import { resolvePendingTokens, stripImageTokens } from './src/util/inlineImages';
+import { resolvePendingTokens } from './src/util/inlineImages';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 
@@ -231,12 +231,17 @@ function Shell({ booted }: { booted: boolean }) {
   }, [route, settingsFrom]);
 
   /**
-   * 把**一张**图的文字读出来，写回那条配图。
+   * 用户**明确点了**「让它读一遍」才走这里。
    *
-   * 顺序很重要：**先存图、先插碎片，再解析**。反过来的话模型一失败，
-   * 用户刚拍的那张图和写的那句话就一起没了 —— 而记录应用最不能丢的就是这个。
+   * v0.20.2 起上传不再自动解析（用户 2026-11-12：「不要上传一次解析一次」）：
+   * 读图发生在整理和提问之前 —— 见 `ai/imageReads.ts`。
+   * 这个入口留着，是因为「重试 / 现在就读」必须是一个看得见的按钮：
+   * 整理时读失败的那张，用户得有个地方立刻再试，而不是等下一轮。
    *
-   * 失败要留痕：`imageFail` 存一句原因，行上显示「没读出文字 · 重试」。
+   * 顺序仍然是**先存图、先插碎片，再解析**。反过来的话模型一失败，
+   * 用户刚拍的那张图和写的那句话就一起没了 —— 记录应用最不能丢的就是这个。
+   *
+   * 失败要留痕：`imageFail` 存一句原因，行上显示「没读出文字 · 点这里重试」。
    * 静默失败会让用户以为「这张图就是没字」。
    */
   const parseImage = useCallback(
@@ -298,13 +303,12 @@ function Shell({ booted }: { booted: boolean }) {
             images.map((img, i) => ({ key: img.key, imageId: rows[i]?.id ?? 0 })),
           );
           if (resolved !== text) await repo.updateFragmentContent(id, resolved);
+          /*
+           * 不在这里读图。图已经落盘、已进库、时间轴上马上就能看到 ——
+           * 读字留到「什么时候要用」：整理或提问之前由 `ai/imageReads.ts` 统一做。
+           * 这里多等的几秒曾经是用户看到的第一件事，而它什么也没换来。
+           */
           await reload();
-          // 解析不 await：用户已经可以去记下一条了。多张图**串行**解析 ——
-          // 并发打出去会撞免费额度的限流，一失败就是整批都要重试
-          const hint = stripImageTokens(resolved);
-          void (async () => {
-            for (const img of rows) await parseImage(img.id, img.path, hint);
-          })();
         } catch (e) {
           for (const path of paths) await removeFragmentImage(path);
           throw e;
@@ -322,15 +326,16 @@ function Shell({ booted }: { booted: boolean }) {
         }
       }
     },
-    [parseImage, reload],
+    [reload],
   );
 
   /**
-   * 详情页「加图」：先落盘、再插一行配图，然后异步读字。
+   * 详情页「加图」：先落盘、再插一行配图。**不读字** ——
+   * 读字统一在整理/提问前做（`ai/imageReads.ts`），也可以由用户在图下面点一下立刻读。
    * 返回新建的配图（正文要拿 id 插 `![](img:id)` 定位标记）。
    */
   const handleAddImages = useCallback(
-    async (fragmentId: number, uris: string[], hint: string) => {
+    async (fragmentId: number, uris: string[]) => {
       const added: { id: number; path: string }[] = [];
       for (const uri of uris) {
         const path = await saveFragmentImage(uri);
@@ -344,14 +349,10 @@ function Shell({ booted }: { booted: boolean }) {
         }
         if (imageId) added.push({ id: imageId, path });
       }
-      // 先把「多出来的缩略图」显示出来，再逐张读字 —— 否则选完图要有好几秒没反应
       await reload();
-      void (async () => {
-        for (const a of added) await parseImage(a.id, a.path, hint);
-      })();
       return added;
     },
-    [parseImage, reload],
+    [reload],
   );
 
   /** 详情页删掉一张图：数据库那行先删，再删文件（顺序反了会留下指向空文件的图） */

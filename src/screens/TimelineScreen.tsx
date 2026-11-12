@@ -149,7 +149,6 @@ interface Props {
   onAddImages: (
     fragmentId: number,
     uris: string[],
-    hint: string,
   ) => Promise<{ id: number; path: string }[]>;
   /** 详情页里删掉一张图 */
   onRemoveImage: (imageId: number) => Promise<void>;
@@ -771,23 +770,30 @@ export function TimelineScreen({
   }
 
   /**
-   * 拍照 / 相册菜单。抽成函数是因为它要在两个地方出现：
+   * 拍照 / 相册的选择行。抽成函数是因为它要在两个地方出现：
    * 底部输入区（图落到正文上方）和长文记录（图插在光标处）。
    * `inlineHere` 决定选完图要不要一并插定位标记。
+   *
+   * **必须是排版里的一行，不能是浮在输入区上方的弹层**（v0.20.2）：
+   * 弹层用 `position: absolute` + `bottom: 100%` 挂在输入区上边界，
+   * 那个位置刚好是键盘抬起来之后被盖住的地方 —— 用户得先收起输入法才点得到，
+   * 而且长文页和随手记两处同时中招。放进卡片内部当普通一行，
+   * 它会跟着输入区一起被键盘顶上来，位置天然正确。
    */
-  function imageMenuView(inlineHere: boolean) {
+  function imagePickerRow(inlineHere: boolean) {
     return (
-      <View style={[styles.imageSheet, inlineHere && styles.imageSheetFull]}>
-        <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('camera', inlineHere)}>
-          <Ionicons name="camera-outline" size={18} color={c.text2} />
-          <Text style={styles.imageSheetText}>拍一张</Text>
+      <View style={[styles.pickRow, inlineHere && styles.pickRowFull]}>
+        <Pressable style={styles.pickChip} onPress={() => void pickImage('camera', inlineHere)}>
+          <Ionicons name="camera-outline" size={16} color={c.text2} />
+          <Text style={styles.pickChipText}>拍一张</Text>
         </Pressable>
-        <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('library', inlineHere)}>
-          <Ionicons name="images-outline" size={18} color={c.text2} />
-          <Text style={styles.imageSheetText}>从相册选（可多选）</Text>
+        <Pressable style={styles.pickChip} onPress={() => void pickImage('library', inlineHere)}>
+          <Ionicons name="images-outline" size={16} color={c.text2} />
+          <Text style={styles.pickChipText}>从相册选</Text>
         </Pressable>
-        <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
-          <Text style={styles.imageSheetText}>取消</Text>
+        <View style={styles.flex} />
+        <Pressable onPress={() => setImageMenu(false)} hitSlop={8} accessibilityLabel="收起加图">
+          <Text style={styles.pickCancel}>取消</Text>
         </Pressable>
       </View>
     );
@@ -1177,7 +1183,9 @@ export function TimelineScreen({
                           const allTried = fragment.images.every((i) => i.text !== null);
                           return (
                             <Text style={styles.imageNote}>
-                              {allTried ? '图里没有可读的字' : '还没读图里的字'}
+                              {allTried
+                                ? '图里没有可读的字'
+                                : '图里的字还没读 · 整理或提问时会看'}
                             </Text>
                           );
                         })()}
@@ -1301,6 +1309,9 @@ export function TimelineScreen({
               </ScrollView>
             ) : null}
 
+            {/* 加图选择行：在卡片内部，键盘弹着也点得到 */}
+            {imageMenu && !fullEdit ? imagePickerRow(false) : null}
+
             {/*
               工具行：展开在左，图片和发布在右（用户 2026-11-12 要求把图片图标挪到右边）。
               发布贴最右是肌肉记忆的位置，图片紧挨着它才不会让人去左边找。
@@ -1324,7 +1335,7 @@ export function TimelineScreen({
               <Pressable
                 onPress={() => setImageMenu((v) => !v)}
                 hitSlop={8}
-                style={styles.toolBtn}
+                style={[styles.toolBtn, imageMenu && styles.toolBtnOn]}
                 accessibilityLabel="加图片"
               >
                 <Ionicons name="image-outline" size={18} color={c.text2} />
@@ -1346,9 +1357,6 @@ export function TimelineScreen({
               </Pressable>
             </View>
           </View>
-
-          {/* 拍照 / 相册。弹出层用 absolute，不用 Modal —— 键盘弹着的时候 Modal 会错位 */}
-          {imageMenu && !fullEdit ? imageMenuView(false) : null}
         </View>
       </View>
 
@@ -1470,6 +1478,9 @@ export function TimelineScreen({
             </ScrollView>
           ) : null}
 
+          {/* 同上：选择行走正常流，贴在底栏上方，键盘弹着也点得到 */}
+          {imageMenu ? imagePickerRow(true) : null}
+
           <View style={styles.fullBar}>
             <Text style={styles.fullCount}>
               {draft.length} 字
@@ -1478,7 +1489,7 @@ export function TimelineScreen({
             <Pressable
               onPress={() => setImageMenu((v) => !v)}
               hitSlop={8}
-              style={styles.toolBtn}
+              style={[styles.toolBtn, imageMenu && styles.toolBtnOn]}
               accessibilityLabel="在光标处插图"
             >
               <Ionicons name="image-outline" size={18} color={c.text2} />
@@ -1489,8 +1500,6 @@ export function TimelineScreen({
               ) : null}
             </Pressable>
           </View>
-
-          {imageMenu ? imageMenuView(true) : null}
         </View>
       ) : null}
     </View>
@@ -1744,33 +1753,28 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     // 压在小图上必须够深，浅灰底上白色叉号会看不见
     backgroundColor: 'rgba(0,0,0,0.62)',
   },
-  /** 加图菜单贴在输入区上方 */
-  imageSheet: {
-    position: 'absolute',
-    left: 16,
-    bottom: '100%',
-    marginBottom: 6,
-    minWidth: 170,
-    backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.hair,
-    paddingVertical: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  imageSheetRow: {
+  /** 加图选择行：在输入卡片内部，跟着输入区一起被键盘顶上来的那一行 */
+  pickRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 2,
+    paddingRight: 4,
   },
-  imageSheetCancel: { paddingHorizontal: 14, paddingVertical: 11 },
-  imageSheetText: { fontSize: 13.5, color: c.text },
+  pickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: R.btn,
+    backgroundColor: c.hairSoft,
+  },
+  pickChipText: { fontSize: 12.5, color: c.text },
+  pickCancel: { fontSize: 12.5, color: c.text3 },
+  /** 长文页那一行要和底栏对齐 */
+  pickRowFull: { paddingHorizontal: 18 },
   /**
    * 输入区：上方文字、下方工具行。
    *
@@ -1801,6 +1805,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: c.hairSoft,
   },
+  /** 选择行开着时给图标一点底色：否则那一行像是凭空冒出来的 */
+  toolBtnOn: { backgroundColor: c.hair },
   /** 已选图张数。压在图标右上角，不额外占位置 */
   toolBadge: {
     position: 'absolute',
@@ -1870,8 +1876,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   fullThumbs: { flexGrow: 0 },
   fullThumbsContent: { gap: 8, paddingHorizontal: 18, paddingTop: 8 },
-  /** 长文里的加图菜单：贴着底栏上方弹出 */
-  imageSheetFull: { left: 16, right: 16, bottom: 64 },
 
   /** 覆盖整个内容区；安全区由外层 SafeAreaView 负责，这里只管层叠 */
   overlay: {

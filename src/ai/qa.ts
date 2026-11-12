@@ -37,6 +37,8 @@ import { repo } from '../db/repo';
 import { AiError, requestChat, type ChatMessage, type ChatProgress } from './chat';
 import { searchWeb } from './search';
 import { fetchPages } from './fetchPage';
+import { readPendingImages } from './imageReads';
+import { ASK_IMAGE_READ_LIMIT } from '../util/pendingImages';
 import { extractUrls, searchQueryOf } from '../util/urls';
 import {
   buildDocumentCitations,
@@ -451,11 +453,20 @@ export interface QaOptions {
    */
   scope?: QaScope;
   onProgress?: (patch: ChatProgress) => void;
+  /**
+   * 「现在在干嘛」的一句话（读图、读网页这类不产生流式输出的前置动作）。
+   * 不往外说，用户只会觉得发出去之后卡了很久 —— 而这段时间其实在花钱。
+   */
+  onStage?: (text: string) => void;
 }
 
 export interface QaRun extends QaOutcome {
   /** 本轮检索到的资料，界面上可以显示「查了 N 条」 */
   retrieval: Retrieval;
+  /** 本轮顺手读了几张图里的字（0 = 这次命中的碎片没有未读的图） */
+  imageReads: number;
+  /** 其中几张没读出来。>0 时答案可能缺这几张图里的信息，要如实说 */
+  imageReadFailed: number;
 }
 
 /** 一次请求的输入预算分配结果，抽出来是为了能在 node 里断言 */
@@ -525,6 +536,7 @@ interface BaseAsk {
   config: AiConfig;
   thinking: boolean;
   onProgress?: (patch: ChatProgress) => void;
+  onStage?: (text: string) => void;
 }
 
 /** 记录模式：原来那套检索 + 联网，行为不变，只是多了预算与范围字段 */
@@ -580,6 +592,17 @@ async function askRecords(
         );
 
   const retrieval = await retrieveLocal(question, plan.turns, contextIds, plan.materialBudget);
+  /*
+   * 素材里还有没读过的图 → 现在顺手看一眼（用户 2026-11-12：读图放在提问时，
+   * 不要上传时就解析）。只读**真要进上下文的那几条**，代价跟着问题走：
+   * 没命中带图的碎片，一次请求都不多发。读完写回文字层，下一次提问不会再读。
+   */
+  const pictures = await readPendingImages({
+    fragments: retrieval.fragments,
+    config,
+    limit: ASK_IMAGE_READ_LIMIT,
+    onStep: (text) => input.onStage?.(text),
+  });
   const { hits: web, error: webError } = await webTask;
 
   const outcome = await requestChat(
@@ -613,6 +636,8 @@ async function askRecords(
     scope: { kind: 'records' },
     inputTruncated: plan.droppedTurns > 0,
     retrieval,
+    imageReads: pictures.read,
+    imageReadFailed: pictures.failed,
   };
 }
 
@@ -685,6 +710,9 @@ async function askDocuments(
       range: null,
       documentPicks: docPlan.picks,
     },
+    // 文档模式只读文档切片，不碰碎片配图
+    imageReads: 0,
+    imageReadFailed: 0,
   };
 }
 
@@ -696,7 +724,7 @@ async function askDocuments(
  * 兜住的每一条都会变成一次范围越界。
  */
 export async function askQuestion(options: QaOptions): Promise<QaRun> {
-  const { question, turns, config, thinking, useWeb, contextIds, onProgress } = options;
+  const { question, turns, config, thinking, useWeb, contextIds, onProgress, onStage } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   const q = question.trim();
   if (!q) throw new AiError('format', '问点什么吧');
@@ -713,8 +741,9 @@ export async function askQuestion(options: QaOptions): Promise<QaRun> {
       // 首版文档问答不开联网：来源范围要干净，网页不能混进「这几份文档说」
       scope,
       onProgress,
+      onStage,
     });
   }
 
-  return askRecords({ question: q, config, thinking, turns, useWeb, contextIds, onProgress });
+  return askRecords({ question: q, config, thinking, turns, useWeb, contextIds, onProgress, onStage });
 }

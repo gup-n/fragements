@@ -59,6 +59,7 @@ const tscArgs = [
   'src/util/fragmentText.ts',
   'src/util/inlineImages.ts',
   'src/util/mdBlocks.ts',
+  'src/util/pendingImages.ts',
   'src/util/urls.ts',
   '--rootDir',
   'src',
@@ -92,6 +93,7 @@ const text = require(path.join(outDir, 'util', 'fragmentText.js'));
 const urls = require(path.join(outDir, 'util', 'urls.js'));
 const inline = require(path.join(outDir, 'util', 'inlineImages.js'));
 const mdBlocks = require(path.join(outDir, 'util', 'mdBlocks.js'));
+const pending = require(path.join(outDir, 'util', 'pendingImages.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -610,6 +612,53 @@ check('图文字拼接前先剥标记，模型看不到 `![](img:12)`', () => {
   });
   assert(!out.includes('img:9'), '材料里不该有标记');
   assert(out.includes('换盘前') && out.includes('SMART 截图'), '正文与图文字都还在');
+});
+
+// ---------------------------------------------------------------------------
+// 3.8c 读图的时机：只挑没读过的，一轮有上限（v0.20.2）
+// ---------------------------------------------------------------------------
+check('只挑没读过的图：读过（含空结论）的不再读', () => {
+  const frag = {
+    id: 1,
+    content: '这块盘有异响',
+    images: [pic(11, 'SMART 截图'), pic(12, ''), pic(13, null)],
+  };
+  const { list, rest } = pending.pendingImagesOf([frag]);
+  eq(list.length, 1, '只有 null 的那张');
+  eq(list[0].imageId, 13, '挑出的是没读过的那张');
+  eq(rest, 0, '没有落下的');
+});
+
+check('纯文字碎片没有待读的图', () => {
+  eq(pending.pendingImagesOf([{ id: 2, content: '只有字', images: [] }]).list.length, 0, '空');
+});
+
+check('一轮有上限，剩下的要报出来（不能假装全读完了）', () => {
+  const frag = {
+    id: 3,
+    content: '一堆截图',
+    images: [1, 2, 3, 4, 5].map((i) => pic(i, null)),
+  };
+  const { list, rest } = pending.pendingImagesOf([frag], 2);
+  eq(list.length, 2, '只给两张');
+  eq(rest, 3, '剩下三张如实报');
+  eq(pending.pendingImagesOf([frag], 0).list.length, 0, '上限为 0 时一张都不读');
+});
+
+check('待读的图带上那条碎片的正文（同一张图，正文不同要抄的东西不同）', () => {
+  const body = '这个报错啥意思 然后一张图 ![](img:9) 结束';
+  const { list } = pending.pendingImagesOf([{ id: 4, content: body, images: [pic(9, null)] }]);
+  eq(list[0].fragmentId, 4, '记着是哪一条的');
+  eq(list[0].hint, '这个报错啥意思 然后一张图 结束', '正文里的定位标记要剥掉');
+  eq(list[0].path, 'p9.jpg', '文件相对名照带');
+});
+
+check('按碎片顺序排队：先记的先读', () => {
+  const { list } = pending.pendingImagesOf([
+    { id: 5, content: 'a', images: [pic(51, null)] },
+    { id: 6, content: 'b', images: [pic(61, null)] },
+  ]);
+  eq(list.map((x) => x.imageId).join(','), '51,61', '顺序');
 });
 
 // ---------------------------------------------------------------------------

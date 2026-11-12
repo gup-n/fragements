@@ -73,6 +73,8 @@ import {
 import { routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
 import { packFragments, sliceBatches } from '../util/batch';
 import { hasReadableText } from '../util/fragmentText';
+import { IMAGE_READ_LIMIT, pendingImagesOf } from '../util/pendingImages';
+import { readPendingImages, type ImageReadResult } from '../ai/imageReads';
 import { writeKnowledgeDocument } from '../documents/knowledge';
 import { KnowledgeDraftCard, type AgentStep, type SavedDoc } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
@@ -139,6 +141,21 @@ function todoSnapshotsOf(draft: KnowledgeDraft): TodoSnapshot[] {
 
 function citeKey(kind: string, id: number) {
   return `${kind}${id}`;
+}
+
+/**
+ * 「这一轮顺手看了几张图」写成一句人话。
+ *
+ * 三个数字各有各的后果：读了 = 材料里有这段字；没读出来 = 材料缺一块，
+ * 下次还要试；剩下没看 = 这一轮排不上，别让它听起来像全读完了。
+ */
+function imageLineOf(read: ImageReadResult | null): string {
+  if (!read || (!read.read && !read.failed)) return '';
+  const bits: string[] = [];
+  if (read.read) bits.push(`顺手看了 ${read.read} 张图里的字`);
+  if (read.failed) bits.push(`${read.failed} 张没读出来`);
+  if (read.rest) bits.push(`还有 ${read.rest} 张下轮再看`);
+  return bits.join('，');
 }
 
 /** 历史列表的预览：把 Markdown 外壳剥掉，只留能读的一行 */
@@ -1032,6 +1049,7 @@ export function AskScreen({
         useWeb: !docMode && webOn,
         contextIds: !docMode && context ? [context.id] : [],
         scope,
+        onStage: (text) => setWebNote(text),
         onProgress: (patch) => {
           const now = Date.now();
           if (now - streamRef.current.lastFlush < 120) return;
@@ -1058,6 +1076,15 @@ export function AskScreen({
       setOpenReasoningKey(`${turns.length}-${question.slice(0, 8)}`);
       dirtyRef.current = true;
       void persistSession(next);
+
+      // 这一轮顺手读了图里的字（已经写进库），时间轴那份数据要跟上，别再说「还没读」
+      if (run.imageReads) {
+        try {
+          await onSaved();
+        } catch {
+          /* 刷新失败不影响这一轮的回答 */
+        }
+      }
 
       if (docMode) {
         const read = (run.documentCoverage ?? []).reduce((n, x) => n + x.includedChunks, 0);
@@ -1086,6 +1113,17 @@ export function AskScreen({
                 ? '联网开了，但没搜到有用的网页'
                 : '',
         );
+        /*
+         * 图是这次提问才读的（上传时不再解析），所以「答之前多等的那几秒」
+         * 必须有出处。和联网提示并在一行，比再开一行更省位置。
+         */
+        if (run.imageReads || run.imageReadFailed) {
+          const bits = [
+            run.imageReads ? `顺手看了 ${run.imageReads} 张图里的字` : '',
+            run.imageReadFailed ? `${run.imageReadFailed} 张没读出来` : '',
+          ].filter(Boolean);
+          setWebNote((s) => (s ? `${s}｜${bits.join('，')}` : bits.join('，')));
+        }
         if (run.scanned === 0 && run.fragments.length === 0) {
           setWebNote((s) => (s ? `${s}｜本地记录里没检索到相关碎片` : '本地记录里没检索到相关碎片'));
         }
@@ -1279,11 +1317,17 @@ export function AskScreen({
       let batches: Fragment[][] = [];
       let restCount = 0;
       let hint = '';
+      /** 这一轮顺手读了哪些图。null = 这批里没有没读过的图 */
+      let imageRead: ImageReadResult | null = null;
 
       if (opts.turns) {
         hint = `这场会话的 ${opts.turns.length} 轮问答`;
       } else {
-        const pool = opts.fragments ?? (await pickFragments(context, all));
+        const picked = opts.fragments
+          ? { pool: opts.fragments, read: await readImagesOf(opts.fragments, config) }
+          : await pickFragments(context, all, config);
+        imageRead = picked.read;
+        const pool = picked.pool;
         if (!pool.length) {
           // 「继续」时草稿里还有没写库的产出，不能因为这次没材料就把它清掉
           if (!append) {
@@ -1312,10 +1356,16 @@ export function AskScreen({
       const existing = await loadTodoSnapshots();
       if (draftGenRef.current !== gen) return;
       if (append) {
-        markLastStep({ text: `又读到${hint}，正在提炼…`, state: 'running' });
+        markLastStep({
+          text: `又读到${hint}${imageRead?.read ? `（顺手看了 ${imageRead.read} 张图）` : ''}，正在提炼…`,
+          state: 'running',
+        });
       } else {
+        const seen = imageLineOf(imageRead);
         setDraftSteps([
           { text: `读到${hint}${existing.length ? `，${existing.length} 条已有待办` : ''}`, state: 'done' },
+          // 读图是一步看得见的动作：不写出来，用户只会觉得「怎么多等了一会儿」
+          ...(seen ? [{ text: seen, state: 'done' as const }] : []),
           {
             text: batches.length > 1 ? '第 1 批：正在提炼可复用的知识…' : '正在提炼可复用的知识…',
             state: 'running',
@@ -1390,6 +1440,12 @@ export function AskScreen({
       const noteBits: string[] = [];
       if (truncated) noteBits.push('材料太多，中间省略了一部分，可能漏掉一些细节');
       if (restCount) noteBits.push(`还有 ${restCount} 条没整理，点下面「继续」接着来`);
+      /*
+       * 读图的两种「没成」要分开说：失败的那张是白试了一次（可以再试），
+       * 没排上的那些只是这一轮没轮到 —— 混成一句「有些图没读」就分不清该不该重来。
+       */
+      if (imageRead?.failed) noteBits.push(`有 ${imageRead.failed} 张图没读出来，下次整理会再试`);
+      if (imageRead?.rest) noteBits.push(`还有 ${imageRead.rest} 张图没来得及看，下一轮接着看`);
       setDraftNote(noteBits.join('；'));
 
       // 整理也是对话：写进历史，退出之后还能找回来
@@ -1405,6 +1461,17 @@ export function AskScreen({
         opts.session,
       );
       if (sid !== null && draftGenRef.current === gen) setDraftSession(sid);
+      /*
+       * 这一轮可能刚把图里的字写进库（整理前读的那几张）。时间轴显示的是上层
+       * 那份 list，不重读的话回到时间轴还说「图里的字还没读」—— 明明是刚读过的。
+       */
+      if (imageRead?.read) {
+        try {
+          await onSaved();
+        } catch {
+          /* 刷新失败不影响已经写进去的字 */
+        }
+      }
     } catch (e) {
       if (draftGenRef.current !== gen) return;
       setDraftErr(errorDetailOf(e));
@@ -1602,7 +1669,35 @@ export function AskScreen({
   }
 
   /**
-   * 取这一轮要整理的碎片。
+   * 把这一批碎片里**还没读过**的图读一遍（最多 6 张）。
+   *
+   * 时机是这里，不是上传的时候（用户 2026-11-12：「不要上传一次解析一次，
+   * 在整理时-询问时把图片顺手让 deepseek 查看」）。图已经在手机上躺了几天，
+   * 现在才第一次有机会被模型看到 —— 因为**现在才要用它**。
+   *
+   * 读不出来不拦整理：材料里少那一块，但数量如实写在步骤里。
+   */
+  async function readImagesOf(
+    target: Fragment[],
+    config: AiConfig,
+  ): Promise<ImageReadResult | null> {
+    const { list } = pendingImagesOf(target, IMAGE_READ_LIMIT);
+    if (!list.length) return null;
+    markLastStep({
+      text: `先把 ${list.length} 张图看一眼（图里的字要进材料）…`,
+      state: 'running',
+    });
+    return readPendingImages({
+      fragments: target,
+      config,
+      limit: IMAGE_READ_LIMIT,
+      onStep: (text) => markLastStep({ text }),
+    });
+  }
+
+  /**
+   * 取这一轮要整理的碎片。**顺带把里面的图读了** —— 必须在装箱之前读，
+   * 否则图里的字不算进字数预算，一批 40 条带图的会把 16k 撑到两倍。
    *
    * 从某条碎片进来就只整理那一条（用户点的就是它）。
    * 否则：
@@ -1612,30 +1707,48 @@ export function AskScreen({
    * 用 `listFragmentsBetween` 而不是 `listFragments()`：后者默认 500 条上限，
    * 「所有」会被悄悄截掉一批 —— 正是用户这次报的问题（只看了最近 40 条）。
    */
-  async function pickFragments(contextFragment: Fragment | null, all = false): Promise<Fragment[]> {
-    if (contextFragment) return [contextFragment];
+  async function pickFragments(
+    contextFragment: Fragment | null,
+    all: boolean,
+    config: AiConfig,
+  ): Promise<{ pool: Fragment[]; read: ImageReadResult | null }> {
+    if (contextFragment) {
+      // 用户指着这一条问/整理：它的图当然要读
+      return { pool: [contextFragment], read: await readImagesOf([contextFragment], config) };
+    }
+    /*
+     * 取碎片和读图分开两段 try：读图失败不该被当成「没有碎片」——
+     * 那样界面会说「还没有可整理的碎片」，而用户明明刚记了十条。
+     */
+    let target: Fragment[];
     try {
       const list = await repo.listFragmentsBetween(0, Date.now() + 86_400_000);
       /*
-       * 「有可读内容」= 正文或图片文字层至少有一个。
-       * 纯图且还没解析出来的碎片不能进材料：模型只会看到一个空块，
-       * 却照样占掉字数预算。
+       * 「能进材料」= 正文有字，**或者带图**。
+       * 带图但还没读过的必须留下：读图就发生在这一轮，先筛掉的话
+       * 纯图碎片永远进不了整理，也就永远等不到被读。
        */
-      const usable = list.filter((f) => f.mergedInto === null && hasReadableText(f));
+      const usable = list.filter(
+        (f) => f.mergedInto === null && (hasReadableText(f) || f.images.length > 0),
+      );
       if (!all) {
-        // 升序列表的尾部才是最近的；反转之后装箱，超长的那条才不会挤掉后面的
-        return packFragments(usable.slice().reverse(), 40, 16_000);
+        target = usable.slice().reverse();
+      } else {
+        let cursor = 0;
+        try {
+          cursor = Number(await repo.getSetting(ALL_CURSOR_KEY)) || 0;
+        } catch {
+          cursor = 0;
+        }
+        target = usable.filter((f) => f.id > cursor);
       }
-      let cursor = 0;
-      try {
-        cursor = Number(await repo.getSetting(ALL_CURSOR_KEY)) || 0;
-      } catch {
-        cursor = 0;
-      }
-      return usable.filter((f) => f.id > cursor);
     } catch {
-      return [];
+      return { pool: [], read: null };
     }
+
+    const read = await readImagesOf(target, config);
+    // 读完再装箱：图里的字此时已经算得上预算
+    return { pool: all ? target : packFragments(target, 40, 16_000), read };
   }
 
   /**

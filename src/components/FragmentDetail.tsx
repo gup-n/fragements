@@ -74,7 +74,6 @@ interface Props {
   onAddImages: (
     fragmentId: number,
     uris: string[],
-    hint: string,
   ) => Promise<{ id: number; path: string }[]>;
   /** 删掉一张图（同时删文件） */
   onRemoveImage: (imageId: number) => Promise<void>;
@@ -316,7 +315,6 @@ export function FragmentDetail({
         const added = await onAddImages(
           fragment.id,
           res.assets.map((a) => a.uri),
-          draft.trim() || fragment.content,
         );
         /*
          * 编辑态加图 = 在光标处留一行定位标记，图就长在这一段文字中间；
@@ -326,7 +324,8 @@ export function FragmentDetail({
         setToast(
           editing
             ? `加了 ${res.assets.length} 张图，插在光标处`
-            : `加了 ${res.assets.length} 张图，正在读图里的字`,
+            : // 不读字了，别再说「正在读」—— 那句话会一直停在那里不被兑现
+              `加了 ${res.assets.length} 张图，整理或提问时会读图里的字`,
         );
       } finally {
         setAddingImage(false);
@@ -845,7 +844,9 @@ function Page({
                   <Text style={styles.imageState}>这张图里没读出字</Text>
                 ) : (
                   <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
-                    <Text style={styles.imageState}>还没读过这张图 · 点一下让它读</Text>
+                    <Text style={styles.imageState}>
+                      还没读过 · 整理或提问时会看，也可以点这里现在读
+                    </Text>
                   </Pressable>
                 )}
               </View>
