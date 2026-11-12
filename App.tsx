@@ -137,14 +137,15 @@ function Shell({ booted }: { booted: boolean }) {
    */
   const [update, setUpdate] = useState<ReleaseInfo | null>(null);
   /**
-   * 正在解析配图的碎片 id。
+   * 正在解析的**配图 id**（不是碎片 id）。
    *
-   * 解析是异步的（要调模型，几秒钟），而图本身已经进库了。界面上必须
-   * 分开表达这两件事：**记录已经存好**，只是图片里的字还在读。
-   * 混成一句「保存中」会让用户以为记录没记上。
+   * 一条碎片可能带好几张图，每张各读各的；用碎片 id 做键的话，第二张图
+   * 还在读时第一张也会显示成「正在读」。解析是异步的（要调模型，几秒钟），
+   * 而图本身已经进库了 —— 界面上必须分开表达这两件事：**记录已经存好**，
+   * 只是某张图里的字还在读。混成一句「保存中」会让用户以为记录没记上。
    */
   const [imageBusy, setImageBusy] = useState<Set<number>>(new Set());
-  /** 图解析失败的原因（id → 一句人话）。行上要能点重试，不能只在日志里 */
+  /** 图解析失败的原因（配图 id → 一句人话）。行上要能点重试，不能只在日志里 */
   const [imageFail, setImageFail] = useState<Record<number, string>>({});
 
   /*
@@ -229,7 +230,7 @@ function Shell({ booted }: { booted: boolean }) {
   }, [route, settingsFrom]);
 
   /**
-   * 把一张图的文字读出来，写回那一条。
+   * 把**一张**图的文字读出来，写回那条配图。
    *
    * 顺序很重要：**先存图、先插碎片，再解析**。反过来的话模型一失败，
    * 用户刚拍的那张图和写的那句话就一起没了 —— 而记录应用最不能丢的就是这个。
@@ -237,30 +238,30 @@ function Shell({ booted }: { booted: boolean }) {
    * 失败要留痕：`imageFail` 存一句原因，行上显示「没读出文字 · 重试」。
    * 静默失败会让用户以为「这张图就是没字」。
    */
-  const parseImageFor = useCallback(
-    async (id: number, path: string, hint: string) => {
-      setImageBusy((prev) => new Set(prev).add(id));
+  const parseImage = useCallback(
+    async (imageId: number, path: string, hint: string) => {
+      setImageBusy((prev) => new Set(prev).add(imageId));
       try {
         const config = await loadAiConfig();
         const base64 = await readImageBase64(path);
         const text = await describeImage({ base64, config, hint });
-        await repo.setFragmentImageText(id, text);
+        await repo.setFragmentImageText(imageId, text);
         setImageFail((prev) => {
-          if (!(id in prev)) return prev;
+          if (!(imageId in prev)) return prev;
           const next = { ...prev };
-          delete next[id];
+          delete next[imageId];
           return next;
         });
         await reload();
       } catch (e) {
         setImageFail((prev) => ({
           ...prev,
-          [id]: e instanceof Error ? e.message : '图片没读出来',
+          [imageId]: e instanceof Error ? e.message : '图片没读出来',
         }));
       } finally {
         setImageBusy((prev) => {
           const next = new Set(prev);
-          next.delete(id);
+          next.delete(imageId);
           return next;
         });
       }
@@ -269,23 +270,34 @@ function Shell({ booted }: { booted: boolean }) {
   );
 
   const handleAdd = useCallback(
-    async (text: string, imageUri?: string) => {
-      if (imageUri) {
+    async (text: string, imageUris?: string[]) => {
+      if (imageUris?.length) {
         /*
-         * 配图：先落盘再插库。文件存成了但插库失败，会留下一张没人引用的图 ——
+         * 配图：先落盘再插库。文件存成了但插库失败，会留下一批没人引用的图 ——
          * 比起「记录里有条指向空文件的碎片」，前者只是浪费几百 KB。
+         * 反过来（先插库后落盘）会让那条碎片永远缺图，而它看起来是完整的。
          */
-        const path = await saveFragmentImage(imageUri);
-        let id: number;
+        const paths: string[] = [];
         try {
-          id = await repo.insertFragment(text, 'app', undefined, { path });
+          for (const uri of imageUris) paths.push(await saveFragmentImage(uri));
+          const id = await repo.insertFragment(
+            text,
+            'app',
+            undefined,
+            paths.map((path) => ({ path })),
+          );
+          await reload();
+          // 解析不 await：用户已经可以去记下一条了。多张图**串行**解析 ——
+          // 并发打出去会撞免费额度的限流，一失败就是整批都要重试
+          const inserted = await repo.findFragmentsByIds([id]);
+          const images = inserted[0]?.images ?? [];
+          void (async () => {
+            for (const img of images) await parseImage(img.id, img.path, text);
+          })();
         } catch (e) {
-          await removeFragmentImage(path);
+          for (const path of paths) await removeFragmentImage(path);
           throw e;
         }
-        await reload();
-        // 解析不 await：用户已经可以去记下一条了
-        void parseImageFor(id, path, text);
       } else {
         await repo.insertFragment(text, 'app');
         await reload();
@@ -299,16 +311,52 @@ function Shell({ booted }: { booted: boolean }) {
         }
       }
     },
-    [parseImageFor, reload],
+    [parseImage, reload],
+  );
+
+  /** 详情页「加一张图」：先落盘、再插一行配图，然后异步读字 */
+  const handleAddImages = useCallback(
+    async (fragmentId: number, uris: string[], hint: string) => {
+      const added: { id: number; path: string }[] = [];
+      for (const uri of uris) {
+        const path = await saveFragmentImage(uri);
+        let imageId = 0;
+        try {
+          imageId = await repo.insertFragmentImage(fragmentId, path);
+        } catch (e) {
+          // 图行没写进去，这张文件就没人引用了，立刻清掉
+          await removeFragmentImage(path);
+          throw e;
+        }
+        if (imageId) added.push({ id: imageId, path });
+      }
+      // 先把「多出来的缩略图」显示出来，再逐张读字 —— 否则选完图要有好几秒没反应
+      await reload();
+      void (async () => {
+        for (const a of added) await parseImage(a.id, a.path, hint);
+      })();
+    },
+    [parseImage, reload],
+  );
+
+  /** 详情页删掉一张图：数据库那行先删，再删文件（顺序反了会留下指向空文件的图） */
+  const handleRemoveImage = useCallback(
+    async (imageId: number) => {
+      const path = await repo.deleteFragmentImage(imageId);
+      await removeFragmentImage(path);
+      await reload();
+    },
+    [reload],
   );
 
   /** 详情页里的「重新解析」：同一张图再读一遍 */
   const handleReparseImage = useCallback(
-    (fragment: Fragment) => {
-      if (!fragment.imagePath) return;
-      void parseImageFor(fragment.id, fragment.imagePath, fragment.content);
+    (fragment: Fragment, imageId: number) => {
+      const image = fragment.images.find((i) => i.id === imageId);
+      if (!image) return;
+      void parseImage(image.id, image.path, fragment.content);
     },
-    [parseImageFor],
+    [parseImage],
   );
 
   const handleEdit = useCallback(
@@ -321,9 +369,9 @@ function Shell({ booted }: { booted: boolean }) {
 
   const handleDelete = useCallback(
     async (id: number) => {
-      // 先把文件名捞回来，删完那行就再也找不到这张图了 —— 会一直占着空间
-      const imagePath = await repo.deleteFragment(id);
-      await removeFragmentImage(imagePath);
+      // 先把文件名捞回来，删完这些行就再也找不到图了 —— 会一直占着空间
+      const paths = await repo.deleteFragment(id);
+      for (const path of paths) await removeFragmentImage(path);
       await reload();
     },
     [reload],
@@ -424,6 +472,8 @@ function Shell({ booted }: { booted: boolean }) {
                   imageBusy={imageBusy}
                   imageFail={imageFail}
                   onReparseImage={handleReparseImage}
+                  onAddImages={handleAddImages}
+                  onRemoveImage={handleRemoveImage}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}

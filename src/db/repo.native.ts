@@ -10,6 +10,7 @@ import type {
   DocumentLocator,
   DocumentMeta,
   Fragment,
+  FragmentImage,
   FragmentNature,
   FragmentSource,
   FragmentStatus,
@@ -294,6 +295,31 @@ const MIGRATIONS: string[] = [
   ALTER TABLE fragments ADD COLUMN image_path TEXT;
   ALTER TABLE fragments ADD COLUMN image_text TEXT;
   `,
+  // v16：一条碎片可以带多张图（v0.20）。
+  //
+  //     用户 2026-11-12：「目前只能放一张图进去，这些都要优化一下」。
+  //     一张图有自己的一生 —— 文件、文字层、解析失败要单独重试、能单独删掉，
+  //     塞进 fragments 的两个标量列里，第二张图连「它的字读出来没有」都没地方放。
+  //
+  //     v15 的 image_path / image_text **原样保留不删**：老设备上那些图已经
+  //     落在私有目录里，删列等于让文件失去引用、永远查不到。这里只做搬运
+  //     （一条老碎片 → 一行 fragment_images），之后代码只读新表。
+  `
+  CREATE TABLE IF NOT EXISTS fragment_images (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    fragment_id INTEGER NOT NULL,
+    path        TEXT    NOT NULL,
+    text        TEXT,
+    ordinal     INTEGER NOT NULL DEFAULT 0,
+    created_at  INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_fragment_images_frag ON fragment_images(fragment_id, ordinal);
+
+  INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at)
+    SELECT id, image_path, image_text, 0, created_at
+      FROM fragments
+     WHERE image_path IS NOT NULL AND image_path <> '';
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -330,8 +356,25 @@ interface FragmentRow {
   merged_into: number | null;
   nature: string | null;
   organized_at: number | null;
-  image_path: string | null;
-  image_text: string | null;
+}
+
+/** 配图行。`text` 为 NULL = 还没读过，'' = 读过了但图里没字 */
+interface ImageRow {
+  id: number;
+  fragment_id: number;
+  path: string;
+  text: string | null;
+  ordinal: number;
+  created_at: number;
+}
+
+function toFragmentImage(r: ImageRow): FragmentImage {
+  return {
+    id: r.id,
+    path: r.path,
+    text: r.text ?? null,
+    createdAt: r.created_at,
+  };
 }
 
 function toFragment(r: FragmentRow): Fragment {
@@ -346,9 +389,47 @@ function toFragment(r: FragmentRow): Fragment {
     mergedInto: r.merged_into,
     nature: (r.nature as FragmentNature) ?? null,
     organizedAt: r.organized_at ?? null,
-    imagePath: r.image_path ?? null,
-    imageText: r.image_text ?? null,
+    // 配图另行批量装配（见 attachImages）—— 列表动辄几百条，
+    // 每条再查一次图就是几百次往返
+    images: [],
   };
+}
+
+/**
+ * 给一批碎片装配配图。**一次查询**（按 400 切，老 SQLite 绑定上限 999），
+ * 不是逐条查。
+ */
+function attachImages(d: SQLite.SQLiteDatabase, list: Fragment[]): Fragment[] {
+  if (!list.length) return list;
+  const ids = list.map((f) => f.id);
+  const byFragment = new Map<number, FragmentImage[]>();
+  const CHUNK = 400;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const slice = ids.slice(i, i + CHUNK);
+    const ph = slice.map(() => '?').join(',');
+    const rows = d.getAllSync<ImageRow>(
+      `SELECT * FROM fragment_images WHERE fragment_id IN (${ph}) ORDER BY ordinal ASC, id ASC`,
+      slice,
+    );
+    for (const r of rows) {
+      const bucket = byFragment.get(r.fragment_id);
+      if (bucket) bucket.push(toFragmentImage(r));
+      else byFragment.set(r.fragment_id, [toFragmentImage(r)]);
+    }
+  }
+  for (const f of list) f.images = byFragment.get(f.id) ?? [];
+  return list;
+}
+
+/** 这一条现有的全部文字层。索引和模型材料都读它 */
+function imageTextsOf(d: SQLite.SQLiteDatabase, fragmentId: number): string[] {
+  return d
+    .getAllSync<{ text: string | null }>(
+      'SELECT text FROM fragment_images WHERE fragment_id = ? ORDER BY ordinal ASC, id ASC',
+      [fragmentId],
+    )
+    .map((r) => (r.text ?? '').trim())
+    .filter((t) => t.length > 0);
 }
 
 interface TodoRow {
@@ -573,25 +654,39 @@ function toDocumentChunk(r: {
   };
 }
 
-/** 把一条碎片写进 FTS。先删后插，更新/打标签都走它 */
+/** 把一条碎片写进 FTS。先删后插，更新/打标签/加图都走它 */
 function indexFragment(
   d: SQLite.SQLiteDatabase,
   id: number,
   content: string,
   tags: string[],
   project: string | null,
-  imageText: string | null = null,
+  imageTexts: string[] = [],
 ) {
   d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
   /*
    * 有配图时把文字层拼进索引。加不加分隔符都行，但加上之后
    * 用户在搜索结果里看到的命中位置不会把正文和图片文字连成一句。
+   * 多张图各占一行：两张图的字连成一句会造出原文里没有的句子。
    */
-  const body = imageText ? `${content}\n[图片] ${imageText}` : content;
+  const body = [content, ...imageTexts.map((t) => `[图片] ${t}`)].join('\n');
   d.runSync('INSERT INTO fragment_fts(rowid, text) VALUES (?, ?)', [
     id,
     indexText(body, tags, project),
   ]);
+}
+
+/**
+ * 按库里的现状重建这一条的索引。
+ *
+ * 加图、删图、改正文、改图文字都要重算 —— 只是各自记得传对参数的话，
+ * 迟早有一处漏传（v0.20 之前 imageText 就是这样在 applyTags 里丢掉的）。
+ * 统一从这里读一遍现状，比让每个调用点自己拼更不容易错。
+ */
+function reindexFragment(d: SQLite.SQLiteDatabase, id: number) {
+  const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
+  if (!row) return;
+  indexFragment(d, id, row.content, parseTags(row.tags), row.project, imageTextsOf(d, id));
 }
 
 /**
@@ -610,7 +705,7 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
           LIMIT ?`,
         [match, limit],
       );
-      if (rows.length) return rows.map(toFragment);
+      if (rows.length) return attachImages(d, rows.map(toFragment));
     } catch {
       /* FTS 语法/扩展异常时退回 LIKE，不能让问答整条挂掉 */
     }
@@ -625,12 +720,25 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
       ORDER BY created_at DESC LIMIT ?`,
     [like, like, like, limit],
   );
-  return rows.map(toFragment);
+  return attachImages(d, rows.map(toFragment));
 }
 
 /** 按 200 条一页重建索引。迁移回填和设置页「重建索引」共用 */
 function rebuildIndex(d: SQLite.SQLiteDatabase): number {
   d.execSync('DELETE FROM fragment_fts');
+  // 图文字先一次性读进内存（按 fragment_id 归组）：重建时逐条查图，
+  // 几千条碎片就是几千次查询，升级后第一次启动会明显卡
+  const texts = new Map<number, string[]>();
+  for (const r of d.getAllSync<ImageRow>(
+    'SELECT * FROM fragment_images ORDER BY fragment_id ASC, ordinal ASC, id ASC',
+  )) {
+    const t = (r.text ?? '').trim();
+    if (!t) continue;
+    const bucket = texts.get(r.fragment_id);
+    if (bucket) bucket.push(t);
+    else texts.set(r.fragment_id, [t]);
+  }
+
   let offset = 0;
   let indexed = 0;
   for (;;) {
@@ -642,7 +750,7 @@ function rebuildIndex(d: SQLite.SQLiteDatabase): number {
     d.execSync('BEGIN');
     try {
       for (const r of rows) {
-        indexFragment(d, r.id, r.content, parseTags(r.tags), r.project);
+        indexFragment(d, r.id, r.content, parseTags(r.tags), r.project, texts.get(r.id) ?? []);
         indexed++;
       }
       d.execSync('COMMIT');
@@ -676,30 +784,33 @@ export const repo: Repo = {
   },
 
   async listFragments(limit = 500) {
-    const rows = db().getAllSync<FragmentRow>(
+    const d = db();
+    const rows = d.getAllSync<FragmentRow>(
       'SELECT * FROM fragments ORDER BY created_at DESC LIMIT ?',
       [limit],
     );
-    return rows.map(toFragment);
+    return attachImages(d, rows.map(toFragment));
   },
 
   async findFragmentsByIds(ids) {
     if (!ids.length) return [];
+    const d = db();
     // 一次查完：ids 是「当初那批」，可能几十条，逐条查就是几十次往返
     const marks = ids.map(() => '?').join(',');
-    const rows = db().getAllSync<FragmentRow>(
+    const rows = d.getAllSync<FragmentRow>(
       `SELECT * FROM fragments WHERE id IN (${marks})`,
       ids,
     );
-    return rows.map(toFragment);
+    return attachImages(d, rows.map(toFragment));
   },
 
   async listFragmentsBetween(from, to) {
-    const rows = db().getAllSync<FragmentRow>(
+    const d = db();
+    const rows = d.getAllSync<FragmentRow>(
       'SELECT * FROM fragments WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC',
       [from, to],
     );
-    return rows.map(toFragment);
+    return attachImages(d, rows.map(toFragment));
   },
 
   async listFragmentIds(scope) {
@@ -731,7 +842,7 @@ export const repo: Repo = {
       const f = byId.get(id);
       if (f) out.push(f);
     }
-    return out;
+    return attachImages(db(), out);
   },
 
   async countFragments(scope) {
@@ -739,35 +850,85 @@ export const repo: Repo = {
     return countOf(db(), `SELECT COUNT(*) AS n FROM fragments WHERE ${where}`);
   },
 
-  async insertFragment(content, source, createdAt, image) {
+  async insertFragment(content, source, createdAt, images) {
     const d = db();
     const text = content.trim();
     const row = createdAt ?? Date.now();
-    const res = d.runSync(
-      `INSERT INTO fragments (content, created_at, source, status, image_path, image_text)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [text, row, source, 'inbox', image?.path ?? null, image?.text ?? null],
-    );
-    const id = Number(res.lastInsertRowId);
+    /*
+     * 正文和配图必须在同一个事务里：分开写的话，插完碎片那一步失败，
+     * 库里就留一条「有图但图行没写进去」的碎片 —— 界面上是一个空白的
+     * 图片位，而文件其实还在磁盘上。
+     *
+     * image_path / image_text 两列（v15）不再写入：配图改由 fragment_images 承载。
+     */
+    d.execSync('BEGIN');
+    let id = 0;
+    try {
+      const res = d.runSync(
+        'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
+        [text, row, source, 'inbox'],
+      );
+      id = Number(res.lastInsertRowId);
+      (images ?? []).forEach((img, i) => {
+        d.runSync(
+          'INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at) VALUES (?, ?, ?, ?, ?)',
+          [id, img.path, img.text ?? null, i, row],
+        );
+      });
+      d.execSync('COMMIT');
+    } catch (e) {
+      d.execSync('ROLLBACK');
+      throw e;
+    }
     // 图里的文字也要进索引：不然「搜图里的报错码」永远搜不到
-    indexFragment(d, id, text, [], null, image?.text ?? null);
+    reindexFragment(d, id);
     return id;
   },
 
-  async setFragmentImageText(id, text) {
+  async insertFragmentImage(fragmentId, path) {
     const d = db();
-    d.runSync('UPDATE fragments SET image_text = ? WHERE id = ?', [text, id]);
-    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
+    const next =
+      d.getFirstSync<{ n: number | null }>(
+        'SELECT MAX(ordinal) AS n FROM fragment_images WHERE fragment_id = ?',
+        [fragmentId],
+      )?.n ?? -1;
+    const res = d.runSync(
+      'INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at) VALUES (?, ?, NULL, ?, ?)',
+      [fragmentId, path, next + 1, Date.now()],
+    );
+    reindexFragment(d, fragmentId);
+    return Number(res.lastInsertRowId);
+  },
+
+  async setFragmentImageText(imageId, text) {
+    const d = db();
+    const mine = d.getFirstSync<{ fragment_id: number }>(
+      'SELECT fragment_id FROM fragment_images WHERE id = ?',
+      [imageId],
+    );
+    if (!mine) return;
+    d.runSync('UPDATE fragment_images SET text = ? WHERE id = ?', [text, imageId]);
     // 重建索引：这段文字是这条碎片内容的一部分，必须能被搜到
-    if (row) indexFragment(d, id, row.content, parseTags(row.tags), row.project, text);
+    reindexFragment(d, mine.fragment_id);
+  },
+
+  async deleteFragmentImage(imageId) {
+    const d = db();
+    const mine = d.getFirstSync<{ fragment_id: number; path: string }>(
+      'SELECT fragment_id, path FROM fragment_images WHERE id = ?',
+      [imageId],
+    );
+    if (!mine) return null;
+    d.runSync('DELETE FROM fragment_images WHERE id = ?', [imageId]);
+    reindexFragment(d, mine.fragment_id);
+    return mine.path;
   },
 
   async updateFragmentContent(id, content) {
     const d = db();
     const text = content.trim();
     d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [text, id]);
-    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
-    if (row) indexFragment(d, id, text, parseTags(row.tags), row.project, row.image_text);
+    reindexFragment(d, id);
   },
 
   async markFragmentsOrganized(ids, at) {
@@ -784,20 +945,29 @@ export const repo: Repo = {
 
   async deleteFragment(id) {
     const d = db();
-    // 先取配图名：删完这行就再也查不到文件在哪了，那张图会永远占着空间
-    const mine = d.getFirstSync<{ image_path: string | null }>(
-      'SELECT image_path FROM fragments WHERE id = ?',
-      [id],
-    );
-    d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
-    d.runSync('DELETE FROM fragments WHERE id = ?', [id]);
-    // 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
-    // 再加 status='merged'，它们就既不在时间轴上、也不会被重新整理，等于凭空消失
-    d.runSync(
-      "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
-      [id],
-    );
-    return mine?.image_path ?? null;
+    // 先取配图名：删完这些行就再也查不到文件在哪了，图会永远占着空间
+    const paths = d
+      .getAllSync<{ path: string }>('SELECT path FROM fragment_images WHERE fragment_id = ?', [id])
+      .map((r) => r.path);
+    d.execSync('BEGIN');
+    try {
+      d.runSync('DELETE FROM fragment_images WHERE fragment_id = ?', [id]);
+      d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
+      d.runSync('DELETE FROM fragments WHERE id = ?', [id]);
+      /*
+       * 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
+       * 再加 status='merged'，它们就既不在时间轴上、也不会被重新整理，等于凭空消失
+       */
+      d.runSync(
+        "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
+        [id],
+      );
+      d.execSync('COMMIT');
+    } catch (e) {
+      d.execSync('ROLLBACK');
+      throw e;
+    }
+    return paths;
   },
 
   async applyTags(id, labels, project) {
@@ -811,8 +981,7 @@ export const repo: Repo = {
        WHERE id = ?`,
       [JSON.stringify(clean), project, id],
     );
-    const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
-    if (row) indexFragment(d, id, row.content, clean, project);
+    reindexFragment(d, id);
   },
 
   async markMerged(dropIds, keepId) {

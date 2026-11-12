@@ -133,6 +133,15 @@ function load(): WebDb {
       excerpt: d.excerpt ?? '',
     }));
     cache!.documentChunks = cache!.documentChunks ?? [];
+    /*
+     * v0.20：配图从 `imagePath` 一个标量变成 `images[]`。
+     * 网页版本来就没有相册，老数据里不会有真图；这里只保证形状对得上 ——
+     * 少一个 `images` 数组，界面 `f.images.length` 会直接抛异常。
+     */
+    cache!.fragments = (cache!.fragments ?? []).map((f) => ({
+      ...f,
+      images: Array.isArray(f.images) ? f.images : [],
+    }));
   } catch {
     cache = empty();
   }
@@ -196,14 +205,15 @@ export const repo: Repo = {
     content,
     source: FragmentSource,
     createdAt?: number,
-    image?: { path: string; text?: string | null },
+    images?: { path: string; text?: string | null }[],
   ) {
     const d = load();
     const id = nextId(d);
+    const at = createdAt ?? Date.now();
     d.fragments.push({
       id,
       content: content.trim(),
-      createdAt: createdAt ?? Date.now(),
+      createdAt: at,
       source,
       status: 'inbox',
       tags: [],
@@ -211,20 +221,54 @@ export const repo: Repo = {
       mergedInto: null,
       nature: null,
       organizedAt: null,
-      // 网页版没有相册和拍照，字段留着不填 —— 但它必须存在，
+      // 网页版没有相册和拍照，但形状必须和 native 一致，
       // 否则同一个 Fragment 类型在两个端上形状不同，界面代码没法共用
-      imagePath: image?.path ?? null,
-      imageText: image?.text ?? null,
+      images: (images ?? []).map((img) => ({
+        id: nextId(d),
+        path: img.path,
+        text: img.text ?? null,
+        createdAt: at,
+      })),
     });
     persist();
     return id;
   },
 
-  async setFragmentImageText(id, text) {
+  async insertFragmentImage(fragmentId, path) {
     const d = load();
-    const f = d.fragments.find((x) => x.id === id);
-    if (f) f.imageText = text;
+    const f = d.fragments.find((x) => x.id === fragmentId);
+    if (!f) return 0;
+    const id = nextId(d);
+    f.images.push({ id, path, text: null, createdAt: Date.now() });
     persist();
+    return id;
+  },
+
+  async setFragmentImageText(imageId, text) {
+    const d = load();
+    for (const f of d.fragments) {
+      const img = f.images.find((i) => i.id === imageId);
+      if (img) {
+        img.text = text;
+        break;
+      }
+    }
+    persist();
+  },
+
+  async deleteFragmentImage(imageId) {
+    const d = load();
+    let path: string | null = null;
+    for (const f of d.fragments) {
+      const i = f.images.findIndex((x) => x.id === imageId);
+      if (i >= 0) {
+        path = f.images[i].path;
+        f.images.splice(i, 1);
+        break;
+      }
+    }
+    persist();
+    return path;
   },
 
   async updateFragmentContent(id, content) {
@@ -254,7 +298,7 @@ export const repo: Repo = {
       }
     });
     persist();
-    return gone?.imagePath ?? null;
+    return (gone?.images ?? []).map((i) => i.path);
   },
 
   async applyTags(id, labels, project) {

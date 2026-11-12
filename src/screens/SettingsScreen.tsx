@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Linking,
   Platform,
   Pressable,
@@ -59,9 +60,35 @@ const EFFORT_LABEL: Record<ReasoningEffort, string> = {
   max: '深',
 };
 
+/**
+ * 设置页的四个模块。
+ *
+ * 为什么拆开（用户 2026-11-12：「目前的设置界面功能较为杂乱，能否在其中进行分离」）：
+ * 原来是一根长滚动条 —— 主题、Key、模型、思考强度、MinerU、统计、索引、导入导出、
+ * 更新、包名连着排下来。找「主题」要滑过一整屏跟它无关的接口配置，
+ * 找一个开关得先读完整页才能确定它在不在。
+ *
+ * 现在的分层和用户说的四个模块一一对应：
+ * - `config`     配置：LLM 地址/Key/模型、思考过程与强度、MinerU Token
+ * - `appearance` 外观：主题（字体 / 背景 / 风格后续也放这里）
+ * - `data`       数据：条数、索引、导入导出（将来云端也放这里）
+ * - `about`      关于：版本、更新、仓库、包名
+ */
+type Pane = 'root' | 'config' | 'appearance' | 'data' | 'about';
+
+const PANE_TITLE: Record<Pane, string> = {
+  root: '设置',
+  config: '配置',
+  appearance: '外观',
+  data: '数据',
+  about: '关于',
+};
+
 export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { mode, setMode } = useTheme();
+  /** 当前在哪一层。`root` 是模块菜单，其余是子页 */
+  const [pane, setPane] = useState<Pane>('root');
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
   const [apiKey, setApiKey] = useState('');
@@ -132,6 +159,22 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setProbe(await repo.selfTestSearch(5));
     })();
   }, []);
+
+  /**
+   * 子页里的返回键先回模块菜单，再由 App 那一层决定是不是回时间轴。
+   *
+   * 不在 `pane` 变了才注册、而是首次就注册、内部判 `pane`：
+   * 后者会让「从子页返回」变成先关掉整个设置页 —— 用户刚点进去就被弹出去了。
+   * 这里只在子页时拦截，`root` 时 `return false` 让上层接手。
+   */
+  useEffect(() => {
+    if (Platform.OS === 'web' || pane === 'root') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setPane('root');
+      return true;
+    });
+    return () => sub.remove();
+  }, [pane]);
 
   /**
    * 官方接口 = baseUrl 的域名是 api.deepseek.com。
@@ -392,460 +435,620 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
           .join('、#')}${probe.misses.length > 3 ? ' 等' : ''}（用「${probe.misses[0].needle}」去搜没命中自己）。建议点下面的「重建搜索索引」`
       : '';
 
+  /* ---- 菜单行右侧那句「现在是什么」 ---- */
+  const aiValue = official
+    ? `DeepSeek 官方 · ${model === 'deepseek-v4-pro' ? 'Pro' : 'Flash'}`
+    : model || '自定义接口';
+  const thinkValue = thinking ? `开 · ${EFFORT_LABEL[effort]}` : '关（更快更省钱）';
+  const mineruValue = mineruToken.trim() ? '已填 Token' : '未填 · 轻量解析';
+  const dataValue = `${stats.total} 条 · ${stats.pending} 待整理`;
+  const indexValue = !indexState
+    ? '检查中'
+    : indexEmpty
+      ? '空库'
+      : indexHealthy
+        ? '正常'
+        : '需要重建';
+
   return (
     <View style={styles.root}>
-      <ScreenHeader title="设置" subtitle={'v' + APP_VERSION} onBack={onClose} />
+      <ScreenHeader
+        title={PANE_TITLE[pane]}
+        subtitle={pane === 'root' ? 'v' + APP_VERSION : undefined}
+        onBack={pane === 'root' ? onClose : () => setPane('root')}
+        backLabel={pane === 'root' ? '返回' : '回到设置'}
+      />
 
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text style={styles.groupTitle}>外观</Text>
-        <View style={styles.card}>
-          <View style={styles.chipRow}>
-            {(['light', 'dark', 'system'] as const).map((m) => (
-              <Pressable
-                key={m}
-                style={[styles.chip, mode === m && styles.chipOn]}
-                onPress={() => setMode(m)}
-                accessibilityRole="button"
-                accessibilityState={{ selected: mode === m }}
-              >
-                <Text style={[styles.chipText, mode === m && styles.chipTextOn]}>
-                  {THEME_MODE_LABEL[m]}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-
-        <Text style={styles.groupTitle}>AI 接口</Text>
-        <View style={styles.card}>
-          {/*
-            默认就是官方：只需要一把 Key。地址和模型不是「配置项」，
-            而是「换服务商时才要动的东西」，收进下面的折叠区。
-          */}
-          <View style={styles.officialHead}>
-            <Ionicons name="shield-checkmark-outline" size={15} color={c.accentText} />
-            <Text style={styles.officialTitle}>DeepSeek 官方</Text>
-            <View style={{ flex: 1 }} />
-            {official ? (
-              <Text style={styles.officialTag}>当前</Text>
-            ) : (
-              <Pressable onPress={switchToOfficial} hitSlop={6}>
-                <Text style={styles.linkText}>切回官方</Text>
-              </Pressable>
-            )}
-          </View>
-
-          <Field label="API Key" last>
-            <View style={styles.keyRow}>
-              <TextInput
-                value={apiKey}
-                onChangeText={setApiKey}
-                autoCapitalize="none"
-                autoCorrect={false}
-                secureTextEntry={!showKey}
-                placeholder="sk-…"
-                placeholderTextColor={c.text3}
-                style={[styles.input, styles.keyInput]}
-              />
-              <Pressable onPress={() => setShowKey((v) => !v)} hitSlop={8}>
-                <Ionicons
-                  name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                  size={17}
-                  color={c.text3}
-                />
-              </Pressable>
-            </View>
-            <Text style={styles.fieldHint}>
-              只填这一项就能用。Key 在 platform.deepseek.com 的「API keys」里创建。
-            </Text>
-          </Field>
-
-          {/* 余额。只有官方地址查得到；第三方接口这里会说清原因，而不是转圈 */}
-          <View style={styles.balanceRow}>
-            <Ionicons name="wallet-outline" size={14} color={c.text3} />
-            <Text style={styles.balanceText} numberOfLines={2}>
-              {balanceBusy
-                ? '正在查余额…'
-                : balance
-                  ? balanceLine(balance)
-                  : apiKey.trim()
-                    ? '还没查余额'
-                    : '填了 Key 才能查余额'}
-            </Text>
-            <Pressable
-              onPress={() => void refreshBalance(true)}
-              hitSlop={8}
-              accessibilityLabel="刷新余额"
-            >
-              {balanceBusy ? (
-                <ActivityIndicator size="small" color={c.text3} />
-              ) : (
-                <Ionicons name="refresh" size={13} color={c.text3} />
-              )}
-            </Pressable>
-          </View>
-
-          <View style={styles.linkRow}>
-            <Pressable
-              style={styles.linkBtn}
-              onPress={() => {
-                Linking.openURL('https://platform.deepseek.com/api_keys').catch(() => undefined);
-              }}
-            >
-              <Ionicons name="key-outline" size={12} color={c.accentText} />
-              <Text style={styles.linkText}>去领 Key</Text>
-            </Pressable>
-            <Pressable
-              style={styles.linkBtn}
-              onPress={() => {
-                Linking.openURL('https://platform.deepseek.com/top_up').catch(() => undefined);
-              }}
-            >
-              <Ionicons name="card-outline" size={12} color={c.accentText} />
-              <Text style={styles.linkText}>充值</Text>
-            </Pressable>
-            <Pressable
-              style={styles.linkBtn}
-              onPress={() => {
-                Linking.openURL('https://platform.deepseek.com/usage').catch(() => undefined);
-              }}
-            >
-              <Ionicons name="stats-chart-outline" size={12} color={c.accentText} />
-              <Text style={styles.linkText}>用量</Text>
-            </Pressable>
-          </View>
-
-          {balance?.kind === 'error' && balance.raw ? (
-            <Text style={styles.hintErr} numberOfLines={4}>
-              {balance.raw}
-            </Text>
-          ) : null}
-
-          <View style={styles.modelField}>
-            <Text style={styles.fieldLabel}>模型</Text>
-            <View style={styles.chipRow}>
-              {([
-                ['deepseek-flash', 'Flash（默认）'],
-                ['deepseek-v4-pro', 'Pro（更强）'],
-              ] as const).map(([id, label]) => (
-                <Pressable
-                  key={id}
-                  style={[styles.chip, model === id && styles.chipOn]}
-                  onPress={() => setModel(id)}
-                >
-                  <Text style={[styles.chipText, model === id && styles.chipTextOn]}>{label}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.btnRow}>
-            <Pressable style={styles.ghostBtn} onPress={handleSave} disabled={busy !== 'idle'}>
-              <Text style={styles.ghostBtnText}>
-                {busy === 'saving' ? '保存中…' : '保存'}
-              </Text>
-            </Pressable>
-            <Pressable style={styles.solidBtn} onPress={handleTest} disabled={busy !== 'idle'}>
-              {busy === 'testing' ? (
-                <ActivityIndicator size="small" color={c.onAccent} />
-              ) : (
-                <Text style={styles.solidBtnText}>测试连接</Text>
-              )}
-            </Pressable>
-          </View>
-
-          {msg && (
-            <Text style={[styles.msg, msg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
-              {msg.text}
-            </Text>
-          )}
-
-          {/* 第三方接口：默认收起。打开它的人才需要看 Base URL */}
-          <Pressable style={styles.customToggle} onPress={() => setShowCustom((v) => !v)}>
-            <Ionicons
-              name={showCustom ? 'chevron-down' : 'chevron-forward'}
-              size={13}
-              color={c.text3}
+      {/* ---------------- 模块菜单（根层） ---------------- */}
+      {pane === 'root' ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <GroupTitle text="配置" />
+          <View style={styles.cardTight}>
+            <MenuRow
+              icon="hardware-chip-outline"
+              label="模型服务"
+              value={aiValue}
+              onPress={() => setPane('config')}
             />
-            <Text style={styles.customToggleText}>使用第三方接口（OpenAI 兼容）</Text>
-          </Pressable>
+            <MenuRow
+              icon="bulb-outline"
+              label="思考过程"
+              value={thinkValue}
+              onPress={() => setPane('config')}
+            />
+            <MenuRow
+              icon="document-text-outline"
+              label="文档解析"
+              value={mineruValue}
+              onPress={() => setPane('config')}
+              last
+            />
+          </View>
+          <Text style={styles.groupHint}>
+            模型地址、Key、MinerU Token 都在「配置」里，换服务商也只在这一处改。
+          </Text>
 
-          {showCustom ? (
-            <View style={styles.customBox}>
-              <Field label="Base URL">
-                <TextInput
-                  value={baseUrl}
-                  onChangeText={setBaseUrl}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder={DEFAULT_AI_CONFIG.baseUrl}
-                  placeholderTextColor={c.text3}
-                  style={styles.input}
-                />
-              </Field>
-              <Field label="模型" last>
-                <TextInput
-                  value={model}
-                  onChangeText={setModel}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder={DEFAULT_AI_CONFIG.model}
-                  placeholderTextColor={c.text3}
-                  style={styles.input}
-                />
-              </Field>
-              <Text style={styles.fieldHint}>
-                第三方网关一般不认 DeepSeek 的思考参数，输出额度也小得多（8K 上限），
-                也查不到账户余额。整理长文档时容易半路截断。
-              </Text>
+          <GroupTitle text="外观" />
+          <View style={styles.cardTight}>
+            <MenuRow
+              icon="color-palette-outline"
+              label="主题"
+              value={THEME_MODE_LABEL[mode]}
+              onPress={() => setPane('appearance')}
+              last
+            />
+          </View>
+          <Text style={styles.groupHint}>字体大小、背景、风格调整后续也在这里。</Text>
+
+          <GroupTitle text="数据" />
+          <View style={styles.cardTight}>
+            <MenuRow
+              icon="albums-outline"
+              label="碎片数据"
+              value={dataValue}
+              onPress={() => setPane('data')}
+            />
+            <MenuRow
+              icon="swap-vertical-outline"
+              label="导入导出"
+              value="Markdown"
+              onPress={() => setPane('data')}
+            />
+            <MenuRow
+              icon="search-outline"
+              label="搜索索引"
+              value={indexValue}
+              tone={!indexState || indexEmpty || indexHealthy ? 'normal' : 'warn'}
+              onPress={() => setPane('data')}
+              last
+            />
+          </View>
+          <Text style={styles.groupHint}>数据只在手机本地，没有账号也不上传。</Text>
+
+          <GroupTitle text="关于" />
+          <View style={styles.cardTight}>
+            <MenuRow
+              icon="information-circle-outline"
+              label="关于碎片"
+              value={'v' + APP_VERSION}
+              onPress={() => setPane('about')}
+            />
+            <MenuRow
+              icon="cloud-download-outline"
+              label="检查更新"
+              value={checkMsg || '点这里检查'}
+              tone={checkState === 'error' ? 'warn' : checkState === 'update' ? 'link' : 'normal'}
+              busy={checking}
+              onPress={() => {
+                // 根层点「检查更新」就直接查，不逼人多点一次进子页
+                setPane('about');
+                void handleCheckUpdate();
+              }}
+              last
+            />
+          </View>
+        </ScrollView>
+      ) : null}
+
+      {/* ---------------- 配置 ---------------- */}
+      {pane === 'config' ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <GroupTitle text="模型服务" />
+          <View style={styles.card}>
+            {/*
+              默认就是官方：只需要一把 Key。地址和模型不是「配置项」，
+              而是「换服务商时才要动的东西」，收进下面的折叠区。
+            */}
+            <View style={styles.officialHead}>
+              <Ionicons name="shield-checkmark-outline" size={15} color={c.accentText} />
+              <Text style={styles.officialTitle}>DeepSeek 官方</Text>
+              <View style={{ flex: 1 }} />
+              {official ? (
+                <Text style={styles.officialTag}>当前</Text>
+              ) : (
+                <Pressable onPress={switchToOfficial} hitSlop={6}>
+                  <Text style={styles.linkText}>切回官方</Text>
+                </Pressable>
+              )}
             </View>
-          ) : null}
-        </View>
 
-        <Text style={styles.groupTitle}>整理行为</Text>
-        <View style={styles.card}>
-          <Field label="思考过程" last={!thinking}>
-            <View style={styles.toggleRow}>
+            <Field label="API Key" last>
+              <View style={styles.keyRow}>
+                <TextInput
+                  value={apiKey}
+                  onChangeText={setApiKey}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  secureTextEntry={!showKey}
+                  placeholder="sk-…"
+                  placeholderTextColor={c.text3}
+                  style={[styles.input, styles.keyInput]}
+                />
+                <Pressable onPress={() => setShowKey((v) => !v)} hitSlop={8}>
+                  <Ionicons
+                    name={showKey ? 'eye-off-outline' : 'eye-outline'}
+                    size={17}
+                    color={c.text3}
+                  />
+                </Pressable>
+              </View>
+              <Text style={styles.fieldHint}>
+                只填这一项就能用。Key 在 platform.deepseek.com 的「API keys」里创建。
+              </Text>
+            </Field>
+
+            {/* 余额。只有官方地址查得到；第三方接口这里会说清原因，而不是转圈 */}
+            <View style={styles.balanceRow}>
+              <Ionicons name="wallet-outline" size={14} color={c.text3} />
+              <Text style={styles.balanceText} numberOfLines={2}>
+                {balanceBusy
+                  ? '正在查余额…'
+                  : balance
+                    ? balanceLine(balance)
+                    : apiKey.trim()
+                      ? '还没查余额'
+                      : '填了 Key 才能查余额'}
+              </Text>
               <Pressable
-                style={[styles.toggle, thinking && styles.toggleOn]}
-                onPress={() => setThinking((v) => !v)}
-                hitSlop={6}
+                onPress={() => void refreshBalance(true)}
+                hitSlop={8}
+                accessibilityLabel="刷新余额"
               >
-                <View style={styles.toggleKnob} />
+                {balanceBusy ? (
+                  <ActivityIndicator size="small" color={c.text3} />
+                ) : (
+                  <Ionicons name="refresh" size={13} color={c.text3} />
+                )}
               </Pressable>
             </View>
-          </Field>
 
-          {thinking && (
-            <Field label="思考强度" last>
+            <View style={styles.linkRow}>
+              <Pressable
+                style={styles.linkBtn}
+                onPress={() => {
+                  Linking.openURL('https://platform.deepseek.com/api_keys').catch(() => undefined);
+                }}
+              >
+                <Ionicons name="key-outline" size={12} color={c.accentText} />
+                <Text style={styles.linkText}>去领 Key</Text>
+              </Pressable>
+              <Pressable
+                style={styles.linkBtn}
+                onPress={() => {
+                  Linking.openURL('https://platform.deepseek.com/top_up').catch(() => undefined);
+                }}
+              >
+                <Ionicons name="card-outline" size={12} color={c.accentText} />
+                <Text style={styles.linkText}>充值</Text>
+              </Pressable>
+              <Pressable
+                style={styles.linkBtn}
+                onPress={() => {
+                  Linking.openURL('https://platform.deepseek.com/usage').catch(() => undefined);
+                }}
+              >
+                <Ionicons name="stats-chart-outline" size={12} color={c.accentText} />
+                <Text style={styles.linkText}>用量</Text>
+              </Pressable>
+            </View>
+
+            {balance?.kind === 'error' && balance.raw ? (
+              <Text style={styles.hintErr} numberOfLines={4}>
+                {balance.raw}
+              </Text>
+            ) : null}
+
+            <View style={styles.modelField}>
+              <Text style={styles.fieldLabel}>模型</Text>
               <View style={styles.chipRow}>
-                {(['low', 'high', 'max'] as const).map((e) => (
+                {([
+                  ['deepseek-flash', 'Flash（默认）'],
+                  ['deepseek-v4-pro', 'Pro（更强）'],
+                ] as const).map(([id, label]) => (
                   <Pressable
-                    key={e}
-                    style={[styles.chip, effort === e && styles.chipOn]}
-                    onPress={() => setEffort(e)}
+                    key={id}
+                    style={[styles.chip, model === id && styles.chipOn]}
+                    onPress={() => setModel(id)}
                   >
-                    <Text style={[styles.chipText, effort === e && styles.chipTextOn]}>
-                      {EFFORT_LABEL[e]}
-                    </Text>
+                    <Text style={[styles.chipText, model === id && styles.chipTextOn]}>{label}</Text>
                   </Pressable>
                 ))}
               </View>
-            </Field>
-          )}
-
-        </View>
-
-        <Text style={styles.groupTitle}>文档解析</Text>
-        <View style={styles.card}>
-          <Field label="MinerU Token" last>
-            <TextInput
-              value={mineruToken}
-              onChangeText={setMineruTokenOn}
-              autoCapitalize="none"
-              autoCorrect={false}
-              placeholder="留空 = 只用免 Token 的轻量解析"
-              placeholderTextColor={c.text3}
-              style={styles.input}
-              returnKeyType="done"
-              onSubmitEditing={saveMineruToken}
-              onEndEditing={saveMineruToken}
-            />
-            <Text style={styles.fieldHint}>
-              填了才能解超过 10 MB / 20 页的文件，以及 doc / ppt / xls。Token 在
-              mineru.net 的「API 管理」里创建，每天 1000 页额度。
-            </Text>
-            {tokenMsg ? (
-              <Text style={tokenMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
-                {tokenMsg.text}
-              </Text>
-            ) : null}
-          </Field>
-        </View>
-
-        <Text style={styles.groupTitle}>数据</Text>
-        <View style={styles.card}>
-          <View style={styles.statRow}>
-            <Stat num={stats.total} label="总条数" />
-            <Stat num={stats.pending} label="待整理" />
-            <Stat num={stats.todoOpen} label="未完成待办" />
-          </View>
-
-          <View style={styles.indexBox}>
-            <View style={styles.indexHead}>
-              <Ionicons name={indexIcon} size={14} color={indexColor} />
-              <Text style={[styles.indexTitle, { color: indexColor }]}>{indexLine}</Text>
             </View>
-            <Text style={styles.indexHint}>{probeLine}</Text>
-            {probeDetail ? (
-              <Text style={[styles.indexHint, styles.msgErr]}>{probeDetail}</Text>
-            ) : null}
-            {indexMsg && (
-              <Text
-                style={[styles.indexHint, indexMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}
-              >
-                {indexMsg.text}
+
+            <View style={styles.btnRow}>
+              <Pressable style={styles.ghostBtn} onPress={handleSave} disabled={busy !== 'idle'}>
+                <Text style={styles.ghostBtnText}>
+                  {busy === 'saving' ? '保存中…' : '保存'}
+                </Text>
+              </Pressable>
+              <Pressable style={styles.solidBtn} onPress={handleTest} disabled={busy !== 'idle'}>
+                {busy === 'testing' ? (
+                  <ActivityIndicator size="small" color={c.onAccent} />
+                ) : (
+                  <Text style={styles.solidBtnText}>测试连接</Text>
+                )}
+              </Pressable>
+            </View>
+
+            {msg && (
+              <Text style={[styles.msg, msg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+                {msg.text}
               </Text>
             )}
+
+            {/* 第三方接口：默认收起。打开它的人才需要看 Base URL */}
+            <Pressable style={styles.customToggle} onPress={() => setShowCustom((v) => !v)}>
+              <Ionicons
+                name={showCustom ? 'chevron-down' : 'chevron-forward'}
+                size={13}
+                color={c.text3}
+              />
+              <Text style={styles.customToggleText}>使用第三方接口（OpenAI 兼容）</Text>
+            </Pressable>
+
+            {showCustom ? (
+              <View style={styles.customBox}>
+                <Field label="Base URL">
+                  <TextInput
+                    value={baseUrl}
+                    onChangeText={setBaseUrl}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder={DEFAULT_AI_CONFIG.baseUrl}
+                    placeholderTextColor={c.text3}
+                    style={styles.input}
+                  />
+                </Field>
+                <Field label="模型" last>
+                  <TextInput
+                    value={model}
+                    onChangeText={setModel}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder={DEFAULT_AI_CONFIG.model}
+                    placeholderTextColor={c.text3}
+                    style={styles.input}
+                  />
+                </Field>
+                <Text style={styles.fieldHint}>
+                  第三方网关一般不认 DeepSeek 的思考参数，输出额度也小得多（8K 上限），
+                  也查不到账户余额。整理长文档时容易半路截断。
+                </Text>
+              </View>
+            ) : null}
           </View>
 
-          <Pressable
-            style={styles.ghostBtnWide}
-            onPress={handleRebuildIndex}
-            disabled={busy !== 'idle'}
-          >
-            <Ionicons name="refresh-outline" size={15} color={c.text} />
-            <Text style={styles.ghostBtnText}>
-              {busy === 'indexing' ? '正在重建…' : '重建搜索索引'}
-            </Text>
-          </Pressable>
-
-          <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
-            <Ionicons name="download-outline" size={15} color={c.text} />
-            <Text style={styles.ghostBtnText}>
-              {busy === 'exporting' ? '正在导出…' : '导出 Markdown'}
-            </Text>
-          </Pressable>
-          <Pressable
-            style={styles.ghostBtnWide}
-            onPress={handlePickImport}
-            disabled={busy !== 'idle'}
-          >
-            <Ionicons name="cloud-upload-outline" size={15} color={c.text} />
-            <Text style={styles.ghostBtnText}>
-              {busy === 'picking' ? '正在读取…' : '从 Markdown 导入'}
-            </Text>
-          </Pressable>
-          {ioMsg && (
-            <Text style={[styles.msg, ioMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
-              {ioMsg.text}
-            </Text>
-          )}
-        </View>
-
-        <Text style={styles.groupTitle}>关于</Text>
-        <View style={styles.card}>
-          <View style={styles.aboutRow}>
-            <Text style={styles.aboutKey}>版本</Text>
-            <Text style={styles.aboutVal}>{APP_VERSION}</Text>
-          </View>
-
-          {/*
-            两行纯网页链接，安卓之外也显示 —— 没有安装包可下，但「这个 App 从哪来、
-            改过什么」在浏览器里一样能看。更新说明本体在 GitHub，App 内不再排一遍。
-          */}
-          <Pressable
-            style={styles.aboutRow}
-            onPress={() => {
-              Linking.openURL(REPO_WEB).catch(() => undefined);
-            }}
-          >
-            <Text style={styles.aboutKey}>GitHub 仓库</Text>
-            <View style={styles.updateValue}>
-              <Text style={styles.aboutVal}>gup-n/fragements</Text>
-              <Ionicons name="chevron-forward" size={13} color={c.text3} />
-            </View>
-          </Pressable>
-
-          <Pressable
-            style={styles.aboutRow}
-            onPress={() => {
-              Linking.openURL(RELEASES_WEB).catch(() => undefined);
-            }}
-          >
-            <Text style={styles.aboutKey}>更新记录</Text>
-            <View style={styles.updateValue}>
-              <Text style={styles.aboutVal}>全部版本</Text>
-              <Ionicons name="chevron-forward" size={13} color={c.text3} />
-            </View>
-          </Pressable>
-
-          {/*
-            只有 Android 能装包，web 上不显示这两行 —— 摆一个点了没反应的
-            「检查更新」比不摆更让人困惑。
-          */}
-          {Platform.OS === 'android' ? (
-            <>
-              <Pressable
-                style={styles.aboutRow}
-                onPress={handleCheckUpdate}
-                disabled={checking}
-              >
-                <Text style={styles.aboutKey}>检查更新</Text>
-                <View style={styles.updateValue}>
-                  {checking ? (
-                    <ActivityIndicator size="small" color={c.text3} />
-                  ) : (
-                    <>
-                      <Text
-                        style={[
-                          styles.updateState,
-                          checkState === 'update' && styles.updateStateNew,
-                          checkState === 'error' && styles.updateStateErr,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {checkMsg || '点这里检查'}
-                      </Text>
-                      <Ionicons name="chevron-forward" size={13} color={c.text3} />
-                    </>
-                  )}
-                </View>
-              </Pressable>
-
-              <View style={styles.aboutRow}>
-                <Text style={styles.aboutKey}>启动时自动检查</Text>
+          <GroupTitle text="思考过程" />
+          <View style={styles.card}>
+            <Field label="让模型先想再答" last={!thinking}>
+              <View style={styles.toggleRow}>
                 <Pressable
-                  style={[styles.toggle, autoCheck && styles.toggleOn]}
-                  onPress={() => {
-                    const next = !autoCheck;
-                    setAutoCheckOn(next);
-                    setAutoCheck(next).catch(() => undefined);
-                  }}
+                  style={[styles.toggle, thinking && styles.toggleOn]}
+                  onPress={() => setThinking((v) => !v)}
                   hitSlop={6}
                   accessibilityRole="switch"
-                  accessibilityState={{ checked: autoCheck }}
+                  accessibilityState={{ checked: thinking }}
                 >
                   <View style={styles.toggleKnob} />
                 </Pressable>
-              </View>
-
-              <Field label="下载地址">
-                <TextInput
-                  value={downloadBase}
-                  onChangeText={setDownloadBaseOn}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  placeholder="留空 = GitHub 官方直连"
-                  placeholderTextColor={c.text3}
-                  style={styles.input}
-                  returnKeyType="done"
-                  onSubmitEditing={saveDownloadBase}
-                  onEndEditing={saveDownloadBase}
-                />
-                <Text style={styles.fieldHint}>
-                  填自建或镜像的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则先连
-                  GitHub 官方，连不上或卡住才退到内置镜像。
+                <Text style={styles.toggleHint}>
+                  {thinking ? '整理时能看到它怎么想的' : '关掉后更快更省钱，但看不到过程'}
                 </Text>
-                {baseMsg ? (
-                  <Text style={baseMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
-                    {baseMsg.text}
-                  </Text>
-                ) : null}
+              </View>
+            </Field>
+
+            {thinking && (
+              <Field label="思考强度" last>
+                <View style={styles.chipRow}>
+                  {(['low', 'high', 'max'] as const).map((e) => (
+                    <Pressable
+                      key={e}
+                      style={[styles.chip, effort === e && styles.chipOn]}
+                      onPress={() => setEffort(e)}
+                    >
+                      <Text style={[styles.chipText, effort === e && styles.chipTextOn]}>
+                        {EFFORT_LABEL[e]}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <Text style={styles.fieldHint}>
+                  改完记得在上面点「保存」，否则下次打开还是旧设置。
+                </Text>
               </Field>
+            )}
+          </View>
+
+          <GroupTitle text="文档解析（MinerU）" />
+          <View style={styles.card}>
+            <Field label="MinerU Token" last>
+              <TextInput
+                value={mineruToken}
+                onChangeText={setMineruTokenOn}
+                autoCapitalize="none"
+                autoCorrect={false}
+                placeholder="留空 = 只用免 Token 的轻量解析"
+                placeholderTextColor={c.text3}
+                style={styles.input}
+                returnKeyType="done"
+                onSubmitEditing={saveMineruToken}
+                onEndEditing={saveMineruToken}
+              />
+              <Text style={styles.fieldHint}>
+                填了才能解超过 10 MB / 20 页的文件，以及 doc / ppt / xls。Token 在
+                mineru.net 的「API 管理」里创建，每天 1000 页额度。
+              </Text>
+              {tokenMsg ? (
+                <Text style={tokenMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
+                  {tokenMsg.text}
+                </Text>
+              ) : null}
+            </Field>
+          </View>
+        </ScrollView>
+      ) : null}
+
+      {/* ---------------- 外观 ---------------- */}
+      {pane === 'appearance' ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <GroupTitle text="主题" />
+          <View style={styles.card}>
+            <View style={styles.chipRow}>
+              {(['light', 'dark', 'system'] as const).map((m) => (
+                <Pressable
+                  key={m}
+                  style={[styles.chip, mode === m && styles.chipOn]}
+                  onPress={() => setMode(m)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: mode === m }}
+                >
+                  <Text style={[styles.chipText, mode === m && styles.chipTextOn]}>
+                    {THEME_MODE_LABEL[m]}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <Text style={styles.fieldHint}>
+              改完立刻生效，不用保存。选「跟随系统」时，系统切到深色它也跟着切。
+            </Text>
+          </View>
+          <Text style={styles.groupHint}>
+            字体大小、背景、风格调整还没做 —— 但入口会留在这一个模块里，
+            不会再散到别的页去。
+          </Text>
+        </ScrollView>
+      ) : null}
+
+      {/* ---------------- 数据 ---------------- */}
+      {pane === 'data' ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <GroupTitle text="现在有多少" />
+          <View style={styles.card}>
+            <View style={styles.statRow}>
+              <Stat num={stats.total} label="总条数" />
+              <Stat num={stats.pending} label="待整理" />
+              <Stat num={stats.todoOpen} label="未完成待办" />
+            </View>
+          </View>
+
+          <GroupTitle text="搜索索引" />
+          <View style={styles.card}>
+            <View style={styles.indexBox}>
+              <View style={styles.indexHead}>
+                <Ionicons name={indexIcon} size={14} color={indexColor} />
+                <Text style={[styles.indexTitle, { color: indexColor }]}>{indexLine}</Text>
+              </View>
+              <Text style={styles.indexHint}>{probeLine}</Text>
+              {probeDetail ? (
+                <Text style={[styles.indexHint, styles.msgErr]}>{probeDetail}</Text>
+              ) : null}
+              {indexMsg && (
+                <Text
+                  style={[styles.indexHint, indexMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}
+                >
+                  {indexMsg.text}
+                </Text>
+              )}
+            </View>
+
+            <Pressable
+              style={styles.ghostBtnWide}
+              onPress={handleRebuildIndex}
+              disabled={busy !== 'idle'}
+            >
+              <Ionicons name="refresh-outline" size={15} color={c.text} />
+              <Text style={styles.ghostBtnText}>
+                {busy === 'indexing' ? '正在重建…' : '重建搜索索引'}
+              </Text>
+            </Pressable>
+          </View>
+
+          <GroupTitle text="导入导出" />
+          <View style={styles.card}>
+            <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
+              <Ionicons name="download-outline" size={15} color={c.text} />
+              <Text style={styles.ghostBtnText}>
+                {busy === 'exporting' ? '正在导出…' : '导出 Markdown'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={styles.ghostBtnWide}
+              onPress={handlePickImport}
+              disabled={busy !== 'idle'}
+            >
+              <Ionicons name="cloud-upload-outline" size={15} color={c.text} />
+              <Text style={styles.ghostBtnText}>
+                {busy === 'picking' ? '正在读取…' : '从 Markdown 导入'}
+              </Text>
+            </Pressable>
+            {ioMsg && (
+              <Text style={[styles.msg, ioMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+                {ioMsg.text}
+              </Text>
+            )}
+            <Text style={styles.fieldHint}>
+              导出的是一份纯 Markdown 备份，正文、事项和时间都在里面。将来如果做云端同步，
+              入口也会归到这一页。
+            </Text>
+          </View>
+        </ScrollView>
+      ) : null}
+
+      {/* ---------------- 关于 ---------------- */}
+      {pane === 'about' ? (
+        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          <GroupTitle text="关于" />
+          <View style={styles.cardTight}>
+            <View style={styles.aboutRow}>
+              <Text style={styles.aboutKey}>版本</Text>
+              <Text style={styles.aboutVal}>{APP_VERSION}</Text>
+            </View>
+
+            {/*
+              两行纯网页链接，安卓之外也显示 —— 没有安装包可下，但「这个 App 从哪来、
+              改过什么」在浏览器里一样能看。更新说明本体在 GitHub，App 内不再排一遍。
+            */}
+            <Pressable
+              style={styles.aboutRow}
+              onPress={() => {
+                Linking.openURL(REPO_WEB).catch(() => undefined);
+              }}
+            >
+              <Text style={styles.aboutKey}>GitHub 仓库</Text>
+              <View style={styles.updateValue}>
+                <Text style={styles.aboutVal}>gup-n/fragements</Text>
+                <Ionicons name="chevron-forward" size={13} color={c.text3} />
+              </View>
+            </Pressable>
+
+            <Pressable
+              style={styles.aboutRow}
+              onPress={() => {
+                Linking.openURL(RELEASES_WEB).catch(() => undefined);
+              }}
+            >
+              <Text style={styles.aboutKey}>更新记录</Text>
+              <View style={styles.updateValue}>
+                <Text style={styles.aboutVal}>全部版本</Text>
+                <Ionicons name="chevron-forward" size={13} color={c.text3} />
+              </View>
+            </Pressable>
+
+            {/*
+              只有 Android 能装包，web 上不显示这两行 —— 摆一个点了没反应的
+              「检查更新」比不摆更让人困惑。
+            */}
+            {Platform.OS === 'android' ? (
+              <>
+                <Pressable
+                  style={styles.aboutRow}
+                  onPress={handleCheckUpdate}
+                  disabled={checking}
+                >
+                  <Text style={styles.aboutKey}>检查更新</Text>
+                  <View style={styles.updateValue}>
+                    {checking ? (
+                      <ActivityIndicator size="small" color={c.text3} />
+                    ) : (
+                      <>
+                        <Text
+                          style={[
+                            styles.updateState,
+                            checkState === 'update' && styles.updateStateNew,
+                            checkState === 'error' && styles.updateStateErr,
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {checkMsg || '点这里检查'}
+                        </Text>
+                        <Ionicons name="chevron-forward" size={13} color={c.text3} />
+                      </>
+                    )}
+                  </View>
+                </Pressable>
+
+                <View style={styles.aboutRow}>
+                  <Text style={styles.aboutKey}>启动时自动检查</Text>
+                  <Pressable
+                    style={[styles.toggle, autoCheck && styles.toggleOn]}
+                    onPress={() => {
+                      const next = !autoCheck;
+                      setAutoCheckOn(next);
+                      setAutoCheck(next).catch(() => undefined);
+                    }}
+                    hitSlop={6}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: autoCheck }}
+                  >
+                    <View style={styles.toggleKnob} />
+                  </Pressable>
+                </View>
+              </>
+            ) : null}
+
+            <View style={styles.aboutRow}>
+              <Text style={styles.aboutKey}>包名</Text>
+              <Text style={styles.aboutVal}>com.local.fragments</Text>
+            </View>
+            <View style={[styles.aboutRow, { borderBottomWidth: 0 }]}>
+              <Text style={styles.aboutKey}>运行环境</Text>
+              <Text style={styles.aboutVal}>{Platform.OS}</Text>
+            </View>
+          </View>
+
+          {Platform.OS === 'android' ? (
+            <>
+              <GroupTitle text="下载地址" />
+              <View style={styles.card}>
+                <Field label="自定义镜像" last>
+                  <TextInput
+                    value={downloadBase}
+                    onChangeText={setDownloadBaseOn}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    placeholder="留空 = GitHub 官方直连"
+                    placeholderTextColor={c.text3}
+                    style={styles.input}
+                    returnKeyType="done"
+                    onSubmitEditing={saveDownloadBase}
+                    onEndEditing={saveDownloadBase}
+                  />
+                  <Text style={styles.fieldHint}>
+                    填自建或镜像的基础地址（以 / 结尾），下载时拼上 APK 文件名；留空则先连
+                    GitHub 官方，连不上或卡住才退到内置镜像。
+                  </Text>
+                  {baseMsg ? (
+                    <Text style={baseMsg.kind === 'ok' ? styles.hintOk : styles.hintErr}>
+                      {baseMsg.text}
+                    </Text>
+                  ) : null}
+                </Field>
+              </View>
             </>
           ) : null}
-
-          <View style={styles.aboutRow}>
-            <Text style={styles.aboutKey}>包名</Text>
-            <Text style={styles.aboutVal}>com.local.fragments</Text>
-          </View>
-          <View style={[styles.aboutRow, { borderBottomWidth: 0 }]}>
-            <Text style={styles.aboutKey}>运行环境</Text>
-            <Text style={styles.aboutVal}>{Platform.OS}</Text>
-          </View>
-        </View>
-      </ScrollView>
+        </ScrollView>
+      ) : null}
 
       {importPreview && (
         <ImportSheet
@@ -868,6 +1071,66 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   );
 }
 
+/** 分组标题。十几处各写一遍 fontSize/margin，改一次要全都改 */
+function GroupTitle({ text }: { text: string }) {
+  const { styles } = useThemedStyles(makeStyles);
+  return <Text style={styles.groupTitle}>{text}</Text>;
+}
+
+/**
+ * 菜单里的一行：图标 + 名称 + 右侧「现在是什么」+ 箭头。
+ *
+ * 右侧那句值是这个模块的意义所在：不点进去也能知道当前配置是什么、
+ * 数据有多少条、索引正不正常。
+ */
+function MenuRow({
+  icon,
+  label,
+  value,
+  onPress,
+  last,
+  tone = 'normal',
+  busy,
+}: {
+  icon: IoniconName;
+  label: string;
+  value?: string;
+  onPress: () => void;
+  last?: boolean;
+  tone?: 'normal' | 'warn' | 'link';
+  busy?: boolean;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed]}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={value ? `${label}，${value}` : label}
+    >
+      <Ionicons name={icon} size={19} color={c.text2} />
+      <Text style={styles.menuLabel}>{label}</Text>
+      <View style={styles.menuValueWrap}>
+        {busy ? (
+          <ActivityIndicator size="small" color={c.text3} />
+        ) : (
+          <Text
+            style={[
+              styles.menuValue,
+              tone === 'warn' && styles.menuValueWarn,
+              tone === 'link' && styles.menuValueLink,
+            ]}
+            numberOfLines={1}
+          >
+            {value}
+          </Text>
+        )}
+        <Ionicons name="chevron-forward" size={14} color={c.hair} />
+      </View>
+    </Pressable>
+  );
+}
+
 function Field({
   label,
   children,
@@ -877,7 +1140,7 @@ function Field({
   children: React.ReactNode;
   last?: boolean;
 }) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { styles } = useThemedStyles(makeStyles);
   return (
     <View style={[styles.field, last && { borderBottomWidth: 0 }]}>
       <Text style={styles.fieldLabel}>{label}</Text>
@@ -887,7 +1150,7 @@ function Field({
 }
 
 function Stat({ num, label }: { num: number; label: string }) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { styles } = useThemedStyles(makeStyles);
   return (
     <View style={styles.stat}>
       <Text style={styles.statNum}>{num}</Text>
@@ -909,6 +1172,15 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginBottom: 8,
     marginLeft: 4,
   },
+  /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
+  groupHint: {
+    fontSize: 11,
+    color: c.text3,
+    lineHeight: 16,
+    marginTop: 8,
+    marginLeft: 4,
+    marginRight: 4,
+  },
   card: {
     backgroundColor: c.card,
     borderRadius: R.card,
@@ -916,6 +1188,33 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderColor: c.hair,
     padding: 14,
   },
+  /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
+  cardTight: {
+    backgroundColor: c.card,
+    borderRadius: R.card,
+    borderWidth: 0.5,
+    borderColor: c.hair,
+    overflow: 'hidden',
+  },
+
+  /* ---- 菜单行 ---- */
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.hair,
+  },
+  menuRowLast: { borderBottomWidth: 0 },
+  rowPressed: { backgroundColor: c.hairSoft },
+  menuLabel: { flex: 1, fontSize: 14.5, color: c.text },
+  menuValueWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '55%' },
+  menuValue: { fontSize: 13, color: c.text3, flexShrink: 1 },
+  menuValueWarn: { color: c.danger },
+  menuValueLink: { color: c.accentText, fontWeight: '600' },
+
   field: {
     paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -970,6 +1269,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   msgErr: { color: c.danger },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  toggleHint: { flex: 1, fontSize: 11.5, color: c.text3, lineHeight: 17 },
   toggle: {
     width: 38,
     height: 22,
@@ -982,7 +1282,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
   toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
 
-  /* ---- AI 接口：官方区块 ---- */
+  /* ---- 配置：官方区块 ---- */
   officialHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
   officialTitle: { fontSize: 13, color: c.text, fontWeight: '600' },
   officialTag: {
@@ -1018,7 +1318,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   linkText: { fontSize: 11.5, color: c.accentText, fontWeight: '500' },
   modelField: { marginTop: 12, gap: 6 },
 
-  /* ---- AI 接口：第三方折叠 ---- */
+  /* ---- 配置：第三方折叠 ---- */
   customToggle: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1055,7 +1355,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   statLabel: { fontSize: 11, color: c.text3, marginTop: 3 },
 
   indexBox: {
-    marginTop: 14,
+    marginTop: 4,
     backgroundColor: c.hairSoft,
     borderRadius: R.btn,
     paddingHorizontal: 11,
@@ -1073,7 +1373,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   aboutRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingVertical: 9,
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: c.hair,
   },

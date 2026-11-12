@@ -79,20 +79,24 @@ export interface Repo {
   /** 某个整理范围有多少条 */
   countFragments(scope: OrganizeScope): Promise<number>;
   /**
-   * 新记一条。`image` 有值时同时带上配图 —— 图和正文一起落库，
+   * 新记一条。`images` 有值时同时带上配图 —— 图和正文一起落库，
    * 免得「记录进去了、图没进」留下一条指向空文件的碎片。
    */
   insertFragment(
     content: string,
     source: FragmentSource,
     createdAt?: number,
-    image?: { path: string; text?: string | null },
+    images?: { path: string; text?: string | null }[],
   ): Promise<number>;
-  /** 图片解析完，把文字层写回去，并重建这一条的全文索引（图里的字要能搜到） */
-  setFragmentImageText(id: number, text: string): Promise<void>;
+  /** 给已有碎片补一张图，返回这张图的 id（详情页「加一张」用） */
+  insertFragmentImage(fragmentId: number, path: string): Promise<number>;
+  /** 某张图解析完：把文字层写回去，并重建这一条的全文索引（图里的字要能搜到） */
+  setFragmentImageText(imageId: number, text: string): Promise<void>;
+  /** 删掉一张图，返回它的文件名（调用方负责删文件）；这张图不存在返回 null */
+  deleteFragmentImage(imageId: number): Promise<string | null>;
   updateFragmentContent(id: number, content: string): Promise<void>;
-  /** 删除。返回被删掉的那条配图文件名，调用方负责删文件（null = 没有图） */
-  deleteFragment(id: number): Promise<string | null>;
+  /** 删除。返回被删掉的那几条配图文件名，调用方负责删文件（空数组 = 没有图） */
+  deleteFragment(id: number): Promise<string[]>;
   applyTags(id: number, labels: string[], project: string | null): Promise<void>;
   markMerged(dropIds: number[], keepId: number): Promise<void>;
   markStatus(ids: number[], status: FragmentStatus): Promise<void>;

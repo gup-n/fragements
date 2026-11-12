@@ -482,39 +482,58 @@ check('语法错时给出位置，不是只说「不合法的 JSON」', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3.8 配图的文字层（v0.19）
+// 3.8 配图的文字层（v0.19 一张图 / v0.20 多张图）
 // ---------------------------------------------------------------------------
+/** 造一张配图。`text: null` = 还没读过，'' = 读过但没读出内容 —— 两者必须能分开 */
+const pic = (id, t) => ({ id, path: `p${id}.jpg`, text: t, createdAt: id });
+
 check('纯文字碎片原样返回，不会被加上任何标记', () => {
-  eq(text.fragmentText({ content: '换盘先跑 SMART', imageText: null }), '换盘先跑 SMART', '正文');
+  eq(text.fragmentText({ content: '换盘先跑 SMART', images: [] }), '换盘先跑 SMART', '正文');
 });
 
 check('有图文字时拼在正文后面，中间用分隔标记', () => {
-  const out = text.fragmentText({ content: '这块主板', imageText: 'B760M 迫击炮' });
+  const out = text.fragmentText({ content: '这块主板', images: [pic(1, 'B760M 迫击炮')] });
   assert(out.includes('这块主板'), '正文要在');
   assert(out.includes('B760M 迫击炮'), '图文字要在');
   assert(out.includes(text.IMAGE_MARK), '要有标记区分两块内容');
 });
 
 check('只有图文字没有正文时也能读', () => {
-  const out = text.fragmentText({ content: '   ', imageText: '蓝屏 0x0000007B' });
+  const out = text.fragmentText({ content: '   ', images: [pic(1, '蓝屏 0x0000007B')] });
   eq(out, `${text.IMAGE_MARK} 蓝屏 0x0000007B`, '只有图文字');
 });
 
+check('两张图各标各的编号，不会被连成一段', () => {
+  const out = text.fragmentText({ content: '', images: [pic(1, 'AAA'), pic(2, 'BBB')] });
+  assert(out.includes('第 1 张') && out.includes('第 2 张'), '多图要编号');
+  assert(out.indexOf('AAA') < out.indexOf('BBB'), '顺序按加入顺序');
+  assert(!out.includes(`${text.IMAGE_MARK} AAA`), '多图时不能退化成同一套标记');
+});
+
 check('空串（解析过但没读出东西）不算内容', () => {
-  eq(text.fragmentText({ content: '', imageText: '' }), '', '空');
-  eq(text.hasReadableText({ content: '', imageText: '' }), false, '不能进整理材料');
+  eq(text.fragmentText({ content: '', images: [pic(1, '')] }), '', '空');
+  eq(text.hasReadableText({ content: '', images: [pic(1, '')] }), false, '不能进整理材料');
 });
 
 check('纯图还没解析：既没有正文也没有图文字', () => {
-  eq(text.fragmentText({ content: '', imageText: null }), '', '空');
-  eq(text.hasReadableText({ content: '', imageText: null }), false, '不能进材料');
+  eq(text.fragmentText({ content: '', images: [pic(1, null)] }), '', '空');
+  eq(text.hasReadableText({ content: '', images: [pic(1, null)] }), false, '不能进材料');
+});
+
+check('图的状态：没读 / 正在读 / 失败 / 读空 / 有字，各说各的', () => {
+  const base = pic(7, null);
+  eq(text.imageStateOf(base, new Set(), {}), 'idle', '还没读');
+  eq(text.imageStateOf(base, new Set([7]), {}), 'busy', '正在读');
+  eq(text.imageStateOf(base, new Set(), { '7': '超时' }), 'fail', '失败了要能重试');
+  eq(text.imageStateOf({ ...base, text: '' }, new Set(), {}), 'empty', '读过了但没字');
+  eq(text.imageStateOf({ ...base, text: '有字' }, new Set(), {}), 'read', '读出来了');
 });
 
 check('装箱预算把图文字算进去，不是只算正文', () => {
-  const frag = (id, content, imageText) => ({
+  const frag = (id, content, t) => ({
     id,
     content,
-    imageText,
+    images: t === null ? [] : [pic(id, t)],
     createdAt: id,
     source: 'manual',
     status: 'inbox',
@@ -523,7 +542,6 @@ check('装箱预算把图文字算进去，不是只算正文', () => {
     mergedInto: null,
     nature: null,
     organizedAt: null,
-    imagePath: imageText ? 'x.jpg' : null,
   });
   // 三条各 100 字正文 + 100 字图文字 = 每条实际 200+ 字
   const pool = [

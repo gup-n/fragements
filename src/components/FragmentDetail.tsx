@@ -8,6 +8,9 @@
  * 横向翻页用 FlatList 而不是手写 PanResponder / ScrollView：
  * `windowSize=3` 自带窗口化，几百条也只挂三页；分页吸附、惯性、回弹全是系统原生。
  * 自己维护 contentOffset 的写法在安卓上尤其容易抖。
+ *
+ * v0.20 起这里也是图片的主场：一条碎片可以带多张图，点图全屏看，
+ * 阅读态和编辑态都能就地加图（用户 2026-11-12：「全屏时无法插图」）。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -15,22 +18,26 @@ import {
   BackHandler,
   FlatList,
   Image,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Fragment, Note } from '../types';
+import * as ImagePicker from 'expo-image-picker';
+import type { Fragment, FragmentImage, Note } from '../types';
 import { R, useThemedStyles, type Palette } from '../theme';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
-import { dayKey, daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
+import { daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
 import { countHits } from '../util/highlight';
 import { parseBlocks } from '../util/mdBlocks';
 import { useKeyboardHeight } from '../util/keyboard';
+import { imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -57,10 +64,15 @@ interface Props {
   /** 保存正文。父组件负责写库并刷新，这里拿 Promise 是为了显示保存中状态 */
   onSave: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
-  /** 图里的字还在读时为 true */
+  /** 正在读字的**配图 id**（一条可能好几张，各读各的） */
   imageBusy: Set<number>;
+  /** 读图失败的原因（配图 id → 一句话） */
   imageFail: Record<string, string>;
-  onReparseImage: (fragment: Fragment) => void;
+  onReparseImage: (fragment: Fragment, imageId: number) => void;
+  /** 给这条补图。uri 是选择器给的临时路径，落盘与解析都在上层 */
+  onAddImages: (fragmentId: number, uris: string[], hint: string) => Promise<void>;
+  /** 删掉一张图（同时删文件） */
+  onRemoveImage: (imageId: number) => Promise<void>;
 }
 
 export function FragmentDetail({
@@ -75,8 +87,11 @@ export function FragmentDetail({
   imageBusy,
   imageFail,
   onReparseImage,
+  onAddImages,
+  onRemoveImage,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const window = useWindowDimensions();
   /**
    * 用实测容器宽度，不用 useWindowDimensions：桌面预览把 App 关在 420px 的壳里，
    * 窗口宽度和这一页的宽度不是一回事，用后者会让每页都宽出一大截、翻页还错位。
@@ -90,6 +105,14 @@ export function FragmentDetail({
   const [saving, setSaving] = useState(false);
   const [armedDelete, setArmedDelete] = useState(false);
   const keyboardHeight = useKeyboardHeight();
+  /** 全屏看图：图在这条碎片里的下标。null = 没开 */
+  const [viewer, setViewer] = useState<number | null>(null);
+  /** 加图菜单（拍照 / 相册）。和阅读、编辑共用一套 —— 两个状态各写一份迟早对不上 */
+  const [imageMenu, setImageMenu] = useState(false);
+  const [addingImage, setAddingImage] = useState(false);
+  const [toast, setToast] = useState('');
+  /** 待二次确认删除的那张图。图删掉就找不回来了，不能一步到位 */
+  const [armedImage, setArmedImage] = useState<number | null>(null);
 
   const fragment = items[current] ?? items[initialIndex];
 
@@ -97,18 +120,29 @@ export function FragmentDetail({
     if (!fragment) return;
     setDraft(fragment.content);
     setArmedDelete(false);
+    setArmedImage(null);
     setEditing(true);
   }, [fragment]);
 
   const stopEdit = useCallback(() => {
     setEditing(false);
     setArmedDelete(false);
+    setArmedImage(null);
+    setImageMenu(false);
   }, []);
 
-  // 覆盖层不是 Modal，安卓返回键得自己接。编辑态下先退编辑，再按才关页面 ——
-  // 否则改了一半按返回会直接把整页关掉，草稿连带着没了
+  // 覆盖层不是 Modal，安卓返回键得自己接。层级从高到低：
+  // 全屏看图 → 加图菜单 → 编辑态 → 关页面
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (viewer !== null) {
+        setViewer(null);
+        return true;
+      }
+      if (imageMenu) {
+        setImageMenu(false);
+        return true;
+      }
       if (editing) {
         stopEdit();
         return true;
@@ -117,7 +151,7 @@ export function FragmentDetail({
       return true;
     });
     return () => sub.remove();
-  }, [editing, stopEdit, onClose]);
+  }, [editing, imageMenu, stopEdit, onClose, viewer]);
 
   /** 底部的左右箭头：滑动手势之外再给一个确定性的入口，也给「这里能滑」一个提示 */
   const jump = useCallback(
@@ -238,7 +272,90 @@ export function FragmentDetail({
     onClose();
   }
 
+  /**
+   * 选图并加进来。相册可多选 —— 「一条只能放一张」正是用户这次要改掉的限制。
+   * 只对相机请求权限：相册走系统 Photo Picker，Android 13+ 不需要 READ_MEDIA_IMAGES，
+   * 主动去 request 反而会因为清单里没有这个权限而被拒。
+   */
+  async function pickImages(from: 'camera' | 'library') {
+    setImageMenu(false);
+    if (!fragment) return;
+    if (Platform.OS === 'web') {
+      setToast('网页版加不了图片，在手机上用可以');
+      return;
+    }
+    try {
+      if (from === 'camera') {
+        const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!perm.granted) {
+          setToast('没给相机权限，去系统设置里打开');
+          return;
+        }
+      }
+      const res =
+        from === 'camera'
+          ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
+          : await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ['images'],
+              quality: 0.5,
+              allowsMultipleSelection: true,
+              selectionLimit: 9,
+            });
+      if (res.canceled || !res.assets?.length) return;
+      setAddingImage(true);
+      try {
+        await onAddImages(
+          fragment.id,
+          res.assets.map((a) => a.uri),
+          draft.trim() || fragment.content,
+        );
+        // 加完图必须能看见它 —— 阅读态停在原位就好，图就在正文上方
+        setToast(`加了 ${res.assets.length} 张图，正在读图里的字`);
+      } finally {
+        setAddingImage(false);
+      }
+    } catch (e) {
+      setToast(e instanceof Error ? `没加上：${e.message}` : '加图失败');
+    }
+  }
+
+  async function removeImage(image: FragmentImage) {
+    if (armedImage !== image.id) {
+      setArmedImage(image.id);
+      return;
+    }
+    setArmedImage(null);
+    await onRemoveImage(image.id);
+    // 删掉的那张不在序列里了，全屏看图的下标要跟着收
+    setViewer(null);
+  }
+
+  // 轻提示自己消失：这里没有 Toast 组件可复用，一行字挂 2 秒就够
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(''), 2200);
+    return () => clearTimeout(t);
+  }, [toast]);
+
   if (!fragment) return null;
+
+  const images = fragment.images;
+
+  const imageMenuLayer = imageMenu ? (
+    <View style={styles.imageSheet}>
+      <Pressable style={styles.imageSheetRow} onPress={() => void pickImages('camera')}>
+        <Ionicons name="camera-outline" size={18} color={c.text2} />
+        <Text style={styles.imageSheetText}>拍一张</Text>
+      </Pressable>
+      <Pressable style={styles.imageSheetRow} onPress={() => void pickImages('library')}>
+        <Ionicons name="images-outline" size={18} color={c.text2} />
+        <Text style={styles.imageSheetText}>从相册选（可多选）</Text>
+      </Pressable>
+      <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
+        <Text style={styles.imageSheetText}>取消</Text>
+      </Pressable>
+    </View>
+  ) : null;
 
   if (editing) {
     const canSave = draft.trim().length > 0 && !saving;
@@ -276,6 +393,56 @@ export function FragmentDetail({
           </Pressable>
         </View>
 
+        {/*
+          编辑态的配图条：删图必须在这里做，而且要点两次 ——
+          图删掉文件就没了，误触一次就少一张。
+        */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.editImages}
+          contentContainerStyle={styles.editImagesContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {images.map((img, i) => (
+            <View key={img.id} style={styles.editImageItem}>
+              <Image
+                source={{ uri: fragmentImageUri(img.path) ?? undefined }}
+                style={styles.editImageThumb}
+                resizeMode="cover"
+              />
+              <Pressable
+                onPress={() => void removeImage(img)}
+                hitSlop={8}
+                style={[styles.editImageRemove, armedImage === img.id && styles.editImageRemoveArmed]}
+                accessibilityLabel={
+                  armedImage === img.id ? `再点一次删除第 ${i + 1} 张图` : `删除第 ${i + 1} 张图`
+                }
+              >
+                {armedImage === img.id ? (
+                  <Text style={styles.editImageRemoveText}>删?</Text>
+                ) : (
+                  <Ionicons name="close" size={12} color="#FFFFFF" />
+                )}
+              </Pressable>
+            </View>
+          ))}
+          <Pressable
+            onPress={() => setImageMenu((v) => !v)}
+            style={styles.editImageAdd}
+            accessibilityLabel="加一张图"
+          >
+            {addingImage ? (
+              <ActivityIndicator size="small" color={c.text3} />
+            ) : (
+              <>
+                <Ionicons name="add" size={20} color={c.text2} />
+                <Text style={styles.editImageAddText}>加图</Text>
+              </>
+            )}
+          </Pressable>
+        </ScrollView>
+
         <TextInput
           value={draft}
           onChangeText={setDraft}
@@ -294,13 +461,21 @@ export function FragmentDetail({
               {armedDelete ? '再点一次确认删除' : '删除这条碎片'}
             </Text>
           </Pressable>
-          <Text style={styles.editHint}>返回键取消</Text>
+          <Text style={styles.editHint}>{armedImage ? '再点一次图上的叉号才会真删' : '返回键取消'}</Text>
         </View>
+
+        {imageMenuLayer}
+        {toast ? <View style={styles.toast}><Text style={styles.toastText}>{toast}</Text></View> : null}
       </View>
     );
   }
 
   const atEnd = current >= items.length - 1;
+  /**
+   * 全屏看图的页宽。用实测宽度而不是窗口宽度：桌面预览把 App 关在 420px 的壳里，
+   * 用窗口宽度算偏移，翻第二张就会错位。
+   */
+  const pageWidth = width > 0 ? width : window.width;
 
   return (
     <View
@@ -391,9 +566,12 @@ export function FragmentDetail({
               width={width}
               done={doneIds.has(item.id)}
               notes={notes}
-              imageBusy={imageBusy.has(item.id)}
-              imageFail={imageFail[String(item.id)]}
+              imageBusy={imageBusy}
+              imageFail={imageFail}
               onReparseImage={onReparseImage}
+              onOpenImage={(i) => setViewer(i)}
+              onAddImage={() => setImageMenu((v) => !v)}
+              addingImage={addingImage}
               highlight={highlightQuery}
               registerScroll={registerScroll}
               registerBlock={registerBlock}
@@ -423,6 +601,53 @@ export function FragmentDetail({
           </Pressable>
         </View>
       ) : null}
+
+      {imageMenuLayer}
+      {toast ? (
+        <View style={styles.toast}>
+          <Text style={styles.toastText}>{toast}</Text>
+        </View>
+      ) : null}
+
+      {/*
+        全屏看图。黑底、整屏、点一下关掉 —— 看截图时不该有一圈白边和标题栏。
+        用 FlatList 横向翻页而不是一张一张点：一屏之内就能左右比较两张截图。
+      */}
+      {viewer !== null && images[viewer] ? (
+        <View style={styles.viewer}>
+          <FlatList
+            style={styles.viewerList}
+            data={images}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            keyExtractor={(img) => String(img.id)}
+            initialScrollIndex={Math.min(viewer, images.length - 1)}
+            getItemLayout={(_, i) => ({ length: pageWidth, offset: pageWidth * i, index: i })}
+            onMomentumScrollEnd={(e) => {
+              const i = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
+              if (i >= 0 && i < images.length) setViewer(i);
+            }}
+            renderItem={({ item }) => (
+              <Pressable style={[styles.viewerPage, { width: pageWidth }]} onPress={() => setViewer(null)}>
+                <Image
+                  source={{ uri: fragmentImageUri(item.path) ?? undefined }}
+                  style={styles.viewerImage}
+                  resizeMode="contain"
+                />
+              </Pressable>
+            )}
+          />
+          <View style={styles.viewerBar} pointerEvents="box-none">
+            <Text style={styles.viewerCount}>
+              {Math.min(viewer, images.length - 1) + 1} / {images.length}
+            </Text>
+            <Pressable onPress={() => setViewer(null)} hitSlop={12} style={styles.viewerClose}>
+              <Ionicons name="close" size={20} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -448,6 +673,9 @@ function Page({
   imageBusy,
   imageFail,
   onReparseImage,
+  onOpenImage,
+  onAddImage,
+  addingImage,
   registerScroll,
   registerBlock,
 }: {
@@ -456,43 +684,47 @@ function Page({
   done: boolean;
   notes: Note[];
   highlight?: string;
-  imageBusy: boolean;
-  imageFail?: string;
-  onReparseImage: (fragment: Fragment) => void;
+  imageBusy: Set<number>;
+  imageFail: Record<string, string>;
+  onReparseImage: (fragment: Fragment, imageId: number) => void;
+  onOpenImage: (index: number) => void;
+  onAddImage: () => void;
+  addingImage: boolean;
   registerScroll: (id: number, view: ScrollViewInstance | null) => void;
   registerBlock: (id: number, blockIndex: number, y: number) => void;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   /**
-   * 配图的原始宽高比。
+   * 每张图的原始宽高比，按配图 id 记。
    *
    * 不写死成 4:3：手机拍的报错屏常常是 9:19，写死会把主要内容裁掉；
    * 拿不到尺寸时退回 4:3，至少不塌成 0 高。
    */
-  const imgUri = fragmentImageUri(fragment.imagePath);
-  const [imgAspect, setImgAspect] = useState<number | null>(null);
+  const [aspects, setAspects] = useState<Record<number, number>>({});
+  const paths = fragment.images.map((i) => i.path).join('|');
   useEffect(() => {
-    if (!imgUri) {
-      setImgAspect(null);
-      return;
-    }
     let alive = true;
-    Image.getSize(
-      imgUri,
-      (w, h) => {
-        if (alive && w > 0) setImgAspect(h / w);
-      },
-      () => {
-        if (alive) setImgAspect(null);
-      },
-    );
+    for (const img of fragment.images) {
+      const uri = fragmentImageUri(img.path);
+      if (!uri) continue;
+      Image.getSize(
+        uri,
+        (w, h) => {
+          if (alive && w > 0) setAspects((prev) => (prev[img.id] ? prev : { ...prev, [img.id]: h / w }));
+        },
+        () => undefined,
+      );
+    }
     return () => {
       alive = false;
     };
-  }, [imgUri]);
+    // 只在图变了的时候重量：images 数组每次渲染都是新引用
+  }, [paths]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const merged = fragment.mergedInto !== null;
   const hasMeta = !!fragment.project || fragment.source !== 'app';
   const dayNotes = notesOn(fragment.createdAt, notes);
+  const texts = imageTextsOf(fragment);
   // 身份要稳：内联箭头每次渲染都会换新，React 会把 ref 先置 null 再挂回去
   const setScrollRef = useCallback(
     (view: ScrollViewInstance | null) => registerScroll(fragment.id, view),
@@ -524,45 +756,105 @@ function Page({
         </View>
       ) : null}
 
-      {imgUri ? (
-        <View style={styles.imageBox}>
-          <Image
-            source={{ uri: imgUri }}
-            style={[
-              styles.imageBig,
-              {
-                width: Math.max(0, width - 44),
-                height: Math.max(0, width - 44) * (imgAspect ?? 0.75),
-              },
-            ]}
-            resizeMode="contain"
-          />
-          {/* 状态行就在图下面：读者下一眼看到的就是「它读出来没有」 */}
-          {imageBusy ? (
-            <Text style={styles.imageState}>正在读图里的字…</Text>
-          ) : imageFail ? (
-            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
-              <Text style={[styles.imageState, styles.imageStateErr]} numberOfLines={3}>
-                没读出文字：{imageFail} · 点这里重试
-              </Text>
-            </Pressable>
-          ) : fragment.imageText ? (
-            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
-              <Text style={styles.imageState}>图里的字 · 点一下重读</Text>
-            </Pressable>
-          ) : (
-            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
-              <Text style={styles.imageState}>还没读过这张图 · 点一下让它读</Text>
-            </Pressable>
-          )}
+      {/*
+        配图：竖着排，按原始比例给高度，一张都不裁。
+        点一下进全屏 —— 详情页的宽度就那么多，看截图里的字得能放大到整屏。
+      */}
+      {fragment.images.length ? (
+        <View style={styles.imageList}>
+          {fragment.images.map((img, i) => {
+            const st = imageStateOf(img, imageBusy, imageFail);
+            const reason = imageFail[String(img.id)];
+            return (
+              <View key={img.id} style={styles.imageBox}>
+                <Pressable
+                  onPress={() => onOpenImage(i)}
+                  accessibilityRole="imagebutton"
+                  accessibilityLabel={`第 ${i + 1} 张图，点开全屏查看`}
+                >
+                  <Image
+                    source={{ uri: fragmentImageUri(img.path) ?? undefined }}
+                    style={[
+                      styles.imageBig,
+                      {
+                        width: Math.max(0, width - 44),
+                        height: Math.max(0, width - 44) * (aspects[img.id] ?? 0.75),
+                      },
+                    ]}
+                    resizeMode="contain"
+                  />
+                  {fragment.images.length > 1 ? (
+                    <View style={styles.imageIndex}>
+                      <Text style={styles.imageIndexText}>{i + 1}</Text>
+                    </View>
+                  ) : null}
+                </Pressable>
+                {/* 状态行就在图下面：读者下一眼看到的就是「它读出来没有」 */}
+                {st === 'busy' ? (
+                  <Text style={styles.imageState}>正在读图里的字…</Text>
+                ) : st === 'fail' ? (
+                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                    <Text style={[styles.imageState, styles.imageStateErr]} numberOfLines={3}>
+                      没读出文字：{reason} · 点这里重试
+                    </Text>
+                  </Pressable>
+                ) : st === 'read' ? (
+                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                    <Text style={styles.imageState}>图里的字 · 点一下重读</Text>
+                  </Pressable>
+                ) : st === 'empty' ? (
+                  <Text style={styles.imageState}>这张图里没读出字</Text>
+                ) : (
+                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                    <Text style={styles.imageState}>还没读过这张图 · 点一下让它读</Text>
+                  </Pressable>
+                )}
+              </View>
+            );
+          })}
         </View>
       ) : null}
 
+      {/*
+        加图入口在阅读态也留着（用户 2026-11-12：「全屏时无法插图」）：
+        翻旧记录时想起还有一张图要补，不该逼人先进编辑态。
+      */}
+      <Pressable
+        onPress={onAddImage}
+        style={({ pressed }) => [styles.addImageBtn, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityLabel="给这条碎片加图片"
+      >
+        {addingImage ? (
+          <ActivityIndicator size="small" color={c.text3} />
+        ) : (
+          <>
+            <Ionicons name="image-outline" size={15} color={c.text2} />
+            <Text style={styles.addImageText}>
+              {fragment.images.length ? '再加一张图' : '加一张图'}
+            </Text>
+          </>
+        )}
+      </Pressable>
+
       {/* 图里的字单独一块：用户要能核对模型抄得对不对，而不是只能信 */}
-      {fragment.imageText ? (
+      {texts.length ? (
         <View style={styles.imageTextBox}>
-          <Text style={styles.imageTextLabel}>图里的字</Text>
-          <NoteBody text={fragment.imageText} style={styles.imageTextBody} variant="reading" selectable />
+          <Text style={styles.imageTextLabel}>
+            {fragment.images.length > 1 ? `图里的字（${texts.length} 张有字）` : '图里的字'}
+          </Text>
+          {fragment.images.map((img, i) => {
+            const t = (img.text ?? '').trim();
+            if (!t) return null;
+            return (
+              <View key={img.id} style={styles.imageTextGroup}>
+                {fragment.images.length > 1 ? (
+                  <Text style={styles.imageTextIndex}>第 {i + 1} 张</Text>
+                ) : null}
+                <NoteBody text={t} style={styles.imageTextBody} variant="reading" selectable />
+              </View>
+            );
+          })}
         </View>
       ) : null}
 
@@ -597,7 +889,8 @@ function Page({
       ) : null}
 
       <Text style={styles.count}>
-        {fragment.content.length} 字 ·{' '}
+        {fragment.content.length} 字
+        {fragment.images.length ? ` · ${fragment.images.length} 张图` : ''} ·{' '}
         {new Date(fragment.createdAt).getFullYear()}-{String(new Date(fragment.createdAt).getMonth() + 1).padStart(2, '0')}-
         {String(new Date(fragment.createdAt).getDate()).padStart(2, '0')}
       </Text>
@@ -670,11 +963,40 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: 4 },
 
   content: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48 },
-  /** 配图：大图 + 一行状态。按原始比例给高度，不裁剪 */
-  imageBox: { marginBottom: 16, gap: 6 },
+  /** 配图：竖排，每张按原始比例给高度，不裁剪 */
+  imageList: { gap: 10, marginBottom: 14 },
+  imageBox: { gap: 6 },
   imageBig: { borderRadius: R.card, backgroundColor: c.hairSoft, alignSelf: 'center' },
+  /** 多图时左上角标序号：点开的全屏和这里是同一份顺序，能对得上 */
+  imageIndex: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    paddingHorizontal: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  imageIndexText: { fontSize: 11, color: '#FFFFFF', fontWeight: '600' },
   imageState: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
   imageStateErr: { color: c.danger },
+  /** 阅读态的加图入口：虚线框，看起来就是「这里还可以放东西」 */
+  addImageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    marginBottom: 16,
+    borderRadius: R.btn,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderStyle: 'dashed',
+    borderColor: c.hair,
+  },
+  addImageText: { fontSize: 12.5, color: c.text2 },
   /** 「图里的字」单独一块，方便核对模型抄得对不对 */
   imageTextBox: {
     marginBottom: 16,
@@ -687,6 +1009,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderColor: c.hair,
   },
   imageTextLabel: { fontSize: 11, color: c.text3, letterSpacing: 0.4, marginBottom: 6 },
+  imageTextGroup: { marginBottom: 6 },
+  imageTextIndex: { fontSize: 10.5, color: c.text3, marginBottom: 2 },
   imageTextBody: { fontSize: 14, lineHeight: 23, color: c.text2 },
   badges: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
   doneBadge: {
@@ -750,6 +1074,38 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   saveBtnOff: { backgroundColor: c.hairSoft },
   saveText: { fontSize: 12.5, color: c.onAccent, fontWeight: '600' },
   saveTextOff: { color: c.text3 },
+  editImages: {
+    flexGrow: 0,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: c.hair,
+  },
+  editImagesContent: { gap: 8, paddingHorizontal: 22, paddingVertical: 10, alignItems: 'center' },
+  editImageItem: { width: 56, height: 56 },
+  editImageThumb: { width: 56, height: 56, borderRadius: R.btn, backgroundColor: c.hairSoft },
+  editImageRemove: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 19,
+    height: 19,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.62)',
+  },
+  /** 二次确认态：红底 + 「删?」，和碎片删除的两次点击是同一套手感 */
+  editImageRemoveArmed: { width: 26, height: 19, borderRadius: 10, backgroundColor: c.danger },
+  editImageRemoveText: { fontSize: 9, color: '#FFFFFF', fontWeight: '600' },
+  editImageAdd: {
+    width: 56,
+    height: 56,
+    borderRadius: R.btn,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 1,
+    backgroundColor: c.hairSoft,
+  },
+  editImageAddText: { fontSize: 10, color: c.text3 },
   editInput: {
     flex: 1,
     fontSize: 17,
@@ -772,6 +1128,83 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   deleteText: { fontSize: 12.5, color: c.danger },
   editHint: { fontSize: 11, color: c.text3 },
+
+  /** 加图菜单：贴在底部，阅读态和编辑态共用 */
+  imageSheet: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    bottom: 64,
+    backgroundColor: c.card,
+    borderRadius: R.card,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hair,
+    paddingVertical: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.16,
+    shadowRadius: 14,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 8,
+  },
+  imageSheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  imageSheetCancel: { paddingHorizontal: 16, paddingVertical: 12 },
+  imageSheetText: { fontSize: 13.5, color: c.text },
+  toast: {
+    position: 'absolute',
+    left: 24,
+    right: 24,
+    bottom: 86,
+    alignItems: 'center',
+  },
+  toastText: {
+    fontSize: 12,
+    lineHeight: 18,
+    color: c.text2,
+    backgroundColor: c.card,
+    borderRadius: R.pill,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    overflow: 'hidden',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.hair,
+  },
+
+  /** 全屏看图：纯黑底，只留计数和关闭 */
+  viewer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    backgroundColor: '#000000',
+  },
+  viewerPage: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  viewerList: { flex: 1 },
+  viewerImage: { width: '100%', height: '100%' },
+  viewerBar: {
+    position: 'absolute',
+    top: 10,
+    left: 16,
+    right: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  viewerCount: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontVariant: ['tabular-nums'] },
+  viewerClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
 
   footer: {
     flexDirection: 'row',

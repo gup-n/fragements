@@ -34,19 +34,34 @@ export interface Fragment {
    */
   organizedAt: number | null;
   /**
-   * 配图的文件名（相对 `fragment-images/` 目录）。null = 纯文字碎片。
+   * 配图，按加入顺序。空数组 = 纯文字碎片。
    *
-   * 只存文件名不存绝对路径：换机、迁移、App 私有目录前缀变化时，
-   * 绝对路径会集体失效，而文件名永远能拼回去。
+   * v0.20 之前是 `imagePath` + `imageText` 两个标量字段，一条碎片只能带一张图。
+   * 用户 2026-11-12 明确要求「目前只能放一张图进去，这些都要优化一下」，
+   * 所以拆成独立表：一张图有自己的一生（文件、文字层、解析失败要单独重试），
+   * 硬塞进两个标量字段里，第二张图就没有位置放它的状态了。
    */
-  imagePath: string | null;
+  images: FragmentImage[];
+}
+
+/**
+ * 碎片的一张配图。
+ *
+ * 只存文件名不存绝对路径：换机、迁移、App 私有目录前缀变化时，
+ * 绝对路径会集体失效，而文件名永远能拼回去。
+ */
+export interface FragmentImage {
+  id: number;
+  /** 文件名（相对 `fragment-images/` 目录） */
+  path: string;
   /**
-   * 图片的文字层：模型把图里的字抄下来 / 描述画面。null = 还没解析过。
+   * 这张图的文字层：模型把图里的字抄下来 / 描述画面。null = 还没解析过。
    *
    * 空字符串是**有意义的**：表示「解析过了，图里确实没读出东西」。
    * 这两种状态在界面上必须区分 —— 前者可以重试，后者重试也没用。
    */
-  imageText: string | null;
+  text: string | null;
+  createdAt: number;
 }
 
 export interface Todo {

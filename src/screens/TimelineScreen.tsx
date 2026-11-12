@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   BackHandler,
   Image,
   Platform,
   Pressable,
+  ScrollView,
   SectionList,
   StyleSheet,
   Text,
@@ -25,6 +27,7 @@ import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } 
 import { countHits } from '../util/highlight';
 import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
+import { imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -78,8 +81,9 @@ function previewOfItem(item: TimelineItem): string {
     if (text) return text;
     // 纯图碎片没有正文：折叠起来的时候至少要看得见「这里有一张图」，
     // 否则那一行是空白，用户会以为碎片丢了
-    const pic = (item.fragment.imageText ?? '').replace(/\s+/g, ' ').trim();
-    return pic ? `[图片] ${pic}` : '[图片]';
+    const pic = imageTextsOf(item.fragment).join(' · ').replace(/\s+/g, ' ');
+    const n = item.fragment.images.length;
+    return pic ? `[${n} 张图] ${pic}` : `[${n} 张图]`;
   }
   return item.note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim();
 }
@@ -119,8 +123,8 @@ interface Props {
    */
   draft: string;
   onDraftChange: (text: string) => void;
-  /** `imageUri` 有值就是「这条带一张图」，图由上层存盘并异步解析 */
-  onAdd: (text: string, imageUri?: string) => Promise<void>;
+  /** `imageUris` 有值就是「这条带图」，图由上层存盘并逐张异步解析（可以多张） */
+  onAdd: (text: string, imageUris?: string[]) => Promise<void>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
@@ -131,11 +135,15 @@ interface Props {
   /** 文档库（v0.10.0）。入口在页头「问」的左边 */
   onOpenDocs: () => void;
   onSeed?: () => Promise<void>;
-  /** 正在读图的碎片 id。行上要说「正在读图里的字」，而不是让用户干等 */
+  /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
-  /** 读图失败的原因（id → 一句话）。必须能就地重试 */
+  /** 读图失败的原因（配图 id → 一句话）。必须能就地重试 */
   imageFail: Record<string, string>;
-  onReparseImage: (fragment: Fragment) => void;
+  onReparseImage: (fragment: Fragment, imageId: number) => void;
+  /** 详情页里给已有碎片补图 */
+  onAddImages: (fragmentId: number, uris: string[], hint: string) => Promise<void>;
+  /** 详情页里删掉一张图 */
+  onRemoveImage: (imageId: number) => Promise<void>;
 }
 
 export function TimelineScreen({
@@ -156,6 +164,8 @@ export function TimelineScreen({
   imageBusy,
   imageFail,
   onReparseImage,
+  onAddImages,
+  onRemoveImage,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { width } = useWindowDimensions();
@@ -179,7 +189,7 @@ export function TimelineScreen({
    * 待发送的图（选择器给的临时 uri）。发送时才落盘 ——
    * 选了又删掉的图不该在私有目录里留一份。
    */
-  const [pendingImage, setPendingImage] = useState<string | null>(null);
+  const [pendingImages, setPendingImages] = useState<string[]>([]);
   /** 加图的方式菜单（拍照 / 相册）。不用 Modal：本项目一律 absolute + 自接返回键 */
   const [imageMenu, setImageMenu] = useState(false);
   const [query, setQuery] = useState('');
@@ -505,10 +515,13 @@ export function TimelineScreen({
   }, [hitCounts]);
 
   // 只有图没有字也能发：随手拍一张报错屏，不写备注是最常见的用法
-  const canSend = (draft.trim().length > 0 || !!pendingImage) && !sending;
+  const canSend = (draft.trim().length > 0 || pendingImages.length > 0) && !sending;
+
+  /** 换成多图后最多几张：九宫格是用户在手机上最熟悉的张数上限，超过就说明该拆成几条了 */
+  const MAX_IMAGES = 9;
 
   /**
-   * 选一张图。`camera` 走系统相机，`library` 走相册。
+   * 选图。`camera` 走系统相机，`library` 走相册（可多选）。
    *
    * 压缩只靠 `quality`：图片落盘时统一转 JPEG，`quality` 才会真的生效。
    * 不引 `expo-image-manipulator` —— 多一个原生模块，只为省几百 KB，
@@ -533,16 +546,26 @@ export function TimelineScreen({
           return;
         }
       }
+      const room = MAX_IMAGES - pendingImages.length;
+      if (room <= 0) {
+        setToast(`一条最多 ${MAX_IMAGES} 张图，再多就拆成两条记`);
+        return;
+      }
       const res =
         from === 'camera'
           ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
           : await ImagePicker.launchImageLibraryAsync({
               mediaTypes: ['images'],
               quality: 0.5,
-              allowsMultipleSelection: false,
+              allowsMultipleSelection: true,
+              selectionLimit: room,
             });
       if (res.canceled || !res.assets?.length) return;
-      setPendingImage(res.assets[0].uri);
+      const picked = res.assets.slice(0, room).map((a) => a.uri);
+      setPendingImages((prev) => [...prev, ...picked]);
+      if (res.assets.length > room) {
+        setToast(`只加了前 ${room} 张，一条最多 ${MAX_IMAGES} 张`);
+      }
     } catch (e) {
       setToast(e instanceof Error ? `打不开相册：${e.message}` : '选图失败');
     }
@@ -550,12 +573,12 @@ export function TimelineScreen({
 
   async function submit() {
     const text = draft.trim();
-    const picture = pendingImage;
-    if ((!text && !picture) || sending) return;
+    const pictures = pendingImages;
+    if ((!text && !pictures.length) || sending) return;
     setSending(true);
     try {
-      await onAdd(text, picture ?? undefined);
-      setPendingImage(null);
+      await onAdd(text, pictures.length ? pictures : undefined);
+      setPendingImages([]);
       onDraftChange('');
       // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
       // 折叠一个「刚往里写了东西的日期」没有任何意义。
@@ -614,7 +637,7 @@ export function TimelineScreen({
      * 纯图碎片没有正文。复制一个空串，用户粘出来是一片空白，
      * 却收到「已复制」的提示 —— 那是在骗他。有图文字就复制图文字。
      */
-    const text = f.content.trim() || (f.imageText ?? '').trim();
+    const text = f.content.trim() || imageTextsOf(f).join('\n\n');
     if (!text) {
       setOpenRow(null);
       showToast('这条只有图片，没有可复制的文字');
@@ -1018,34 +1041,75 @@ export function TimelineScreen({
                       );
                     })()}
                     {/*
-                      配图。缩略图 + 一行状态。
+                      配图。缩略图一排 + 一行状态。
                       图里的字还在读时必须说出来 —— 否则用户看到的就是一张图，
                       永远不知道「模型其实还没看过它」。
                     */}
-                    {fragment.imagePath ? (
-                      <View style={styles.imageRow}>
-                        <Image
-                          source={{ uri: fragmentImageUri(fragment.imagePath) ?? undefined }}
-                          style={styles.imageThumb}
-                          resizeMode="cover"
-                        />
-                        <View style={styles.imageSide}>
-                          {imageBusy.has(fragment.id) ? (
-                            <Text style={styles.imageNote}>正在读图里的字…</Text>
-                          ) : imageFail[String(fragment.id)] ? (
-                            <Pressable onPress={() => onReparseImage(fragment)} hitSlop={8}>
-                              <Text style={[styles.imageNote, styles.imageNoteErr]} numberOfLines={2}>
-                                没读出文字 · 点这里重试
+                    {fragment.images.length ? (
+                      <View style={styles.imageBlock}>
+                        <View style={styles.thumbRow}>
+                          {fragment.images.slice(0, 4).map((img) => {
+                            const st = imageStateOf(img, imageBusy, imageFail);
+                            return (
+                              <View key={img.id} style={styles.thumbWrap}>
+                                <Image
+                                  source={{ uri: fragmentImageUri(img.path) ?? undefined }}
+                                  style={styles.imageThumb}
+                                  resizeMode="cover"
+                                />
+                                {st === 'busy' ? (
+                                  <View style={styles.thumbMask}>
+                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                  </View>
+                                ) : st === 'fail' ? (
+                                  <View style={styles.thumbMask}>
+                                    <Ionicons name="alert-circle-outline" size={17} color="#FFFFFF" />
+                                  </View>
+                                ) : null}
+                              </View>
+                            );
+                          })}
+                          {fragment.images.length > 4 ? (
+                            <View style={[styles.imageThumb, styles.thumbMore]}>
+                              <Text style={styles.thumbMoreText}>
+                                +{fragment.images.length - 4}
                               </Text>
-                            </Pressable>
-                          ) : fragment.imageText ? (
-                            <Text style={styles.imageNote} numberOfLines={3}>
-                              {shortPreview(fragment.imageText, 90)}
-                            </Text>
-                          ) : (
-                            <Text style={styles.imageNote}>还没读图里的字</Text>
-                          )}
+                            </View>
+                          ) : null}
                         </View>
+                        {(() => {
+                          const texts = imageTextsOf(fragment);
+                          const reading = fragment.images.some((i) => imageBusy.has(i.id));
+                          const bad = fragment.images.find((i) => imageFail[String(i.id)]);
+                          if (reading) return <Text style={styles.imageNote}>正在读图里的字…</Text>;
+                          if (bad)
+                            return (
+                              <Pressable
+                                onPress={() => onReparseImage(fragment, bad.id)}
+                                hitSlop={8}
+                              >
+                                <Text
+                                  style={[styles.imageNote, styles.imageNoteErr]}
+                                  numberOfLines={2}
+                                >
+                                  有 {fragment.images.filter((i) => imageFail[String(i.id)]).length}{' '}
+                                  张没读出文字 · 点这里重试
+                                </Text>
+                              </Pressable>
+                            );
+                          if (texts.length)
+                            return (
+                              <Text style={styles.imageNote} numberOfLines={3}>
+                                {shortPreview(texts.join(' · '), 90)}
+                              </Text>
+                            );
+                          const allTried = fragment.images.every((i) => i.text !== null);
+                          return (
+                            <Text style={styles.imageNote}>
+                              {allTried ? '图里没有可读的字' : '还没读图里的字'}
+                            </Text>
+                          );
+                        })()}
                       </View>
                     ) : null}
                     {(hitCount > 0 ||
@@ -1118,41 +1182,16 @@ export function TimelineScreen({
 
         <View style={[styles.composerWrap, { paddingBottom: 10 + keyboardHeight }]}>
           {/*
-            选好的图。放在输入框上方而不是塞进输入框里：
-            缩略图要大一点才能确认「是不是这张」，塞进一行里只能做成一枚小图标。
+            输入框在上、工具行在下（用户 2026-11-12 要求，参照 DeepSeek 的输入区）：
+            文字区域独占整行宽度，展开 / 加图 / 发布退到下面一排 ——
+            原来四个按钮挤在同一行里，长句子写两行就被压得只剩半行宽。
           */}
-          {pendingImage ? (
-            <View style={styles.pendingRow}>
-              <Image source={{ uri: pendingImage }} style={styles.pendingThumb} />
-              <Text style={styles.pendingHint} numberOfLines={2}>
-                发出去之后会自动把图里的字读出来{'\n'}可以顺手写一句它是什么
-              </Text>
-              <Pressable
-                onPress={() => setPendingImage(null)}
-                hitSlop={10}
-                style={styles.pendingRemove}
-                accessibilityLabel="不发了"
-              >
-                <Ionicons name="close" size={14} color={c.text2} />
-              </Pressable>
-            </View>
-          ) : null}
-
-          <View style={styles.composer}>
-            {/* 加图入口在最左边：从「写一条」到「拍一张」是同一个动作的两半 */}
-            <Pressable
-              onPress={() => setImageMenu((v) => !v)}
-              hitSlop={8}
-              style={styles.expandIcon}
-              accessibilityLabel="加一张图片"
-            >
-              <Ionicons name="image-outline" size={17} color={c.text2} />
-            </Pressable>
+          <View style={styles.composerCard}>
             <TextInput
               ref={inputRef}
               value={draft}
               onChangeText={onDraftChange}
-              placeholder={pendingImage ? '这张图是什么？可留空' : '随手记一条…'}
+              placeholder={pendingImages.length ? '这张图是什么？可留空' : '随手记一条…'}
               placeholderTextColor={c.text3}
               style={styles.input}
               multiline
@@ -1161,17 +1200,71 @@ export function TimelineScreen({
               blurOnSubmit={false}
               returnKeyType="default"
             />
-            <Pressable onPress={() => setFullEdit(true)} hitSlop={8} style={styles.expandIcon}>
-              <Ionicons name="expand-outline" size={17} color={c.text2} />
-            </Pressable>
-            <Pressable
-              onPress={submit}
-              disabled={!canSend}
-              style={[styles.send, canSend && styles.sendActive]}
-              hitSlop={6}
-            >
-              <Ionicons name="arrow-up" size={18} color={canSend ? c.onAccent : c.text3} />
-            </Pressable>
+
+            {/*
+              选好的图。横排缩略图，每张右上角一个叉 ——
+              缩略图要大一点才能确认「是不是这张」，塞进一行里只能做成一枚小图标。
+            */}
+            {pendingImages.length ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.pendingStrip}
+                contentContainerStyle={styles.pendingStripContent}
+                keyboardShouldPersistTaps="handled"
+              >
+                {pendingImages.map((uri, i) => (
+                  <View key={`${uri}-${i}`} style={styles.pendingItem}>
+                    <Image source={{ uri }} style={styles.pendingThumb} />
+                    <Pressable
+                      onPress={() => setPendingImages((prev) => prev.filter((_, k) => k !== i))}
+                      hitSlop={8}
+                      style={styles.pendingRemove}
+                      accessibilityLabel={`不发第 ${i + 1} 张`}
+                    >
+                      <Ionicons name="close" size={12} color="#FFFFFF" />
+                    </Pressable>
+                  </View>
+                ))}
+              </ScrollView>
+            ) : null}
+
+            <View style={styles.composerBar}>
+              <Pressable
+                onPress={() => setFullEdit(true)}
+                hitSlop={8}
+                style={styles.toolBtn}
+                accessibilityLabel="展开成整页写"
+              >
+                <Ionicons name="expand-outline" size={18} color={c.text2} />
+              </Pressable>
+
+              <Pressable
+                onPress={() => setImageMenu((v) => !v)}
+                hitSlop={8}
+                style={styles.toolBtn}
+                accessibilityLabel="加图片"
+              >
+                <Ionicons name="image-outline" size={18} color={c.text2} />
+                {pendingImages.length ? (
+                  <View style={styles.toolBadge}>
+                    <Text style={styles.toolBadgeText}>{pendingImages.length}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+
+              <View style={styles.flex} />
+
+              <Pressable
+                onPress={submit}
+                disabled={!canSend}
+                style={[styles.send, canSend && styles.sendActive]}
+                hitSlop={6}
+                accessibilityLabel="发布这条碎片"
+              >
+                <Ionicons name="arrow-up" size={19} color={canSend ? c.onAccent : c.text3} />
+              </Pressable>
+            </View>
           </View>
 
           {/* 拍照 / 相册。弹出层用 absolute，不用 Modal —— 键盘弹着的时候 Modal 会错位 */}
@@ -1183,7 +1276,7 @@ export function TimelineScreen({
               </Pressable>
               <Pressable style={styles.imageSheetRow} onPress={() => void pickImage('library')}>
                 <Ionicons name="images-outline" size={18} color={c.text2} />
-                <Text style={styles.imageSheetText}>从相册选</Text>
+                <Text style={styles.imageSheetText}>从相册选（可多选）</Text>
               </Pressable>
               <Pressable style={styles.imageSheetCancel} onPress={() => setImageMenu(false)}>
                 <Text style={styles.imageSheetText}>取消</Text>
@@ -1211,6 +1304,8 @@ export function TimelineScreen({
           imageBusy={imageBusy}
           imageFail={imageFail}
           onReparseImage={onReparseImage}
+          onAddImages={onAddImages}
+          onRemoveImage={onRemoveImage}
           onClose={() => setDetail(null)}
           onSave={onEdit}
           onDelete={onDelete}
@@ -1382,20 +1477,29 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   dotMuted: { backgroundColor: c.hair },
   rowBody: { flex: 1, paddingBottom: 18, paddingLeft: 2 },
-  /** 配图那一行：缩略图 + 右侧状态文字 */
-  imageRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 7,
-  },
+  /** 配图区：一排缩略图 + 下面一行状态 */
+  imageBlock: { marginTop: 8, gap: 6 },
+  thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  thumbWrap: { borderRadius: R.btn, overflow: 'hidden' },
   imageThumb: {
     width: 62,
     height: 62,
     borderRadius: R.btn,
     backgroundColor: c.hairSoft,
   },
-  imageSide: { flex: 1 },
+  /** 压在图上的「正在读 / 读失败」标记：只有一层薄蒙版，不遮住图本身 */
+  thumbMask: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.38)',
+  },
+  thumbMore: { alignItems: 'center', justifyContent: 'center' },
+  thumbMoreText: { fontSize: 13, color: c.text2, fontWeight: '600' },
   imageNote: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
   imageNoteErr: { color: c.danger },
 
@@ -1506,30 +1610,30 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
-  /** 待发送的图：缩略图 + 一句说明 + 取消 */
-  pendingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-  },
-  pendingThumb: { width: 56, height: 56, borderRadius: R.btn, backgroundColor: c.hairSoft },
-  pendingHint: { flex: 1, fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  /** 待发送的图：横排缩略图，每张右上角一个叉 */
+  pendingStrip: { marginTop: 8 },
+  pendingStripContent: { gap: 8, paddingRight: 4 },
+  pendingItem: { width: 58, height: 58 },
+  pendingThumb: { width: 58, height: 58, borderRadius: R.btn, backgroundColor: c.hairSoft },
   pendingRemove: {
-    width: 26,
-    height: 26,
-    borderRadius: 13,
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    width: 19,
+    height: 19,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: c.hairSoft,
+    // 压在小图上必须够深，浅灰底上白色叉号会看不见
+    backgroundColor: 'rgba(0,0,0,0.62)',
   },
-  /** 加图菜单贴在输入框上方 */
+  /** 加图菜单贴在输入区上方 */
   imageSheet: {
     position: 'absolute',
     left: 16,
     bottom: '100%',
     marginBottom: 6,
-    minWidth: 150,
+    minWidth: 170,
     backgroundColor: c.card,
     borderRadius: R.card,
     borderWidth: StyleSheet.hairlineWidth,
@@ -1550,26 +1654,59 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   imageSheetCancel: { paddingHorizontal: 14, paddingVertical: 11 },
   imageSheetText: { fontSize: 13.5, color: c.text },
-  composer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 6,
+  /**
+   * 输入区：上方文字、下方工具行。
+   *
+   * 圆角比卡片大一点，是为了让「这是一个可以写东西的框」一眼看出来 ——
+   * 时间轴上的碎片也是圆角卡片，两者贴得太近时只有尺寸差能区分。
+   */
+  composerCard: {
     backgroundColor: c.card,
-    borderRadius: R.card + 2,
+    borderRadius: R.card + 6,
     borderWidth: 0.5,
     borderColor: c.hair,
     paddingLeft: 14,
     paddingRight: 8,
-    paddingVertical: 8,
+    paddingTop: 10,
+    paddingBottom: 6,
   },
+  composerBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  toolBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.hairSoft,
+  },
+  /** 已选图张数。压在图标右上角，不额外占位置 */
+  toolBadge: {
+    position: 'absolute',
+    top: -2,
+    right: -2,
+    minWidth: 15,
+    height: 15,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: c.accent,
+  },
+  toolBadgeText: { fontSize: 9.5, lineHeight: 12, color: c.onAccent, fontWeight: '600' },
   input: {
-    flex: 1,
     fontSize: 15,
     lineHeight: 21,
     color: c.text,
-    maxHeight: 108,
-    paddingTop: 4,
-    paddingBottom: 4,
+    minHeight: 24,
+    maxHeight: 132,
+    paddingTop: 2,
+    paddingBottom: 6,
+    paddingRight: 6,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
   send: {
@@ -1581,16 +1718,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     backgroundColor: c.hairSoft,
   },
   sendActive: { backgroundColor: c.accent },
-  expandIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.hairSoft,
-    marginRight: 2,
-    marginBottom: 1,
-  },
 
   fullHeader: {
     flexDirection: 'row',
