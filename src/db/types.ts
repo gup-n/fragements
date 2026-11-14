@@ -16,6 +16,35 @@ import type {
   QaTurn,
   Todo,
 } from '../types';
+import type { BackupCounts, BackupManifest } from '../util/backupPlan';
+
+/** 完整备份的结果。`bytes` 是**压缩后**的体积，界面显示这个数字 */
+export interface BackupResult {
+  uri: string;
+  name: string;
+  bytes: number;
+  counts: BackupCounts;
+}
+
+/**
+ * 恢复的结果。
+ *
+ * `safetyName` 是覆盖前那份当前库的文件名（在 App 私有目录 `backups/` 下），
+ * 永远有值 —— 拿不出退路的恢复不该被执行。
+ */
+export interface RestoreResult {
+  counts: BackupCounts;
+  safetyName: string;
+  safetyBytes: number;
+  /** 清单里有、包里却没有的条目。非空时界面要提示「这次恢复不完整」 */
+  missing: string[];
+}
+
+export interface SafetyCopy {
+  name: string;
+  bytes: number;
+  at: number;
+}
 
 /** 整理会话的增量更新。只传要改的字段 */
 export interface OrganizeSessionPatch {
@@ -355,6 +384,37 @@ export interface Repo {
    * 拿它当「待整理」等于永远等于总数，那个数字就是在骗人。
    */
   stats(): Promise<{ total: number; pending: number; todoOpen: number }>;
+
+  /**
+   * 完整备份：数据库快照 + 配图 + 文档原件，打成一个 zip 放在 cache 目录。
+   * 调用方负责把 `uri` 交给系统分享。
+   *
+   * 用 `VACUUM INTO` 取快照而不是拷主文件：应用在跑的时候库里有未落盘的 WAL，
+   * 直接拷会得到「少最近几条」的包。
+   */
+  exportBackup(appVersion: string): Promise<BackupResult>;
+
+  /**
+   * 从备份包恢复。**会覆盖当前数据库与同名文件**。
+   *
+   * 覆盖之前一定会把当前库留一份到 `backups/pre-restore-*.db`，
+   * 返回值里带上它的名字与体积 —— 界面必须如实说出来，否则用户没有退路。
+   */
+  restoreBackup(zipUri: string): Promise<RestoreResult>;
+
+  /**
+   * 只读备份包的清单，不动任何数据。
+   *
+   * 恢复不可逆，所以「这份包里是什么」要在按下确认之前说清：哪天的包、
+   * 多少条、来自哪个版本、有没有缺文件。
+   */
+  peekBackup(zipUri: string): Promise<{
+    manifest: BackupManifest;
+    bytes: number;
+    blockedReason: string | null;
+  }>;
+  /** 恢复点列表。设置页用它告诉用户「上一份库还在哪」 */
+  listSafetyCopies(): Promise<SafetyCopy[]>;
 }
 
 export function parseTags(raw: unknown): string[] {

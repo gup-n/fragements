@@ -1,6 +1,6 @@
 {
   "name": "fragments",
-  "version": "0.20.4",
+  "version": "0.20.5",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",
@@ -47,7 +47,8 @@
     "test:ask": "node scripts/assert_ask.cjs",
     "test:reliability": "node scripts/assert_reliability.cjs",
     "test:appearance": "node scripts/assert_appearance.cjs",
-    "test": "npm run typecheck && npm run test:md && npm run test:docs && npm run test:todos && npm run test:ask && npm run test:reliability && npm run test:appearance && npm run check:docs"
+    "test:backup": "node scripts/assert_backup.cjs",
+    "test": "npm run typecheck && npm run test:md && npm run test:docs && npm run test:todos && npm run test:ask && npm run test:reliability && npm run test:appearance && npm run test:backup && npm run check:docs"
   },
   "private": true
 }

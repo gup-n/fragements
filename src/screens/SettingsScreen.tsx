@@ -13,6 +13,9 @@ import {
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, ReasoningEffort } from '../types';
+import type { BackupManifest } from '../util/backupPlan';
+import { humanBytes } from '../util/backupPlan';
+import { isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
 import type { SearchProbe } from '../db/types';
 import {
   R,
@@ -107,9 +110,35 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const [balanceBusy, setBalanceBusy] = useState(false);
   const [stats, setStats] = useState({ total: 0, pending: 0, todoOpen: 0 });
   const [busy, setBusy] = useState<
-    'idle' | 'saving' | 'testing' | 'exporting' | 'indexing' | 'picking' | 'importing'
+    | 'idle'
+    | 'saving'
+    | 'testing'
+    | 'exporting'
+    | 'indexing'
+    | 'picking'
+    | 'importing'
+    | 'backing'
+    | 'restoring'
   >('idle');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 完整备份的反馈。和 Markdown 的提示分开：两件事的失败原因完全不同 */
+  const [bkMsg, setBkMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 通知栏常驻入口的开关状态。默认关：常驻通知该是用户主动开的 */
+  const [quickOn, setQuickOn] = useState(false);
+  const [quickMsg, setQuickMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * 选好但还没确认的备份包。
+   *
+   * 恢复会覆盖当前数据库，所以必须先把它「是什么」摆出来（哪天的、
+   * 多少条、来自哪个版本、有没有缺文件），再由用户按下确认。
+   */
+  const [restoreAsk, setRestoreAsk] = useState<{
+    uri: string;
+    name: string;
+    manifest: BackupManifest;
+    bytes: number;
+    blocked: string | null;
+  } | null>(null);
   /**
    * 数据区自己的反馈位。
    *
@@ -162,6 +191,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
       setIndexState(await repo.searchIndexStats());
       setProbe(await repo.selfTestSearch(5));
+      setQuickOn(await isQuickRecordEnabled());
     })();
   }, []);
 
@@ -332,6 +362,107 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       setIoMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
     } finally {
       setBusy('idle');
+    }
+  }
+
+  /**
+   * 打包完整备份。
+   *
+   * 三步都是必答的：库快照（VACUUM INTO，不拷正在写的主文件）、配图、
+   * 文档原件。最后交给系统分享面板 —— App 不自己挑目录，也不往外传。
+   */
+  async function handleFullBackup() {
+    setBusy('backing');
+    setBkMsg(null);
+    try {
+      const out = await repo.exportBackup(APP_VERSION);
+      const Sharing = require('expo-sharing');
+      let shared = false;
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(out.uri, {
+          mimeType: 'application/zip',
+          dialogTitle: '保存完整备份',
+        });
+        shared = true;
+      }
+      setBkMsg({
+        kind: 'ok',
+        text: `已生成 ${out.name}（${humanBytes(out.bytes)}）：${out.counts.fragments} 条碎片 · ${
+          out.counts.images
+        } 张图 · ${out.counts.documents} 份文档${shared ? '' : `。文件在 ${out.uri}`}`,
+      });
+    } catch (e) {
+      setBkMsg({ kind: 'err', text: (e as Error).message || '打包失败' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  /** 选一个备份包，先只读清单 —— 覆盖之前必须让人看清里面是什么 */
+  async function handlePickBackup() {
+    setBusy('picking');
+    setBkMsg(null);
+    setRestoreAsk(null);
+    try {
+      const DocumentPicker = require('expo-document-picker');
+      const res = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (!res || res.canceled || !res.assets || !res.assets.length) return;
+      const asset = res.assets[0];
+      const peek = await repo.peekBackup(asset.uri);
+      setRestoreAsk({
+        uri: asset.uri,
+        name: asset.name || '备份包',
+        manifest: peek.manifest,
+        bytes: peek.bytes,
+        blocked: peek.blockedReason,
+      });
+    } catch (e) {
+      setBkMsg({ kind: 'err', text: (e as Error).message || '读不了这个文件' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  /** 真正覆盖。恢复点由数据层负责留，这里只负责把结果如实说出来 */
+  async function handleConfirmRestore() {
+    if (!restoreAsk || busy === 'restoring') return;
+    const name = restoreAsk.name;
+    setBusy('restoring');
+    setBkMsg(null);
+    try {
+      const out = await repo.restoreBackup(restoreAsk.uri);
+      setRestoreAsk(null);
+      onChanged();
+      setBkMsg({
+        kind: 'ok',
+        text: `已从 ${name} 恢复：${out.counts.fragments} 条碎片 · ${out.counts.images} 张图 · ${
+          out.counts.documents
+        } 份文档。覆盖前的旧库已另存为 ${out.safetyName}（${humanBytes(out.safetyBytes)}）${
+          out.missing.length ? `；包里缺 ${out.missing.length} 个文件` : ''
+        }`,
+      });
+    } catch (e) {
+      setBkMsg({ kind: 'err', text: (e as Error).message || '恢复失败' });
+    } finally {
+      setBusy('idle');
+    }
+  }
+
+  /** 通知栏入口的开关。失败要把原因说出来（权限被拒是最常见的） */
+  async function handleToggleQuick() {
+    const next = !quickOn;
+    setQuickOn(next);
+    setQuickMsg(null);
+    const res = await setQuickRecordEnabled(next);
+    if (!res.ok) {
+      setQuickOn(!next);
+      setQuickMsg({ kind: 'err', text: res.reason });
+    } else {
+      setQuickMsg({ kind: 'ok', text: next ? '已放到通知栏' : '已撤掉' });
     }
   }
 
@@ -862,6 +993,106 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               入口也会归到这一页。
             </Text>
           </View>
+
+          <GroupTitle text="完整备份" />
+          <View style={styles.card}>
+            <Pressable
+              style={[styles.ghostBtnWide, styles.touchTarget]}
+              onPress={handleFullBackup}
+              disabled={busy !== 'idle'}
+            >
+              <Ionicons name="archive-outline" size={15} color={c.text} />
+              <Text style={styles.ghostBtnText}>
+                {busy === 'backing' ? '正在打包…' : '打包完整备份（含图片与文档）'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={[styles.ghostBtnWide, styles.touchTarget]}
+              onPress={handlePickBackup}
+              disabled={busy !== 'idle'}
+            >
+              <Ionicons name="cloud-download-outline" size={15} color={c.text} />
+              <Text style={styles.ghostBtnText}>
+                {busy === 'picking' ? '正在读取…' : '从备份恢复'}
+              </Text>
+            </Pressable>
+
+            {restoreAsk ? (
+              <View style={styles.warnBox}>
+                <Text style={styles.warnTitle}>这个包里是这些内容，确认覆盖？</Text>
+                <Text style={styles.warnLine}>
+                  {new Date(restoreAsk.manifest.createdAt).toLocaleString()} · App{' '}
+                  {restoreAsk.manifest.appVersion || '未知版本'} · 库 v
+                  {restoreAsk.manifest.schemaVersion} · {humanBytes(restoreAsk.bytes)}
+                </Text>
+                <Text style={styles.warnLine}>
+                  {restoreAsk.manifest.counts.fragments} 条碎片 ·{' '}
+                  {restoreAsk.manifest.counts.images} 张图 ·{' '}
+                  {restoreAsk.manifest.counts.documents} 份文档
+                </Text>
+                {restoreAsk.blocked ? (
+                  <Text style={styles.warnLine}>{restoreAsk.blocked}</Text>
+                ) : null}
+                <Text style={styles.warnLine}>
+                  当前 {stats.total} 条会被覆盖。覆盖前会把现在这份库另存到 App 私有目录的
+                  backups/ 下，并告诉你文件名。
+                </Text>
+                <View style={styles.warnActions}>
+                  <Pressable
+                    style={styles.warnGhost}
+                    onPress={() => setRestoreAsk(null)}
+                    disabled={busy === 'restoring'}
+                  >
+                    <Text style={styles.ghostBtnText}>取消</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.warnSolid}
+                    onPress={handleConfirmRestore}
+                    disabled={busy === 'restoring'}
+                  >
+                    <Text style={styles.warnSolidText}>
+                      {busy === 'restoring' ? '正在恢复…' : '覆盖并恢复'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
+            {bkMsg && (
+              <Text style={[styles.msg, bkMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+                {bkMsg.text}
+              </Text>
+            )}
+            <Text style={styles.fieldHint}>
+              备份是一个 zip：数据库、配图原文件、文档原件都在里面，换机或误删时能整份搬回来。
+              它只交到系统分享面板，App 不自己往外传；恢复需要你自己选这个文件。
+            </Text>
+          </View>
+
+          <GroupTitle text="快捷入口" />
+          <View style={styles.card}>
+            <View style={styles.toggleRow}>
+              <ChoiceChip
+                label={quickOn ? '开启' : '关闭'}
+                accessibilityLabel="通知栏常驻「记一条」"
+                role="switch"
+                selected={quickOn}
+                onPress={() => void handleToggleQuick()}
+              />
+              <Text style={styles.toggleHint}>
+                通知栏常驻一条「记一条」，点一下回到时间轴、光标已经在输入框里
+              </Text>
+            </View>
+            {quickMsg && (
+              <Text style={[styles.msg, quickMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+                {quickMsg.text}
+              </Text>
+            )}
+            <Text style={styles.fieldHint}>
+              它是一条划不掉的常驻通知：不发声、不弹横幅、不亮屏。在通知栏里直接打字需要原生实现，
+              这一版没有；这个入口省掉的是「解锁 → 找图标 → 点开 → 点输入框」。
+            </Text>
+          </View>
         </ScrollView>
       ) : null}
 
@@ -1220,6 +1451,39 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   msg: { fontSize: 12, lineHeight: 19, marginTop: 12 },
   msgOk: { color: c.tealText },
   msgErr: { color: c.danger },
+
+  /*
+   * 恢复确认块。整块用 dangerBg 起底 —— 覆盖数据是这个 App 里唯一
+   * 「按下去就回不来」的动作，它不该长得和别的按钮一样。
+   */
+  warnBox: {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: metrics.cardRadius,
+    backgroundColor: c.dangerBg,
+    gap: 6,
+  },
+  warnTitle: { fontSize: 13, color: c.danger, fontWeight: '600' },
+  warnLine: { fontSize: 12, lineHeight: 18, color: c.text2 },
+  warnActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  warnGhost: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
+    borderColor: c.hair,
+  },
+  warnSolid: {
+    flex: 1.4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 44,
+    borderRadius: metrics.buttonRadius,
+    backgroundColor: c.danger,
+  },
+  warnSolidText: { fontSize: 13, color: c.onDanger, fontWeight: '600' },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   toggleHint: { flex: 1, fontSize: 12, color: c.text3, lineHeight: 17 },

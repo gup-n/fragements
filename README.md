@@ -12,7 +12,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.20.4（versionCode 55） |
+| 当前版本 | v0.20.5（versionCode 56） |
 | 开发分支 | `feat/ui-refresh-ink-20261114`，改版未发布 |
 | 发布基线与恢复点 | `master`、`backup/pre-ui-20261114` 均保留改版前 `5befe65` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

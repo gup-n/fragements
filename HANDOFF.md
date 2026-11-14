@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.20.4 / versionCode 55 |
+| 版本 | v0.20.5 / versionCode 56 |
 | 开发分支 | `feat/ui-refresh-ink-20261114` |
 | 发布状态 | 2026-11-14改版开发中，未发布；版本号仍沿用发布基线 |
 | 基线与代码恢复点 | `master`、`backup/pre-ui-20261114` 均保留 `5befe65` |
@@ -88,12 +88,13 @@
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 549 | route state、两轴偏好落盘、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1963 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `App.tsx` [打开](<App.tsx>) | 579 | route state、两轴偏好落盘、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
+| `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1979 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2290 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 280 | 待办/小结两类回顾，没有标签tab |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 988 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1337 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1601 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 91 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 225 | 四套完整色表、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
@@ -103,9 +104,11 @@
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/db/types.ts` [打开](<src/db/types.ts>) | 369 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 1815 | SQLite、16段历史迁移、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1047 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/types.ts` [打开](<src/db/types.ts>) | 429 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 1890 | SQLite、16段历史迁移、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1069 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
+| `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
 | `src/db/draftCommit.ts` [打开](<src/db/draftCommit.ts>) | 135 | 输入/凭据验证、稳定key、共享提交项处理，平台事务内调用 |
 | `src/db/importMd.ts` [打开](<src/db/importMd.ts>) | 187 | 系统选文件、预览、完整分钟判重、串行单条原子导入与部分失败说明 |
@@ -210,6 +213,7 @@
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `src/util/fragmentText.ts` [打开](<src/util/fragmentText.ts>) | 81 | 材料文字、可见检索投影、配图文字与状态判据 |
+| `src/util/backupPlan.ts` | 219 | 备份清单的纯函数：文件名、manifest、恢复前校验（拿错包 / 版本更新 / 缺库）、路径过滤、SQLite 文件头、体积文案与上限 |
 | `src/util/inlineImages.ts` [打开](<src/util/inlineImages.ts>) | 99 | 图片定位标记、待发键替换、删除和无定位图判定 |
 | `src/util/pendingImages.ts` [打开](<src/util/pendingImages.ts>) | 52 | 按图id选择未读图片、保持顺序与读图预算 |
 | `src/util/tokenize.ts` [打开](<src/util/tokenize.ts>) | 165 | 中文bigram/FTS查询与旧标签规范化兼容工具 |
@@ -241,6 +245,7 @@
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `scripts/assert_md.cjs` [打开](<scripts/assert_md.cjs>) | 303 | 原有Markdown往返断言 |
+| `scripts/assert_backup.cjs` | 243 | 完整备份的 19 项断言：命名、清单、四种拒绝、路径穿越过滤、SQLite 头、体积上限 |
 | `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 482 | 限定文档问答/预算/引用 |
 | `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 567 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |

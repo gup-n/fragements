@@ -772,7 +772,27 @@ function nativeTrace(options = {}) {
       throw new Error(`测试桩未声明的getAllSync：${sql}`);
     },
   };
-  const loader = createLoader({ stubs: { 'expo-sqlite': { openDatabaseSync: () => database } } });
+  /*
+   * repo.native 会 import './backup'，而 backup 用 expo-file-system 与 fflate。
+   * 这里的断言不跑备份流程，所以给空桩只为了让模块能加载 —— 真正的备份逻辑
+   * 在 assert_backup.cjs（纯函数）和真机上验，不在这里假装验过。
+   */
+  const loader = createLoader({
+    stubs: {
+      'expo-sqlite': { openDatabaseSync: () => database },
+      'expo-file-system': {
+        Directory: class {},
+        File: class {},
+        Paths: { document: {}, cache: {} },
+      },
+      fflate: {
+        zipSync: () => new Uint8Array(),
+        unzipSync: () => ({}),
+        strToU8: (s) => new Uint8Array(Array.from(String(s), (c) => c.charCodeAt(0))),
+        strFromU8: (b) => String.fromCharCode.apply(null, Array.from(b)),
+      },
+    },
+  });
   return {
     repo: loader.load('src/db/repo.native.ts').repo,
     trace, settings,

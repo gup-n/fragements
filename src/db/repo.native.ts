@@ -30,12 +30,48 @@ import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '
 import { removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
+import {
+  createBackup,
+  listSafetyCopies as readSafetyCopies,
+  peekBackup as peekBackupFile,
+  restoreBackup as restoreBackupFile,
+} from './backup';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
 function db(): SQLite.SQLiteDatabase {
   if (!_db) _db = SQLite.openDatabaseSync('fragments.db');
   return _db;
+}
+
+/**
+ * 把当前库写成一份一致的快照文件（完整备份用）。
+ *
+ * 为什么用 `VACUUM INTO` 而不是复制 `fragments.db`：应用在跑的时候库里有
+ * 未落盘的 WAL，直接拷主文件会得到「少最近几条」的库；VACUUM INTO 在事务里
+ * 重写一份，既不阻塞读写，也不用关连接。
+ *
+ * 目标文件必须不存在 —— 调用方要先清掉同名残留。
+ */
+function snapshotDatabaseTo(targetFsPath: string): void {
+  db().execSync(`VACUUM INTO '${targetFsPath.replace(/'/g, "''")}'`);
+}
+
+/** 恢复备份时要先把连接关掉，否则替换文件之后读到的还是旧句柄 */
+function closeDatabase(): void {
+  if (!_db) return;
+  try {
+    _db.closeSync();
+  } catch {
+    /* 关不掉也要把单例置空，下次重新打开 */
+  }
+  _db = null;
+}
+
+/** 库当前迁移到第几版。恢复前用它拒绝「来自更新版本的备份」 */
+function databaseSchemaVersion(): number {
+  const row = db().getFirstSync<{ user_version: number }>('PRAGMA user_version');
+  return row?.user_version ?? 0;
 }
 
 /**
@@ -1811,5 +1847,44 @@ export const repo: Repo = {
       'SELECT COUNT(*) AS n FROM todos WHERE done = 0 AND merged_into IS NULL',
     );
     return { total, pending, todoOpen };
+  },
+
+  /* ---------------- 完整备份 ---------------- */
+
+  async exportBackup(appVersion) {
+    const d = db();
+    return createBackup({
+      appVersion,
+      counts: {
+        fragments: countOf(d, 'SELECT COUNT(*) AS n FROM fragments'),
+        images: countOf(d, 'SELECT COUNT(*) AS n FROM fragment_images'),
+        documents: countOf(d, 'SELECT COUNT(*) AS n FROM documents'),
+      },
+      snapshot: snapshotDatabaseTo,
+      schemaVersion: databaseSchemaVersion,
+    });
+  },
+
+  async restoreBackup(zipUri) {
+    return restoreBackupFile(zipUri, {
+      snapshot: snapshotDatabaseTo,
+      close: closeDatabase,
+      schemaVersion: databaseSchemaVersion,
+      /*
+       * 恢复的库可能来自更低的版本：db() 会重新打开，但不会自己补迁移。
+       * 手动跑一次 migrate —— 它按 user_version 只补缺的那几段，跑到当前版本就停。
+       */
+      reopen: async () => {
+        migrate(db());
+      },
+    });
+  },
+
+  async peekBackup(zipUri) {
+    return peekBackupFile(zipUri, databaseSchemaVersion());
+  },
+
+  async listSafetyCopies() {
+    return readSafetyCopies();
   },
 };

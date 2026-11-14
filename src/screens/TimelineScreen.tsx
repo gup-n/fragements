@@ -139,6 +139,13 @@ interface Props {
   onOpenReview: () => void;
   /** 文档库（v0.10.0）。入口在页头「问」的左边 */
   onOpenDocs: () => void;
+  /**
+   * 通知栏「记一条」点进来的计数器。
+   *
+   * 页面已经在时间轴时不会重新挂载，冷启动那次自动聚焦就不会再跑一遍 ——
+   * 用户点了通知却停在原地，等于入口是坏的。所以用一个自增值当信号。
+   */
+  focusSignal?: number;
   /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
   /** 读图失败的原因（配图 id → 一句话）。必须能就地重试 */
@@ -170,6 +177,7 @@ export function TimelineScreen({
   onOpenAsk,
   onOpenReview,
   onOpenDocs,
+  focusSignal,
   imageBusy,
   imageFail,
   onReparseImage,
@@ -276,6 +284,14 @@ export function TimelineScreen({
     const timer = setTimeout(() => inputRef.current?.focus(), 380);
     return () => clearTimeout(timer);
   }, []);
+
+  // 通知栏点进来：页面可能已经在这，重新把光标放回输入框
+  useEffect(() => {
+    if (!focusSignal) return;
+    if (fullEdit) setFullEdit(false);
+    const timer = setTimeout(() => inputRef.current?.focus(), 120);
+    return () => clearTimeout(timer);
+  }, [focusSignal]);
 
   // 长文记录是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App。
   // 顺序是「先关最上面那层」：确认弹层压在长文编辑之上。

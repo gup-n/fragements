@@ -1044,4 +1044,26 @@ export const repo: Repo = {
       todoOpen: d.todos.filter((t) => !t.done && t.mergedInto === null).length,
     };
   },
+
+  /* ---------------- 完整备份（网页版不支持） ---------------- */
+
+  /*
+   * 不 import `./backup`：tsc 只认 `.ts`，会把 native 版一起拉进来
+   * （Metro 才按平台挑 `.web.ts`）。这里的实现本来就只有一句拒绝，直接写在这。
+   */
+  async exportBackup() {
+    throw new Error('网页版没有完整备份（没有私有目录和本地数据库文件），请在手机上操作');
+  },
+
+  async restoreBackup() {
+    throw new Error('网页版不能从备份恢复，请在手机上操作');
+  },
+
+  async peekBackup() {
+    throw new Error('网页版不能读取备份包，请在手机上操作');
+  },
+
+  async listSafetyCopies() {
+    return [];
+  },
 };

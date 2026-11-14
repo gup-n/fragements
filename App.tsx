@@ -27,6 +27,7 @@ import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/d
 import { Toast } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
+import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
 
 type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
@@ -186,6 +187,34 @@ function Shell({ booted }: { booted: boolean }) {
     const timer = setTimeout(() => setWriteNotice(''), 5500);
     return () => clearTimeout(timer);
   }, [writeNotice]);
+
+  /**
+   * 通知栏「记一条」点进来的次数。
+   *
+   * 递增而不是布尔：页面已经在时间轴时不会重新挂载，只有变值才能再触发一次聚焦。
+   */
+  const [quickTap, setQuickTap] = useState(0);
+
+  /*
+   * 通知栏入口的启动两件事：
+   * 1. 开关打开着就补发那条常驻通知（应用被杀过之后它会被系统清掉）；
+   * 2. 挂点击监听 —— 包括冷启动那一次（见 quickRecord 里为什么要单独捞）。
+   */
+  useEffect(() => {
+    if (isWeb) return;
+    let alive = true;
+    void isQuickRecordEnabled().then((on) => {
+      if (on && alive) void showQuickRecord();
+    });
+    const stop = watchQuickRecord(() => {
+      setRoute('timeline');
+      setQuickTap((n) => n + 1);
+    });
+    return () => {
+      alive = false;
+      stop();
+    };
+  }, []);
 
   /*
    * 启动 3 秒后查一次新版本。
@@ -463,6 +492,7 @@ function Shell({ booted }: { booted: boolean }) {
                   }}
                   onOpenReview={() => setRoute('review')}
                   onOpenDocs={() => setRoute('docs')}
+                  focusSignal={quickTap}
                 />
               )}
               {route === 'settings' && (
