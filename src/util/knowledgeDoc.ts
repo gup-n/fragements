@@ -11,12 +11,13 @@
  * 2. **待办分两层**。整理一次抽出十几条平铺待办，看起来就是一堆碎片；
  *    真正的「一件事分几步」在库里本来就有父子结构（todos.parent_id），只是没被用上。
  */
-import type { Document } from '../types';
 
 export type DraftMode = 'knowledge' | 'todos';
 
 /** 一条待办（含它自己的子步骤，子步骤不再有子步骤） */
 export interface DraftTodo {
+  /** 本地稳定身份；模型不能用它授予写入权限。旧构造用例可省，由工作区入口补齐。 */
+  key?: string;
   text: string;
   /** YYYY-MM-DD 或 null */
   due: string | null;
@@ -27,6 +28,7 @@ export interface DraftTodo {
 }
 
 export interface DraftTodoChild {
+  key?: string;
   text: string;
   due: string | null;
   keep: boolean;
@@ -34,6 +36,7 @@ export interface DraftTodoChild {
 
 /** 一篇待写入的文档 */
 export interface DraftDoc {
+  key?: string;
   title: string;
   bodyMd: string;
   /** 一句话说明这篇讲什么。列表上用它，不截正文 */
@@ -43,6 +46,7 @@ export interface DraftDoc {
 }
 
 export interface KnowledgeDraft {
+  draftId?: string;
   docs: DraftDoc[];
   todos: DraftTodo[];
   /** 这次喂给模型的碎片 id，写库时记到会话上，供「重新整理」 */
@@ -89,11 +93,14 @@ export function dueValid(due: string | null | undefined): due is string {
   return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d;
 }
 
+const modelKey = (value: unknown): { key?: string } =>
+  typeof value === 'string' && value.length > 0 && value.length <= 200 ? { key: value } : {};
+
 function toChild(raw: unknown): DraftTodoChild | null {
   const t = obj(raw);
   const text = str(t.text);
   if (!text) return null;
-  return { text, due: dueValid(str(t.due)) ? str(t.due) : null, keep: true };
+  return { ...modelKey(t.key), text, due: dueValid(str(t.due)) ? str(t.due) : null, keep: true };
 }
 
 function toTodo(raw: unknown): DraftTodo | null {
@@ -101,6 +108,7 @@ function toTodo(raw: unknown): DraftTodo | null {
   const text = str(t.text);
   if (!text) return null;
   return {
+    ...modelKey(t.key),
     text,
     due: dueValid(str(t.due)) ? str(t.due) : null,
     keep: true,
@@ -115,6 +123,7 @@ function toDoc(raw: unknown): DraftDoc | null {
   // 空正文的文档写进去就是一篇点开全白的记录，直接丢掉
   if (!body) return null;
   return {
+    ...modelKey(d.key),
     title: clipTitle(str(d.title)),
     bodyMd: body,
     summary: str(d.summary) || excerptOf(body, 60),
@@ -135,6 +144,7 @@ export function normalizeDraft(
   raw: unknown,
   mode: DraftMode,
   sourceIds: number[],
+  maxDocs = MAX_DOCS,
 ): KnowledgeDraft {
   const root = obj(raw);
 
@@ -154,7 +164,7 @@ export function normalizeDraft(
     .filter((t): t is DraftTodo => t !== null);
 
   return {
-    docs: docs.slice(0, MAX_DOCS),
+    docs: docs.slice(0, maxDocs),
     todos,
     sourceIds,
     mode,
@@ -316,28 +326,6 @@ export function docProblem(doc: DraftDoc): string | null {
   return null;
 }
 
-/**
- * 草稿 → 文档记录的形状（还没写库）。
- *
- * 单独一步是为了让「什么时候算写进去了」有一个明确的边界：
- * 界面上点「通过并写入」之后，先算出这个东西，再交给 repo。
- */
-export function draftToDocument(
-  doc: DraftDoc,
-  now: number,
-  index = 0,
-): Pick<Document, 'name' | 'ext' | 'size' | 'fileUri' | 'bodyMd' | 'origin' | 'excerpt'> {
-  const bodyMd = doc.bodyMd.trim();
-  return {
-    name: docNameOf(doc, now, index),
-    ext: 'md',
-    size: bodyMd.length,
-    fileUri: null,
-    bodyMd,
-    origin: 'knowledge',
-    excerpt: doc.summary || excerptOf(bodyMd),
-  };
-}
 
 /**
  * 整理写进历史的那句话。
@@ -361,11 +349,4 @@ export function describeForHistory(draft: KnowledgeDraft, leftover = 0): string 
   }
   const tail = leftover ? `；还有 ${leftover} 条碎片没整理` : '';
   return `${bits.join('，')}${tail}。`;
-}
-
-/** 会话行上的徽标文案。已有文档才显示，否则返回 null */
-export function documentBadge(name: string | null | undefined): string | null {
-  const n = (name ?? '').trim();
-  if (!n) return null;
-  return n.length > 12 ? `${n.slice(0, 12)}…` : n;
 }

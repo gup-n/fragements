@@ -25,6 +25,8 @@ import {
   type ChatProgress,
 } from './chat';
 import { MAX_DOCS, normalizeDraft, type DraftMode, type KnowledgeDraft } from '../util/knowledgeDoc';
+import type { DraftCommitReceipt } from '../db/types';
+import { ensureDraftIdentity, reconcileRevision } from '../organize/workspace';
 
 const INPUT_LIMIT = 16_000;
 
@@ -102,7 +104,7 @@ ${SHAPE}
 - docs 一律给空数组（这一轮不要写文档）。
 - 一条都抽不出来就给空数组，并在 note 里说明为什么。`;
 
-export type KnowledgeSource = { kind: 'fragments'; fragments: Fragment[] } | { kind: 'session'; turns: QaTurn[] };
+export type KnowledgeSource = { kind: 'fragments'; fragments: Fragment[] } | { kind: 'session'; turns: QaTurn[]; title?: string };
 
 /** 已有待办的一句话快照。整理时交给模型去重 —— 不给它看见，它只会把旧事再抽一遍 */
 export interface TodoSnapshot {
@@ -127,7 +129,7 @@ export function formatFragments(list: Fragment[]): string {
   return list
     .map(
       (f, i) =>
-        `【${i + 1}】${stamp(f.createdAt)}${f.tags.length ? ` #${f.tags.join(' #')}` : ''}\n${fragmentText(f)}`,
+        `【${i + 1}】${stamp(f.createdAt)}\n${fragmentText(f)}`,
     )
     .join('\n\n');
 }
@@ -173,7 +175,9 @@ export function trimMaterial(text: string, limit = INPUT_LIMIT): { text: string;
 }
 
 function materialOf(source: KnowledgeSource): string {
-  return source.kind === 'fragments' ? formatFragments(source.fragments) : formatTurns(source.turns);
+  return source.kind === 'fragments'
+    ? formatFragments(source.fragments)
+    : `${source.title ? `会话标题：${source.title}\n\n` : ''}${formatTurns(source.turns)}`;
 }
 
 export interface ExtractOptions {
@@ -291,10 +295,13 @@ const REVISE_SYSTEM = `你在改一批用户已经看过、正在修改的文档
   "漏了什么"），要给的是**增量**：在保留已有内容的前提下，从材料里补出没被覆盖的部分；
   材料里确实没有了，就在 note 里说清楚「材料里就这些」，不要拿重复的东西凑数。
 - 补出来的内容不能和已有条目重复（措辞不同也算同一件）。
+- 每个已有文档、待办和子步骤的 key 必须原样返回，重排不改 key；新增项不要伪造旧 key。
+- 所有已有条目都要返回，不能因为首次生成最多四篇就截断当前草稿；不负责勾选或写入权限。
 - 有了材料就不要凭印象补事实：数字、型号、命令、路径仍以材料为准。`;
 
 export interface ReviseOptions {
   draft: KnowledgeDraft;
+  receipt?: DraftCommitReceipt;
   instruction: string;
   config: AiConfig;
   onProgress?: (patch: ChatProgress) => void;
@@ -319,7 +326,8 @@ export interface ReviseOptions {
 }
 
 export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraft> {
-  const { draft, instruction, config, onProgress, history, material, existingTodos } = options;
+  const { instruction, config, onProgress, history, material, existingTodos, receipt } = options;
+  const draft = ensureDraftIdentity(options.draft);
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!instruction.trim()) throw new AiError('format', '还没说要改什么');
 
@@ -336,14 +344,16 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
         JSON.stringify(
           {
             docs: draft.docs.map((d) => ({
+              key: d.key,
               title: d.title,
               summary: d.summary,
               body_md: d.bodyMd,
             })),
             todos: draft.todos.map((t) => ({
+              key: t.key,
               text: t.text,
               due: t.due,
-              children: t.children.map((c) => ({ text: c.text, due: c.due })),
+              children: t.children.map((c) => ({ key: c.key, text: c.text, due: c.due })),
             })),
           },
           null,
@@ -383,12 +393,11 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
       finish: outcome.finishReason,
     });
   }
-  const next = normalizeDraft(parsed, draft.mode, draft.sourceIds);
-  /*
-   * 模型偶尔只回一句 note（尤其当它认为"没什么要改"时）。
-   * 这种情况下保留原文，别让用户点一下修改就丢一篇 —— 但也不会把空数组当成"删光了"。
-   */
-  if (!next.docs.length) next.docs = draft.docs;
-  if (!next.todos.length) next.todos = draft.todos;
+  const proposed = normalizeDraft(parsed, draft.mode, draft.sourceIds, Number.MAX_SAFE_INTEGER);
+  const { draft: next, unreviewed, retained } = reconcileRevision(draft, proposed, receipt);
+  const notices = [next.note];
+  if (unreviewed) notices.push(`${unreviewed} 个新增或无法对应的条目尚未勾选，请逐项确认`);
+  if (retained) notices.push(`${retained} 个未被模型返回的原条目已保留，没有擅自删除`);
+  next.note = notices.filter(Boolean).join('；');
   return next;
 }

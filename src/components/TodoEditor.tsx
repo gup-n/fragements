@@ -7,13 +7,13 @@
  * 全屏覆盖层而不是 Modal：安卓上 Modal 会把返回键接管成一套自己的手势，
  * 而且键盘弹起时高度计算是另一套。项目红线见 AGENTS.md。
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Todo } from '../types';
 import { repo } from '../db/repo';
 import { dayKey } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { ScreenHeader } from './ScreenHeader';
 
 interface Props {
@@ -41,10 +41,11 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
   const [due, setDue] = useState(todo?.dueAt ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const saveLock = useRef(false);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-      onClose();
+      if (!saveLock.current) onClose();
       return true;
     });
     return () => sub.remove();
@@ -53,7 +54,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
   const title = todo ? '编辑待办' : parentId === null ? '新建待办' : '加一条子项';
 
   async function save() {
-    if (busy) return;
+    if (saveLock.current) return;
     const body = text.trim();
     if (!body) {
       setError('写点什么再保存');
@@ -65,6 +66,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
       return;
     }
 
+    saveLock.current = true;
     setBusy(true);
     setError('');
     try {
@@ -81,6 +83,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : '没保存上，再试一次');
+      saveLock.current = false;
       setBusy(false);
       return;
     }
@@ -91,6 +94,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
     } catch {
       /* 交给下次进页面 */
     }
+    saveLock.current = false;
     setBusy(false);
     onClose();
   }
@@ -104,7 +108,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
      * 看着像「键盘盖住了输入框但页面没动」。见 AGENTS「Android UI 红线」。
      */
     <View style={[styles.root, keyboardHeight > 0 && { paddingBottom: keyboardHeight }]}>
-      <ScreenHeader title={title} backIcon="close" onBack={onClose} />
+      <ScreenHeader title={title} backIcon="close" onBack={busy ? undefined : onClose} />
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {parentId !== null && parentText ? (
@@ -114,13 +118,13 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
         <Text style={styles.label}>做什么</Text>
         <TextInput
           style={styles.input}
-          value={text}
+          value={text} accessibilityLabel="待办内容" editable={!busy}
           onChangeText={(v) => {
             setText(v);
             if (error) setError('');
           }}
           placeholder="一句话说清要做什么"
-          placeholderTextColor={c.text3}
+          placeholderTextColor={c.text3} selectionColor={c.selection}
           multiline
           autoFocus
           maxLength={200}
@@ -129,13 +133,13 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
         <Text style={styles.label}>哪天做（可不填）</Text>
         <TextInput
           style={styles.input}
-          value={due}
+          value={due} accessibilityLabel="到期日期，可不填" editable={!busy}
           onChangeText={(v) => {
             setDue(v);
             if (error) setError('');
           }}
           placeholder="2026-11-30"
-          placeholderTextColor={c.text3}
+          placeholderTextColor={c.text3} selectionColor={c.selection}
           autoCapitalize="none"
           autoCorrect={false}
           maxLength={10}
@@ -152,33 +156,34 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
                 setDue(value);
                 if (error) setError('');
               }}
-              style={({ pressed }) => [styles.quickChip, pressed && { backgroundColor: c.hairSoft }]}
+              style={({ pressed }) => [[styles.quickChip, pressed && { backgroundColor: c.hairSoft }], styles.touchTarget]}
             >
               <Text style={styles.quickText}>{label}</Text>
             </Pressable>
           ))}
         </View>
 
-        {error ? <Text style={styles.error}>{error}</Text> : null}
+        {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
       </ScrollView>
 
       <View style={styles.footer}>
-        <Pressable style={styles.ghostBtn} onPress={onClose} disabled={busy}>
+        <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={onClose} disabled={busy}>
           <Text style={styles.ghostText}>取消</Text>
         </Pressable>
         <Pressable
-          style={[styles.primaryBtn, busy && styles.btnDisabled]}
+          style={[[styles.primaryBtn, busy && styles.btnDisabled], styles.touchTarget]}
           onPress={save}
-          disabled={busy}
+          disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy, busy }}
         >
-          <Text style={styles.primaryText}>{todo ? '保存' : '加进列表'}</Text>
+          <Text style={styles.primaryText}>{busy ? '保存中…' : todo ? '保存' : '加进列表'}</Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   content: { paddingHorizontal: 16, paddingTop: 6 },
 
@@ -187,8 +192,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   label: { fontSize: 12, color: c.text3, marginTop: 18, marginBottom: 8 },
   input: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -199,11 +204,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
 
   quickRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  quickChip: {
+  quickChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: R.pill,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },
@@ -219,24 +224,24 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 18,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
-  primaryBtn: {
+  primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 22,
     paddingVertical: 12,
     minWidth: 110,
     alignItems: 'center',
   },
   primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: {
-    borderRadius: R.btn,
+  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },

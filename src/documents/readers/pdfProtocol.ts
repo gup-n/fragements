@@ -19,8 +19,17 @@ export interface PdfTheme {
   hair: string;
   accent: string;
   accentText: string;
+  /** PDF 原稿纸色，独立于界面的明暗模式。 */
+  paper: string;
+  surface: string;
   hitBg: string;
   hitCurrent: string;
+  /** 当前命中用轮廓区分，不只加深底色。 */
+  hitOutline: string;
+  selection: string;
+  strokeWidth: number;
+  radius: number;
+  reduceMotion: boolean;
   danger: string;
 }
 

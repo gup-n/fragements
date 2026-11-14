@@ -22,7 +22,6 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   Animated,
   Linking,
   PanResponder,
@@ -48,40 +47,17 @@ import type {
   QaScope,
   QaTurn,
 } from '../types';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
+import { useOrganize, type StartDraftOptions } from '../organize/useOrganize';
+import { hasUnsavedWorkspace, remainingIds } from '../organize/workspace';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError, type AiErrorDetail } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
-import {
-  extractKnowledge,
-  formatFragments,
-  reviseDraft,
-  trimMaterial,
-  type KnowledgeSource,
-  type TodoSnapshot,
-} from '../ai/knowledge';
-import {
-  docNameOf,
-  docProblem,
-  describeForHistory,
-  draftProblem,
-  emptyDraft,
-  excerptOf,
-  keptDocs,
-  keptTodos,
-  mergeDrafts,
-  type DraftDoc,
-  type DraftMode,
-  type KnowledgeDraft,
-} from '../util/knowledgeDoc';
-import { planDraftInput, routeAsk, showsDraftAsk, TASK_SEED, wantsAll } from '../util/askIntent';
-import { packFragments, sliceBatches } from '../util/batch';
-import { hasReadableText } from '../util/fragmentText';
-import { IMAGE_READ_LIMIT, pendingImagesOf } from '../util/pendingImages';
-import { readPendingImages, type ImageReadResult } from '../ai/imageReads';
-import { writeKnowledgeDocument } from '../documents/knowledge';
-import { KnowledgeDraftCard, type AgentStep, type SavedDoc } from '../components/KnowledgeDraft';
+import { docProblem, type DraftMode } from '../util/knowledgeDoc';
+import { planDraftInput, routeAsk, showsDraftAsk, TASK_SEED } from '../util/askIntent';
+import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
 import { DraftDocPage } from '../components/DraftDocPage';
 import { SummarySheet } from '../components/SummarySheet';
@@ -125,43 +101,15 @@ interface ErrInfo {
 
 const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
-/**
- * 「整理全部」的游标：上一次整理到哪一条（fragment id）。
- *
- * 没有它，第二次说「整理所有碎片」会从头再来一遍 —— 用户以为在往下推进，
- * 实际上把同样的前 400 条又烧了一遍。碎片 id 单调递增，用它当游标最省事。
- */
-const ALL_CURSOR_KEY = 'organize.cursor';
-/** 草稿里已经抽出来的待办 → 去重上下文。分多批时必须带上，否则每批都抽一遍 */
-function todoSnapshotsOf(draft: KnowledgeDraft): TodoSnapshot[] {
-  return draft.todos
-    .filter((t) => t.text.trim())
-    .map((t) => ({
-      text: t.text,
-      done: false,
-      due: t.due,
-      children: t.children.map((c) => c.text).filter((c) => c.trim().length > 0),
-    }));
-}
+
+
+
 
 function citeKey(kind: string, id: number) {
   return `${kind}${id}`;
 }
 
-/**
- * 「这一轮顺手看了几张图」写成一句人话。
- *
- * 三个数字各有各的后果：读了 = 材料里有这段字；没读出来 = 材料缺一块，
- * 下次还要试；剩下没看 = 这一轮排不上，别让它听起来像全读完了。
- */
-function imageLineOf(read: ImageReadResult | null): string {
-  if (!read || (!read.read && !read.failed)) return '';
-  const bits: string[] = [];
-  if (read.read) bits.push(`顺手看了 ${read.read} 张图里的字`);
-  if (read.failed) bits.push(`${read.failed} 张没读出来`);
-  if (read.rest) bits.push(`还有 ${read.rest} 张下轮再看`);
-  return bits.join('，');
-}
+
 
 /** 历史列表的预览：把 Markdown 外壳剥掉，只留能读的一行 */
 function plainPreview(text: string): string {
@@ -325,7 +273,7 @@ function TurnAnswer({
       {turn.webSources?.length ? (
         <View style={styles.webBlock}>
           <Text style={styles.webTitle}>网页来源</Text>
-          {turn.webSources.slice(0, 4).map((w) => (
+          {turn.webSources.map((w) => (
             <Pressable
               key={w.url}
               style={({ pressed }) => [styles.webRow, pressed && { opacity: 0.6 }]}
@@ -345,11 +293,6 @@ function TurnAnswer({
               <Ionicons name="open-outline" size={12} color={c.text3} />
             </Pressable>
           ))}
-          {turn.webSources.length > 4 ? (
-            <Text style={styles.webMore}>
-              还有 {turn.webSources.length - 4} 条，展开上面的「参考」可以看到
-            </Text>
-          ) : null}
           {linkErr ? <Text style={styles.webErr}>{linkErr}</Text> : null}
         </View>
       ) : null}
@@ -365,6 +308,9 @@ export function AskScreen({
   initialScope,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
   /**
    * 这一页的范围（进入页面时明确选定的那个）。新开会话回到它，
    * 而不是继承刚才翻到的那场历史会话 —— 那会变成「悄悄换范围」。
@@ -442,54 +388,48 @@ export function AskScreen({
   const [docTitles, setDocTitles] = useState<Map<number, string>>(new Map());
   const [working, setWorking] = useState<'' | 'archive' | 'delete'>('');
 
-  /* ---- 整理草稿（v0.16） ---- */
-  /** 当前草稿。null = 没有正在整理的稿子 */
-  const [draft, setDraft] = useState<KnowledgeDraft | null>(null);
-  const [draftBusy, setDraftBusy] = useState(false);
-  const [draftErr, setDraftErr] = useState<ErrInfo | null>(null);
-  /** 材料被截断的提示，必须显示：少看了内容就可能漏了结论 */
-  const [draftNote, setDraftNote] = useState('');
-  const [draftRecv, setDraftRecv] = useState(0);
-  const [draftElapsed, setDraftElapsed] = useState(0);
-  const [draftReasoning, setDraftReasoning] = useState('');
-  /** 过程日志。整理这件事现在是「看得见在干什么」的，不再只报一个字数 */
-  const [draftSteps, setDraftSteps] = useState<AgentStep[]>([]);
-  /**
-   * 屏幕上这份草稿是「因为哪句话」才有的。
-   *
-   * 它要显示成右侧的用户气泡 —— 否则整段整理只有助手那半边，
-   * 屏幕上没有「我问了什么」，读起来就不像对话（用户 v0.20.4 的要求）。
-   */
-  const [draftAsk, setDraftAsk] = useState('');
-  /**
-   * 这一份草稿被要求改过哪些话（从旧到新）。
-   *
-   * 改稿只看草稿和这一句，就会出现「第二轮说的话没起作用」：上一轮的要求随着
-   * 草稿一起变了，模型不知道用户已经让改过一次。带着走之后，「上面那条」才有指代。
-   */
-  const [reviseHistory, setReviseHistory] = useState<string[]>([]);
-  const [savingDraft, setSavingDraft] = useState(false);
-  /** 写入权限。默认开，但一定要看得见、关得掉 */
-  const [allowDoc, setAllowDoc] = useState(true);
-  const [allowTodos, setAllowTodos] = useState(true);
-  /** 已经写进文档库的那几篇（按草稿下标），卡片上逐篇打勾 */
-  const [savedDocs, setSavedDocs] = useState<SavedDoc[]>([]);
-  /** 打开整页查看/编辑草稿里的第几篇。null = 没开 */
-  const [draftDoc, setDraftDoc] = useState<{ index: number; mode: 'read' | 'edit' } | null>(null);
-  /** 「整理全部」被这一轮的上限截断时还剩多少条，卡片上要看得见 */
-  const [leftover, setLeftover] = useState(0);
-  /** 点「+」但本来就在新会话里：顶部闪一条提示，别让人以为按钮坏了 */
+  /* 整理拥有独立、可恢复的工作区，页面不再复制它的授权与进度状态。 */
+  const organize = useOrganize({
+    context, scope,
+    getOwner: () => ({ id: sessionIdRef.current, title: sessionTitle || '', turns: turnsRef.current, scope: scopeRef.current, createdAt: startedAtRef.current }),
+    getSessionGeneration: () => sessionGenRef.current,
+    onSessionUpdated: (owner, previousId) => {
+      if (sessionIdRef.current !== previousId) return;
+      sessionIdRef.current = owner.id; setSessionId(owner.id);
+      setSessionTitle(owner.title); setTurns(owner.turns); turnsRef.current = owner.turns;
+      dirtyRef.current = false;
+    },
+    onRestoreOwner: (owner) => {
+      sessionGenRef.current += 1; dirtyRef.current = false;
+      sessionIdRef.current = owner.id; setSessionId(owner.id);
+      setSessionTitle(owner.title || null); startedAtRef.current = owner.createdAt;
+      setTurns(owner.turns); turnsRef.current = owner.turns;
+      setScope(owner.scope); setScopeProblem(null); setContext(null); setHistoryOpen(false);
+    },
+    onSaved,
+    onHistoryChanged: () => loadHistory(),
+    showToast: (message) => showToast(message),
+  });
+  const draft = organize.workspace?.draft ?? null;
+  const draftBusy = organize.busy;
+  const savingDraft = organize.saving;
+  const draftErr = organize.error;
+  const draftSteps = organize.workspace?.steps ?? [];
+  const draftNote = organize.workspace?.note ?? '';
+  const draftAsk = organize.workspace?.draftAsk ?? '';
+  const draftRecv = organize.received;
+  const draftElapsed = organize.elapsed;
+  const draftReasoning = organize.reasoning;
+  const allowDoc = organize.workspace?.allowDoc ?? true;
+  const allowTodos = organize.workspace?.allowTodos ?? true;
+  const savedDocs = organize.workspace?.receipt.documents ?? [];
+  const leftover = organize.workspace ? remainingIds(organize.workspace).length : 0;
+  const setDraft = organize.changeDraft;
+  const setAllowDoc = organize.setAllowDoc;
+  const setAllowTodos = organize.setAllowTodos;
+  const [draftDoc, setDraftDoc] = useState<{ key: string; mode: 'read' | 'edit' } | null>(null);
   const [newHint, setNewHint] = useState(false);
-  /**
-   * 这份草稿属于哪场会话。
-   *
-   * 不能直接用 `sessionIdRef.current`：从历史里对**别的**会话点「重新整理」时，
-   * 当前打开的可能是另一场 —— 用它去 mark，会把文档挂到不相干的会话上，
-   * 界面上看着「整理成功了」，其实那条历史行永远不会有徽标。
-   */
-  const [draftSession, setDraftSession] = useState<number | null>(null);
-  /** 草稿代次：放弃之后迟到的结果不能再把卡片弹回来 */
-  const draftGenRef = useRef(0);
+  const [discardConfirm, setDiscardConfirm] = useState(false);
 
   /** 文档阅读器（从历史会话跳进来，或写完直接看） */
   const [openDocId, setOpenDocId] = useState<number | null>(null);
@@ -509,7 +449,7 @@ export function AskScreen({
   const historyRef = useRef(historyOpen);
   /** 任一层覆盖物开着时都不接管左滑，否则会在操作面板底下打开历史 */
   const overlayRef = useRef(false);
-  busyRef.current = busy;
+  busyRef.current = busy || draftBusy || savingDraft;
   historyRef.current = historyOpen;
   overlayRef.current =
     historyOpen ||
@@ -601,19 +541,8 @@ export function AskScreen({
     return () => clearInterval(timer);
   }, [busy]);
 
-  // 草稿自己的计时：生成和改稿都可能跑几十秒，得让用户知道还在动
-  useEffect(() => {
-    if (!draftBusy) return;
-    const started = Date.now();
-    const timer = setInterval(
-      () => setDraftElapsed(Math.round((Date.now() - started) / 1000)),
-      500,
-    );
-    return () => clearInterval(timer);
-  }, [draftBusy]);
-
   const scrollToEnd = useCallback(() => {
-    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: !reduceMotionRef.current }));
   }, []);
 
   /**
@@ -729,68 +658,24 @@ export function AskScreen({
    * 会话已经每轮自动存过，这里不再问「要不要留纪要」。
    */
   const attemptClose = useCallback(() => {
-    if (draftDoc !== null) {
-      setDraftDoc(null);
-      return;
-    }
-    if (openDocId !== null) {
-      setOpenDocId(null);
-      return;
-    }
-    if (summaryOpen) {
-      setSummaryOpen(false);
-      return;
-    }
-    if (draft) {
-      /*
-       * 关掉草稿＝放弃这次整理。代次 +1，迟到的结果不再回写 ——
-       * 否则关完卡片又从底下冒出来，用户会以为自己点错了。
-       * 已经写进文档的那份不受影响（那时草稿已经是「已写入」状态，单独关掉即可）。
-       */
-      draftGenRef.current += 1;
-      setDraft(null);
-      setDraftBusy(false);
-      setSavedDocs([]);
-      return;
-    }
-    if (cite) {
-      setCite(null);
-      return;
-    }
-    if (sessionDocs) {
-      setSessionDocs(null);
-      return;
-    }
-    if (deleteSession) {
-      setDeleteSession(null);
-      return;
-    }
-    if (actionSession) {
-      setActionSession(null);
-      return;
-    }
-    if (historyOpen) {
-      setHistoryOpen(false);
-      return;
-    }
+    if (organize.isLocked()) { showToast('先暂停整理，或等待写入完成'); return; }
+    if (discardConfirm) { setDiscardConfirm(false); return; }
+    if (draftDoc !== null) { setDraftDoc(null); return; }
+    if (openDocId !== null) { setOpenDocId(null); return; }
+    if (summaryOpen) { setSummaryOpen(false); return; }
+    if (cite) { setCite(null); return; }
+    if (sessionDocs) { setSessionDocs(null); return; }
+    if (deleteSession) { setDeleteSession(null); return; }
+    if (actionSession) { setActionSession(null); return; }
+    if (historyOpen) { setHistoryOpen(false); return; }
     if (busy) return;
-    if (dirtyRef.current) void persistSession(turns);
-    onClose();
-  }, [
-    actionSession,
-    busy,
-    cite,
-    deleteSession,
-    draft,
-    draftDoc,
-    historyOpen,
-    onClose,
-    openDocId,
-    persistSession,
-    sessionDocs,
-    summaryOpen,
-    turns,
-  ]);
+    void (async () => {
+      if (!(await organize.suspend())) return;
+      if (dirtyRef.current) void persistSession(turnsRef.current);
+      onClose();
+    })();
+  }, [organize, showToast, discardConfirm, draftDoc, openDocId, summaryOpen, cite, sessionDocs,
+      deleteSession, actionSession, historyOpen, busy, persistSession, onClose]);
 
   useEffect(() => {
     registerClose(attemptClose);
@@ -825,9 +710,10 @@ export function AskScreen({
 
   const springTo = useCallback(
     (to: number, done?: () => void) => {
+      if (reduceMotionRef.current) { historyAnim.setValue(to); done?.(); return; }
       Animated.spring(historyAnim, {
         toValue: to,
-        useNativeDriver: true,
+        useNativeDriver: false,
         speed: 18,
         bounciness: 0,
       }).start(done);
@@ -850,8 +736,8 @@ export function AskScreen({
     }
     Animated.timing(historyAnim, {
       toValue: 0,
-      duration: 180,
-      useNativeDriver: true,
+      duration: reduceMotionRef.current ? 0 : 180,
+      useNativeDriver: false,
     }).start(({ finished }) => {
       // 关到一半又被打开：别把正在展开的抽屉卸掉，会闪一下
       if (finished && !historyRef.current) setHistoryMounted(false);
@@ -882,8 +768,8 @@ export function AskScreen({
         }
         Animated.timing(historyAnim, {
           toValue: 0,
-          duration: 160,
-          useNativeDriver: true,
+          duration: reduceMotionRef.current ? 0 : 160,
+          useNativeDriver: false,
         }).start(() => {
           if (!historyRef.current) setHistoryMounted(false);
         });
@@ -892,8 +778,8 @@ export function AskScreen({
         draggingRef.current = false;
         Animated.timing(historyAnim, {
           toValue: 0,
-          duration: 160,
-          useNativeDriver: true,
+          duration: reduceMotionRef.current ? 0 : 160,
+          useNativeDriver: false,
         }).start(() => {
           if (!historyRef.current) setHistoryMounted(false);
         });
@@ -938,115 +824,41 @@ export function AskScreen({
       },
     }),
   ).current;
-
-  /** 新建一场。旧会话已经自动存好，这里只重置当前视图 */
-  function newSession() {
-    if (busy) return;
-    /*
-     * 已经站在一个空会话里再点「+」，什么都不会发生 —— 但按钮必须有反应，
-     * 否则用户会以为它坏了。所以先把面板收起、输入清空，再闪一条提示。
-     */
-    if (!turns.length && !draft) {
-      setHistoryOpen(false);
-      setActionSession(null);
-      setDeleteSession(null);
-      setInput('');
-      setError(null);
-      flashNewHint();
-      return;
-    }
-    // 先落上一场（此时 scopeRef 还是上一场的范围），再回到页面范围
-    void persistSession(turns);
-    // 先让上一场的保存拿到旧代次，再切代次；否则它回来会改到新会话上
-    sessionGenRef.current += 1;
-    dirtyRef.current = false;
-    setTurns([]);
-    setSessionId(null);
-    sessionIdRef.current = null;
-    setSessionTitle(null);
-    startedAtRef.current = Date.now();
-    setInput('');
-    setError(null);
-    setWebNote('');
-    setPendingQ('');
-    setReasoning('');
-    setOpenReasoningKey(null);
-    setReceived(0);
-    setElapsed(0);
-    setCite(null);
-    setHistoryOpen(false);
-    setDraftDoc(null);
-    setActionSession(null);
-    setDeleteSession(null);
-    draftGenRef.current += 1;
-    setDraft(null);
-    setDraftBusy(false);
-    setDraftErr(null);
-    setSavedDocs([]);
-    setReviseHistory([]);
-    setDraftAsk('');
-    setContext(null);
-    // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
-    setScope(pageScope.scope);
-    setScopeProblem(pageScope.error);
+  async function newSession(): Promise<boolean> {
+    if (busy || organize.isLocked()) return false;
+    if (!(await organize.suspend())) return false;
+    if (!turnsRef.current.length && sessionIdRef.current === null) flashNewHint();
+    if (dirtyRef.current) void persistSession(turnsRef.current);
+    sessionGenRef.current += 1; dirtyRef.current = false;
+    setTurns([]); turnsRef.current = [];
+    setSessionId(null); sessionIdRef.current = null;
+    setSessionTitle(null); startedAtRef.current = Date.now();
+    setInput(''); setError(null); setWebNote(''); setPendingQ('');
+    setReasoning(''); setOpenReasoningKey(null); setReceived(0); setElapsed(0);
+    setCite(null); setHistoryOpen(false); setDraftDoc(null);
+    setActionSession(null); setDeleteSession(null); setSessionDocs(null);
+    setContext(null); setScope(pageScope.scope); setScopeProblem(pageScope.error);
+    return true;
   }
-
-  /** 打开一个历史会话 */
-  function loadSession(s: AskSession) {
-    if (busy) return;
-
-    // 范围读不出来的会话不能按 records 打开：那会把「只问两份文档」变成全库问答
-    if (s.scopeBroken) {
-      showToast('这场会话的范围读不出来，不能继续问');
-      return;
-    }
+  async function loadSession(s: AskSession) {
+    if (busy || organize.isLocked()) return;
+    if (s.scopeBroken) { showToast('这场会话的范围读不出来，不能继续问'); return; }
     let nextScope: QaScope;
-    try {
-      // 只有读旧会话时允许缺字段（那时还没有范围概念，它们确实是 records）
-      nextScope = normalizeQaScope(s.scope, true);
-    } catch {
-      showToast('这场会话的范围读不出来，不能继续问');
-      return;
-    }
-
-    sessionGenRef.current += 1;
-    dirtyRef.current = false;
-    setTurns(s.turns);
-    setSessionId(s.id);
-    sessionIdRef.current = s.id;
-    setSessionTitle(s.title);
-    startedAtRef.current = s.createdAt;
-    setScope(nextScope);
-    setScopeProblem(null);
-    setHistoryOpen(false);
-    setActionSession(null);
-    setDeleteSession(null);
-    setCite(null);
-    setDraftDoc(null);
-    setLeftover(0);
-    setInput('');
-    setError(null);
-    setWebNote('');
-    setPendingQ('');
-    setReasoning('');
-    setOpenReasoningKey(null);
-    setReceived(0);
-    setElapsed(0);
-    draftGenRef.current += 1;
-    setDraft(null);
-    setDraftBusy(false);
-    setDraftErr(null);
-    setSavedDocs([]);
-    setReviseHistory([]);
-    setDraftAsk('');
-    setContext(null);
-    /*
-     * 换了一整场会话，应该直接看到最新一轮。
-     * 以前这是靠 `onContentSizeChange` 无条件滚到底兜着的，现在那个只跟生成过程，
-     * 所以这里显式补一次（等这一帧渲染完再跳）。
-     */
-    setTimeout(scrollToEnd, 120);
+    try { nextScope = normalizeQaScope(s.scope, true); }
+    catch { showToast('这场会话的范围读不出来，不能继续问'); return; }
+    if (!(await organize.suspend())) return;
+    if (dirtyRef.current) void persistSession(turnsRef.current);
+    sessionGenRef.current += 1; dirtyRef.current = false;
+    setTurns(s.turns); turnsRef.current = s.turns;
+    setSessionId(s.id); sessionIdRef.current = s.id;
+    setSessionTitle(s.title); startedAtRef.current = s.createdAt;
+    setScope(nextScope); setScopeProblem(null); setHistoryOpen(false);
+    setActionSession(null); setDeleteSession(null); setCite(null); setDraftDoc(null);
+    setInput(''); setError(null); setWebNote(''); setPendingQ('');
+    setReasoning(''); setOpenReasoningKey(null); setReceived(0); setElapsed(0);
+    setContext(null); setTimeout(scrollToEnd, 120);
   }
+
 
   async function toggleThinking() {
     const next = !thinkingOn;
@@ -1070,7 +882,7 @@ export function AskScreen({
 
   async function send(raw?: string) {
     const question = (raw ?? input).trim();
-    if (!question || busy || draftBusy) return;
+    if (!question || busy || organize.isLocked()) return;
     if (scopeProblem) {
       // 边界不清楚就不发：宁可让用户回去重选，也不要拿错的范围去查
       setError({ message: scopeProblem });
@@ -1088,18 +900,15 @@ export function AskScreen({
      * - 有没写入的 → 不吞这句话、也不偷偷替换草稿，而是说清下一步该按哪里。
      */
     if (draft) {
-      // 「还没写入」按两类分别算：文档看已写篇数，待办写进去之后草稿里就清空了
-      const unsavedDocs =
-        draft.mode === 'knowledge' ? Math.max(0, keptDocs(draft).length - savedDocs.length) : 0;
-      const unsavedTodos = allowTodos ? keptTodos(draft).length : 0;
-      const plan = planDraftInput(question, unsavedDocs + unsavedTodos);
+      const protectedWork = organize.workspace !== null && hasUnsavedWorkspace(organize.workspace);
+      const plan = planDraftInput(question, protectedWork ? 1 : 0);
       if (plan.kind === 'blocked') {
         // 输入不清空：那句话还在，处理完草稿可以直接再发
-        showToast('当前草稿还没写入。先点卡片上的「写入」或「丢弃」，再开新一轮整理');
+        showToast('还有未保存内容或未处理材料。请先处理，或点「放弃草稿」明确确认，再开新任务');
         return;
       }
       if (plan.kind === 'new') {
-        discardDraft();
+        if (!(await discardDraft())) return;
         await startDraft(plan.mode, { instruction: question });
         return;
       }
@@ -1263,648 +1072,26 @@ export function AskScreen({
       setWorking('');
     }
   }
-
-  /** 追加一行过程日志 */
-  const pushStep = useCallback((step: AgentStep) => {
-    setDraftSteps((prev) => [...prev, step]);
-  }, []);
-
-  /** 改最后一行（「正在写…」→「已写入」），不新增噪音 */
-  const markLastStep = useCallback((patch: Partial<AgentStep>) => {
-    setDraftSteps((prev) => {
-      if (!prev.length) return prev;
-      const next = prev.slice();
-      next[next.length - 1] = { ...next[next.length - 1], ...patch };
-      return next;
-    });
-  }, []);
-
-  /**
-   * 已有待办的快照，交给模型去重。
-   *
-   * 只取「未完成」和「最近完成的 12 条」：
-   * - 未完成的必须全给，否则模型会把同一件事再抽一遍 —— 这正是
-   *   「已经做完的事反复被整理出来」的根因：模型根本不知道待办清单里有什么。
-   * - 已完成的不可能全给（几年下来上千条），但最近那批最有参考价值。
-   * 子项一并带上，否则模型看到父项会以为「这件事还没拆过」。
-   */
-  async function loadTodoSnapshots(): Promise<TodoSnapshot[]> {
-    try {
-      const all = await repo.listTodos();
-      const byParent = new Map<number, string[]>();
-      for (const t of all) {
-        if (t.parentId === null || t.mergedInto !== null) continue;
-        const list = byParent.get(t.parentId) ?? [];
-        list.push(t.text);
-        byParent.set(t.parentId, list);
-      }
-      const tops = all.filter((t) => t.parentId === null && t.mergedInto === null);
-      const open = tops.filter((t) => !t.done);
-      const done = tops.filter((t) => t.done).slice(0, 12);
-      return [...open, ...done].map((t) => ({
-        text: t.text,
-        done: t.done,
-        due: t.dueAt,
-        children: byParent.get(t.id) ?? [],
-      }));
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * 把这次整理写成一条会话轮次。
-   *
-   * 两个细节必须对：
-   * - **挂到正确的那场会话**：从历史里对别的会话点「重新整理」时，当前打开的
-   *   可能是另一场，写到当前会话上等于整理记录跑错了地方；
-   * - **把新 id 交回草稿**：新会话的第一次动作就是整理时，`draftSession` 原本是
-   *   null，不更新的话文档写进去之后历史行上不会出现「已写入」徽标，
-   *   点「重新整理」也没有来源碎片可用。
-   */
-  async function recordOrganize(turn: QaTurn, session?: AskSession): Promise<number | null> {
-    if (session) {
-      try {
-        const id = await repo.saveAskSession({
-          id: session.id,
-          title: session.title,
-          turns: [...session.turns, turn],
-          scope: session.scope,
-          createdAt: session.createdAt,
-        });
-        await loadHistory();
-        return id;
-      } catch {
-        return null;
-      }
-    }
-
-    const gen = sessionGenRef.current;
-    const next = [...turnsRef.current, turn];
-    const title =
-      (sessionTitle ?? turn.question).replace(/\s+/g, ' ').trim().slice(0, 32) || '整理';
-    try {
-      const id = await repo.saveAskSession({
-        id: sessionIdRef.current ?? undefined,
-        title,
-        turns: next,
-        scope: scopeRef.current,
-        createdAt: startedAtRef.current,
-      });
-      // 保存期间用户换了会话：只落库，不再改当前界面
-      if (sessionGenRef.current === gen) {
-        sessionIdRef.current = id;
-        setSessionId(id);
-        setSessionTitle(title);
-        setTurns(next);
-        dirtyRef.current = false;
-      }
-      await loadHistory();
-      return id;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * 发起一次整理（v0.18）。
-   *
-   * 和上一版的三处差别，都是用户用过之后提出来的：
-   * 1. **「整理所有碎片」真的是所有**。上一版无论说什么都只取最近 40 条 ——
-   *    用户明确说了「所有」，结果只看到 40 条的结果，还以为整理失败了。
-   *    现在按批循环，游标落库，中途退出下次接着来。
-   * 2. **整理也是对话**。整理完退出，历史里找不到这场整理；现在会写一条
-   *    `kind: 'organize'` 的轮次，带产出摘要和来源碎片。
-   * 3. **每一步都得是真的**：第几批、读了几条、拆了几篇、还差多少。
-   */
-  async function startDraft(
-    mode: DraftMode,
-    opts: {
-      instruction?: string;
-      turns?: QaTurn[];
-      session?: AskSession;
-      /** 指定要整理的那批碎片（重新整理时用当初那批）。不传就自己取 */
-      fragments?: Fragment[];
-      /** 强制「整理全部」。不传就看指令里有没有说「所有 / 全部」 */
-      all?: boolean;
-      /**
-       * 接着上一次的草稿继续（「还有 N 条，继续」走这条）。
-       *
-       * 必须接着而不是重来：上一轮产出的文档还没写库，重来等于把它们从卡片上抹掉。
-       */
-      append?: boolean;
-    } = {},
-  ) {
-    if (draftBusy || busy) return;
-    if (!opts.turns && !opts.fragments && docMode) {
-      // 文档范围是「只问这几份文档」的契约。整理要读碎片正文，跨过去就是越界。
-      showToast('这次的范围是文档，整理碎片请新开一场会话');
-      return;
-    }
-
-    const all = opts.all ?? (opts.fragments ? false : wantsAll(opts.instruction));
-    const append = !!opts.append && !!draft;
-    const gen = ++draftGenRef.current;
-    setDraftErr(null);
-    setDraftNote('');
-    setDraftReasoning('');
-    setDraftRecv(0);
-    setDraftElapsed(0);
-    setLeftover(0);
+  async function startDraft(mode: DraftMode, opts: StartDraftOptions = {}) {
+    if (busy) return;
     setInput('');
-    if (append) {
-      // 接着上一轮的草稿：文档还在等用户过目，步骤日志也留着。
-      // 气泡也不换 —— 用户这一下没说话，只是让上一轮继续说完
-      pushStep({ text: '继续整理剩下的碎片…', state: 'running' });
-    } else {
-      setSavedDocs([]);
-      setDraft(emptyDraft(mode, []));
-      setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
-      // 与写进历史的那句同源：屏幕上看到的气泡，就是历史里能找回来的那句
-      setDraftAsk(
-        (opts.instruction ?? '').trim() || (mode === 'todos' ? '整理待办' : '整理碎片'),
-      );
-      // 新的一轮整理，上一份草稿的改稿要求不能跟过来
-      setReviseHistory([]);
-    }
-    setDraftSession(opts.session?.id ?? sessionIdRef.current);
-    setDraftBusy(true);
-
-    try {
-      const config = await loadAiConfig();
-      let sourceIds: number[] = [];
-      let batches: Fragment[][] = [];
-      let restCount = 0;
-      let hint = '';
-      /** 这一轮顺手读了哪些图。null = 这批里没有没读过的图 */
-      let imageRead: ImageReadResult | null = null;
-
-      if (opts.turns) {
-        hint = `这场会话的 ${opts.turns.length} 轮问答`;
-      } else {
-        const picked = opts.fragments
-          ? { pool: opts.fragments, read: await readImagesOf(opts.fragments, config) }
-          : await pickFragments(context, all, config);
-        imageRead = picked.read;
-        const pool = picked.pool;
-        if (!pool.length) {
-          // 「继续」时草稿里还有没写库的产出，不能因为这次没材料就把它清掉
-          if (!append) {
-            setDraft(null);
-            setDraftSteps([]);
-            setDraftAsk('');
-          } else {
-            markLastStep({ text: '没有剩下的碎片了', state: 'done' });
-          }
-          setDraftBusy(false);
-          showToast(
-            all ? '没有待整理的碎片：要么已经整理过，要么还没记' : '还没有可整理的碎片，先记点什么',
-          );
-          return;
-        }
-        batches = sliceBatches(pool);
-        restCount = pool.length - batches.reduce((n, b) => n + b.length, 0);
-        sourceIds = pool.map((f) => f.id);
-        hint = opts.fragments
-          ? `当初那 ${pool.length} 条碎片`
-          : all
-            ? `${append ? '剩下的' : '全部'} ${pool.length} 条碎片（分 ${batches.length} 批）`
-            : `最近 ${batches[0].length} 条碎片`;
-      }
-      if (draftGenRef.current !== gen) return;
-
-      const existing = await loadTodoSnapshots();
-      if (draftGenRef.current !== gen) return;
-      if (append) {
-        markLastStep({
-          text: `又读到${hint}${imageRead?.read ? `（顺手看了 ${imageRead.read} 张图）` : ''}，正在提炼…`,
-          state: 'running',
-        });
-      } else {
-        const seen = imageLineOf(imageRead);
-        setDraftSteps([
-          { text: `读到${hint}${existing.length ? `，${existing.length} 条已有待办` : ''}`, state: 'done' },
-          // 读图是一步看得见的动作：不写出来，用户只会觉得「怎么多等了一会儿」
-          ...(seen ? [{ text: seen, state: 'done' as const }] : []),
-          {
-            text: batches.length > 1 ? '第 1 批：正在提炼可复用的知识…' : '正在提炼可复用的知识…',
-            state: 'running',
-          },
-        ]);
-      }
-
-      let acc = append && draft ? { ...draft, mode } : emptyDraft(mode, []);
-      let truncated = false;
-      let dropped = 0;
-
-      for (let i = 0; i < batches.length; i += 1) {
-        if (draftGenRef.current !== gen) return;
-        const batch = batches[i];
-        const label = batches.length > 1 ? `第 ${i + 1}/${batches.length} 批：` : '';
-        if (i > 0) pushStep({ text: `${label}正在提炼…`, state: 'running' });
-
-        const out = await extractKnowledge({
-          source: { kind: 'fragments', fragments: batch },
-          mode,
-          instruction: opts.instruction,
-          // 前几批抽出来的待办一并带上，否则同一件事每一批都会再抽一遍
-          existingTodos: [...existing, ...todoSnapshotsOf(acc)],
-          config,
-          onProgress: (patch) => {
-            if (draftGenRef.current !== gen) return;
-            if (patch.content !== undefined) {
-              setDraftRecv(patch.content.length);
-              markLastStep({ text: `${label}正在写出结果…（已收到 ${patch.content.length} 字）` });
-            }
-            if (patch.reasoning !== undefined) setDraftReasoning(patch.reasoning);
-          },
-        });
-        if (draftGenRef.current !== gen) return;
-
-        const merged = mergeDrafts(acc, out.draft);
-        acc = merged.draft;
-        dropped += merged.dropped;
-        truncated = truncated || out.truncated;
-        const newDocs = out.draft.docs.length;
-        const newTodos = out.draft.todos.filter((t) => t.text.trim()).length;
-        markLastStep({
-          text: `${label}整理出 ${newDocs} 篇、${newTodos} 件事`,
-          state: 'done',
-        });
-        // 每跑完一批就落游标，卡片也同步长出这一批的产出
-        setDraft({ ...acc });
-        if (all && batch.length) {
-          try {
-            await repo.setSetting(ALL_CURSOR_KEY, String(batch[batch.length - 1].id));
-          } catch {
-            /* 游标记不住只会让下次重做这一批，不影响这次结果 */
-          }
-        }
-      }
-
-      const docN = acc.docs.filter((d) => d.bodyMd.trim()).length;
-      const todoN = acc.todos.filter((t) => t.text.trim()).length;
-      const bits: string[] = [];
-      if (docN) bits.push(`${docN} 篇文档`);
-      if (todoN) bits.push(`${todoN} 件事`);
-      setDraftSteps((prev) => [
-        ...prev,
-        {
-          text: bits.length
-            ? `整理完成：${bits.join('、')}${dropped ? `（${dropped} 篇同名或超上限，没重复列）` : ''}`
-            : '材料里没有可沉淀的知识',
-          state: 'done',
-        },
-      ]);
-      setLeftover(restCount);
-      const noteBits: string[] = [];
-      if (truncated) noteBits.push('材料太多，中间省略了一部分，可能漏掉一些细节');
-      if (restCount) noteBits.push(`还有 ${restCount} 条没整理，点下面「继续」接着来`);
-      /*
-       * 读图的两种「没成」要分开说：失败的那张是白试了一次（可以再试），
-       * 没排上的那些只是这一轮没轮到 —— 混成一句「有些图没读」就分不清该不该重来。
-       */
-      if (imageRead?.failed) noteBits.push(`有 ${imageRead.failed} 张图没读出来，下次整理会再试`);
-      if (imageRead?.rest) noteBits.push(`还有 ${imageRead.rest} 张图没来得及看，下一轮接着看`);
-      setDraftNote(noteBits.join('；'));
-
-      // 整理也是对话：写进历史，退出之后还能找回来
-      const question =
-        (opts.instruction ?? '').trim() || (mode === 'todos' ? '整理待办' : '整理碎片');
-      const sid = await recordOrganize(
-        {
-          question,
-          answer: describeForHistory(acc, restCount),
-          sourceIds: acc.sourceIds.length ? acc.sourceIds : sourceIds,
-          kind: 'organize',
-        },
-        opts.session,
-      );
-      if (sid !== null && draftGenRef.current === gen) setDraftSession(sid);
-      /*
-       * 这一轮可能刚把图里的字写进库（整理前读的那几张）。时间轴显示的是上层
-       * 那份 list，不重读的话回到时间轴还说「图里的字还没读」—— 明明是刚读过的。
-       */
-      if (imageRead?.read) {
-        try {
-          await onSaved();
-        } catch {
-          /* 刷新失败不影响已经写进去的字 */
-        }
-      }
-    } catch (e) {
-      if (draftGenRef.current !== gen) return;
-      setDraftErr(errorDetailOf(e));
-      markLastStep({ state: 'fail' });
-    } finally {
-      if (draftGenRef.current === gen) setDraftBusy(false);
-    }
+    await organize.start(mode, opts);
   }
-
-  /** 草稿开着时，用户说的每一句都是「改哪里」 */
   async function reviseCurrent(instruction: string) {
-    if (!draft || draftBusy || savingDraft) return;
-    const gen = draftGenRef.current;
     setInput('');
-    setDraftErr(null);
-    setDraftRecv(0);
-    setDraftElapsed(0);
-    setDraftBusy(true);
-    /*
-     * 用户说的这句话必须留在过程里。以前只 push 一句「正在按你说的改…」，
-     * 自己刚打的字从输入框里消失、草稿又看不出变化 —— 看起来就是「第二次对话没反应」。
-     */
-    pushStep({ text: `你说：${instruction.trim()}`, state: 'done' });
-    // 气泡跟着换成这一句：屏幕上得看得见「我刚说了什么」（更早的句子在步骤日志里）
-    setDraftAsk(instruction.trim());
-    pushStep({ text: '正在按你说的改…', state: 'running' });
-    try {
-      const config = await loadAiConfig();
-      /*
-       * 把材料带上。改稿原来只看到草稿，「再抽两条待办」「还有没有别的」这类要求
-       * 根本没有可依据的东西，只能把原样吐回来 —— 用户于是说「第二次没效果」。
-       * 材料就是当初那批碎片（`sourceIds`），按整理时同一套口径截断。
-       */
-      let material = '';
-      if (draft.sourceIds.length) {
-        try {
-          const frags = await repo.findFragmentsByIds(draft.sourceIds);
-          if (frags.length) material = trimMaterial(formatFragments(frags)).text;
-        } catch {
-          /* 碎片被删了就算了：没有材料也能改措辞，只是补不出新内容 */
-        }
-      }
-      let existing: TodoSnapshot[] | undefined;
-      try {
-        existing = await loadTodoSnapshots();
-      } catch {
-        /* 读不到就不带去重清单，最坏情况是多抽两条重复的 */
-      }
-      if (draftGenRef.current !== gen) return;
-
-      const next = await reviseDraft({
-        draft,
-        instruction,
-        config,
-        material: material || undefined,
-        history: reviseHistory,
-        existingTodos: existing,
-        onProgress: (patch) => {
-          if (draftGenRef.current !== gen) return;
-          if (patch.content !== undefined) setDraftRecv(patch.content.length);
-        },
-      });
-      if (draftGenRef.current !== gen) return;
-      setDraft(next);
-      setReviseHistory((prev) => [...prev, instruction.trim()].slice(-6));
-      markLastStep({ text: '已按你说的改过', state: 'done' });
-      setDraftNote('不满意可以继续说；改好的每一篇都可以单独加入文档库');
-    } catch (e) {
-      if (draftGenRef.current !== gen) return;
-      setDraftErr(errorDetailOf(e));
-      markLastStep({ state: 'fail' });
-    } finally {
-      if (draftGenRef.current === gen) setDraftBusy(false);
-    }
+    await organize.revise(instruction);
+  }
+  async function discardDraft() {
+    const discarded = await organize.discard();
+    if (discarded) setDraftDoc(null);
+    return discarded;
+  }
+  async function approveDraft(key: string | null) {
+    await organize.approve(key);
   }
 
-  function discardDraft() {
-    draftGenRef.current += 1;
-    setDraft(null);
-    setDraftDoc(null);
-    setDraftBusy(false);
-    setDraftErr(null);
-    setDraftNote('');
-    setDraftSteps([]);
-    setDraftAsk('');
-    setReviseHistory([]);
-    setSavedDocs([]);
-    setDraftSession(null);
-  }
 
-  /**
-   * 写入文档库 / 待办。
-   *
-   * `only` 是草稿里某一篇的下标 —— 卡片上每篇的「加入文档库」走这条；
-   * null 表示「全部」。
-   *
-   * 顺序：文档 → 待办 → 会话标记。文档写失败就中止，不留「待办进去了、
-   * 文档没进去」的半个结果 —— 用户没法从界面上判断缺了哪一半。
-   */
-  async function approveDraft(only: number | null) {
-    if (!draft || savingDraft || draftBusy) return;
 
-    const single = only !== null ? draft.docs[only] : null;
-    if (single) {
-      const problem = docProblem(single);
-      if (problem) {
-        setDraftErr({ message: problem });
-        return;
-      }
-      if (!allowDoc) {
-        setDraftErr({ message: '「允许写入文档区」是关着的，先打开它' });
-        return;
-      }
-    } else {
-      const problem = draftProblem(draft);
-      if (problem) {
-        setDraftErr({ message: problem });
-        return;
-      }
-    }
-
-    const already = new Set(savedDocs.map((s) => s.index));
-    const docTargets = (
-      single
-        ? [{ index: only as number, doc: single }]
-        : allowDoc && draft.mode === 'knowledge'
-          ? keptDocs(draft).map((doc) => ({ index: draft.docs.indexOf(doc), doc }))
-          : []
-    ).filter((t) => !already.has(t.index));
-
-    const todoTargets = single ? [] : allowTodos ? keptTodos(draft) : [];
-    if (!docTargets.length && !todoTargets.length) {
-      setDraftErr({
-        message: '没有可写入的内容：权限关掉了，或者这些都已经写过了',
-      });
-      return;
-    }
-
-    setSavingDraft(true);
-    setDraftErr(null);
-    try {
-      const now = Date.now();
-      const written: SavedDoc[] = [];
-
-      for (const target of docTargets) {
-        const name = docNameOf(target.doc, now, target.index);
-        pushStep({ text: `正在写入《${name}》`, state: 'running' });
-        const id = await writeKnowledgeDocument({
-          title: name,
-          bodyMd: target.doc.bodyMd,
-          excerpt: target.doc.summary || excerptOf(target.doc.bodyMd),
-        });
-        written.push({ index: target.index, id, name });
-        markLastStep({ text: `已写入《${name}》`, state: 'done' });
-      }
-
-      let todoCount = 0;
-      if (todoTargets.length) {
-        pushStep({ text: `正在写入 ${todoTargets.length} 件事`, state: 'running' });
-        for (const t of todoTargets) {
-          // 父项先落库拿到 id，子项才有地方挂。两层结构靠的就是这一步
-          const parentId = await repo.insertTodo({
-            text: t.text,
-            dueAt: t.due,
-            sourceFragmentId: null,
-            parentId: null,
-          });
-          todoCount += 1;
-          for (const ch of t.children) {
-            if (!ch.keep || !ch.text.trim()) continue;
-            await repo.insertTodo({
-              text: ch.text,
-              dueAt: ch.due,
-              sourceFragmentId: null,
-              parentId,
-            });
-            todoCount += 1;
-          }
-        }
-        markLastStep({ text: `已写入 ${todoCount} 条待办`, state: 'done' });
-      }
-
-      /*
-       * 这一批碎片从此算「已整理」。
-       *
-       * 只在**真的写进库之后**才标：草稿被放弃的那次一个字都没留下，
-       * 标成「已整理」等于骗用户「这批已经处理过了」。
-       * 时间轴上因此能一眼看出哪些还没整理过（标签拆掉后唯一的依据）。
-       */
-      if (draft.sourceIds.length) {
-        try {
-          await repo.markFragmentsOrganized(draft.sourceIds, now);
-        } catch {
-          /* 标不上只是徽标不显示，不影响已经写进去的内容 */
-        }
-      }
-
-      // 会话上记下「这场整理出了哪几篇」：历史列表要能逐个跳过去
-      const allIds = [...savedDocs.map((s) => s.id), ...written.map((w) => w.id)];
-      if (draftSession !== null && allIds.length) {
-        try {
-          await repo.markAskSessionDocument(draftSession, allIds, draft.sourceIds);
-          await loadHistory();
-        } catch {
-          /* 标记失败不影响已经写进去的文档 */
-        }
-      }
-      try {
-        await onSaved();
-      } catch {
-        /* 刷新失败不影响已经写进去的东西 */
-      }
-
-      setSavedDocs([...savedDocs, ...written]);
-      /*
-       * 只写了一篇时不动草稿的其余部分：另外两篇还在等用户看，
-       * 待办也还没写。清空它们等于「点了一篇，别的都没了」。
-       */
-      if (!single) setDraft({ ...draft, todos: [] });
-      const said: string[] = [];
-      if (written.length) said.push(`${written.length} 篇文档`);
-      if (todoCount) said.push(`${todoCount} 条待办`);
-      showToast(said.length ? `已写入 ${said.join('、')}` : '没有写入任何东西');
-    } catch (e) {
-      setDraftErr(errorDetailOf(e));
-      markLastStep({ state: 'fail' });
-    } finally {
-      setSavingDraft(false);
-    }
-  }
-
-  /**
-   * 把这一批碎片里**还没读过**的图读一遍（最多 6 张）。
-   *
-   * 时机是这里，不是上传的时候（用户 2026-11-12：「不要上传一次解析一次，
-   * 在整理时-询问时把图片顺手让 deepseek 查看」）。图已经在手机上躺了几天，
-   * 现在才第一次有机会被模型看到 —— 因为**现在才要用它**。
-   *
-   * 读不出来不拦整理：材料里少那一块，但数量如实写在步骤里。
-   */
-  async function readImagesOf(
-    target: Fragment[],
-    config: AiConfig,
-  ): Promise<ImageReadResult | null> {
-    const { list } = pendingImagesOf(target, IMAGE_READ_LIMIT);
-    if (!list.length) return null;
-    markLastStep({
-      text: `先把 ${list.length} 张图看一眼（图里的字要进材料）…`,
-      state: 'running',
-    });
-    return readPendingImages({
-      fragments: target,
-      config,
-      limit: IMAGE_READ_LIMIT,
-      onStep: (text) => markLastStep({ text }),
-    });
-  }
-
-  /**
-   * 取这一轮要整理的碎片。**顺带把里面的图读了** —— 必须在装箱之前读，
-   * 否则图里的字不算进字数预算，一批 40 条带图的会把 16k 撑到两倍。
-   *
-   * 从某条碎片进来就只整理那一条（用户点的就是它）。
-   * 否则：
-   * - 普通「整理」取最近的一批（40 条 / 16,000 字）；
-   * - **「整理所有碎片」取全部**，从游标之后接着来。
-   *
-   * 用 `listFragmentsBetween` 而不是 `listFragments()`：后者默认 500 条上限，
-   * 「所有」会被悄悄截掉一批 —— 正是用户这次报的问题（只看了最近 40 条）。
-   */
-  async function pickFragments(
-    contextFragment: Fragment | null,
-    all: boolean,
-    config: AiConfig,
-  ): Promise<{ pool: Fragment[]; read: ImageReadResult | null }> {
-    if (contextFragment) {
-      // 用户指着这一条问/整理：它的图当然要读
-      return { pool: [contextFragment], read: await readImagesOf([contextFragment], config) };
-    }
-    /*
-     * 取碎片和读图分开两段 try：读图失败不该被当成「没有碎片」——
-     * 那样界面会说「还没有可整理的碎片」，而用户明明刚记了十条。
-     */
-    let target: Fragment[];
-    try {
-      const list = await repo.listFragmentsBetween(0, Date.now() + 86_400_000);
-      /*
-       * 「能进材料」= 正文有字，**或者带图**。
-       * 带图但还没读过的必须留下：读图就发生在这一轮，先筛掉的话
-       * 纯图碎片永远进不了整理，也就永远等不到被读。
-       */
-      const usable = list.filter(
-        (f) => f.mergedInto === null && (hasReadableText(f) || f.images.length > 0),
-      );
-      if (!all) {
-        target = usable.slice().reverse();
-      } else {
-        let cursor = 0;
-        try {
-          cursor = Number(await repo.getSetting(ALL_CURSOR_KEY)) || 0;
-        } catch {
-          cursor = 0;
-        }
-        target = usable.filter((f) => f.id > cursor);
-      }
-    } catch {
-      return { pool: [], read: null };
-    }
-
-    const read = await readImagesOf(target, config);
-    // 读完再装箱：图里的字此时已经算得上预算
-    return { pool: all ? target : packFragments(target, 40, 16_000), read };
-  }
 
   /**
    * 从历史会话重新整理。
@@ -1938,7 +1125,8 @@ export function AskScreen({
   }
 
   async function confirmDeleteSession() {
-    if (!deleteSession || working) return;
+    if (!deleteSession || working || organize.isLocked()) return;
+    if (organize.workspace?.request.owner.id === deleteSession.id || organize.recovery?.request.owner.id === deleteSession.id) { showToast('先保存或放弃这场会话的本地草稿，再删除会话'); return; }
     setWorking('delete');
     try {
       const id = deleteSession.id;
@@ -1967,14 +1155,14 @@ export function AskScreen({
 
   const hasContent = turns.length > 0;
   /** 草稿整页正在看的那一篇。草稿被改（或丢弃）时它会变成 undefined，整页自动关掉 */
-  const draftDocCurrent = draft && draftDoc ? draft.docs[draftDoc.index] ?? null : null;
+  const draftDocCurrent = draft && draftDoc ? draft.docs.find((d) => d.key === draftDoc.key) ?? null : null;
   const docMode = scope.kind === 'documents';
   /** 范围必须一直看得见：隐私边界不能只写在代码里 */
   const scopeLine = docMode
     ? `只问这 ${scope.documentIds.length} 份文档${docNames.length ? `：${docNames.join('、')}` : ''}`
     : '范围：你的碎片、小结与待办';
   /** 能不能发出去：有字、不在忙、范围明确 */
-  const canSend = !!input.trim() && !busy && !scopeProblem;
+  const canSend = !!input.trim() && !busy && !draftBusy && !savingDraft && !scopeProblem;
 
   /** 按「今天 / 昨天 / 更早」分组，归档的单独放最后 */
   const history = useMemo(() => {
@@ -2011,6 +1199,7 @@ export function AskScreen({
             {s.documentIds.length || s.documentId ? (
               <Pressable
                 onPress={() => void openSessionDocs(s)}
+                style={styles.controlButton}
                 hitSlop={6}
                 accessibilityLabel="打开这场会话整理出的文档"
               >
@@ -2055,7 +1244,7 @@ export function AskScreen({
     () => ({
       contentX: historyAnim.interpolate({
         inputRange: [0, 1],
-        outputRange: [0, screenW * 0.16],
+        outputRange: [0, reduceMotion ? 0 : screenW * 0.16],
       }),
       historyX: historyAnim.interpolate({
         inputRange: [0, 1],
@@ -2066,7 +1255,7 @@ export function AskScreen({
         outputRange: [0, 0.3],
       }),
     }),
-    [historyAnim, screenW],
+    [historyAnim, screenW, reduceMotion],
   );
 
   return (
@@ -2091,6 +1280,7 @@ export function AskScreen({
                 size={21}
                 tone="soft"
                 onPress={newSession}
+                disabled={busy || draftBusy || savingDraft}
                 accessibilityLabel="新建会话"
               />
               <IconButton
@@ -2098,8 +1288,8 @@ export function AskScreen({
                 size={20}
                 tone="soft"
                 onPress={attemptClose}
-                disabled={busy}
-                accessibilityLabel="关闭"
+                disabled={busy || draftBusy || savingDraft}
+                accessibilityLabel="保留草稿并关闭"
               />
             </View>
           }
@@ -2130,7 +1320,24 @@ export function AskScreen({
             if (busy || pendingQ) scrollToEnd();
           }}
         >
-          {!hasContent && !pendingQ && !draft ? (
+          {organize.recovery && !draft ? (
+            <View style={styles.recovery}>
+              <Text style={styles.recoveryTitle}>有一份本地整理草稿</Text>
+              <Text style={styles.recoveryText}>{organize.recovery.request.source.kind === 'session' ? '会话：' + organize.recovery.request.source.title : '来源快照：' + organize.recovery.request.source.ids.length + ' 条碎片'} · {organize.recovery.draft.docs.length} 篇文档</Text>
+              <Text style={styles.recoveryText}>恢复会回到原会话范围，只恢复本地内容，不自动发送模型请求。</Text>
+              <View style={styles.recoveryActions}>
+                <Pressable style={styles.controlButton} onPress={organize.restore} disabled={busy || savingDraft} accessibilityRole="button"><Text style={styles.ghostBtnText}>恢复草稿</Text></Pressable>
+                <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(true)} disabled={busy || savingDraft} accessibilityRole="button"><Text style={styles.danger}>放弃草稿</Text></Pressable>
+              </View>
+            </View>
+          ) : null}
+          {organize.storageError ? <AgentError title="本地草稿未保存" message={organize.storageError} onRetry={() => void (draft ? organize.saveLocal() : organize.reloadRecovery())} /> : null}
+          {draftBusy ? (
+            <Pressable style={styles.controlButton} onPress={() => void organize.pause()} accessibilityRole="button" accessibilityLabel="暂停后续整理并保留当前材料">
+              <Text style={styles.ghostBtnText}>暂停整理 · 保留材料和进度</Text>
+            </Pressable>
+          ) : null}
+          {!hasContent && !pendingQ && !draft && !organize.recovery ? (
             <View style={styles.empty}>
               <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
               <Text style={styles.emptyTitle}>{docMode ? '就这几份文档提问' : '问、或者让它整理'}</Text>
@@ -2282,23 +1489,19 @@ export function AskScreen({
               onAllowDoc={setAllowDoc}
               onAllowTodos={setAllowTodos}
               saving={savingDraft}
-              saved={savedDocs}
+              receipt={organize.workspace!.receipt}
               onOpenDoc={(id) => {
                 setDocReload((n) => n + 1);
                 setOpenDocId(id);
               }}
-              onOpenDraft={(index, mode) => setDraftDoc({ index, mode })}
+              onOpenDraft={(key, mode) => setDraftDoc({ key, mode })}
               leftover={leftover}
               onContinueAll={() =>
                 void startDraft(draft?.mode ?? 'knowledge', { all: true, append: true })
               }
               onApprove={(index) => void approveDraft(index)}
-              onDiscard={discardDraft}
-              onRetry={() => {
-                // 重试＝用同一个来源再跑一遍。材料的取法和第一次完全一致
-                if (draft?.mode === 'todos') void startDraft('todos');
-                else void startDraft('knowledge');
-              }}
+              onDiscard={() => setDiscardConfirm(true)}
+              onRetry={() => void organize.retry()}
             />
           ) : null}
 
@@ -2325,6 +1528,7 @@ export function AskScreen({
               </Text>
               <Pressable
                 onPress={() => setContext(null)}
+                style={styles.controlButton}
                 hitSlop={8}
                 accessibilityRole="button"
                 accessibilityLabel="移除这条上下文"
@@ -2335,13 +1539,13 @@ export function AskScreen({
           ) : null}
 
           <View style={styles.toggleRow}>
-            <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking}>
+            <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityState={{ checked: thinkingOn }}>
               <Ionicons
                 name="bulb-outline"
                 size={13}
                 color={thinkingOn ? c.accentText : c.text3}
               />
-              <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
+              <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>思考 · {thinkingOn ? '开' : '关'}</Text>
             </Pressable>
             {docMode ? (
               // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
@@ -2350,13 +1554,13 @@ export function AskScreen({
                 <Text style={styles.toggleText}>不联网</Text>
               </View>
             ) : (
-              <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb}>
+              <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb} accessibilityRole="switch" accessibilityState={{ checked: webOn }}>
                 <Ionicons
                   name="globe-outline"
                   size={13}
                   color={webOn ? c.accentText : c.text3}
                 />
-                <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网搜索</Text>
+                <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网 · {webOn ? '开' : '关'}</Text>
               </Pressable>
             )}
             {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
@@ -2368,6 +1572,7 @@ export function AskScreen({
               onChangeText={setInput}
               placeholder={draft ? '说要改哪里，比如「第二段并进第一段」…' : '问点什么，或者让它整理…'}
               placeholderTextColor={c.text3}
+              selectionColor={c.selection}
               style={styles.input}
               multiline
               maxLength={500}
@@ -2376,7 +1581,7 @@ export function AskScreen({
             <Pressable
               onPress={() => void send()}
               // 范围有问题时按钮直接不可用：原因就写在上面的红字里
-              disabled={!input.trim() || busy || !!scopeProblem}
+              disabled={!canSend}
               style={[styles.send, canSend && styles.sendOn]}
               hitSlop={6}
             >
@@ -2588,10 +1793,10 @@ export function AskScreen({
               已经整理成碎片的副本不受影响。
             </Text>
             <View style={styles.dialogActions}>
-              <Pressable onPress={() => setDeleteSession(null)} hitSlop={8}>
+              <Pressable style={styles.controlButton} onPress={() => setDeleteSession(null)} hitSlop={8}>
                 <Text style={styles.muted}>取消</Text>
               </Pressable>
-              <Pressable onPress={confirmDeleteSession} disabled={working === 'delete'} hitSlop={8}>
+              <Pressable style={styles.controlButton} onPress={confirmDeleteSession} disabled={working === 'delete'} hitSlop={8}>
                 <Text style={styles.danger}>
                   {working === 'delete' ? '删除中…' : '删除'}
                 </Text>
@@ -2627,10 +1832,10 @@ export function AskScreen({
             reloadKey={docReload}
             onClose={() => setOpenDocId(null)}
             onChanged={() => setDocReload((n) => n + 1)}
-            onAsk={(ids) => {
+            onAsk={async (ids) => {
               setOpenDocId(null);
               // 文档问和碎片问是两条入口：换范围必须新开会话，别在旧会话上改契约
-              newSession();
+              if (!(await newSession())) return;
               setScope({ kind: 'documents', documentIds: ids });
             }}
           />
@@ -2641,34 +1846,45 @@ export function AskScreen({
       {draft && draftDoc && draftDocCurrent ? (
         <DraftDocPage
           doc={draftDocCurrent}
-          index={draftDoc.index}
+          key={draftDoc.key}
+          index={draft.docs.findIndex((d) => d.key === draftDoc.key)}
           total={draft.docs.length}
           initialMode={draftDoc.mode}
-          saved={savedDocs.some((d) => d.index === draftDoc.index)}
-          canWrite={allowDoc}
+          saved={savedDocs.some((d) => d.key === draftDoc.key)}
+          canWrite={allowDoc && draftDocCurrent.keep}
           problem={docProblem(draftDocCurrent)}
           saving={savingDraft}
-          onChange={(patch) => {
-            const at = draftDoc.index;
-            setDraft((prev) =>
-              prev
-                ? { ...prev, docs: prev.docs.map((d, i) => (i === at ? { ...d, ...patch } : d)) }
-                : prev,
-            );
-          }}
-          onApprove={() => void approveDraft(draftDoc.index)}
+          onChange={(patch) => setDraft({ ...draft, docs: draft.docs.map((d) => d.key === draftDoc.key ? { ...d, ...patch } : d) })}
+          onApprove={() => void approveDraft(draftDoc.key)}
           onClose={() => setDraftDoc(null)}
         />
       ) : null}
 
+      {discardConfirm ? (
+        <View style={styles.dialogOverlay}>
+          <View style={styles.dialog}>
+            <Text style={styles.dialogTitle}>放弃这份本地草稿？</Text>
+            <Text style={styles.dialogBody}>尚未写入的文档、待办和改稿记录会被移除。已经写入的文档、待办及原始碎片不受影响。</Text>
+            <View style={styles.dialogActions}>
+              <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(false)} disabled={savingDraft}><Text style={styles.muted}>保留</Text></Pressable>
+              <Pressable style={styles.controlButton} onPress={() => { void discardDraft().then((ok) => { if (ok) setDiscardConfirm(false); }); }} disabled={savingDraft}><Text style={styles.danger}>确认放弃</Text></Pressable>
+            </View>
+          </View>
+        </View>
+      ) : null}
       {cite ? <CitationSheet cite={cite} onClose={() => setCite(null)} /> : null}
       <Toast text={toast} bottom={keyboardHeight + 110} />
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
+  recovery: { padding: metrics.pagePadding, gap: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.cardRadius, backgroundColor: c.card, marginBottom: 16 },
+  recoveryTitle: { color: c.text, fontSize: 16, fontWeight: '600', lineHeight: 24 },
+  recoveryText: { color: c.text2, fontSize: 13, lineHeight: 21 },
+  recoveryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  controlButton: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' },
   /**
    * 「已在新对话中」的提示条。
    *
@@ -2680,12 +1896,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     top: 58,
     alignSelf: 'center',
     zIndex: 30,
-    backgroundColor: 'rgba(0,0,0,0.72)',
-    borderRadius: R.pill,
+    backgroundColor: c.accent,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 16,
     paddingVertical: 9,
   },
-  newHintText: { fontSize: 13, color: '#FFFFFF', fontWeight: '500' },
+  newHintText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
   content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 20 },
   /** 没内容时把「问点什么」放在可视区中间，而不是贴着顶部 */
   contentEmpty: { flexGrow: 1, justifyContent: 'center', paddingBottom: 90 },
@@ -2693,13 +1909,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   /* ---- 空态的三张提示框 ---- */
   hints: { alignSelf: 'stretch', gap: 10, marginTop: 22, paddingHorizontal: 4 },
   hint: {
+    minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },
@@ -2718,7 +1935,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginTop: 8,
     paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   scopeText: { flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 17, color: c.text2 },
@@ -2726,9 +1943,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     color: c.text3,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
-    borderRadius: R.pill,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 6,
     overflow: 'hidden',
   },
@@ -2750,7 +1967,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   qBubble: {
     maxWidth: '85%',
     backgroundColor: c.accentBg,
-    borderRadius: R.card,
+    borderRadius: metrics.cardRadius,
     paddingHorizontal: 13,
     paddingVertical: 9,
   },
@@ -2765,15 +1982,16 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   thinkingText: { fontSize: 13, color: c.text3 },
 
   srcBlock: { marginTop: 12, gap: 6 },
-  srcToggle: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  srcToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 5 },
   srcLabel: { fontSize: 11, color: c.text3 },
   srcRow: {
+    minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 10,
     paddingVertical: 9,
@@ -2792,6 +2010,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   webBlock: { marginTop: 10, gap: 4 },
   webTitle: { fontSize: 11, color: c.text3, letterSpacing: 0.3 },
   webRow: {
+    minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -2806,7 +2025,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   errText: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 10 },
 
   footer: {
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     backgroundColor: c.page,
     paddingTop: 8,
@@ -2819,7 +2038,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginBottom: 8,
     paddingHorizontal: 10,
     paddingVertical: 7,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accentBg,
   },
   contextText: { flex: 1, fontSize: 11.5, color: c.accentText },
@@ -2832,11 +2051,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingBottom: 8,
   },
   toggle: {
+    minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    borderRadius: R.pill,
-    borderWidth: 0.5,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -2854,8 +2074,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   input: {
@@ -2869,9 +2089,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
   send: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: metrics.controlHeight,
+    height: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: c.hairSoft,
@@ -2887,7 +2107,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#000000',
+    backgroundColor: c.scrim,
   },
   historyPage: {
     position: 'absolute',
@@ -2920,15 +2140,15 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     gap: 4,
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingLeft: 12,
     paddingRight: 6,
     paddingVertical: 9,
     marginBottom: 8,
   },
-  histMain: { flex: 1, paddingRight: 4 },
+  histMain: { minHeight: metrics.controlHeight, justifyContent: 'center', flex: 1, paddingRight: 4 },
   histTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   histTitle: { flexShrink: 1, fontSize: 13.5, color: c.text, fontWeight: '500' },
   histBadge: {
@@ -2936,7 +2156,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     lineHeight: 14,
     color: c.tealText,
     backgroundColor: c.tealBg,
-    borderRadius: R.pill,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 5,
     overflow: 'hidden',
   },
@@ -2957,8 +2177,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   sheet: {
     backgroundColor: c.card,
-    borderTopLeftRadius: 18,
-    borderTopRightRadius: 18,
+    borderTopLeftRadius: metrics.cardRadius,
+    borderTopRightRadius: metrics.cardRadius,
     paddingHorizontal: 18,
     paddingTop: 16,
     paddingBottom: 24,
@@ -2966,15 +2186,16 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sheetTitle: { fontSize: 14.5, color: c.text, fontWeight: '600' },
   sheetSub: { fontSize: 11, color: c.text3, marginTop: 3, marginBottom: 8 },
   sheetAction: {
+    minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   sheetActionText: { fontSize: 13.5, color: c.text },
-  sheetCancel: { paddingVertical: 11, alignItems: 'center', marginTop: 4 },
+  sheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 11, alignItems: 'center', marginTop: 4 },
   sheetCancelText: { fontSize: 13, color: c.text2 },
 
   /* ---- 删除确认 ---- */
@@ -2990,7 +2211,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   dialog: {
     backgroundColor: c.card,
-    borderRadius: R.card,
+    borderRadius: metrics.cardRadius,
     padding: 20,
     gap: 10,
   },
@@ -3044,23 +2265,25 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     paddingBottom: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
   ghostBtn: {
+    minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
     paddingVertical: 11,
-    borderRadius: R.btn,
-    borderWidth: 0.5,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   ghostBtnText: { fontSize: 13, color: c.text },
   solidBtn: {
+    minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
     paddingVertical: 11,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent,
   },
   solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },

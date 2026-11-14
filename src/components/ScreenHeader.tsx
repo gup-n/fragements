@@ -1,28 +1,17 @@
-/**
- * 子页面统一的顶部栏：左侧返回圆钮、中间标题（可带副标题）、右侧动作区。
- *
- * 以前四个子页面各自写了一遍「chevron-back + 一个 Text + 一个占位 View」，
- * 于是返回键大小不一样、标题有的左一点有的右一点、页面之间切换会看到跳动。
- * 收成一个组件之后，改一处就等于所有页面一起改。
- *
- * 首页（时间轴）不用它 —— 那里左边是品牌名而不是返回键。
- */
-import React from 'react';
+/** 子页面统一页头：48dp动作槽，左右动作等宽，长标题和大字体允许增高。 */
+import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useThemedStyles, type Palette } from '../theme';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { IconButton, type IoniconName } from './IconButton';
+import { useHeadingFocus } from './useHeadingFocus';
 
 interface Props {
   title: string;
-  /** 标题下方的小字，用来说明这一页是什么（如「3 个主题 · 12 张卡」） */
   subtitle?: string;
   onBack?: () => void;
   backIcon?: IoniconName;
-  /** 左侧按钮的无障碍说明。问页把它当「历史会话」用，不再是返回 */
   backLabel?: string;
-  /** 右侧动作区，通常是几个 IconButton */
   right?: React.ReactNode;
-  /** 底部细分隔线。内容会滚动时建议开，避免标题和列表黏在一起 */
   bordered?: boolean;
 }
 
@@ -35,50 +24,46 @@ export function ScreenHeader({
   right,
   bordered = true,
 }: Props) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { styles, metrics } = useThemedStyles(makeStyles);
+  const headingRef = useHeadingFocus(title);
+  const [rightWidth, setRightWidth] = useState(0);
+  const sideWidth = Math.max(metrics.controlHeight, rightWidth);
   return (
     <View style={[styles.wrap, bordered && styles.bordered]}>
-      <View style={styles.side}>
+      <View style={[styles.side, { width: sideWidth }]}>
         {onBack ? (
-          <IconButton
-            name={backIcon}
-            onPress={onBack}
-            size={22}
-            tone="soft"
-            accessibilityLabel={backLabel}
-          />
+          <IconButton name={backIcon} onPress={onBack} size={22} tone="soft" accessibilityLabel={backLabel} />
         ) : null}
       </View>
-
       <View style={styles.center}>
-        <Text style={styles.title} numberOfLines={1}>
-          {title}
-        </Text>
-        {subtitle ? (
-          <Text style={styles.sub} numberOfLines={1}>
-            {subtitle}
-          </Text>
-        ) : null}
+        <Text ref={headingRef} accessible style={styles.title} numberOfLines={2} accessibilityRole="header">{title}</Text>
+        {subtitle ? <Text style={styles.sub} numberOfLines={2}>{subtitle}</Text> : null}
       </View>
-
-      <View style={[styles.side, styles.sideRight]}>{right}</View>
+      <View style={[styles.side, { width: sideWidth }, styles.sideRight]}>
+        <View
+          style={styles.actions}
+          onLayout={(e) => {
+            const measured = Math.ceil(e.nativeEvent.layout.width);
+            setRightWidth((previous) => previous === measured ? previous : measured);
+          }}
+        >
+          {right}
+        </View>
+      </View>
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   wrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingTop: 6,
-    paddingBottom: 8,
-    backgroundColor: c.page,
+    flexDirection: 'row', alignItems: 'center', minHeight: 60,
+    paddingHorizontal: 12, paddingVertical: 6, backgroundColor: c.page,
   },
-  bordered: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
-  side: { minWidth: 40, justifyContent: 'center' },
-  sideRight: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 },
-  center: { flex: 1, alignItems: 'center', paddingHorizontal: 4 },
-  title: { fontSize: 16, color: c.text, fontWeight: '600', letterSpacing: 0.3 },
-  sub: { fontSize: 11, color: c.text3, marginTop: 1 },
+  bordered: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  side: { alignItems: 'flex-start', justifyContent: 'center' },
+  sideRight: { alignItems: 'flex-end' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 0 },
+  center: { flex: 1, minWidth: 0, alignItems: 'center', paddingHorizontal: 6 },
+  title: { fontSize: 17, lineHeight: 24, color: c.text, fontWeight: '600', textAlign: 'center' },
+  sub: { fontSize: 12, lineHeight: 18, color: c.text2, marginTop: 2, textAlign: 'center' },
 });

@@ -12,13 +12,14 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { IconButton } from './IconButton';
 import { DONE_TODO_KEEP } from '../types';
 import type { Todo } from '../types';
 import { repo } from '../db/repo';
 import { buildTodoTree, openChildCount, orphanTodos, type TodoNode } from '../util/todoTree';
 import { dayKey } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   todos: Todo[];
@@ -163,84 +164,41 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
     const { todo, children } = node;
     const due = dueLabel(todo.dueAt);
     const progress = openChildCount(node);
-    const on = picked.has(todo.id);
+    const selected = picked.has(todo.id);
     const folded = collapsed.has(todo.id);
-
     return (
       <View key={todo.id}>
         <View style={[styles.row, depth > 0 && styles.rowChild]}>
-          {selecting ? (
-            depth === 0 ? (
-              <Pressable
-                onPress={() => pick(todo.id)}
-                style={styles.checkHit}
-                hitSlop={6}
-                accessibilityLabel={on ? '取消选择' : '选中'}
-              >
-                <View style={[styles.checkBox, on && styles.checkBoxOn]}>
-                  {on ? <Ionicons name="checkmark" size={12} color={c.onAccent} /> : null}
-                </View>
-              </Pressable>
-            ) : (
-              // 子项不参与合并：并进另一条之后 parentId 指向谁没有意义，
-              // 而且「把 3 个不同的子项合成一条」本身就不是用户想要的
-              <View style={styles.checkHit} />
-            )
-          ) : (
+          {selecting && depth > 0 ? <View style={styles.checkHit} /> : (
             <Pressable
-              onPress={() => toggle(todo)}
-              style={styles.checkHit}
-              hitSlop={6}
-              accessibilityLabel={todo.done ? '标记为未完成' : '标记为完成'}
+              onPress={() => selecting ? pick(todo.id) : void toggle(todo)}
+              style={[styles.checkHit, styles.touchTarget]}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`${selecting ? '合并选择' : '完成状态'}：${todo.text}`}
+              accessibilityState={{ checked: selecting ? selected : todo.done }}
             >
-              <Ionicons
-                name={todo.done ? 'checkmark-circle' : 'ellipse-outline'}
-                size={20}
-                color={todo.done ? c.accent : c.text3}
-              />
+              <Ionicons name={(selecting ? selected : todo.done) ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={(selecting ? selected : todo.done) ? c.accent : c.text2} />
             </Pressable>
           )}
-
           <Pressable
-            style={styles.main}
-            onPress={() => (selecting ? pick(todo.id) : onOpenEditor(todo, null))}
+            style={[styles.main, styles.touchTarget]}
+            onPress={() => selecting ? pick(todo.id) : onOpenEditor(todo, null)}
             disabled={selecting && depth > 0}
+            accessibilityRole="button"
+            accessibilityLabel={`${selecting ? '选择' : '编辑待办'}：${todo.text}`}
+            accessibilityState={{ disabled: selecting && depth > 0 }}
           >
-            <Text style={[styles.text, todo.done && styles.doneText]}>{todo.text}</Text>            {progress.total > 0 ? (
-              <Text style={styles.progress}>
-                {progress.total - progress.open} / {progress.total} 项
-              </Text>
-            ) : null}
+            <Text style={[styles.text, todo.done && styles.doneText]}>{todo.text}</Text>
+            {progress.total > 0 ? <Text style={styles.progress}>{progress.total - progress.open} / {progress.total} 个步骤</Text> : null}
+            {due ? <Text style={[styles.due, due.overdue && !todo.done && styles.dueOverdue]}>{due.overdue && !todo.done ? '已逾期 · ' : '到期 · '}{due.text}</Text> : null}
           </Pressable>
-
-          {due ? (
-            <Text style={[styles.due, due.overdue && !todo.done && styles.dueOverdue]}>
-              {due.text}
-            </Text>
-          ) : null}
-
           {progress.total > 0 && !selecting ? (
-            <Pressable onPress={() => toggleCollapse(todo.id)} hitSlop={8} style={styles.iconHit}>
-              <Ionicons
-                name={folded ? 'chevron-down' : 'chevron-up'}
-                size={14}
-                color={c.text3}
-              />
-            </Pressable>
+            <IconButton name={folded ? 'chevron-down' : 'chevron-up'} size={18} onPress={() => toggleCollapse(todo.id)} accessibilityLabel={`${folded ? '展开' : '收起'}步骤：${todo.text}`} accessibilityState={{ expanded: !folded }} />
           ) : null}
-
           {!selecting && depth === 0 && !todo.done ? (
-            <Pressable
-              onPress={() => onOpenEditor(null, todo.id)}
-              hitSlop={8}
-              style={styles.iconHit}
-              accessibilityLabel="加一条子项"
-            >
-              <Ionicons name="add" size={17} color={c.text3} />
-            </Pressable>
+            <IconButton name="add" size={20} onPress={() => onOpenEditor(null, todo.id)} accessibilityLabel={`添加子项：${todo.text}`} />
           ) : null}
         </View>
-
         {!folded ? children.map((child) => renderRow({ todo: child, children: [] }, depth + 1)) : null}
       </View>
     );
@@ -248,7 +206,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView importantForAccessibility={mergeOpen ? "no-hide-descendants" : "auto"} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {todos.length === 0 ? (
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>还没有待办</Text>
@@ -256,24 +214,25 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
               整理时 AI 会把「有明确动作」的碎片挑出来，{'\n'}
               也可以点下面的「新建」自己写一条。
             </Text>
+            <Pressable style={[[styles.toolBtn, { marginTop: 16 }], styles.touchTarget]} onPress={() => onOpenEditor(null, null)} accessibilityRole="button"><Ionicons name="add" size={18} color={c.accentText} /><Text style={styles.toolText}>新建待办</Text></Pressable>
           </View>
         ) : (
           <>
             <View style={styles.toolbar}>
               <Pressable
-                style={({ pressed }) => [styles.toolBtn, pressed && { backgroundColor: c.hairSoft }]}
+                style={({ pressed }) => [[styles.toolBtn, pressed && { backgroundColor: c.hairSoft }], styles.touchTarget]}
                 onPress={() => onOpenEditor(null, null)}
               >
                 <Ionicons name="add" size={15} color={c.accentText} />
                 <Text style={styles.toolText}>新建</Text>
               </Pressable>
               <Pressable
-                style={({ pressed }) => [
+                style={({ pressed }) => [[
                   styles.toolBtn,
                   selecting && styles.toolBtnOn,
                   pressed && { backgroundColor: c.hairSoft },
-                ]}
-                onPress={() => setSelecting((v) => !v)}
+                ], styles.touchTarget]}
+                onPress={() => setSelecting((v) => !v)} accessibilityRole="button" accessibilityState={{ selected: selecting }}
               >
                 <Ionicons name="git-merge-outline" size={15} color={c.accentText} />
                 <Text style={styles.toolText}>{selecting ? '完成' : '合并'}</Text>
@@ -303,7 +262,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
 
             {merged.length > 0 ? (
               <>
-                <Pressable style={styles.mergedBar} onPress={() => setShowMerged((v) => !v)}>
+                <Pressable style={[styles.mergedBar, styles.touchTarget]} onPress={() => setShowMerged((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showMerged }}>
                   <Ionicons name="git-merge-outline" size={16} color={c.text3} />
                   <Text style={styles.mergedLabel}>已合并 {merged.length} 条</Text>
                   <Ionicons
@@ -320,7 +279,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
                         style={[styles.row, i === merged.length - 1 && styles.rowLast]}
                       >
                         <Text style={styles.mergedText}>{item.text}</Text>
-                        <Pressable onPress={() => unmerge(item)} hitSlop={10}>
+                        <Pressable onPress={() => void unmerge(item)} style={[styles.toolBtn, styles.touchTarget]} accessibilityRole="button" accessibilityLabel={`恢复待办：${item.text}`}>
                           <Text style={styles.mergedUndo}>恢复</Text>
                         </Pressable>
                       </View>
@@ -330,7 +289,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
               </>
             ) : null}
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
           </>
         )}
       </ScrollView>
@@ -345,7 +304,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
             {picked.size > 0 ? `已选 ${picked.size} 条` : '还没选'}
           </Text>
           <Pressable
-            style={[styles.mergeBtn, picked.size < 2 && styles.btnDisabled]}
+            accessibilityRole="button" accessibilityState={{ disabled: picked.size < 2 }} style={[[styles.mergeBtn, picked.size < 2 && styles.btnDisabled], styles.touchTarget]}
             onPress={openMerge}
             disabled={picked.size < 2}
           >
@@ -355,8 +314,8 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
       ) : null}
 
       {mergeOpen ? (
-        <View style={styles.sheet}>
-          <Pressable style={styles.backdrop} onPress={() => setMergeOpen(false)} />
+        <View style={styles.sheet} accessibilityViewIsModal>
+          <Pressable style={[styles.backdrop, styles.touchTarget]} onPress={() => setMergeOpen(false)} />
           <View style={[styles.sheetCard, { marginBottom: keyboardHeight }]}>
             <Text style={styles.sheetTitle}>合并后的待办</Text>
             <Text style={styles.sheetHint}>
@@ -375,17 +334,17 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
               autoFocus
               maxLength={200}
             />
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
             <View style={styles.sheetFooter}>
               <Pressable
-                style={styles.ghostBtn}
+                style={[styles.ghostBtn, styles.touchTarget]}
                 onPress={() => setMergeOpen(false)}
                 disabled={busy}
               >
                 <Text style={styles.ghostText}>返回</Text>
               </Pressable>
               <Pressable
-                style={[styles.primaryBtn, busy && styles.btnDisabled]}
+                style={[[styles.primaryBtn, busy && styles.btnDisabled], styles.touchTarget]}
                 onPress={confirmMerge}
                 disabled={busy}
               >
@@ -399,12 +358,13 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { flex: 1 },
   content: { paddingHorizontal: 16, paddingBottom: 40 },
 
   toolbar: { flexDirection: 'row', gap: 8, paddingTop: 2, paddingBottom: 10 },
-  toolBtn: {
+  toolBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
@@ -415,7 +375,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   toolBtnOn: { backgroundColor: c.hairSoft },
   toolText: { fontSize: 12.5, color: c.accentText, fontWeight: '500' },
-  selectHint: { fontSize: 11.5, color: c.text3, lineHeight: 18, marginBottom: 10 },
+  selectHint: { fontSize: 12, color: c.text3, lineHeight: 18, marginBottom: 10 },
 
   empty: { alignItems: 'center', paddingTop: 80 },
   emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
@@ -423,8 +383,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 
   group: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     overflow: 'hidden',
   },
@@ -434,13 +394,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   /** 子项往里缩，且没有独立卡片边框 —— 否则看着像另一条顶层待办 */
-  rowChild: { paddingLeft: 34, paddingVertical: 10, backgroundColor: c.hairSoft },
+  rowChild: { paddingLeft: 24, paddingVertical: 10, backgroundColor: c.hairSoft },
   rowLast: { borderBottomWidth: 0 },
-  checkHit: { width: 26, alignItems: 'center' },
+  checkHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: 48, alignItems: 'center', justifyContent: 'center' },
   checkBox: {
     width: 18,
     height: 18,
@@ -451,13 +411,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'center',
   },
   checkBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
-  main: { flex: 1, paddingVertical: 2 },
+  main: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 2 },
   text: { fontSize: 14, lineHeight: 21, color: c.text },
   doneText: { color: c.text3, textDecorationLine: 'line-through' },
-  progress: { fontSize: 11, color: c.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
-  due: { fontSize: 11, color: c.text3 },
+  progress: { fontSize: 12, color: c.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
+  due: { fontSize: 12, color: c.text3 },
   dueOverdue: { color: c.danger },
-  iconHit: { width: 22, alignItems: 'center' },
+  iconHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: 22, alignItems: 'center' },
 
   hint: { fontSize: 12, color: c.text3, marginTop: 18, marginBottom: 8 },
   allDone: { fontSize: 12.5, color: c.text3, paddingVertical: 14, textAlign: 'center' },
@@ -482,14 +442,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 12,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
   selectCount: { flex: 1, fontSize: 13, color: c.text2 },
-  mergeBtn: {
+  mergeBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 22,
     paddingVertical: 10,
     alignItems: 'center',
@@ -507,18 +467,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   sheetCard: {
     backgroundColor: c.page,
-    borderTopLeftRadius: R.card + 4,
-    borderTopRightRadius: R.card + 4,
+    borderTopLeftRadius: metrics.cardRadius + 4,
+    borderTopRightRadius: metrics.cardRadius + 4,
     paddingHorizontal: 16,
     paddingTop: 18,
     paddingBottom: 16,
   },
   sheetTitle: { fontSize: 14.5, color: c.text, fontWeight: '600' },
-  sheetHint: { fontSize: 11.5, color: c.text3, lineHeight: 18, marginTop: 6, marginBottom: 12 },
+  sheetHint: { fontSize: 12, color: c.text3, lineHeight: 18, marginTop: 6, marginBottom: 12 },
   input: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -529,20 +489,20 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   sheetFooter: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 14 },
 
-  primaryBtn: {
+  primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 22,
     paddingVertical: 11,
     minWidth: 100,
     alignItems: 'center',
   },
   primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: {
-    borderRadius: R.btn,
+  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 16,
     paddingVertical: 11,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },

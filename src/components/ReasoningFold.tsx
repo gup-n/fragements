@@ -12,7 +12,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   text: string;
@@ -29,9 +29,9 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
   return (
     <View style={styles.wrap}>
       <Pressable
-        style={styles.head}
+        style={[styles.head, styles.touchTarget]}
         onPress={() => setOpen((v) => !v)}
-        accessibilityRole="button"
+        accessibilityRole="button" accessibilityState={{ expanded: open }}
         accessibilityLabel={open ? '收起深度思考' : '展开深度思考'}
       >
         <Ionicons name="bulb-outline" size={14} color={c.text3} />
@@ -57,17 +57,18 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   wrap: {
     marginTop: 2,
     marginBottom: 10,
     backgroundColor: c.hairSoft,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     overflow: 'hidden',
   },
-  head: {
+  head: { minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -75,7 +76,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingVertical: 8,
   },
   title: { fontSize: 12, color: c.text2, fontWeight: '500' },
-  meta: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
+  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
   flex: { flex: 1 },
   body: { maxHeight: 280 },
   bodyContent: { paddingHorizontal: 11, paddingBottom: 11 },

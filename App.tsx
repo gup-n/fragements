@@ -2,16 +2,18 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Platform, StyleSheet, useColorScheme, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import type { Fragment, Note } from './src/types';
+import type { Fragment, Note, PendingFragmentImage } from './src/types';
 import { checkForUpdate, getAutoCheck, setSkipVersion, type ReleaseInfo } from './src/update/check';
 import { UpdateSheet } from './src/components/UpdateSheet';
 import {
   normalizeThemeMode,
+  normalizeThemeStyle,
   ThemeProvider,
   useTheme,
   useThemedStyles,
   type Palette,
   type ThemeMode,
+  type ThemeStyle,
 } from './src/theme';
 import { repo } from './src/db/repo';
 import { TimelineScreen } from './src/screens/TimelineScreen';
@@ -21,9 +23,8 @@ import { AskScreen } from './src/screens/AskScreen';
 import { DocsScreen } from './src/screens/DocsScreen';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
-import { dayKey } from './src/util/date';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
-import { resolvePendingTokens } from './src/util/inlineImages';
+import { Toast } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 
@@ -43,6 +44,10 @@ const K_THEME = 'ui_theme';
 export default function App() {
   const system = useColorScheme();
   const [mode, setMode] = useState<ThemeMode>('system');
+  const [style, setStyle] = useState<ThemeStyle>('default');
+  const [preferenceErrors, setPreferenceErrors] = useState<Record<string, string>>({});
+  const preferenceQueue = useRef<Promise<void>>(Promise.resolve());
+  const preferenceVersions = useRef<Record<string, number>>({});
   const [booted, setBooted] = useState(false);
 
   useEffect(() => {
@@ -50,6 +55,7 @@ export default function App() {
       try {
         await repo.init();
         setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
+        setStyle(normalizeThemeStyle(await repo.getSetting('ui_style')));
         /*
          * 文档任务服务必须在库就绪之后启动：它启动时要扫一遍
          * `state = 'parsing'` 但没有对应任务的记录，把它们标成「上次没跑完」。
@@ -64,15 +70,38 @@ export default function App() {
     })();
   }, []);
 
+  const persistPreference = useCallback((key: string, value: string) => {
+    const version = (preferenceVersions.current[key] ?? 0) + 1;
+    preferenceVersions.current[key] = version;
+    setPreferenceErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
+    preferenceQueue.current = preferenceQueue.current.then(async () => {
+      try {
+        await repo.setSetting(key, value);
+        if (preferenceVersions.current[key] === version) {
+          setPreferenceErrors((previous) => { const next = { ...previous }; delete next[key]; return next; });
+        }
+      } catch {
+        if (preferenceVersions.current[key] === version) {
+          setPreferenceErrors((previous) => ({ ...previous, [key]: key === K_THEME ? '明暗模式' : '界面风格' }));
+        }
+      }
+    });
+  }, []);
   const changeMode = useCallback((next: ThemeMode) => {
     setMode(next);
-    // 存盘失败不拦着切换：这次会话照常用新外观，下次启动退回跟随系统
-    repo.setSetting(K_THEME, next).catch(() => {});
-  }, []);
+    persistPreference(K_THEME, next);
+  }, [persistPreference]);
+  const changeStyle = useCallback((next: ThemeStyle) => {
+    setStyle(next);
+    persistPreference('ui_style', next);
+  }, [persistPreference]);
+  const saveError = Object.keys(preferenceErrors).length
+    ? `本次外观已应用，但${Object.values(preferenceErrors).join('、')}未能保存；请重试选择`
+    : null;
 
   return (
     <SafeAreaProvider>
-      <ThemeProvider mode={mode} systemDark={system === 'dark'} onChangeMode={changeMode}>
+      <ThemeProvider mode={mode} style={style} systemDark={system === 'dark'} onChangeMode={changeMode} onChangeStyle={changeStyle} saveError={saveError}>
         <Shell booted={booted} />
       </ThemeProvider>
     </SafeAreaProvider>
@@ -99,6 +128,9 @@ function Shell({ booted }: { booted: boolean }) {
    * 打了半句去翻一张卡，回来输入框是空的 —— 这不是「没保存」，是根本没留住。
    */
   const [draft, setDraft] = useState('');
+  const [pendingImages, setPendingImages] = useState<PendingFragmentImage[]>([]);
+  const pendingImageSequence = useRef(0);
+  const nextImageKey = useCallback(() => `p${++pendingImageSequence.current}`, []);
   /**
    * 从时间轴右滑一条碎片进「问」时，带上的那条碎片 id。
    * 从页头聊天按钮进来时是 null —— 两种入口共用同一个页面，但上下文不一样。
@@ -148,6 +180,12 @@ function Shell({ booted }: { booted: boolean }) {
   const [imageBusy, setImageBusy] = useState<Set<number>>(new Set());
   /** 图解析失败的原因（配图 id → 一句人话）。行上要能点重试，不能只在日志里 */
   const [imageFail, setImageFail] = useState<Record<number, string>>({});
+  const [writeNotice, setWriteNotice] = useState('');
+  useEffect(() => {
+    if (!writeNotice) return;
+    const timer = setTimeout(() => setWriteNotice(''), 5500);
+    return () => clearTimeout(timer);
+  }, [writeNotice]);
 
   /*
    * 启动 3 秒后查一次新版本。
@@ -176,12 +214,15 @@ function Shell({ booted }: { booted: boolean }) {
     };
   }, []);
 
+  const reloadGeneration = useRef(0);
   const reload = useCallback(async () => {
+    const generation = ++reloadGeneration.current;
     const [list, noteList, done] = await Promise.all([
-      repo.listFragments(),
+      repo.listAllFragments(),
       repo.listNotes(120),
       repo.listDoneTodoSourceIds(),
     ]);
+    if (reloadGeneration.current !== generation) return;
     setFragments(list);
     setNotes(noteList);
     setDoneIds(new Set(done));
@@ -276,55 +317,28 @@ function Shell({ booted }: { booted: boolean }) {
   );
 
   const handleAdd = useCallback(
-    async (text: string, images?: { key: string; uri: string }[]) => {
-      if (images?.length) {
-        /*
-         * 配图：先落盘再插库。文件存成了但插库失败，会留下一批没人引用的图 ——
-         * 比起「记录里有条指向空文件的碎片」，前者只是浪费几百 KB。
-         * 反过来（先插库后落盘）会让那条碎片永远缺图，而它看起来是完整的。
-         */
-        const paths: string[] = [];
-        try {
-          for (const img of images) paths.push(await saveFragmentImage(img.uri));
-          const id = await repo.insertFragment(
-            text,
-            'app',
-            undefined,
-            paths.map((path) => ({ path })),
-          );
-          /*
-           * 长文里插过的图是 `![](img:p1)` 这种**待发标记**（那时还不知道库里的 id）。
-           * 现在图已经入库，把标记换成真 id —— 换不了就会在正文里留一行看不懂的东西。
-           */
-          const inserted = await repo.findFragmentsByIds([id]);
-          const rows = inserted[0]?.images ?? [];
-          const resolved = resolvePendingTokens(
-            text,
-            images.map((img, i) => ({ key: img.key, imageId: rows[i]?.id ?? 0 })),
-          );
-          if (resolved !== text) await repo.updateFragmentContent(id, resolved);
-          /*
-           * 不在这里读图。图已经落盘、已进库、时间轴上马上就能看到 ——
-           * 读字留到「什么时候要用」：整理或提问之前由 `ai/imageReads.ts` 统一做。
-           * 这里多等的几秒曾经是用户看到的第一件事，而它什么也没换来。
-           */
-          await reload();
-        } catch (e) {
-          for (const path of paths) await removeFragmentImage(path);
-          throw e;
-        }
-      } else {
-        await repo.insertFragment(text, 'app');
-        await reload();
+    async (text: string, images?: PendingFragmentImage[]): Promise<void | string> => {
+      const paths: string[] = [];
+      try {
+        for (const image of images ?? []) paths.push(await saveFragmentImage(image.uri));
+        await repo.insertFragment(text, 'app', undefined,
+          (images ?? []).map((image, i) => ({ path: paths[i], key: image.key })));
+      } catch (error) {
+        // The Repo promises that a rejection means its transaction did not commit.
+        for (const path of paths) await removeFragmentImage(path);
+        throw error;
       }
+      // Files are now owned by committed image rows. Refresh is NOT a rollback boundary.
+      let notice: string | undefined;
+      try { await reload(); }
+      catch { notice = '记录已保存，列表暂未刷新；请重新进入时间轴，不要重复发布'; }
       if (!isWeb) {
         try {
           const Haptics = require('expo-haptics');
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        } catch {
-          /* 震动失败不影响记录 */
-        }
+          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+        } catch { /* Haptics cannot invalidate a saved record. */ }
       }
+      return notice;
     },
     [reload],
   );
@@ -336,20 +350,19 @@ function Shell({ booted }: { booted: boolean }) {
    */
   const handleAddImages = useCallback(
     async (fragmentId: number, uris: string[]) => {
-      const added: { id: number; path: string }[] = [];
-      for (const uri of uris) {
-        const path = await saveFragmentImage(uri);
-        let imageId = 0;
-        try {
-          imageId = await repo.insertFragmentImage(fragmentId, path);
-        } catch (e) {
-          // 图行没写进去，这张文件就没人引用了，立刻清掉
-          await removeFragmentImage(path);
-          throw e;
-        }
-        if (imageId) added.push({ id: imageId, path });
+      const paths: string[] = [];
+      let added: import('./src/types').FragmentImage[];
+      try {
+        for (const uri of uris) paths.push(await saveFragmentImage(uri));
+        added = await repo.insertFragmentImages(fragmentId, paths.map((path) => ({ path })));
+      } catch (error) {
+        for (const path of paths) await removeFragmentImage(path);
+        throw error;
       }
-      await reload();
+      setFragments((previous) => previous.map((fragment) => fragment.id === fragmentId
+        ? { ...fragment, images: [...fragment.images, ...added] } : fragment));
+      try { await reload(); }
+      catch { setWriteNotice('图片已保存，列表暂未刷新；请重新进入这条记录'); }
       return added;
     },
     [reload],
@@ -401,62 +414,6 @@ function Shell({ booted }: { booted: boolean }) {
     [reload],
   );
 
-  /** 仅浏览器预览使用：写入一批带历史时间的示例碎片，方便看真实排版 */
-  const handleSeed = useCallback(async () => {
-    const now = Date.now();
-    const min = 60 * 1000;
-    const samples: [number, string][] = [
-      [14 * min, '财务说要补一张 9 月的报销单，明天上午弄完'],
-      [2 * 60 * min + 10 * min, '老张说 NAS 4 号盘有异响，可能是轴承'],
-      [3 * 60 * min + 40 * min, '明天带 U 盘给小李，装系统用的'],
-      [6 * 60 * min + 5 * min, '办公室空调漏水，报修单还没提'],
-      [26 * 60 * min, '群晖的配置备份一直没做，得写个脚本定时跑'],
-      [28 * 60 * min + 20 * min, '客户那台笔记本开机蓝屏，怀疑内存条'],
-      [31 * 60 * min, '想起上周答应给行政做一批 U 盘启动盘'],
-      [
-        40 * 60 * min,
-        '今天换 NAS 那块盘算是搞明白了一件事：RAID5 降级后先别急着拔盘，得先确认哪一块是热备、哪一块是真正故障的。热备会自动顶上开始重建，这时候拔错盘直接阵列报废。正确顺序是先看存储池状态确认降级位置，等重建跑完再换新盘。另外新盘插进去之前一定要先跑一次 SMART 长检，别拿一块本身有问题的盘去重建。',
-      ],
-      [50 * 60 * min, '2.5 寸螺丝刀丢了一把，买新的'],
-      [52 * 60 * min + 30 * min, 'Ventoy 更新了，回头升级 U 盘'],
-      [55 * 60 * min, '想给家里 NAS 加个远程访问，Tailscale 还是 RustDesk'],
-    ];
-    const ids: number[] = [];
-    for (const [offset, text] of samples) {
-      ids.push(await repo.insertFragment(text, 'app', now - offset));
-    }
-
-    // 给几条打上标签：真机上标签是整理时 AI 打的，但 Web 预览不会跑 AI，
-    // 不打标签的话「点标签筛选」这个功能在预览里根本没法试
-    const seedTags: [number, string[], string | null][] = [
-      [0, ['财务', '待办'], '报销'],
-      [1, ['设备', 'NAS'], 'NAS 维护'],
-      [4, ['NAS', '备份'], 'NAS 维护'],
-      [6, ['工具', '装机'], '装机'],
-      [7, ['坑', 'NAS'], 'NAS 维护'],
-      [9, ['工具', '装机'], '装机'],
-      [10, ['网络', '方案'], null],
-    ];
-    for (const [i, labels, project] of seedTags) {
-      if (ids[i] !== undefined) await repo.applyTags(ids[i], labels, project);
-    }
-
-    // 顺带造一条当天小结：否则详情页底部「当天小结」那块在预览里永远是空的
-    await repo.upsertNote({
-      type: 'daily',
-      title: null,
-      period: dayKey(now),
-      bodyMd: [
-        '## 今天主要花在三件事上',
-        '',
-        '- NAS 换盘：确认了 RAID5 降级后先看存储池状态，别急着拔盘',
-        '- 一批启动盘还欠着行政，得排个时间',
-        '- 报销单明天上午补完',
-      ].join('\n'),
-    });
-
-    await reload();
-  }, [reload]);
 
   return (
     <>
@@ -484,6 +441,9 @@ function Shell({ booted }: { booted: boolean }) {
                   doneIds={doneIds}
                   draft={draft}
                   onDraftChange={setDraft}
+                  pendingImages={pendingImages}
+                  onPendingImagesChange={setPendingImages}
+                  nextImageKey={nextImageKey}
                   onAdd={handleAdd}
                   imageBusy={imageBusy}
                   imageFail={imageFail}
@@ -503,7 +463,6 @@ function Shell({ booted }: { booted: boolean }) {
                   }}
                   onOpenReview={() => setRoute('review')}
                   onOpenDocs={() => setRoute('docs')}
-                  onSeed={isWeb ? handleSeed : undefined}
                 />
               )}
               {route === 'settings' && (
@@ -558,6 +517,7 @@ function Shell({ booted }: { booted: boolean }) {
                   }}
                 />
               ) : null}
+              <Toast text={writeNotice} />
             </SafeAreaView>
           ) : (
             <View style={styles.splash} />

@@ -1,65 +1,19 @@
-/**
- * 整理的过程与产出，落在对话流里，可以直接改。
- *
- * v0.17 按用户的反馈重做，三处与上一版的差别：
- *
- * 1. **过程看得见**。上一版只显示「已收到 1200 字」，然后一整篇正文直接落屏。
- *    现在有步骤日志（读了什么、拆出几个主题、正在写哪一篇）和可展开的思考过程 ——
- *    和 agent 干活时一样，用户能判断它是不是跑偏了、要不要打断。
- * 2. **产出是「几篇文档」而不是「一大坨正文」**。一次整理可能拆出 1~4 篇，
- *    每篇一张卡：标题、字数、一句话摘要，点开才展开正文。
- *    用户要的是「产出 2 篇，先看这篇」，不是往下滚三千字。
- * 3. **每篇能单独加入文档库**。原来只有「通过并写入」一刀切，
- *    某一篇写得不好就只能整批放弃 —— 而那意味着另外两篇也得重跑。
- *
- * 三个不能省的约束：
- * - **写入前必须有权限位**：这张卡会往文档区和待办里写东西，而它对用户来说只是
- *   "整理一下"。所以写入按钮旁边两行开关，默认开着也要看得见、关得掉。
- * - **预览走真正的渲染器**：用 `NoteBody` 渲染，和读文档时同一套 ——
- *   用等宽文本框预览，表格是对不齐的，而表格恰恰最容易写坏。
- * - **报错不省略**：错误卡带「查看详情」，里面是服务端/模型的原话。
- */
-import React from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+/** 聊天中的整理产出：所有篇可审阅，权限/数量/写入共用一个稳定 key 计划。 */
+import React, { useState } from 'react';
+import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../theme';
-import type { AiErrorDetail } from '../ai/chat';
-import { NoteBody } from './NoteBody';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { BusyIndicator } from './BusyIndicator';
 import { AgentError } from './AgentError';
 import { ReasoningFold } from './ReasoningFold';
-import {
-  countTodos,
-  docProblem,
-  keptDocs,
-  keptTodos,
-  todoShape,
-  type DraftDoc,
-  type KnowledgeDraft,
-} from '../util/knowledgeDoc';
+import type { AiErrorDetail } from '../ai/chat';
+import type { DraftCommitReceipt } from '../db/types';
+import { docProblem, type KnowledgeDraft } from '../util/knowledgeDoc';
+import { selectDraftTargets, type KeyedDraft, type WorkStep } from '../organize/workspace';
 
-/** 过程日志的一行。「正在写…」用 running，跑完了改成 done */
-export interface AgentStep {
-  text: string;
-  state: 'done' | 'running' | 'fail';
-}
-
-export interface SavedDoc {
-  /** 草稿里那篇的下标。写入后要把它标成「已加入」，不是整批 */
-  index: number;
-  id: number;
-  name: string;
-}
-
+export type AgentStep = WorkStep;
 interface Props {
-  draft: KnowledgeDraft;
+  draft: KeyedDraft;
   onChange: (next: KnowledgeDraft) => void;
   busy: boolean;
   received: number;
@@ -67,7 +21,6 @@ interface Props {
   reasoning: string;
   error: { message: string; code?: string; detail?: AiErrorDetail } | null;
   onRetry: () => void;
-  /** 材料说明：读了多少条、有没有截断 */
   note: string;
   steps: AgentStep[];
   allowDoc: boolean;
@@ -75,495 +28,186 @@ interface Props {
   onAllowDoc: (v: boolean) => void;
   onAllowTodos: (v: boolean) => void;
   saving: boolean;
-  saved: SavedDoc[];
+  receipt: DraftCommitReceipt;
   onOpenDoc: (id: number) => void;
-  /** 打开整页查看/编辑某一篇。卡片本身不再就地展开 —— 那会把对话滚到底 */
-  onOpenDraft: (index: number, mode: 'read' | 'edit') => void;
-  /** 还有多少条碎片没进这一轮（「全部整理」被单轮上限截断时） */
+  onOpenDraft: (key: string, mode: 'read' | 'edit') => void;
   leftover: number;
   onContinueAll: () => void;
-  /** index 为 null 表示写入全部；否则只写那一篇 */
-  onApprove: (index: number | null) => void;
+  onApprove: (key: string | null) => void;
   onDiscard: () => void;
 }
 
-/** 正文字数。空格和换行不算，和文档页「N 字」的口径一致 */
-function charsOf(text: string): number {
-  return text.replace(/\s/g, '').length;
-}
-
 export function KnowledgeDraftCard({
-  draft,
-  onChange,
-  busy,
-  received,
-  elapsed,
-  reasoning,
-  error,
-  onRetry,
-  note,
-  steps,
-  allowDoc,
-  allowTodos,
-  onAllowDoc,
-  onAllowTodos,
-  saving,
-  saved,
-  onOpenDoc,
-  onOpenDraft,
-  leftover,
-  onContinueAll,
-  onApprove,
-  onDiscard,
+  draft, onChange, busy, received, elapsed, reasoning, error, onRetry, note, steps,
+  allowDoc, allowTodos, onAllowDoc, onAllowTodos, saving, receipt, onOpenDoc,
+  onOpenDraft, leftover, onContinueAll, onApprove, onDiscard,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
-
-  const todos = keptTodos(draft);
-  const docs = draft.docs;
-  /** 卡片上最多列 8 篇：再多就该分几次整理了，一屏几十张卡反而找不到 */
-  const shownDocs = docs.slice(0, 8);
-  const docCardsHidden = docs.length - shownDocs.length;
-  const shape = todoShape(draft);
-  const isTodosOnly = draft.mode === 'todos';
-  const savedMap = new Map(saved.map((s) => [s.index, s]));
-
-  const patchDoc = (index: number, patch: Partial<DraftDoc>) => {
-    onChange({ ...draft, docs: draft.docs.map((d, i) => (i === index ? { ...d, ...patch } : d)) });
-  };
-  const patchTodo = (index: number, patch: Partial<(typeof draft.todos)[number]>) => {
-    onChange({ ...draft, todos: draft.todos.map((t, i) => (i === index ? { ...t, ...patch } : t)) });
-  };
-  const patchChild = (ti: number, ci: number, keep: boolean) => {
-    onChange({
-      ...draft,
-      todos: draft.todos.map((t, i) =>
-        i === ti
-          ? { ...t, children: t.children.map((ch, j) => (j === ci ? { ...ch, keep } : ch)) }
-          : t,
-      ),
-    });
-  };
-
-  /**
-   * 卡片标题。三种状态各说一句话：
-   * 跑着、跑完有产出、跑完没产出。没有第四种。
-   */
-  const headTitle = busy
-    ? draft.mode === 'todos'
-      ? '正在整理待办'
-      : '正在整理'
-    : isTodosOnly
-      ? `抽出 ${countTodos(draft)} 条待办`
-      : docs.length
-        ? `产出 ${docs.length} 篇文档${countTodos(draft) ? ` · ${countTodos(draft)} 条待办` : ''}`
-        : '这次没有可沉淀的内容';
-
-  const doneCount = saved.length;
-  /**
-   * 这一下会写进去什么。
-   *
-   * 按钮原来固定写「全部加入文档库」，可权限位关掉之后它实际只写待办 ——
-   * 用户点了「加入文档库」，结果待办多了一堆、文档区什么也没有（v0.18.1 报的）。
-   * 所以文案必须由**实际会写的东西**算出来，不是由模式和篇数猜。
-   */
-  const pendingDocs = isTodosOnly ? 0 : Math.max(0, keptDocs(draft).length - saved.length);
-  const pendingTodos = allowTodos ? todos.length : 0;
-  const writable = pendingDocs > 0 || pendingTodos > 0;
-
-  const writeLabel = saving
-    ? '写入中…'
-    : doneCount && !pendingDocs && !pendingTodos
-      ? '全部已完成'
-      : pendingDocs && pendingTodos
-        ? `写入 ${pendingDocs} 篇文档 + ${pendingTodos} 条待办`
-        : pendingDocs
-          ? `全部加入文档库（${pendingDocs} 篇）`
-          : pendingTodos
-            ? `写入 ${pendingTodos} 条待办`
-            : '没有可写入的内容';
+  const [showSteps, setShowSteps] = useState(false);
+  const locked = busy || saving;
+  const plan = selectDraftTargets(draft, receipt, allowDoc, allowTodos);
+  const savedDocs = new Map(receipt.documents.map((d) => [d.key, d]));
+  const savedTodos = new Set(receipt.todos.map((t) => t.key));
+  const todoTotal = draft.todos.reduce((n, t) => n + 1 + t.children.length, 0);
+  const hasTargets = plan.documentCount + plan.todoCount > 0;
+  const writeLabel = saving ? '写入中…' : hasTargets
+    ? [plan.documentCount ? `${plan.documentCount} 篇文档` : '', plan.todoCount ? `${plan.todoCount} 条待办` : ''].filter(Boolean).join(' + ')
+    : receipt.documents.length + receipt.todos.length ? '当前选择已写入' : '没有已批准的内容';
+  const patchDoc = (key: string, keep: boolean) => onChange({ ...draft, docs: draft.docs.map((d) => d.key === key ? { ...d, keep } : d) });
+  const patchTodo = (key: string, patch: Partial<KeyedDraft['todos'][number]>) => onChange({
+    ...draft, todos: draft.todos.map((t) => t.key === key ? { ...t, ...patch } : t),
+  });
+  const patchChild = (parentKey: string, key: string, keep: boolean) => onChange({
+    ...draft, todos: draft.todos.map((t) => t.key === parentKey ? { ...t, children: t.children.map((ch) => ch.key === key ? { ...ch, keep } : ch) } : t),
+  });
+  const visibleSteps = showSteps ? steps : steps.slice(-3);
 
   return (
     <View style={styles.card}>
-      {/* ---- 头 ---- */}
-      <View style={styles.headRow}>
-        {/* 只在跑着的时候占一个位置：转圈是「还在进行」，图标只是装饰 */}
-        {busy ? <ActivityIndicator size="small" color={c.text3} /> : null}
-        <Text style={styles.headTitle}>{headTitle}</Text>
-        <View style={styles.flex} />
-        {busy ? <Text style={styles.elapsed}>{elapsed}s</Text> : null}
+      <View style={styles.heading}>
+        {busy ? <BusyIndicator color={c.text2} size="small" /> : null}
+        <Text style={styles.title}>{busy ? '正在整理' : draft.mode === 'todos' ? `提炼出 ${todoTotal} 条待办` : `产出 ${draft.docs.length} 篇文档${todoTotal ? ` · ${todoTotal} 条待办` : ''}`}</Text>
+        {busy ? <Text style={styles.meta}>{elapsed}s</Text> : null}
       </View>
-
-      {/* ---- 过程：步骤日志 ---- */}
       {steps.length ? (
         <View style={styles.steps}>
-          {steps.map((s, i) => (
-            <View key={`${i}-${s.text}`} style={styles.stepRow}>
-              {s.state === 'running' ? (
-                <ActivityIndicator size="small" color={c.text3} style={styles.stepIcon} />
-              ) : (
-                <Ionicons
-                  name={s.state === 'fail' ? 'close-circle' : 'checkmark-circle'}
-                  size={12}
-                  color={s.state === 'fail' ? c.danger : c.tealText}
-                  style={styles.stepIcon}
-                />
-              )}
-              <Text style={[styles.stepText, s.state === 'running' && styles.stepTextRun]}>
-                {s.text}
-              </Text>
+          {visibleSteps.map((step, i) => (
+            <View key={`${i}-${step.text}`} style={styles.step}>
+              {step.state === 'running'
+                ? <BusyIndicator size={16} color={c.text2} />
+                : <Ionicons name={step.state === 'fail' ? 'alert-circle-outline' : 'checkmark-circle-outline'} size={16} color={step.state === 'fail' ? c.danger : c.text2} accessible={false} />}
+              <Text style={styles.stepText}>{step.text}</Text>
             </View>
           ))}
+          {steps.length > 3 ? <Pressable style={styles.textButton} onPress={() => setShowSteps(!showSteps)} accessibilityRole="button" accessibilityState={{ expanded: showSteps }}><Text style={styles.secondary}>{showSteps ? '收起过程' : `展开全部 ${steps.length} 步`}</Text></Pressable> : null}
         </View>
       ) : null}
-
-      {/* 生成中：只报进度，不占屏 */}
-      {busy ? (
-        <Text style={styles.busyText}>
-          {received > 0 ? `已收到 ${received} 字，正在成形…` : '正在读材料…'}
-        </Text>
-      ) : null}
-
-      {/* ---- 思考过程：默认收起，标题上标字数 ---- */}
-      {reasoning.trim() ? (
-        <View style={styles.reasonWrap}>
-          {/* 生成中就摊开：用户要求「思考过程可以查看」，藏着等于没做 */}
-          <ReasoningFold text={reasoning} defaultOpen={busy} />
-        </View>
-      ) : null}
-
-      {!!note && !busy ? <Text style={styles.note}>{note}</Text> : null}
-
-      {/* 这一轮被单轮上限截断时，必须有看得见的「接着来」—— 藏起来等于没做 */}
+      {busy ? <Text style={styles.secondary}>{received ? `已收到 ${received} 字；当前材料与进度已在本机保留` : '正在读取这次选定的材料…'}</Text> : null}
+      {reasoning.trim() ? <ReasoningFold text={reasoning} defaultOpen={busy} /> : null}
+      {!!note ? <Text style={styles.note}>{note}</Text> : null}
+      {error ? <AgentError title="整理暂停" message={error.message} code={error.code} detail={error.detail} onRetry={locked ? undefined : onRetry} /> : null}
       {leftover > 0 && !busy ? (
-        <Pressable style={styles.moreBtn} onPress={onContinueAll} disabled={saving} hitSlop={4}>
-          <Ionicons name="layers-outline" size={13} color={c.accentText} />
-          <Text style={styles.moreText}>还有 {leftover} 条碎片没整理，继续</Text>
+        <Pressable style={styles.outline} onPress={onContinueAll} disabled={saving} accessibilityRole="button" accessibilityLabel={`继续处理快照中剩下的 ${leftover} 条材料`}>
+          <Text style={styles.secondary}>还有 {leftover} 条材料未处理 · 继续</Text>
         </Pressable>
       ) : null}
 
-      {/* ---- 错误：带详情 ---- */}
-      {error ? (
-        <View style={styles.errWrap}>
-          <AgentError
-            title={isTodosOnly ? '整理待办失败' : '整理失败'}
-            message={error.message}
-            code={error.code}
-            detail={error.detail}
-            onRetry={onRetry}
-          />
-        </View>
-      ) : null}
+      {draft.mode === 'knowledge' ? draft.docs.map((doc) => {
+        const saved = savedDocs.get(doc.key);
+        const problem = docProblem(doc);
+        return (
+          <View key={doc.key} style={styles.document}>
+            <View style={styles.docHeading}>
+              <Pressable
+                style={styles.checkHit} disabled={locked || !!saved} onPress={() => patchDoc(doc.key, !doc.keep)}
+                accessibilityRole="checkbox" accessibilityState={{ checked: !!saved || doc.keep, disabled: locked || !!saved }}
+                accessibilityLabel={`${saved ? '已写入' : doc.keep ? '取消写入' : '选择写入'}文档 ${doc.title || '未命名文档'}`}
+              >
+                <Ionicons name={saved ? 'checkmark-circle' : doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+              </Pressable>
+              <Pressable style={styles.docTitleHit} onPress={() => onOpenDraft(doc.key, 'read')} accessibilityRole="button" accessibilityLabel={`查看 ${doc.title || '未命名文档'}`}>
+                <Text style={styles.docTitle}>{doc.title || '未命名文档'}</Text>
+                <Text style={styles.meta}>{doc.bodyMd.replace(/\s/g, '').length} 字 · {saved ? '已写入' : doc.keep ? '待确认写入' : '未选择'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.secondary}>{doc.summary || '没有摘要，点查看阅读全文'}</Text>
+            <View style={styles.row}>
+              <Pressable style={styles.smallButton} onPress={() => onOpenDraft(doc.key, 'read')} accessibilityRole="button"><Text style={styles.buttonText}>查看</Text></Pressable>
+              {saved ? (
+                <Pressable style={styles.smallButton} onPress={() => onOpenDoc(saved.id)} accessibilityRole="button"><Text style={styles.buttonText}>打开已存文档</Text></Pressable>
+              ) : (
+                <>
+                  <Pressable style={styles.smallButton} disabled={locked} onPress={() => onOpenDraft(doc.key, 'edit')} accessibilityRole="button"><Text style={styles.buttonText}>编辑</Text></Pressable>
+                  <Pressable style={[styles.smallButton, (!allowDoc || !doc.keep || !!problem || locked) && styles.off]} disabled={!allowDoc || !doc.keep || !!problem || locked} onPress={() => onApprove(doc.key)} accessibilityRole="button"><Text style={styles.buttonText}>写入这一篇</Text></Pressable>
+                </>
+              )}
+            </View>
+            {problem && !saved ? <Text style={styles.problem}>{problem}</Text> : null}
+          </View>
+        );
+      }) : null}
 
-      {/* ---- 产出：每篇一张小卡 ---- */}
-      {!isTodosOnly && docs.length ? (
-        <View style={styles.docsBlock}>
-          <Text style={styles.label}>产出</Text>
-          {shownDocs.map((doc, i) => {
-            const done = savedMap.get(i);
-            const problem = docProblem(doc);
-            return (
-              <View key={`doc-${i}`} style={styles.docCard}>
-                {/*
-                  点整行就是「看这一篇」。以前点一下是在卡片里展开正文，
-                  结果把下面的按钮全推走、ScrollView 跟着滚到底 —— 用户点「查看」，
-                  视线被甩到页面底部。现在一律开整页。
-                */}
-                <Pressable
-                  style={styles.docHead}
-                  onPress={() => onOpenDraft(i, 'read')}
-                  accessibilityRole="button"
-                  accessibilityLabel={`打开《${doc.title || '未命名文档'}》`}
-                >
-                  <View style={styles.docHeadBody}>
-                    <Text style={styles.docTitle} numberOfLines={2}>
-                      {doc.title || '未命名文档'}
-                    </Text>
-                    <Text style={styles.docSummary} numberOfLines={2}>
-                      {doc.summary || '（没有摘要）'}
-                    </Text>
-                  </View>
-                  <View style={styles.docCharsBox}>
-                    <Text style={styles.docChars}>{charsOf(doc.bodyMd)} 字</Text>
-                    {done ? (
-                      <Ionicons name="checkmark-circle" size={13} color={c.tealText} />
-                    ) : (
-                      <Ionicons name="chevron-forward" size={13} color={c.text3} />
-                    )}
-                  </View>
-                </Pressable>
-
-                <View style={styles.docActions}>
-                  <Pressable style={styles.miniBtn} onPress={() => onOpenDraft(i, 'read')} hitSlop={4}>
-                    <Text style={styles.miniText}>查看</Text>
+      {draft.todos.length ? <Text style={styles.label}>待办与步骤 · 每条都可以单独取消</Text> : null}
+      {draft.todos.map((todo) => {
+        const saved = savedTodos.has(todo.key);
+        return (
+          <View key={todo.key} style={styles.todoGroup}>
+            <View style={styles.todoRow}>
+              <Pressable style={styles.checkHit} onPress={() => patchTodo(todo.key, { keep: !todo.keep })} disabled={locked || saved} accessibilityRole="checkbox" accessibilityState={{ checked: saved || todo.keep, disabled: locked || saved }} accessibilityLabel={`${saved ? '已写入' : todo.keep ? '取消写入' : '选择写入'}待办 ${todo.text}`}>
+                <Ionicons name={saved ? 'checkmark-circle' : todo.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+              </Pressable>
+              <TextInput value={todo.text} onChangeText={(text) => patchTodo(todo.key, { text })} style={[styles.todoInput, !todo.keep && styles.unselected]} multiline editable={!locked && !saved} accessibilityLabel="待办内容" selectionColor={c.selection} />
+            </View>
+            <Text style={styles.todoState}>{saved ? '已写入' : todo.keep ? '已选择' : '未选择'}{todo.due ? ` · 截止 ${todo.due}` : ''}</Text>
+            {todo.children.map((child) => {
+              const childSaved = savedTodos.has(child.key);
+              return (
+                <View key={child.key} style={styles.childRow}>
+                  <Pressable style={styles.checkHit} onPress={() => patchChild(todo.key, child.key, !child.keep)} disabled={locked || childSaved || !todo.keep} accessibilityRole="checkbox" accessibilityState={{ checked: childSaved || child.keep, disabled: locked || childSaved || !todo.keep }} accessibilityLabel={`${childSaved ? '已写入' : child.keep ? '取消写入' : '选择写入'}步骤 ${child.text}`}>
+                    <Ionicons name={childSaved ? 'checkmark-circle' : child.keep ? 'checkbox-outline' : 'square-outline'} size={20} color={c.text2} />
                   </Pressable>
-                  {done ? (
-                    <Pressable style={styles.miniBtn} onPress={() => onOpenDoc(done.id)} hitSlop={4}>
-                      <Text style={styles.miniText}>打开文档</Text>
-                    </Pressable>
-                  ) : (
-                    <>
-                      <Pressable
-                        style={styles.miniBtn}
-                        onPress={() => onOpenDraft(i, 'edit')}
-                        hitSlop={4}
-                        disabled={busy || saving}
-                      >
-                        <Text style={styles.miniText}>编辑</Text>
-                      </Pressable>
-                      <Pressable
-                        style={[styles.miniPrimary, (!allowDoc || !!problem || busy || saving) && styles.off]}
-                        onPress={() => onApprove(i)}
-                        disabled={!allowDoc || !!problem || busy || saving}
-                        hitSlop={4}
-                      >
-                        <Text style={styles.miniPrimaryText}>加入文档库</Text>
-                      </Pressable>
-                    </>
-                  )}
+                  <Text style={[styles.childText, (!child.keep || !todo.keep) && styles.unselected]}>{child.text}{childSaved ? ' · 已写入' : !child.keep ? ' · 未选择' : ''}</Text>
                 </View>
-                {problem && !busy ? <Text style={styles.docProblem}>{problem}</Text> : null}
-              </View>
-            );
-          })}
-          {docCardsHidden > 0 ? (
-            <Text style={styles.note}>还有 {docCardsHidden} 篇没列出来，先处理上面这几篇再继续。</Text>
-          ) : null}
-        </View>
-      ) : null}
+              );
+            })}
+          </View>
+        );
+      })}
 
-      {/* ---- 待办：两层 ---- */}
-      {todos.length ? (
-        <View style={styles.todosBlock}>
-          <Text style={styles.label}>
-            待办 {todos.length} 件{shape.sub ? ` · ${shape.sub} 个步骤` : ''}
-          </Text>
-          {draft.todos.map((t, i) => {
-            if (!t.text.trim()) return null;
-            return (
-              <View key={`todo-${i}`} style={styles.todoGroup}>
-                <View style={styles.todoRow}>
-                  <Pressable
-                    onPress={() => patchTodo(i, { keep: !t.keep })}
-                    hitSlop={8}
-                    accessibilityLabel={t.keep ? '不写入这条' : '写入这条'}
-                  >
-                    <View style={[styles.check, t.keep && styles.checkOn]}>
-                      {t.keep ? <Ionicons name="checkmark" size={11} color={c.onAccent} /> : null}
-                    </View>
-                  </Pressable>
-                  <TextInput
-                    value={t.text}
-                    onChangeText={(text) => patchTodo(i, { text })}
-                    style={[styles.todoInput, !t.keep && styles.todoOff]}
-                    multiline
-                    editable={!busy && !saving}
-                  />
-                  {t.due ? <Text style={styles.due}>{t.due.slice(5)}</Text> : null}
-                </View>
-                {t.children.map((ch, ci) => (
-                  <View key={`sub-${i}-${ci}`} style={styles.subRow}>
-                    <View style={styles.subRail} />
-                    <Pressable
-                      onPress={() => patchChild(i, ci, !ch.keep)}
-                      hitSlop={8}
-                      accessibilityLabel={ch.keep ? '不写入这个步骤' : '写入这个步骤'}
-                    >
-                      <View style={[styles.subCheck, ch.keep && styles.checkOn]}>
-                        {ch.keep ? (
-                          <Ionicons name="checkmark" size={9} color={c.onAccent} />
-                        ) : null}
-                      </View>
-                    </Pressable>
-                    <Text style={[styles.subText, !ch.keep && styles.todoOff]}>{ch.text}</Text>
-                  </View>
-                ))}
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
-
-      {/* ---- 权限位：写入是这张卡唯一会改数据的地方 ---- */}
-      <View style={styles.permBox}>
-        <Pressable style={styles.permRow} onPress={() => onAllowDoc(!allowDoc)} hitSlop={4}>
-          <Ionicons
-            name={allowDoc ? 'checkbox' : 'square-outline'}
-            size={16}
-            color={allowDoc ? c.accentText : c.text3}
-          />
-          <Text style={styles.permText}>
-            允许写入文档区{isTodosOnly ? '（本轮不写）' : `（${docs.length} 篇）`}
-          </Text>
+      <View style={styles.permissions}>
+        <Pressable style={styles.permission} onPress={() => onAllowDoc(!allowDoc)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowDoc, disabled: locked }} accessibilityLabel="允许写入文档">
+          <Ionicons name={allowDoc ? 'checkbox-outline' : 'square-outline'} size={22} color={c.text} />
+          <Text style={styles.permissionText}>文档写入 · {allowDoc ? '开' : '关'}{draft.mode === 'todos' ? '（本轮不写文档）' : ''}</Text>
         </Pressable>
-        {draft.todos.length ? (
-          <Pressable style={styles.permRow} onPress={() => onAllowTodos(!allowTodos)} hitSlop={4}>
-            <Ionicons
-              name={allowTodos ? 'checkbox' : 'square-outline'}
-              size={16}
-              color={allowTodos ? c.accentText : c.text3}
-            />
-            <Text style={styles.permText}>允许新增 {countTodos(draft)} 条待办</Text>
-          </Pressable>
-        ) : null}
-        <Text style={styles.permHint}>不改动任何原有碎片；写入后可以在文档区继续改或删。</Text>
+        <Pressable style={styles.permission} onPress={() => onAllowTodos(!allowTodos)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowTodos, disabled: locked }} accessibilityLabel="允许新增待办">
+          <Ionicons name={allowTodos ? 'checkbox-outline' : 'square-outline'} size={22} color={c.text} />
+          <Text style={styles.permissionText}>待办写入 · {allowTodos ? '开' : '关'}</Text>
+        </Pressable>
+        <Text style={styles.note}>只写你选择的条目；原始碎片不删除。离开页面会保留这份草稿，不会自动继续请求。</Text>
       </View>
-
-      <View style={styles.actions}>
-        <Pressable style={styles.ghost} onPress={onDiscard} disabled={saving}>
-          <Text style={styles.ghostText}>{doneCount ? '关闭' : '放弃'}</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.solid, (!writable || busy || saving) && styles.off]}
-          onPress={() => onApprove(null)}
-          disabled={!writable || busy || saving}
-        >
-          <Text style={styles.solidText}>
-            {writeLabel}
-          </Text>
+      <View style={styles.row}>
+        <Pressable style={styles.outline} onPress={onDiscard} disabled={locked} accessibilityRole="button"><Text style={styles.buttonText}>放弃草稿</Text></Pressable>
+        <Pressable style={[styles.primary, (!hasTargets || locked) && styles.off]} onPress={() => onApprove(null)} disabled={!hasTargets || locked} accessibilityRole="button" accessibilityLabel={hasTargets ? `确认写入 ${writeLabel}` : writeLabel}>
+          <Text style={styles.primaryText}>{hasTargets && !saving ? `确认写入 ${writeLabel}` : writeLabel}</Text>
         </Pressable>
       </View>
     </View>
   );
 }
 
-const makeStyles = (c: Palette) =>
-  StyleSheet.create({
-    /*
-     * 不再套一张带边框的卡（v0.20.4）。
-     *
-     * 用户原话「希望跟聊天一样」：问答那半页里，用户是右侧气泡、助手是左侧正文，
-     * 只有整理这一段突然变成一张灰边卡片 —— 同一屏两种语言，看起来像系统通知
-     * 而不是回答。现在它只是助手那一段的开头，产出小卡、步骤、按钮各自有自己的底。
-     */
-    card: {
-      paddingTop: 2,
-      marginTop: 10,
-      gap: 8,
-    },
-    flex: { flex: 1 },
-    headRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-    headTitle: { fontSize: 14, lineHeight: 21, color: c.text, fontWeight: '600', flexShrink: 1 },
-    elapsed: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
-
-    /* 过程日志 */
-    steps: { gap: 5, marginTop: 2 },
-    stepRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    stepIcon: { width: 13, alignItems: 'center' },
-    stepText: { flex: 1, fontSize: 11.5, lineHeight: 16, color: c.text3 },
-    stepTextRun: { color: c.text2 },
-    busyText: { fontSize: 11.5, color: c.text3 },
-    reasonWrap: { marginTop: 2 },
-
-    note: { fontSize: 11.5, lineHeight: 18, color: c.text3 },
-    moreBtn: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      paddingVertical: 9,
-      borderRadius: R.btn,
-      backgroundColor: c.accentBg,
-    },
-    moreText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
-    errWrap: { marginTop: -6 },
-
-    /* 产出 */
-    docsBlock: { gap: 8, marginTop: 2 },
-    label: { fontSize: 11, color: c.text3, marginTop: 2 },
-    docCard: {
-      backgroundColor: c.hairSoft,
-      borderRadius: R.btn,
-      paddingHorizontal: 11,
-      paddingVertical: 9,
-      gap: 7,
-    },
-    docHead: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
-    docHeadBody: { flex: 1, gap: 2 },
-    docTitle: { fontSize: 13.5, color: c.text, fontWeight: '600', lineHeight: 19 },
-    docSummary: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
-    docChars: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
-    docCharsBox: { alignItems: 'flex-end', gap: 4, marginTop: 1 },
-    docActions: { flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-    miniBtn: {
-      paddingHorizontal: 9,
-      paddingVertical: 4,
-      borderRadius: R.pill,
-      borderWidth: 0.5,
-      borderColor: c.hair,
-      backgroundColor: c.card,
-    },
-    miniText: { fontSize: 11.5, color: c.text2 },
-    miniPrimary: {
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: R.pill,
-      backgroundColor: c.accent,
-    },
-    miniPrimaryText: { fontSize: 11.5, color: c.onAccent, fontWeight: '600' },
-    off: { opacity: 0.4 },
-    docProblem: { fontSize: 10.5, color: c.danger },
-
-    /* 待办 */
-    todosBlock: { gap: 5, marginTop: 2 },
-    todoGroup: { gap: 2 },
-    todoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-    check: {
-      width: 17,
-      height: 17,
-      borderRadius: 5,
-      borderWidth: 1,
-      borderColor: c.hair,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginTop: 6,
-      backgroundColor: c.card,
-    },
-    checkOn: { backgroundColor: c.accent, borderColor: c.accent },
-    todoInput: { flex: 1, fontSize: 13, lineHeight: 19, color: c.text, paddingVertical: 5 },
-    todoOff: { color: c.text3, textDecorationLine: 'line-through' },
-    due: { fontSize: 11, color: c.text3, marginTop: 8, fontVariant: ['tabular-nums'] },
-    subRow: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingLeft: 10 },
-    subRail: { width: 1, height: 14, backgroundColor: c.hair, marginLeft: 8 },
-    subCheck: {
-      width: 14,
-      height: 14,
-      borderRadius: 4,
-      borderWidth: 1,
-      borderColor: c.hair,
-      alignItems: 'center',
-      justifyContent: 'center',
-      backgroundColor: c.card,
-    },
-    subText: { flex: 1, fontSize: 12.5, lineHeight: 18, color: c.text2 },
-
-    /* 权限位 */
-    permBox: {
-      gap: 6,
-      padding: 10,
-      borderRadius: R.btn,
-      backgroundColor: c.hairSoft,
-      marginTop: 4,
-    },
-    permRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    permText: { fontSize: 12.5, color: c.text },
-    permHint: { fontSize: 11, lineHeight: 16, color: c.text3 },
-
-    actions: { flexDirection: 'row', gap: 10, marginTop: 2 },
-    ghost: {
-      flex: 1,
-      alignItems: 'center',
-      paddingVertical: 10,
-      borderRadius: R.btn,
-      borderWidth: 0.5,
-      borderColor: c.hair,
-    },
-    ghostText: { fontSize: 13, color: c.text },
-    solid: {
-      flex: 1.6,
-      alignItems: 'center',
-      paddingVertical: 10,
-      borderRadius: R.btn,
-      backgroundColor: c.accent,
-    },
-    solidText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },
-  });
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  card: { paddingTop: 8, gap: 12 },
+  heading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  title: { flex: 1, color: c.text, fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  meta: { color: c.text3, fontSize: 12, lineHeight: 19 },
+  secondary: { color: c.text2, fontSize: 14, lineHeight: 22 },
+  note: { color: c.text2, fontSize: 12.5, lineHeight: 20 },
+  steps: { gap: 6, borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair, paddingLeft: 12 },
+  step: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  stepText: { flex: 1, color: c.text2, fontSize: 13, lineHeight: 20 },
+  textButton: { minHeight: metrics.controlHeight, justifyContent: 'center' },
+  document: { backgroundColor: c.card, borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.cardRadius, padding: 12, gap: 8 },
+  docHeading: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  docTitleHit: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', gap: 4 },
+  docTitle: { color: c.text, fontSize: 16, lineHeight: 24, fontWeight: '600' },
+  checkHit: { width: metrics.controlHeight, minHeight: metrics.controlHeight, alignItems: 'center', justifyContent: 'center' },
+  row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  smallButton: { minHeight: metrics.controlHeight, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center', borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
+  buttonText: { color: c.text, fontSize: 14, lineHeight: 21 },
+  outline: { minHeight: metrics.controlHeight, paddingVertical: 10, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center', borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.buttonRadius },
+  primary: { flex: 1, minWidth: 160, minHeight: metrics.controlHeight, padding: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: c.accent, borderRadius: metrics.buttonRadius },
+  primaryText: { color: c.onAccent, fontSize: 14, lineHeight: 21, fontWeight: '600' },
+  permissions: { gap: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair, paddingTop: 8 },
+  permission: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  permissionText: { flex: 1, color: c.text, fontSize: 14, lineHeight: 22 },
+  label: { color: c.text2, fontSize: 14, lineHeight: 22, fontWeight: '600' },
+  todoGroup: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, paddingBottom: 10 },
+  todoRow: { flexDirection: 'row', alignItems: 'center' },
+  todoInput: { flex: 1, minHeight: metrics.controlHeight, color: c.text, fontSize: 15, lineHeight: 24, paddingVertical: 10 },
+  todoState: { marginLeft: metrics.controlHeight, color: c.text2, fontSize: 12, lineHeight: 19 },
+  childRow: { flexDirection: 'row', alignItems: 'center', marginLeft: 24 },
+  childText: { flex: 1, color: c.text2, fontSize: 14, lineHeight: 22 },
+  unselected: { color: c.text3 },
+  problem: { color: c.danger, fontSize: 13, lineHeight: 20 },
+  off: { opacity: 0.55 },
+});

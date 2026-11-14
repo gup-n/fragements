@@ -12,7 +12,7 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useThemedStyles, type Palette } from '../theme';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   /** 为空就不画。清空由调用方的定时器负责 */
@@ -28,7 +28,7 @@ export function Toast({ text, bottom = 24 }: Props) {
   return (
     <View style={[styles.wrap, { bottom }]} pointerEvents="none">
       <View style={styles.pill}>
-        <Text style={styles.text} numberOfLines={2}>
+        <Text style={styles.text} numberOfLines={3} accessibilityLiveRegion="polite">
           {text}
         </Text>
       </View>
@@ -36,7 +36,7 @@ export function Toast({ text, bottom = 24 }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   /**
    * 反色药丸：底色用 `text`、字用 `page`。
@@ -45,9 +45,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
    * 用户完全看不出提示出现过。跟着调色板反着来，两套主题都清晰。
    */
   pill: {
-    maxWidth: '78%',
+    maxWidth: '90%',
     backgroundColor: c.text,
-    borderRadius: 999,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 14,
     paddingVertical: 8,
   },

@@ -1,38 +1,22 @@
-/**
- * 阅读器内的查找栏。
- *
- * 计数口径：**只用确定性字面匹配**（`util/highlight.findHits` 或 WebView 里同一套
- * 规则的实现），不用全文检索的 OR/topK 结果 —— 那只能给「相关片段」，
- * 给不出「一共几处」，显示出来就是骗人的。
- *
- * 超过 99 处显示 `99+`：既不让两位数字把这一行挤爆，也不能假装「总共 99 处」。
- */
-import React from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+/** 阅读器查找：确定性字面匹配，99+ 明示上限，不把索引中说成零命中。 */
+import React, { useState } from 'react';
+import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../../theme';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { IconButton } from '../../components/IconButton';
 
 interface Props {
   value: string;
   onChange: (next: string) => void;
-  /** 全量命中数；-1 表示还没算出来 */
+  /** -1 表示还没算出来；只接受确定性字面命中数。 */
   total: number;
-  /** 当前第几处（1 起）；0 表示没有可选中的命中 */
+  /** 从1起，0表示没有当前命中。 */
   current: number;
   onPrev: () => void;
   onNext: () => void;
-  /** 关闭输入（比如 PDF 没有文字层） */
   disabled?: boolean;
-  /**
-   * 可以输入，但结果还没算出来（PDF 正在后台建文字索引）。
-   *
-   * 和 `disabled` 分开：索引中是「还没查」，不是「查不到」。用 disabled 的话
-   * 输入框会变灰、占位符写着「没有可查找的文字」—— 那是在说谎，用户也就没机会
-   * 先把词打进去等结果。
-   */
+  /** 索引中仍可输入；与确实没有文字的 disabled 分开。 */
   busy?: boolean;
-  /** 「当前工作表」「第 12 行」这类补充说明，跟在计数后面 */
   note?: string;
   placeholder?: string;
 }
@@ -41,116 +25,88 @@ function countLabel(total: number, current: number, note?: string): string {
   if (total < 0) return '正在查找…';
   if (total === 0) return '没有找到';
   const shown = total > 99 ? '99+' : String(total);
-  const at = current > 0 ? `${current} / ` : '';
-  return `第 ${at}${shown} 处${note ? ` · ${note}` : ''}`;
+  return `${current > 0 ? `第 ${current} / ${shown} 处` : `共 ${shown} 处`}${note ? ` · ${note}` : ''}`;
 }
 
 export function SearchBar({
-  value,
-  onChange,
-  total,
-  current,
-  onPrev,
-  onNext,
-  disabled,
-  busy,
-  note,
-  placeholder = '在文档里查找',
+  value, onChange, total, current, onPrev, onNext, disabled = false,
+  busy = false, note, placeholder = '在文档里查找',
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const [focused, setFocused] = useState(false);
   const trimmed = value.trim();
-  const canPrev = total > 0 && current > 1;
-  const canNext = total > 0 && current > 0 && current < total;
+  const canPrev = !disabled && !busy && total > 0 && current > 1;
+  const canNext = !disabled && !busy && total > 0 && current > 0 && current < total;
 
   return (
     <View style={styles.wrap}>
-      <View style={[styles.box, disabled && styles.boxDisabled]}>
-        <Ionicons name="search" size={15} color={c.text3} />
+      <View style={[styles.box, focused && styles.boxFocused, disabled && styles.boxDisabled]}>
+        <Ionicons name="search-outline" size={18} color={c.text2} accessible={false} />
         <TextInput
           value={value}
           onChangeText={onChange}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           placeholder={disabled ? '这篇没有可查找的文字' : placeholder}
           placeholderTextColor={c.text3}
+          accessibilityLabel={placeholder}
+          accessibilityState={{ disabled, busy }}
           style={styles.input}
           editable={!disabled}
           returnKeyType="search"
           autoCorrect={false}
           autoCapitalize="none"
-          selectionColor={c.accent}
+          selectionColor={c.selection}
         />
-        {trimmed ? (
-          <Pressable onPress={() => onChange('')} hitSlop={10} accessibilityLabel="清除查找">
-            <Ionicons name="close-circle" size={16} color={c.text3} />
-          </Pressable>
+        {value ? (
+          <IconButton
+            name="close" size={18} diameter={28} color={c.text2}
+            onPress={() => onChange('')} accessibilityLabel="清除查找"
+          />
         ) : null}
       </View>
 
       {trimmed ? (
         <View style={styles.hitRow}>
-          <Text style={styles.hitText} numberOfLines={1}>
+          <Text style={styles.hitText} accessibilityLiveRegion="polite">
             {busy ? '正在索引文字…' : countLabel(total, current, note)}
           </Text>
           <View style={styles.hitBtns}>
             <IconButton
-              name="chevron-up"
-              size={15}
-              tone="soft"
-              color={c.text2}
-              diameter={32}
-              disabled={!canPrev}
-              onPress={onPrev}
-              accessibilityLabel="上一处"
+              name="chevron-up" size={18} tone="soft" diameter={32}
+              color={c.text2} disabled={!canPrev} onPress={onPrev} accessibilityLabel="上一处命中"
             />
             <IconButton
-              name="chevron-down"
-              size={15}
-              tone="soft"
-              color={c.text2}
-              diameter={32}
-              disabled={!canNext}
-              onPress={onNext}
-              accessibilityLabel="下一处"
+              name="chevron-down" size={18} tone="soft" diameter={32}
+              color={c.text2} disabled={!canNext} onPress={onNext} accessibilityLabel="下一处命中"
             />
           </View>
         </View>
-      ) : null}
+      ) : busy ? <Text style={styles.indexing}>正在索引文字，可以先输入查找词</Text> : null}
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   wrap: {
-    paddingHorizontal: 14,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.hair,
-    backgroundColor: c.page,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: 8,
+    borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, backgroundColor: c.page,
   },
   box: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 7,
-    height: 36,
-    backgroundColor: c.hairSoft,
-    borderRadius: R.btn + 2,
-    paddingHorizontal: 11,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    minHeight: metrics.controlHeight, backgroundColor: c.card,
+    borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    borderRadius: metrics.buttonRadius, paddingLeft: 12, paddingRight: 4,
   },
-  boxDisabled: { opacity: 0.6 },
+  boxFocused: { borderColor: c.focus },
+  boxDisabled: { backgroundColor: c.hairSoft },
   input: {
-    flex: 1,
-    fontSize: 13.5,
-    color: c.text,
-    paddingVertical: 0,
+    flex: 1, minWidth: 0, minHeight: metrics.controlHeight, fontSize: 15,
+    color: c.text, paddingVertical: 8, paddingHorizontal: 0,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as unknown as undefined } : {}),
   },
-  hitRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 7,
-    gap: 10,
-  },
-  hitText: { flex: 1, fontSize: 12, color: c.text2 },
-  hitBtns: { flexDirection: 'row', gap: 6 },
+  hitRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
+  hitText: { flex: 1, fontSize: 13, lineHeight: 20, color: c.text2, fontVariant: ['tabular-nums'] },
+  hitBtns: { flexDirection: 'row', gap: 4 },
+  indexing: { fontSize: 12, lineHeight: 18, color: c.text2, marginTop: 4 },
 });

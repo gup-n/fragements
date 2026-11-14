@@ -14,7 +14,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette } from '../theme';
+import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { IoniconName } from './IconButton';
 
 export interface SwipeAction {
@@ -78,8 +78,16 @@ export function SwipeRow({
   style,
   pressedStyle,
 }: Props) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { c, styles, metrics } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
   const tx = useRef(new Animated.Value(0)).current;
+  const settleTo = (target: number) => {
+    tx.stopAnimation();
+    if (reduceMotionRef.current) tx.setValue(target);
+    else Animated.spring(tx, { toValue: target, ...SPRING }).start();
+  };
   /** 手指按下那一刻内容层停在哪，之后的位移都是从这里加 */
   const base = useRef(0);
   /** JS 侧自己记一份当前值：原生驱动下 Animated.Value 不方便同步读回来 */
@@ -115,8 +123,8 @@ export function SwipeRow({
     const target = open === 'left' ? ACTION_W : open === 'right' ? -ACTION_W : 0;
     // 父级可能在同一帧把 left 换成 right，这里只认最终值，不做过渡
     pos.current = target;
-    Animated.spring(tx, { toValue: target, ...SPRING }).start();
-  }, [open, tx]);
+    settleTo(target);
+  }, [open, tx, reduceMotion]);
 
   const responder = useMemo(
     () =>
@@ -155,7 +163,7 @@ export function SwipeRow({
           } = latest.current;
           const snap = (target: number) => {
             pos.current = target;
-            Animated.spring(tx, { toValue: target, ...SPRING }).start();
+            settleTo(target);
           };
 
           if (at <= -THRESHOLD && r) {
@@ -189,7 +197,7 @@ export function SwipeRow({
           dragging.current = false;
           // 被系统打断（来电、切页）就退回按下时的位置，不要猜用户想去哪一侧
           pos.current = base.current;
-          Animated.spring(tx, { toValue: base.current, ...SPRING }).start();
+          settleTo(base.current);
         },
       }),
     [tx],
@@ -219,8 +227,8 @@ export function SwipeRow({
     <View style={styles.clip} {...responder.panHandlers}>
       {leftAction ? (
         <Pressable
-          style={[styles.action, styles.actionLeft, { backgroundColor: leftAction.bg }]}
-          onPress={leftAction.onPress}
+          style={[[styles.action, styles.actionLeft, { backgroundColor: leftAction.bg }], styles.touchTarget]}
+          onPress={leftAction.onPress} importantForAccessibility={open === "left" ? "yes" : "no-hide-descendants"}
           accessibilityRole="button"
           accessibilityLabel={leftAction.label}
         >
@@ -231,8 +239,8 @@ export function SwipeRow({
 
       {rightAction ? (
         <Pressable
-          style={[styles.action, styles.actionRight, { backgroundColor: rightAction.bg }]}
-          onPress={rightAction.onPress}
+          style={[[styles.action, styles.actionRight, { backgroundColor: rightAction.bg }], styles.touchTarget]}
+          onPress={rightAction.onPress} importantForAccessibility={open === "right" ? "yes" : "no-hide-descendants"}
           accessibilityRole="button"
           accessibilityLabel={rightAction.label}
         >
@@ -244,9 +252,23 @@ export function SwipeRow({
       <Animated.View style={{ transform: [{ translateX: tx }] }}>
         <Pressable
           onPress={handlePress}
+          accessibilityRole="button"
+          accessibilityActions={[
+            { name: 'activate', label: '查看碎片' },
+            ...(onLongPress ? [{ name: 'longpress', label: '复制正文' }] : []),
+            ...(leftAction ? [{ name: 'leftAction', label: leftAction.label }] : []),
+            ...(rightAction ? [{ name: 'rightAction', label: rightAction.label }] : []),
+          ]}
+          onAccessibilityAction={(event) => {
+            const action = event.nativeEvent.actionName;
+            if (action === 'activate') handlePress();
+            else if (action === 'longpress') handleLongPress();
+            else if (action === 'leftAction') leftAction?.onPress();
+            else if (action === 'rightAction') rightAction?.onPress();
+          }}
           onLongPress={onLongPress ? handleLongPress : undefined}
           delayLongPress={400}
-          style={({ pressed }) => [style, { backgroundColor: c.page }, pressed && pressedStyle]}
+          style={({ pressed }) => [[style, { minHeight: metrics.controlHeight, backgroundColor: c.page }, pressed && pressedStyle], styles.touchTarget]}
         >
           {children}
         </Pressable>
@@ -255,7 +277,8 @@ export function SwipeRow({
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   /*
    * 不能裁剪。
    *
@@ -275,5 +298,5 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   actionLeft: { left: 0 },
   actionRight: { right: 0 },
-  actionText: { fontSize: 11.5, fontWeight: '500' },
+  actionText: { fontSize: 12, fontWeight: '500' },
 });

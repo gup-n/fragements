@@ -63,6 +63,12 @@ jobs:
       - name: 问页断言
         run: npm run test:ask
 
+      - name: 数据可靠性与故障恢复断言
+        run: npm run test:reliability
+
+      - name: 两轴外观与阅读器主题断言
+        run: npm run test:appearance
+
       # 版本号 / 行数表 / 死链 / 提示词抄录 这些全是机器能比的，
       # 放这一步是因为它秒级完成 —— 失败得越早越好定位
       - name: 文档一致性检查
@@ -99,7 +105,7 @@ jobs:
       # android/ 不入库（prebuild 产物）。不加 --no-install 会再跑一次 npm install，
       # 而我们上面已经 npm ci 过了
       - name: 生成原生工程
-        run: npx expo prebuild --platform android --no-install
+        run: npx expo prebuild --platform android --no-install --no-clean
 
       # 缓存放在 prebuild 之后：gradle-wrapper.properties 是 prebuild 生成的，
       # 提前做 key 会算成空字符串，等于每次都换一把新锁

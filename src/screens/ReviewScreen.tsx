@@ -1,3 +1,4 @@
+import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 /**
  * 回顾页：待办 / 小结。
  *
@@ -12,10 +13,10 @@
  * 保持一致；分开取会让「刚勾完的待办在另一个 tab 里还是旧状态」。
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Note, Todo } from '../types';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
@@ -23,6 +24,7 @@ import { NoteBody } from '../components/NoteBody';
 import { NoteViewer } from '../components/NoteViewer';
 import { SummarySheet } from '../components/SummarySheet';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { ChoiceChip } from '../components/ChoiceChip';
 import { TodoEditor } from '../components/TodoEditor';
 import { TodoPanel } from '../components/TodoPanel';
 
@@ -48,21 +50,20 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
   /** 被合并掉的待办。合并是隐藏不是删除，这里必须有入口，否则就是数据黑洞 */
   const [merged, setMerged] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   /** 阅读器停在第几篇 */
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editor, setEditor] = useState<EditorTarget | null>(null);
 
   const reload = useCallback(async () => {
-    const [t, n, m] = await Promise.all([
-      repo.listTodos(),
-      repo.listNotes(60),
-      repo.listMergedTodos(),
-    ]);
-    setTodos(t);
-    setNotes(n);
-    setMerged(m);
-    setLoading(false);
+    setLoadError('');
+    try {
+      const [t, n, m] = await Promise.all([repo.listTodos(), repo.listNotes(60), repo.listMergedTodos()]);
+      setTodos(t); setNotes(n); setMerged(m);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : '暂时没有读到数据，请重试');
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => {
@@ -91,10 +92,10 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
     editor?.parentId != null ? todos.find((t) => t.id === editor.parentId) : null;
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root}><View style={styles.normalContent} importantForAccessibility={viewerIndex !== null || sheetOpen || editor !== null ? "no-hide-descendants" : "auto"}>
       <ScreenHeader
         title="回顾"
-        subtitle={pending.length > 0 ? `${pending.length} 件事没做完` : '手头的事都做完了'}
+        subtitle={loading ? '正在读取…' : loadError ? '暂时无法读取' : pending.length > 0 ? `${pending.length} 件事没做完` : '手头的事都做完了'}
         onBack={onClose}
       />
 
@@ -103,19 +104,18 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
           ['todo', `待办${pending.length ? ` ${pending.length}` : ''}`],
           ['note', '小结'],
         ] as [Tab, string][]).map(([key, label]) => (
-          <Pressable
-            key={key}
-            onPress={() => setTab(key)}
-            style={[styles.tab, tab === key && styles.tabActive]}
-          >
-            <Text style={[styles.tabText, tab === key && styles.tabTextActive]}>{label}</Text>
-          </Pressable>
+          <ChoiceChip key={key} label={label} selected={tab === key} onPress={() => setTab(key)} role="tab" />
         ))}
       </View>
 
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={c.accent} />
+        </View>
+      ) : loadError ? (
+        <View style={styles.center}>
+          <Text style={styles.loadError} accessibilityLiveRegion="polite">{loadError}</Text>
+          <Pressable style={[styles.genBtn, styles.touchTarget]} onPress={() => void reload()} accessibilityRole="button"><Text style={styles.genText}>重新读取</Text></Pressable>
         </View>
       ) : tab === 'todo' ? (
         <TodoPanel
@@ -127,7 +127,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <Pressable
-            style={({ pressed }) => [styles.genBtn, pressed && { backgroundColor: c.accentBg }]}
+            style={({ pressed }) => [[styles.genBtn, pressed && { backgroundColor: c.accentBg }], styles.touchTarget]}
             onPress={() => setSheetOpen(true)}
           >
             <Ionicons name="sparkles-outline" size={17} color={c.accentText} />
@@ -154,7 +154,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                   <Pressable
                     key={note.id}
                     onPress={() => setViewerIndex(notes.indexOf(note))}
-                    style={({ pressed }) => [styles.noteCard, pressed && { opacity: 0.7 }]}
+                    style={({ pressed }) => [[styles.noteCard, pressed && { opacity: 0.7 }], styles.touchTarget]}
                   >
                     <View style={styles.noteHead}>
                       <Text style={styles.noteKind}>{NOTE_GROUP_LABEL[note.type]}</Text>
@@ -178,6 +178,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
         </ScrollView>
       )}
 
+      </View>
       {viewerIndex !== null ? (
         <NoteViewer
           notes={notes}
@@ -213,12 +214,15 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
+  normalContent: { flex: 1 },
+  loadError: { color: c.danger, fontSize: 13, lineHeight: 21, padding: 20 },
   root: { flex: 1, backgroundColor: c.page },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-  tabs: { flexDirection: 'row', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
-  tab: {
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
+  tab: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: R.pill,
@@ -234,18 +238,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
   emptyBody: { fontSize: 13, color: c.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
 
-  genBtn: {
+  genBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    borderRadius: R.card,
+    borderRadius: metrics.cardRadius,
     backgroundColor: c.accentBg,
     marginBottom: 12,
   },
   genText: { flex: 1, fontSize: 14, color: c.accentText, fontWeight: '500' },
-  genHint: { fontSize: 11, color: c.accentText, opacity: 0.7 },
+  genHint: { fontSize: 12, color: c.accentText, opacity: 0.7 },
 
   noteGroupHead: {
     flexDirection: 'row',
@@ -256,20 +260,20 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginBottom: 8,
   },
   noteGroupTitle: { fontSize: 12, color: c.text2, fontWeight: '600' },
-  noteGroupCount: { fontSize: 11, color: c.text3 },
+  noteGroupCount: { fontSize: 12, color: c.text3 },
 
   noteCard: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     padding: 14,
     marginBottom: 10,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  noteKind: { flex: 1, fontSize: 11, color: c.accentText, fontWeight: '500' },
-  noteDate: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
-  noteChars: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
+  noteKind: { flex: 1, fontSize: 12, color: c.accentText, fontWeight: '500' },
+  noteDate: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
+  noteChars: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
   noteBody: { fontSize: 14, lineHeight: 23, color: c.text },
   noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 9 },
   noteToggle: { fontSize: 12, color: c.accent },

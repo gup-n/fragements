@@ -33,16 +33,6 @@ export function packFragments(list: Fragment[], limit: number, budget: number): 
   return out;
 }
 
-/**
- * 去掉这一次已经处理过的碎片。
- *
- * `doneIds` 是会话内游标：整理模式还有 commit 里「整批标 tagged」兜底，
- * 重构模式没有 —— 它不改碎片状态，只靠这个游标才不会原地打转。
- */
-export function pendingOnly(list: Fragment[], doneIds: Set<number>): Fragment[] {
-  if (!doneIds.size) return list;
-  return list.filter((f) => !doneIds.has(f.id));
-}
 
 /**
  * 一次「整理全部」最多跑几批（每批 40 条 ≈ 400 条）。

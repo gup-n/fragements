@@ -10,7 +10,7 @@
  * 3. `onShouldStartLoadWithRequest` 只放行本地协议。PDF 里的链接、`target=_blank`
  *    都不允许把用户带到网络上 —— 阅读不应该产生任何远程请求。
  */
-import React, { forwardRef, useImperativeHandle, useRef } from 'react';
+import React, { forwardRef, useImperativeHandle, useMemo, useRef } from 'react';
 import { WebView, type WebViewMessageEvent, type WebViewProps } from 'react-native-webview';
 import {
   parseFromPage,
@@ -43,6 +43,7 @@ export const PdfWebView = forwardRef<PdfWebViewHandle, PdfWebViewProps>(function
   ref,
 ) {
   const view = useRef<{ postMessage: (s: string) => void } | null>(null);
+  const source = useMemo(() => ({ uri }), [uri]);
 
   useImperativeHandle(
     ref,
@@ -57,7 +58,7 @@ export const PdfWebView = forwardRef<PdfWebViewHandle, PdfWebViewProps>(function
   return (
     <WebViewCompat
       ref={view}
-      source={{ uri }}
+      source={source}
       style={style}
       originWhitelist={['*']}
       allowFileAccess

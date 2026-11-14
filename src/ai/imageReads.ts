@@ -38,8 +38,11 @@ export async function readPendingImages(input: {
   limit?: number;
   /** 每一步的人话，整理页拿它写步骤日志 */
   onStep?: (text: string) => void;
+  /** 整理暂停/换代后停止未发出的图片，迟到的识别结果不得写库。 */
+  shouldContinue?: () => boolean;
 }): Promise<ImageReadResult> {
-  const { fragments, config, limit, onStep } = input;
+  const { fragments, config, limit, onStep, shouldContinue } = input;
+  const current = () => shouldContinue?.() !== false;
   const { list, rest } = pendingImagesOf(fragments, limit);
   if (!list.length) return { read: 0, failed: 0, rest, firstError: null };
 
@@ -47,16 +50,22 @@ export async function readPendingImages(input: {
   let failed = 0;
   let firstError: string | null = null;
 
+  const stopped = (unprocessed: number): ImageReadResult => ({ read, failed, rest: rest + unprocessed, firstError });
   for (let i = 0; i < list.length; i += 1) {
+    if (!current()) return stopped(list.length - i);
     const p = list[i];
     onStep?.(
       list.length > 1 ? `正在看第 ${i + 1}/${list.length} 张图里的字…` : '正在看图里的字…',
     );
     try {
       const base64 = await readImageBase64(p.path);
+      if (!current()) return stopped(list.length - i);
       // hint 是那一条的正文：同一张图配「这是什么报错」和配「这块板子型号」，要抄的东西不同
       const text = await describeImage({ base64, config, hint: p.hint });
+      if (!current()) return stopped(list.length - i);
       await repo.setFragmentImageText(p.imageId, text);
+      read += 1;
+      if (!current()) return stopped(list.length - i - 1);
       /*
        * 内存里那份也要改。材料是用调用方手里的这些对象现拼的 ——
        * 只写库不写回对象，这一次整理照样看不到图里的字，等于白读一次。
@@ -66,8 +75,8 @@ export async function readPendingImages(input: {
         const img = f.images.find((x) => x.id === p.imageId);
         if (img) img.text = text;
       }
-      read += 1;
     } catch (e) {
+      if (!current()) return stopped(list.length - i);
       failed += 1;
       if (!firstError) firstError = e instanceof Error ? e.message : '图片没读出来';
     }

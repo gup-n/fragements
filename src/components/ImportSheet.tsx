@@ -1,14 +1,17 @@
+import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import React, { useEffect, useRef } from 'react';
-import { ActivityIndicator, BackHandler, Pressable, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { ImportPreview } from '../db/importMd';
+import { useHeadingFocus } from './useHeadingFocus';
 
 interface Props {
   preview: ImportPreview;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void;
+  error?: string;
 }
 
 /**
@@ -18,8 +21,9 @@ interface Props {
  * （刚换手机、刚重装）。这时候更需要先看清「要进来多少、跳过多少、时间跨度对不对」，
  * 而不是点一下就闷头写。选错文件、选成旧备份，都靠这一层拦下来。
  */
-export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
+export function ImportSheet({ preview, busy, onCancel, onConfirm, error }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const headingRef = useHeadingFocus(preview.fileName);
   const nothing = preview.fresh.length === 0;
 
   // 返回键只在挂载时注册一次：onCancel 每次渲染都是新函数，
@@ -43,15 +47,15 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
   if (preview.mergedSkipped > 0) notes.push(`跳过 ${preview.mergedSkipped} 条当初已合并的旧记录`);
 
   return (
-    <View style={styles.overlay}>
-      <Pressable style={styles.backdrop} onPress={busy ? undefined : onCancel} />
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={[styles.backdrop, styles.touchTarget]} onPress={busy ? undefined : onCancel} />
 
-      <View style={styles.card}>
+      <ScrollView style={styles.card} contentContainerStyle={styles.cardContent} keyboardShouldPersistTaps="handled">
         <View style={styles.head}>
           <View style={styles.iconWrap}>
-            <Ionicons name="cloud-upload-outline" size={17} color={c.accentText} />
+            <Ionicons name="document-text-outline" size={17} color={c.accentText} />
           </View>
-          <Text style={styles.title}>导入 Markdown</Text>
+          <Text ref={headingRef} accessible accessibilityRole="header" style={styles.title}>导入碎片文字</Text>
         </View>
 
         <Text style={styles.file} numberOfLines={1}>
@@ -61,6 +65,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
           共读到 {preview.total} 条 · {preview.from} ~ {preview.to}
         </Text>
 
+        <Text style={styles.dupHint}>只导入 Markdown 里的碎片文字；不恢复原图、文档、月总结、会话或待办列表。</Text>
         <View style={styles.grid}>
           <View style={styles.cell}>
             <Text style={styles.cellNum}>{preview.fresh.length}</Text>
@@ -90,23 +95,24 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
           <Text style={styles.emptyHint}>没有可导入的新内容，这份文件可能已经导过了。</Text>
         )}
 
+        {error ? <Text style={[styles.dupHint, { color: c.danger }]} accessibilityLiveRegion="polite">{error}</Text> : null}
         <View style={styles.actions}>
           <Pressable
-            style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
+            style={({ pressed }) => [[styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }], styles.touchTarget]}
             onPress={onCancel}
-            disabled={busy}
+            disabled={busy} accessibilityRole="button" accessibilityState={{ disabled: busy }}
           >
             <Text style={styles.cancelText}>取消</Text>
           </Pressable>
 
           <Pressable
-            style={({ pressed }) => [
+            style={({ pressed }) => [[
               styles.okBtn,
               nothing && styles.okBtnOff,
               pressed && !nothing && { opacity: 0.85 },
-            ]}
+            ], styles.touchTarget]}
             onPress={onConfirm}
-            disabled={busy || nothing}
+            disabled={busy || nothing} accessibilityRole="button" accessibilityState={{ disabled: busy || nothing, busy }}
           >
             {busy ? (
               <ActivityIndicator size="small" color={c.onAccent} />
@@ -115,12 +121,13 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm }: Props) {
             )}
           </Pressable>
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   overlay: {
     position: 'absolute',
     top: 0,
@@ -128,7 +135,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: 'center',
-    paddingHorizontal: 22,
+    paddingHorizontal: 22, paddingVertical: 16,
   },
   backdrop: {
     position: 'absolute',
@@ -138,10 +145,10 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     bottom: 0,
     backgroundColor: c.scrim,
   },
-  card: {
+  cardContent: { padding: 18 },
+  card: { flexGrow: 0, maxHeight: '100%', width: '100%', borderWidth: metrics.strokeWidth, borderColor: c.hair,
     backgroundColor: c.card,
-    borderRadius: R.card + 4,
-    padding: 18,
+    borderRadius: metrics.cardRadius + 4,
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   iconWrap: {
@@ -161,15 +168,15 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     marginTop: 14,
     paddingVertical: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   cell: { flex: 1, alignItems: 'center' },
-  cellDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: c.hair },
+  cellDivider: { width: metrics.strokeWidth, height: 28, backgroundColor: c.hair },
   cellNum: { fontSize: 20, fontWeight: '600', color: c.accentText },
   cellNumMute: { color: c.text3 },
-  cellLabel: { marginTop: 2, fontSize: 11, color: c.text2 },
+  cellLabel: { marginTop: 2, fontSize: 12, color: c.text2 },
 
   dupHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text2 },
 
@@ -179,20 +186,20 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   emptyHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text3 },
 
   actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
-  cancelBtn: {
+  cancelBtn: { minWidth: metrics.controlHeight,
     flex: 1,
-    height: 42,
-    borderRadius: R.btn,
-    borderWidth: StyleSheet.hairlineWidth,
+    minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     alignItems: 'center',
     justifyContent: 'center',
   },
   cancelText: { fontSize: 14, color: c.text2 },
-  okBtn: {
+  okBtn: { minWidth: metrics.controlHeight,
     flex: 1.4,
-    height: 42,
-    borderRadius: R.btn,
+    minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent,
     alignItems: 'center',
     justifyContent: 'center',

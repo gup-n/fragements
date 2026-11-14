@@ -25,7 +25,8 @@ import {
   type StyleProp,
   type TextStyle,
 } from 'react-native';
-import { useThemedStyles, type Palette } from '../theme';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { blockHitCount, segmentHitCount } from '../documents/readers/markdownSearch';
 import { findHits } from '../util/highlight';
 import {
   flattenForPreview,
@@ -123,7 +124,7 @@ function InlineImage({ uri, onPress }: { uri: string; onPress?: () => void }) {
     <Image
       source={{ uri }}
       style={[styles.inlineImage, { aspectRatio: 1 / (aspect ?? 0.75) }]}
-      resizeMode="contain"
+      resizeMode="contain" fadeDuration={0}
       accessibilityLabel="正文里的配图"
     />
   );
@@ -148,27 +149,25 @@ function Inline({
   variant = 'default',
   selectable,
   highlight,
-}: { segs: Seg[] } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'highlight'>) {
+  activeHit,
+}: { segs: Seg[] } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'highlight' | 'activeHit'>) {
   const { styles } = useThemedStyles(makeStyles);
   const reading = variant === 'reading';
+  // 局部渲染游标，每次 render 从0起；不是跨渲染的可变状态。
+  let hitOffset = 0;
 
-  /**
-   * 按命中切开一段文字，命中的那几截套一层带底色的 Text。
-   *
-   * 嵌套的 Text 继承父级样式，所以加粗、等宽、阅读态字号都还在 ——
-   * 只在外面描一层底色，不动字色：深色主题下正文是浅色，amberBg 是深底，
-   * 硬改字色反而会让高亮的地方读不出来。
-   */
   const withHits = (text: string) => {
     if (!highlight || !text) return text;
     const hits = findHits(text, highlight);
+    const start = hitOffset;
+    hitOffset += hits.length;
     if (!hits.length) return text;
     const parts: React.ReactNode[] = [];
     let last = 0;
     hits.forEach((h, i) => {
       if (h.start > last) parts.push(text.slice(last, h.start));
       parts.push(
-        <Text key={i} style={styles.hit}>
+        <Text key={i} style={[styles.hit, activeHit === start + i && styles.hitCurrent]}>
           {text.slice(h.start, h.end)}
         </Text>,
       );
@@ -184,15 +183,11 @@ function Inline({
         if (seg.cite) {
           const ref = seg.cite;
           const label = citeLabel?.(ref) ?? null;
-          // 拿不到序号就不显示 —— 画一个点不开的编号比不画更让人困惑
           if (!label) return null;
           return (
             <Text
-              key={i}
-              style={styles.cite}
-              suppressHighlighting
-              accessibilityRole="button"
-              accessibilityLabel={`查看引用 ${label}`}
+              key={i} style={styles.cite} suppressHighlighting
+              accessibilityRole="button" accessibilityLabel={`查看引用 ${label}`}
               onPress={onCite ? () => onCite(ref) : undefined}
             >
               {label}
@@ -201,17 +196,8 @@ function Inline({
         }
         return (
           <Text
-            key={i}
-            selectable={selectable && !seg.cite}
-            style={
-              seg.bold
-                ? styles.bold
-                : seg.code
-                  ? reading
-                    ? styles.codeReading
-                    : styles.code
-                  : undefined
-            }
+            key={i} selectable={selectable}
+            style={[seg.bold && styles.bold, seg.code && (reading ? styles.codeReading : styles.code)]}
           >
             {withHits(seg.text)}
           </Text>
@@ -242,42 +228,36 @@ function Table({
   selectable,
   muted,
   highlight,
-}: { block: TableBlock } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'muted' | 'highlight'>) {
+  activeHit,
+}: { block: TableBlock } & CiteProps & Pick<Props, 'variant' | 'selectable' | 'muted' | 'highlight' | 'activeHit'>) {
   const { styles, c } = useThemedStyles(makeStyles);
   const dense = block.head.length >= 5;
   const reading = variant === 'reading';
   const mutedStyle = muted ? { color: c.text3 } : undefined;
+  let hitOffset = 0;
 
-  const cell = (segs: Seg[], col: number, head: boolean) => (
-    <View
-      key={col}
-      style={[
-        styles.td,
-        { flex: block.weights[col] ?? 3 },
-        col > 0 && styles.tdDivider,
-      ]}
-    >
-      <Text
-        selectable={selectable}
-        style={[
-          reading ? styles.tdTextReading : styles.tdText,
-          dense && styles.tdTextDense,
-          head && styles.thText,
-          mutedStyle,
-          { textAlign: ALIGN[block.align[col] ?? 'left'] },
-        ]}
-      >
-        <Inline
-          segs={segs}
-          onCite={onCite}
-          citeLabel={citeLabel}
-          variant={variant}
+  const cell = (segs: Seg[], col: number, head: boolean) => {
+    const start = hitOffset;
+    hitOffset += highlight ? segmentHitCount(segs, highlight) : 0;
+    return (
+      <View key={col} style={[styles.td, { flex: block.weights[col] ?? 3 }, col > 0 && styles.tdDivider]}>
+        <Text
           selectable={selectable}
-          highlight={highlight}
-        />
-      </Text>
-    </View>
-  );
+          style={[
+            reading ? styles.tdTextReading : styles.tdText,
+            dense && styles.tdTextDense, head && styles.thText, mutedStyle,
+            { textAlign: ALIGN[block.align[col] ?? 'left'] },
+          ]}
+        >
+          <Inline
+            segs={segs} onCite={onCite} citeLabel={citeLabel} variant={variant}
+            selectable={selectable} highlight={highlight}
+            activeHit={activeHit === undefined ? undefined : activeHit - start}
+          />
+        </Text>
+      </View>
+    );
+  };
 
   return (
     /*
@@ -326,6 +306,8 @@ interface Props {
    * 引用小标不参与高亮 —— 那是我方编号，不是正文。
    */
   highlight?: string;
+  /** 当前命中（本组件可见文字的0起序号），用下划线而非仅换底色标识。 */
+  activeHit?: number;
   /**
    * 每个文字块的实测 y（相对本组件内容的顶端）。
    *
@@ -363,6 +345,7 @@ export function NoteBody({
   selectable,
   muted,
   highlight,
+  activeHit,
   onBlockLayout,
   literalCitations,
   imageUri,
@@ -378,6 +361,12 @@ export function NoteBody({
   );
   const flat = useMemo(() => flattenForPreview(blocks), [blocks]);
   const groups = useMemo(() => group(blocks), [blocks]);
+  let hitOffset = 0;
+  const nextActiveHit = (count: number) => {
+    const start = hitOffset;
+    hitOffset += count;
+    return activeHit === undefined ? undefined : activeHit - start;
+  };
 
   /** 文字块的内层：标题 / 列表 / 段落，样式按块种类定 */
   const blockInner = (b: TextBlock) => (
@@ -399,6 +388,7 @@ export function NoteBody({
         variant={variant}
         selectable={selectable}
         highlight={highlight}
+        activeHit={nextActiveHit(highlight ? segmentHitCount(b.segs, highlight) : 0)}
       />
     </Text>
   );
@@ -410,7 +400,7 @@ export function NoteBody({
    * 结果落在代码块里却什么都不描，会以为「搜到了但没找到」。
    * 行内样式继承外层 Text，等宽字体不会丢。
    */
-  const hitParts = (text: string) => {
+  const hitParts = (text: string, current?: number) => {
     if (!highlight || !text) return text;
     const hits = findHits(text, highlight);
     if (!hits.length) return text;
@@ -419,7 +409,7 @@ export function NoteBody({
     hits.forEach((h, i) => {
       if (h.start > last) out.push(text.slice(last, h.start));
       out.push(
-        <Text key={i} style={styles.hit}>
+        <Text key={i} style={[styles.hit, current === i && styles.hitCurrent]}>
           {text.slice(h.start, h.end)}
         </Text>,
       );
@@ -432,7 +422,7 @@ export function NoteBody({
   const codeView = (code: string, key: React.Key) => (
     <View key={key} style={styles.codeBox}>
       <Text style={[reading ? styles.codeTextReading : styles.codeText, mutedStyle]} selectable>
-        {hitParts(code)}
+        {hitParts(code, nextActiveHit(highlight ? findHits(code, highlight).length : 0))}
       </Text>
     </View>
   );
@@ -447,6 +437,7 @@ export function NoteBody({
       selectable={selectable}
       muted={muted}
       highlight={highlight}
+      activeHit={nextActiveHit(highlight ? blockHitCount(block, highlight) : 0)}
     />
   );
 
@@ -466,7 +457,7 @@ export function NoteBody({
   if (numberOfLines !== undefined) {
     return (
       <Text
-        style={[styles.root, style, mutedStyle]}
+        style={[styles.root, reading && styles.rootReading, style, mutedStyle]}
         numberOfLines={numberOfLines}
         selectable={selectable}
       >
@@ -525,7 +516,7 @@ export function NoteBody({
           }
           return (
             <View key={bi} onLayout={measure}>
-              <Text style={[styles.root, style, mutedStyle]} selectable={selectable}>
+              <Text style={[styles.root, reading && styles.rootReading, style, mutedStyle]} selectable={selectable}>
                 {blockInner(b)}
               </Text>
             </View>
@@ -545,7 +536,7 @@ export function NoteBody({
         if (g.type === 'image') return imageView(g.id, gi);
 
         return (
-          <Text key={gi} style={[styles.root, style, mutedStyle]} selectable={selectable}>
+          <Text key={gi} style={[styles.root, reading && styles.rootReading, style, mutedStyle]} selectable={selectable}>
             {g.blocks.map((b, i) => (
               <React.Fragment key={i}>
                 {/* 小标题前面空一行，读起来才有分节感 */}
@@ -557,91 +548,51 @@ export function NoteBody({
         );
       })}
       {/* 表格和代码块只设了上下边距，末尾多出来的那点空隙在这里收掉 */}
-      {groups.length === 0 ? <Text style={[styles.root, style, mutedStyle]} selectable={selectable} /> : null}
+      {groups.length === 0 ? <Text style={[styles.root, reading && styles.rootReading, style, mutedStyle]} selectable={selectable} /> : null}
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
-  root: { fontSize: 14, lineHeight: 23, color: c.text },
-  h: { fontSize: 12, lineHeight: 20, color: c.accentText, fontWeight: '600' },
-  /** 碎片详情是阅读态：标题要比正文大，不然会像一行小标签 */
-  hReading: { fontSize: 16, lineHeight: 25, color: c.accentText, fontWeight: '600' },
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  root: { fontSize: 15, lineHeight: 24, color: c.text },
+  rootReading: { fontSize: 17, lineHeight: 30 },
+  h: { fontSize: 16, lineHeight: 25, color: c.text, fontWeight: '600' },
+  hReading: { fontSize: 19, lineHeight: 30, color: c.text, fontWeight: '600' },
   b: {},
   p: {},
-  /** 加粗的关键词略重字重：颜色继承正文，已合并的碎片才能整体置灰 */
   bold: { fontWeight: '600' },
-  /**
-   * 搜索命中：只描底色，不动字色。
-   *
-   * 深色主题的正文是浅灰，amberBg 是深琥珀底 —— 改字色反而可能变成「深色压深色」。
-   * 底色加圆角就够它从段落里跳出来了，加粗和等宽的既有样式也不受影响。
-   */
-  hit: { backgroundColor: c.amberBg, borderRadius: 3 },
-  /** 行内代码只换字形加浅底，不加边框 —— 正文里到处是补丁框会更乱 */
-  code: { fontFamily: MONO, fontSize: 13, color: c.text2 },
-  codeReading: { fontFamily: MONO, fontSize: 15, color: c.text2 },
-  /**
-   * 引用小标：浅蓝底 + 一个序号。
-   *
-   * 字号压到 11 是因为它必须能嵌在 14px 的正文行里不把行高顶开；
-   * 颜色走 accent 系，和正文拉开但不抢视线 —— 它是辅助信息，不是内容。
-   */
+  hit: { backgroundColor: c.amberBg, borderRadius: 2 },
+  hitCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
+  code: { fontFamily: MONO, fontSize: 14 },
+  codeReading: { fontFamily: MONO, fontSize: 15 },
+  /** 引用仍是原有的编号与点击契约，不把作者的字面引用吞掉。 */
   cite: {
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: '600',
-    color: c.accentText,
-    backgroundColor: c.accentBg,
-    borderRadius: 4,
-    paddingHorizontal: 3.5,
-    marginHorizontal: 1,
-    overflow: 'hidden',
+    fontSize: 12, lineHeight: 18, fontWeight: '600', color: c.accentText,
+    backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: 4, marginHorizontal: 1, textDecorationLine: 'underline',
   },
-
-  hr: { height: StyleSheet.hairlineWidth, backgroundColor: c.hair, marginVertical: 12 },
-
+  hr: { height: metrics.strokeWidth, backgroundColor: c.hair, marginVertical: 16 },
   codeBox: {
-    backgroundColor: c.hairSoft,
-    borderRadius: 8,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    marginVertical: 8,
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    paddingHorizontal: 12, paddingVertical: 8, marginVertical: 8,
   },
-  codeText: { fontFamily: MONO, fontSize: 12.5, lineHeight: 19, color: c.text2 },
-  codeTextReading: { fontFamily: MONO, fontSize: 14.5, lineHeight: 22, color: c.text2 },
-
+  codeText: { fontFamily: MONO, fontSize: 13, lineHeight: 21, color: c.text },
+  codeTextReading: { fontFamily: MONO, fontSize: 15, lineHeight: 24, color: c.text },
   table: {
-    marginVertical: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.hair,
-    borderRadius: 8,
-    overflow: 'hidden',
+    marginVertical: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    borderRadius: metrics.buttonRadius, overflow: 'hidden',
   },
   tr: { flexDirection: 'row', alignItems: 'stretch' },
   trHead: { backgroundColor: c.hairSoft },
-  /** 表格下方那行「另 N 列未显示」。字号跟着正文小一档，别抢表格的注意力 */
-  tableNote: {
-    fontSize: 12,
-    color: c.text3,
-    marginTop: -4,
-    marginBottom: 8,
-    paddingHorizontal: 2,
-  },
-  trDivider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
-
-  /** 正文里的图：整宽、按自身比例给高，上下留一点气口 */
+  tableNote: { fontSize: 12, lineHeight: 19, color: c.text2, marginTop: -4, marginBottom: 8, paddingHorizontal: 2 },
+  trDivider: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
   imageBox: { marginVertical: 8 },
-  inlineImage: {
-    width: '100%',
-    borderRadius: 10,
-    backgroundColor: c.hairSoft,
-  },
-
-  td: { paddingHorizontal: 9, paddingVertical: 7, justifyContent: 'center', minWidth: 0 },  tdDivider: { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: c.hair },
-  tdText: { fontSize: 12.5, lineHeight: 19, color: c.text },
-  tdTextReading: { fontSize: 14, lineHeight: 21, color: c.text },
-  tdTextDense: { fontSize: 11.5, lineHeight: 17 },
-  /** 表头压成正文色 + 稍重：小结和回答里的表通常是参考数据，不该抢视线 */
-  thText: { fontWeight: '600', color: c.text2 },
+  inlineImage: { width: '100%', borderRadius: metrics.cardRadius, backgroundColor: c.hairSoft },
+  td: { paddingHorizontal: 8, paddingVertical: 8, justifyContent: 'center', minWidth: 0 },
+  tdDivider: { borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair },
+  tdText: { fontSize: 13, lineHeight: 21, color: c.text },
+  tdTextReading: { fontSize: 15, lineHeight: 24, color: c.text },
+  tdTextDense: { fontSize: 12, lineHeight: 19 },
+  thText: { fontWeight: '600', color: c.text },
 });

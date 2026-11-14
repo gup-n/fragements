@@ -13,6 +13,7 @@
  */
 import type { AiConfig, Fragment, Todo } from '../types';
 import { formatTime, periodLabel, periodRange } from '../util/date';
+import { fragmentText } from '../util/fragmentText';
 import { AiError, requestChat, type ChatProgress } from './chat';
 
 /**
@@ -135,9 +136,9 @@ function buildSystemPrompt() {
 function fragmentLine(f: Fragment) {
   const d = new Date(f.createdAt);
   const stamp = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${formatTime(f.createdAt)}`;
-  const tags = f.tags.length ? `（${f.tags.join('/')}）` : '';
-  const text = f.content.length > PER_FRAGMENT_CLIP ? `${f.content.slice(0, PER_FRAGMENT_CLIP)}…` : f.content;
-  return `${stamp}${tags} ${text.replace(/\s*\n\s*/g, ' / ')}`;
+  const fullText = fragmentText(f);
+  const text = fullText.length > PER_FRAGMENT_CLIP ? `${fullText.slice(0, PER_FRAGMENT_CLIP)}…` : fullText;
+  return `${stamp} ${text.replace(/\s*\n\s*/g, ' / ')}`;
 }
 
 /**

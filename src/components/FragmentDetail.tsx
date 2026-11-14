@@ -14,7 +14,6 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   FlatList,
   Image,
@@ -30,12 +29,14 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, FragmentImage, Note } from '../types';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
+import { fragmentReaderHits, type FragmentReaderHit } from '../documents/readers/fragmentSearch';
+import { ScreenHeader } from './ScreenHeader';
 import { NoteBody } from './NoteBody';
 import { IconButton } from './IconButton';
 import { daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
-import { countHits } from '../util/highlight';
-import { parseBlocks } from '../util/mdBlocks';
+import { findHits } from '../util/highlight';
 import { useKeyboardHeight } from '../util/keyboard';
 import { imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { imageToken, looseImages, removeImageToken } from '../util/inlineImages';
@@ -94,7 +95,8 @@ export function FragmentDetail({
   onAddImages,
   onRemoveImage,
 }: Props) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { c, styles, metrics } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
   const window = useWindowDimensions();
   /**
    * 用实测容器宽度，不用 useWindowDimensions：桌面预览把 App 关在 420px 的壳里，
@@ -133,11 +135,12 @@ export function FragmentDetail({
   }, [fragment]);
 
   const stopEdit = useCallback(() => {
+    if (saving || addingImage) { setToast('正在保存或加入图片，请稍候'); return; }
     setEditing(false);
     setArmedDelete(false);
     setArmedImage(null);
     setImageMenu(false);
-  }, []);
+  }, [saving, addingImage]);
 
   // 覆盖层不是 Modal，安卓返回键得自己接。层级从高到低：
   // 全屏看图 → 加图菜单 → 编辑态 → 关页面
@@ -151,6 +154,14 @@ export function FragmentDetail({
         setImageMenu(false);
         return true;
       }
+      if (armedImage !== null) {
+        setArmedImage(null);
+        return true;
+      }
+      if (armedDelete) {
+        setArmedDelete(false);
+        return true;
+      }
       if (editing) {
         stopEdit();
         return true;
@@ -159,7 +170,7 @@ export function FragmentDetail({
       return true;
     });
     return () => sub.remove();
-  }, [editing, imageMenu, stopEdit, onClose, viewer]);
+  }, [editing, imageMenu, stopEdit, onClose, viewer, armedImage, armedDelete]);
 
   /** 底部的左右箭头：滑动手势之外再给一个确定性的入口，也给「这里能滑」一个提示 */
   const jump = useCallback(
@@ -167,9 +178,9 @@ export function FragmentDetail({
       const next = current + delta;
       if (next < 0 || next >= items.length) return;
       setCurrent(next);
-      listRef.current?.scrollToIndex({ index: next, animated: true });
+      listRef.current?.scrollToIndex({ index: next, animated: !reduceMotion });
     },
-    [current, items.length],
+    [current, items.length, reduceMotion],
   );
 
   /* ---------------- 搜索命中：高亮 + 逐处跳转 ---------------- */
@@ -182,7 +193,7 @@ export function FragmentDetail({
    * 不共用一份：横向 FlatList 会同时挂着相邻几页，共用的话后挂载的那页
    * 会把当前页的 y 覆盖掉，跳转就跳到别人的高度上。
    */
-  const blockY = useRef(new Map<number, Map<number, number>>());
+  const blockY = useRef(new Map<number, Map<string, number>>());
   /** 每页的 ScrollView，跳转时按碎片 id 取当前这一页的 */
   const pageRefs = useRef(new Map<number, ScrollViewInstance>());
 
@@ -192,26 +203,10 @@ export function FragmentDetail({
    * 口径必须和 NoteBody 对得上：同一个 parseBlocks、同一批 seg、同一个 countHits。
    * 不按字符比例估位置 —— 中文一行约 18 字、英文能塞 40 个，估出来的 y 常常差半屏。
    */
-  const hitBlocks = useMemo(() => {
-    const q = highlightQuery?.trim() ?? '';
-    const at: number[] = [];
-    if (!q) return at;
-    parseBlocks(fragment?.content ?? '').forEach((b, bi) => {
-      // 分隔线没有文字；表格和代码块有，而且 NoteBody 现在也给它们量位置，
-      // 漏掉的话「共 5 处」只能跳到 3 处，编号和正文对不上
-      let n = 0;
-      if (b.kind === 'table') {
-        for (const seg of b.head.flat()) n += countHits(seg.text, q);
-        for (const row of b.rows) for (const seg of row.flat()) n += countHits(seg.text, q);
-      } else if (b.kind === 'code') {
-        n = countHits(b.text, q);
-      } else if (b.kind !== 'hr' && b.kind !== 'image') {
-        for (const seg of b.segs) n += countHits(seg.text, q);
-      }
-      for (let k = 0; k < n; k++) at.push(bi);
-    });
-    return at;
-  }, [fragment?.content, highlightQuery]);
+  const hitBlocks = useMemo(
+    () => fragment ? fragmentReaderHits(fragment, highlightQuery ?? '') : [],
+    [fragment?.content, fragment?.images, fragment?.project, highlightQuery],
+  );
 
   const hitTotal = hitBlocks.length;
   /** 换页那一帧 hitIndex 可能还落在旧的范围内，读的时候夹一下，不会显示「第 4 / 2 处」 */
@@ -226,7 +221,7 @@ export function FragmentDetail({
     else pageRefs.current.delete(id);
   }, []);
 
-  const registerBlock = useCallback((id: number, blockIndex: number, y: number) => {
+  const registerBlock = useCallback((id: number, blockIndex: string, y: number) => {
     let m = blockY.current.get(id);
     if (!m) {
       m = new Map();
@@ -240,16 +235,15 @@ export function FragmentDetail({
       const last = hitTotal - 1;
       if (last < 0 || !fragment) return;
       const next = Math.min(Math.max(shownHit + delta, 0), last);
-      if (next === shownHit) return;
       setHitIndex(next);
-      const y = blockY.current.get(fragment.id)?.get(hitBlocks[next]);
+      const y = blockY.current.get(fragment.id)?.get(hitBlocks[next].blockKey);
       // 还没量到这一块（刚换页的那一帧）就不滚：高亮本身已经在屏幕上，
       // 按 undefined 硬滚一下反而会跳回顶部
       if (y !== undefined) {
-        pageRefs.current.get(fragment.id)?.scrollTo({ y: Math.max(0, y - 16), animated: true });
+        pageRefs.current.get(fragment.id)?.scrollTo({ y: Math.max(0, y - 16), animated: !reduceMotion });
       }
     },
-    [fragment, hitBlocks, hitTotal, shownHit],
+    [fragment, hitBlocks, hitTotal, shownHit, reduceMotion],
   );
 
   async function save() {
@@ -264,6 +258,8 @@ export function FragmentDetail({
     try {
       await onSave(fragment.id, text);
       stopEdit();
+    } catch (e) {
+      setToast(e instanceof Error ? `保存失败：${e.message}` : '保存失败，正文仍在编辑器里');
     } finally {
       setSaving(false);
     }
@@ -389,40 +385,21 @@ export function FragmentDetail({
   ) : null;
 
   if (editing) {
-    const canSave = draft.trim().length > 0 && !saving;
+    const canSave = draft.trim().length > 0 && !saving && !addingImage;
     return (
-      <View style={[styles.root, { paddingBottom: keyboardHeight }]}>
-        <View style={styles.topBar}>
-          {/* 和阅读态用同一个关闭钮，切进编辑时顶部不会整排跳位 */}
-          <IconButton
-            name="close"
-            size={22}
-            color={c.text2}
-            onPress={stopEdit}
-            accessibilityLabel="取消编辑"
-          />
-          <View style={styles.topCenter}>
-            <Text style={styles.topDate}>编辑碎片</Text>
-            <Text style={styles.topTime}>{draft.length} 字</Text>
-          </View>
-          <Pressable
-            onPress={save}
-            disabled={!canSave}
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.editBtn,
-              styles.saveBtn,
-              !canSave && styles.saveBtnOff,
-              pressed && canSave && { opacity: 0.7 },
-            ]}
-          >
-            {saving ? (
-              <ActivityIndicator size="small" color={c.onAccent} />
-            ) : (
-              <Text style={[styles.saveText, !canSave && styles.saveTextOff]}>保存</Text>
-            )}
-          </Pressable>
-        </View>
+      <View style={[styles.root, { paddingBottom: keyboardHeight }]} accessibilityViewIsModal>
+        <ScreenHeader
+          title="编辑碎片" subtitle={`${draft.length} 字`} backIcon="close" backLabel="取消编辑" onBack={stopEdit}
+          right={
+            <Pressable
+              onPress={save} disabled={!canSave} accessibilityRole="button" accessibilityLabel="保存碎片"
+              accessibilityState={{ disabled: !canSave, busy: saving }}
+              style={({ pressed }) => [styles.editBtn, styles.saveBtn, !canSave && styles.saveBtnOff, pressed && canSave && { opacity: 0.7 }]}
+            >
+              {saving ? <ActivityIndicator size="small" color={c.onAccent} /> : <Text style={[styles.saveText, !canSave && styles.saveTextOff]}>保存</Text>}
+            </Pressable>
+          }
+        />
 
         {/*
           编辑态的配图条：删图必须在这里做，而且要点两次 ——
@@ -440,27 +417,30 @@ export function FragmentDetail({
               <Image
                 source={{ uri: fragmentImageUri(img.path) ?? undefined }}
                 style={styles.editImageThumb}
-                resizeMode="cover"
+                resizeMode="contain" fadeDuration={0}
               />
               <Pressable
                 onPress={() => void removeImage(img)}
-                hitSlop={8}
+                disabled={saving || addingImage}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: saving || addingImage }}
                 style={[styles.editImageRemove, armedImage === img.id && styles.editImageRemoveArmed]}
                 accessibilityLabel={
                   armedImage === img.id ? `再点一次删除第 ${i + 1} 张图` : `删除第 ${i + 1} 张图`
                 }
               >
-                {armedImage === img.id ? (
-                  <Text style={styles.editImageRemoveText}>删?</Text>
-                ) : (
-                  <Ionicons name="close" size={12} color="#FFFFFF" />
-                )}
+                <Text style={[styles.editImageRemoveText, armedImage === img.id && styles.editImageRemoveArmedText]}>
+                  {armedImage === img.id ? '确认删除' : '删除图片'}
+                </Text>
               </Pressable>
             </View>
           ))}
           <Pressable
             onPress={() => setImageMenu((v) => !v)}
             style={styles.editImageAdd}
+            disabled={saving || addingImage}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: saving || addingImage, busy: addingImage }}
             accessibilityLabel="加一张图"
           >
             {addingImage ? (
@@ -485,16 +465,19 @@ export function FragmentDetail({
           textAlignVertical="top"
           placeholder="写点什么…"
           placeholderTextColor={c.text3}
+          accessibilityLabel="编辑碎片正文"
+          selectionColor={c.selection}
+          editable={!saving && !addingImage}
         />
 
         <View style={styles.editFoot}>
-          <Pressable onPress={remove} hitSlop={8}>
+          <Pressable onPress={remove} style={styles.deleteButton} accessibilityRole="button" disabled={saving || addingImage}>
             <Text style={styles.deleteText}>
               {armedDelete ? '再点一次确认删除' : '删除这条碎片'}
             </Text>
           </Pressable>
           <Text style={styles.editHint}>
-            {armedImage ? '再点一次图上的叉号才会真删' : '「加图」插在光标处'}
+            {armedImage ? '点「确认删除」才会真删' : '「加图」插在光标处'}
           </Text>
         </View>
 
@@ -519,24 +502,13 @@ export function FragmentDetail({
         if (w > 0 && w !== width) setWidth(w);
       }}
     >
-      <View style={styles.topBar}>
-        <IconButton name="close" size={22} color={c.text2} onPress={onClose} accessibilityLabel="关闭" />
-        <View style={styles.topCenter}>
-          <Text style={styles.topDate}>{daySubLabel(fragment.createdAt)}</Text>
-          <Text style={styles.topTime}>
-            {formatTime(fragment.createdAt)}
-            {items.length > 1 ? ` · ${current + 1} / ${items.length}` : ''}
-          </Text>
-        </View>
-        <Pressable
-          onPress={startEdit}
-          hitSlop={8}
-          style={({ pressed }) => [styles.editBtn, pressed && { opacity: 0.6 }]}
-        >
-          <Ionicons name="create-outline" size={17} color={c.accentText} />
-          <Text style={styles.editText}>编辑</Text>
-        </Pressable>
-      </View>
+      <View style={styles.main} importantForAccessibility={viewer !== null ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={viewer !== null}>
+      <ScreenHeader
+        title={daySubLabel(fragment.createdAt)}
+        subtitle={`${formatTime(fragment.createdAt)}${items.length > 1 ? ` · ${current + 1} / ${items.length}` : ''}`}
+        backIcon="close" backLabel="关闭碎片" onBack={onClose}
+        right={<IconButton name="create-outline" label="编辑" tone="soft" onPress={startEdit} accessibilityLabel="编辑这条碎片" />}
+      />
 
       {/*
         「第 i / N 处」只在有命中时出现。单独占一行而不是塞进标题栏：
@@ -545,9 +517,10 @@ export function FragmentDetail({
       */}
       {hitTotal > 0 ? (
         <View style={styles.hitBar}>
-          <Text style={styles.hitBarText}>
-            第 {shownHit + 1} / {hitTotal} 处
-          </Text>
+          <Pressable style={styles.hitCurrentButton} onPress={() => goHit(0)} accessibilityRole="button" accessibilityLabel="定位当前命中">
+            <Text style={styles.hitBarText}>第 {shownHit + 1} / {hitTotal > 99 ? '99+' : hitTotal} 处</Text>
+            <Text style={styles.hitLocation}>点按定位 · {hitBlocks[shownHit]?.section.startsWith('image:') ? '图中文字' : hitBlocks[shownHit]?.section === 'project' ? '事项' : '正文'}</Text>
+          </Pressable>
           <View style={styles.hitBarBtns}>
             <IconButton
               name="chevron-up"
@@ -585,7 +558,7 @@ export function FragmentDetail({
           pagingEnabled
           showsHorizontalScrollIndicator={false}
           keyExtractor={(f) => String(f.id)}
-          initialScrollIndex={initialIndex}
+          initialScrollIndex={current}
           getItemLayout={(_, i) => ({ length: width, offset: width * i, index: i })}
           windowSize={3}
           initialNumToRender={1}
@@ -607,6 +580,7 @@ export function FragmentDetail({
               onAddImage={() => setImageMenu((v) => !v)}
               addingImage={addingImage}
               highlight={highlightQuery}
+              activeHit={item.id === fragment.id ? hitBlocks[shownHit] : undefined}
               registerScroll={registerScroll}
               registerBlock={registerBlock}
             />
@@ -616,23 +590,9 @@ export function FragmentDetail({
 
       {items.length > 1 ? (
         <View style={styles.footer}>
-          <Pressable
-            onPress={() => jump(-1)}
-            disabled={current === 0}
-            hitSlop={12}
-            style={({ pressed }) => [styles.navBtn, pressed && current > 0 && { opacity: 0.5 }]}
-          >
-            <Ionicons name="chevron-back" size={19} color={current === 0 ? c.hair : c.text2} />
-          </Pressable>
-          <Text style={styles.hint}>左右滑动查看上一条</Text>
-          <Pressable
-            onPress={() => jump(1)}
-            disabled={atEnd}
-            hitSlop={12}
-            style={({ pressed }) => [styles.navBtn, pressed && !atEnd && { opacity: 0.5 }]}
-          >
-            <Ionicons name="chevron-forward" size={19} color={atEnd ? c.hair : c.text2} />
-          </Pressable>
+          <IconButton name="chevron-back" onPress={() => jump(-1)} disabled={current === 0} accessibilityLabel="上一条碎片" />
+          <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
+          <IconButton name="chevron-forward" onPress={() => jump(1)} disabled={atEnd} accessibilityLabel="下一条碎片" />
         </View>
       ) : null}
 
@@ -643,12 +603,14 @@ export function FragmentDetail({
         </View>
       ) : null}
 
+      </View>
+
       {/*
         全屏看图。黑底、整屏、点一下关掉 —— 看截图时不该有一圈白边和标题栏。
         用 FlatList 横向翻页而不是一张一张点：一屏之内就能左右比较两张截图。
       */}
       {viewer !== null && images[viewer] ? (
-        <View style={styles.viewer}>
+        <View style={styles.viewer} accessibilityViewIsModal>
           <FlatList
             style={styles.viewerList}
             data={images}
@@ -667,7 +629,7 @@ export function FragmentDetail({
                 <Image
                   source={{ uri: fragmentImageUri(item.path) ?? undefined }}
                   style={styles.viewerImage}
-                  resizeMode="contain"
+                  resizeMode="contain" fadeDuration={0}
                 />
               </Pressable>
             )}
@@ -676,14 +638,61 @@ export function FragmentDetail({
             <Text style={styles.viewerCount}>
               {Math.min(viewer, images.length - 1) + 1} / {images.length}
             </Text>
-            <Pressable onPress={() => setViewer(null)} hitSlop={12} style={styles.viewerClose}>
-              <Ionicons name="close" size={20} color="#FFFFFF" />
+            <Pressable onPress={() => setViewer(null)} style={styles.viewerClose} accessibilityRole="button" accessibilityLabel="关闭图片">
+              <Ionicons name="close" size={20} color={c.mediaForeground} />
             </Pressable>
           </View>
         </View>
       ) : null}
     </View>
   );
+}
+
+type ReaderSectionProps = React.ComponentProps<typeof NoteBody> & {
+  sectionKey: string;
+  fragmentId: number;
+  registerBlock: (id: number, block: string, y: number) => void;
+  label?: string;
+  containerStyle?: React.ComponentProps<typeof View>['style'];
+};
+
+/** 每块的y必须加上整个正文区在页面里的实测位置，不能把图高或标题高漏掉。 */
+function ReaderTextSection({ sectionKey, fragmentId, registerBlock, label, containerStyle, ...body }: ReaderSectionProps) {
+  const { styles } = useThemedStyles(makeStyles);
+  const layout = useRef({ top: 0, content: 0, blocks: new Map<number, number>() });
+  const publish = () => {
+    const p = layout.current;
+    for (const [block, y] of p.blocks) registerBlock(fragmentId, `${sectionKey}:${block}`, p.top + p.content + y);
+  };
+  return (
+    <View style={containerStyle} onLayout={(e) => { layout.current.top = e.nativeEvent.layout.y; publish(); }}>
+      {label ? <Text style={styles.imageTextLabel}>{label}</Text> : null}
+      <View onLayout={(e) => { layout.current.content = e.nativeEvent.layout.y; publish(); }}>
+        <NoteBody
+          {...body}
+          onBlockLayout={body.highlight ? (index, y) => {
+            const p = layout.current;
+            p.blocks.set(index, y);
+            registerBlock(fragmentId, `${sectionKey}:${index}`, p.top + p.content + y);
+          } : undefined}
+        />
+      </View>
+    </View>
+  );
+}
+
+function LiteralHits({ text, query, activeHit }: { text: string; query?: string; activeHit?: number }) {
+  const { styles } = useThemedStyles(makeStyles);
+  const hits = query ? findHits(text, query) : [];
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  hits.forEach((hit, i) => {
+    if (hit.start > last) out.push(text.slice(last, hit.start));
+    out.push(<Text key={i} style={[styles.plainHit, i === activeHit && styles.plainCurrentHit]}>{text.slice(hit.start, hit.end)}</Text>);
+    last = hit.end;
+  });
+  if (last < text.length) out.push(text.slice(last));
+  return <>{out}</>;
 }
 
 /**
@@ -704,6 +713,7 @@ function Page({
   done,
   notes,
   highlight,
+  activeHit,
   imageBusy,
   imageFail,
   onReparseImage,
@@ -718,6 +728,7 @@ function Page({
   done: boolean;
   notes: Note[];
   highlight?: string;
+  activeHit?: FragmentReaderHit;
   imageBusy: Set<number>;
   imageFail: Record<string, string>;
   onReparseImage: (fragment: Fragment, imageId: number) => void;
@@ -725,9 +736,9 @@ function Page({
   onAddImage: () => void;
   addingImage: boolean;
   registerScroll: (id: number, view: ScrollViewInstance | null) => void;
-  registerBlock: (id: number, blockIndex: number, y: number) => void;
+  registerBlock: (id: number, blockIndex: string, y: number) => void;
 }) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { c, styles, metrics } = useThemedStyles(makeStyles);
   /**
    * 每张图的原始宽高比，按配图 id 记。
    *
@@ -815,11 +826,11 @@ function Page({
                     style={[
                       styles.imageBig,
                       {
-                        width: Math.max(0, width - 44),
-                        height: Math.max(0, width - 44) * (aspects[img.id] ?? 0.75),
+                        width: Math.max(0, width - (metrics.pagePadding + 8) * 2),
+                        height: Math.max(0, width - (metrics.pagePadding + 8) * 2) * (aspects[img.id] ?? 0.75),
                       },
                     ]}
-                    resizeMode="contain"
+                    resizeMode="contain" fadeDuration={0}
                   />
                   {fragment.images.length > 1 ? (
                     <View style={styles.imageIndex}>
@@ -831,19 +842,19 @@ function Page({
                 {st === 'busy' ? (
                   <Text style={styles.imageState}>正在读图里的字…</Text>
                 ) : st === 'fail' ? (
-                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                  <Pressable style={styles.imageReadButton} onPress={() => onReparseImage(fragment, img.id)} accessibilityRole="button">
                     <Text style={[styles.imageState, styles.imageStateErr]} numberOfLines={3}>
                       没读出文字：{reason} · 点这里重试
                     </Text>
                   </Pressable>
                 ) : st === 'read' ? (
-                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                  <Pressable style={styles.imageReadButton} onPress={() => onReparseImage(fragment, img.id)} accessibilityRole="button">
                     <Text style={styles.imageState}>图里的字 · 点一下重读</Text>
                   </Pressable>
                 ) : st === 'empty' ? (
                   <Text style={styles.imageState}>这张图里没读出字</Text>
                 ) : (
-                  <Pressable onPress={() => onReparseImage(fragment, img.id)} hitSlop={8}>
+                  <Pressable style={styles.imageReadButton} onPress={() => onReparseImage(fragment, img.id)} accessibilityRole="button">
                     <Text style={styles.imageState}>
                       还没读过 · 整理或提问时会看，也可以点这里现在读
                     </Text>
@@ -864,6 +875,8 @@ function Page({
         style={({ pressed }) => [styles.addImageBtn, pressed && { opacity: 0.6 }]}
         accessibilityRole="button"
         accessibilityLabel="给这条碎片加图片"
+        disabled={addingImage}
+        accessibilityState={{ disabled: addingImage, busy: addingImage }}
       >
         {addingImage ? (
           <ActivityIndicator size="small" color={c.text3} />
@@ -877,36 +890,25 @@ function Page({
         )}
       </Pressable>
 
-      {/* 图里的字单独一块：用户要能核对模型抄得对不对，而不是只能信 */}
-      {texts.length ? (
-        <View style={styles.imageTextBox}>
-          <Text style={styles.imageTextLabel}>
-            {fragment.images.length > 1 ? `图里的字（${texts.length} 张有字）` : '图里的字'}
-          </Text>
-          {fragment.images.map((img, i) => {
-            const t = (img.text ?? '').trim();
-            if (!t) return null;
-            return (
-              <View key={img.id} style={styles.imageTextGroup}>
-                {fragment.images.length > 1 ? (
-                  <Text style={styles.imageTextIndex}>第 {i + 1} 张</Text>
-                ) : null}
-                <NoteBody text={t} style={styles.imageTextBody} variant="reading" selectable />
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
+      {texts.length ? fragment.images.map((img, i) => {
+        const text = (img.text ?? '').trim();
+        if (!text) return null;
+        const section = `image:${img.id}`;
+        return (
+          <ReaderTextSection
+            key={img.id} sectionKey={section} fragmentId={fragment.id} registerBlock={registerBlock}
+            containerStyle={styles.imageTextBox}
+            label={fragment.images.length > 1 ? `图中文字 · 第 ${i + 1} 张` : '图中文字'}
+            text={text} style={styles.imageTextBody} variant="reading" selectable literalCitations
+            highlight={highlight} activeHit={activeHit?.section === section ? activeHit.localIndex : undefined}
+          />
+        );
+      }) : null}
 
-      {/* 碎片正文也走 Markdown 渲染：会话转出来的碎片有标题 / 列表 / 表格 / 代码 */}
-      <NoteBody
-        text={fragment.content}
-        style={styles.body}
-        variant="reading"
-        selectable
-        muted={merged}
-        highlight={highlight}
-        // 正文里 `![](img:12)` 那一行画成这张图；点它进同一个全屏看图
+      <ReaderTextSection
+        sectionKey="body" fragmentId={fragment.id} registerBlock={registerBlock}
+        text={fragment.content} style={styles.body} variant="reading" selectable muted={merged}
+        highlight={highlight} activeHit={activeHit?.section === 'body' ? activeHit.localIndex : undefined}
         imageUri={(id) => {
           const img = fragment.images.find((x) => x.id === id);
           return img ? fragmentImageUri(img.path) : null;
@@ -915,13 +917,11 @@ function Page({
           const i = fragment.images.findIndex((x) => x.id === id);
           if (i >= 0) onOpenImage(i);
         }}
-        // 只有搜索进来才逐块渲染：平时合并成一个大 Text，行距更连贯
-        onBlockLayout={highlight ? (bi, y) => registerBlock(fragment.id, bi, y) : undefined}
       />
 
       {hasMeta ? (
-        <View style={styles.meta}>
-          {fragment.project ? <Text style={styles.project}>{fragment.project}</Text> : null}
+        <View style={styles.meta} onLayout={(e) => { if (highlight && fragment.project) registerBlock(fragment.id, 'project:0', e.nativeEvent.layout.y); }}>
+          {fragment.project ? <Text style={styles.project}><LiteralHits text={fragment.project} query={highlight} activeHit={activeHit?.section === 'project' ? activeHit.localIndex : undefined} /></Text> : null}
           {fragment.source !== 'app' ? (
             <View style={styles.source}>
               <Ionicons
@@ -955,315 +955,88 @@ function Page({
             <Text style={styles.noteKind}>当月总结</Text>
             <Text style={styles.notePeriod}>{periodLabel(n.period)}</Text>
           </View>
-          <NoteBody text={n.bodyMd} style={styles.noteBody} />
+          <NoteBody text={n.bodyMd} style={styles.noteBody} selectable />
         </View>
       ))}
     </ScrollView>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
-  root: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: c.page,
-  },
-  topBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.hair,
-  },
-  topCenter: { flex: 1, alignItems: 'center' },
-  topDate: { fontSize: 13.5, color: c.text, fontWeight: '600' },
-  topTime: { fontSize: 11, color: c.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
-  editBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: c.accentBg,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: R.pill,
-  },
-  editText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
-
-  /**
-   * 命中跳转条。底色用 amberBg —— 和正文里的高亮块是同一个颜色，
-   * 「这条在这里」和「正文里描的那几段」一眼就是同一件事。
-   */
-  hitBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingLeft: 20,
-    paddingRight: 12,
-    paddingVertical: 3,
-    backgroundColor: c.amberBg,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.hair,
-  },
-  hitBarText: { fontSize: 11.5, color: c.amberText, fontWeight: '600', fontVariant: ['tabular-nums'] },
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
+  main: { flex: 1 },
+  editBtn: { minWidth: 64, minHeight: metrics.controlHeight, paddingHorizontal: 12, paddingVertical: 8, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  hitBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: metrics.pagePadding, backgroundColor: c.hairSoft, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  hitCurrentButton: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 4 },
+  hitBarText: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  hitLocation: { fontSize: 12, lineHeight: 18, color: c.text2 },
   hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-
-  content: { paddingHorizontal: 22, paddingTop: 22, paddingBottom: 48 },
-  /** 配图：竖排，每张按原始比例给高度，不裁剪 */
-  imageList: { gap: 10, marginBottom: 14 },
-  imageBox: { gap: 6 },
-  imageBig: { borderRadius: R.card, backgroundColor: c.hairSoft, alignSelf: 'center' },
-  /** 多图时左上角标序号：点开的全屏和这里是同一份顺序，能对得上 */
-  imageIndex: {
-    position: 'absolute',
-    top: 8,
-    left: 8,
-    minWidth: 20,
-    height: 20,
-    borderRadius: 10,
-    paddingHorizontal: 5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  imageIndexText: { fontSize: 11, color: '#FFFFFF', fontWeight: '600' },
-  imageState: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  plainHit: { backgroundColor: c.amberBg },
+  plainCurrentHit: { textDecorationLine: 'underline', fontWeight: '700' },
+  content: { paddingHorizontal: metrics.pagePadding + 8, paddingTop: 24, paddingBottom: 32 },
+  imageList: { gap: 12, marginBottom: 16 },
+  imageBox: { gap: 8 },
+  imageBig: { borderRadius: metrics.cardRadius, backgroundColor: c.hairSoft, alignSelf: 'center' },
+  imageIndex: { position: 'absolute', top: 8, left: 8, minWidth: 24, minHeight: 24, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
+  imageIndexText: { fontSize: 12, lineHeight: 18, color: c.mediaForeground, fontWeight: '600' },
+  imageState: { fontSize: 12, lineHeight: 19, color: c.text2 },
   imageStateErr: { color: c.danger },
-  /** 阅读态的加图入口：虚线框，看起来就是「这里还可以放东西」 */
-  addImageBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 10,
-    marginBottom: 16,
-    borderRadius: R.btn,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderStyle: 'dashed',
-    borderColor: c.hair,
-  },
-  addImageText: { fontSize: 12.5, color: c.text2 },
-  /** 「图里的字」单独一块，方便核对模型抄得对不对 */
-  imageTextBox: {
-    marginBottom: 16,
-    paddingHorizontal: 12,
-    paddingTop: 10,
-    paddingBottom: 12,
-    borderRadius: R.card,
-    backgroundColor: c.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.hair,
-  },
-  imageTextLabel: { fontSize: 11, color: c.text3, letterSpacing: 0.4, marginBottom: 6 },
-  imageTextGroup: { marginBottom: 6 },
-  imageTextIndex: { fontSize: 10.5, color: c.text3, marginBottom: 2 },
-  imageTextBody: { fontSize: 14, lineHeight: 23, color: c.text2 },
-  badges: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 14 },
-  doneBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: c.tealBg,
-    borderRadius: R.pill,
-    paddingLeft: 5,
-    paddingRight: 9,
-    paddingVertical: 3,
-  },
-  doneText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
-  orgBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: c.accentBg,
-    borderRadius: R.pill,
-    paddingLeft: 5,
-    paddingRight: 9,
-    paddingVertical: 3,
-  },
-  orgText: { fontSize: 10.5, lineHeight: 15, color: c.accentText },
-  merged: { fontSize: 11, color: c.text3 },
-
-  /* 详情页是「阅读」场景，字号和行高都比列表放宽一档 */
-  body: { fontSize: 17, lineHeight: 30, color: c.text, letterSpacing: 0.2 },
-
-  meta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 7,
-    marginTop: 26,
-    paddingTop: 16,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: c.hair,
-  },
-  project: { fontSize: 12, color: c.text2 },
-  source: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  sourceText: { fontSize: 11.5, color: c.text3 },
-
-  count: { fontSize: 11, color: c.text3, marginTop: 14, fontVariant: ['tabular-nums'] },
-
-  // 当天小结
-  noteCard: {
-    marginTop: 26,
-    backgroundColor: c.accentBg,
-    borderRadius: R.card,
-    paddingHorizontal: 15,
-    paddingVertical: 13,
-  },
-  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  noteKind: { fontSize: 11.5, color: c.accentText, fontWeight: '600' },
-  notePeriod: { flex: 1, fontSize: 11, color: c.text3 },
-  noteBody: { fontSize: 14.5, lineHeight: 24, color: c.text },
-
-  // 编辑态：整屏输入，字号与阅读态一致
-  saveBtn: { backgroundColor: c.accent, minWidth: 62, justifyContent: 'center' },
-  saveBtnOff: { backgroundColor: c.hairSoft },
-  saveText: { fontSize: 12.5, color: c.onAccent, fontWeight: '600' },
+  imageReadButton: { minHeight: metrics.controlHeight, paddingVertical: 8, justifyContent: 'center' },
+  addImageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: metrics.controlHeight, paddingVertical: 8, marginBottom: 16, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderStyle: 'dashed', borderColor: c.text3 },
+  addImageText: { fontSize: 13, lineHeight: 20, color: c.text2 },
+  imageTextBox: { marginBottom: 16, padding: 12, borderRadius: metrics.cardRadius, backgroundColor: c.card, borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  imageTextLabel: { fontSize: 12, lineHeight: 19, color: c.text2, fontWeight: '600', marginBottom: 8 },
+  imageTextBody: { fontSize: 16, lineHeight: 27, color: c.text },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 },
+  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.tealBg, borderRadius: metrics.buttonRadius, paddingHorizontal: 8, paddingVertical: 4, borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  doneText: { fontSize: 12, lineHeight: 18, color: c.tealText },
+  orgBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 8, paddingVertical: 4, borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  orgText: { fontSize: 12, lineHeight: 18, color: c.text2 },
+  merged: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  body: { fontSize: 17, lineHeight: 30, color: c.text },
+  meta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 24, paddingTop: 16, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
+  project: { fontSize: 13, lineHeight: 21, color: c.text2 },
+  source: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  sourceText: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  count: { fontSize: 12, lineHeight: 19, color: c.text2, marginTop: 16, fontVariant: ['tabular-nums'] },
+  noteCard: { marginTop: 24, backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, padding: 16 },
+  noteHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 },
+  noteKind: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '600' },
+  notePeriod: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2 },
+  noteBody: { fontSize: 15, lineHeight: 25, color: c.text },
+  saveBtn: { backgroundColor: c.accent, borderColor: c.accent },
+  saveBtnOff: { backgroundColor: c.hairSoft, borderColor: c.hair },
+  saveText: { fontSize: 14, lineHeight: 22, color: c.onAccent, fontWeight: '600' },
   saveTextOff: { color: c.text3 },
-  editImages: {
-    flexGrow: 0,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.hair,
-  },
-  editImagesContent: { gap: 8, paddingHorizontal: 22, paddingVertical: 10, alignItems: 'center' },
-  editImageItem: { width: 56, height: 56 },
-  editImageThumb: { width: 56, height: 56, borderRadius: R.btn, backgroundColor: c.hairSoft },
-  editImageRemove: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    width: 19,
-    height: 19,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.62)',
-  },
-  /** 二次确认态：红底 + 「删?」，和碎片删除的两次点击是同一套手感 */
-  editImageRemoveArmed: { width: 26, height: 19, borderRadius: 10, backgroundColor: c.danger },
-  editImageRemoveText: { fontSize: 9, color: '#FFFFFF', fontWeight: '600' },
-  editImageAdd: {
-    width: 56,
-    height: 56,
-    borderRadius: R.btn,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 1,
-    backgroundColor: c.hairSoft,
-  },
-  editImageAddText: { fontSize: 10, color: c.text3 },
-  editInput: {
-    flex: 1,
-    fontSize: 17,
-    lineHeight: 30,
-    letterSpacing: 0.2,
-    color: c.text,
-    paddingHorizontal: 22,
-    paddingTop: 22,
-    paddingBottom: 22,
-  },
-  editFoot: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 22,
-    paddingTop: 10,
-    paddingBottom: 14,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: c.hair,
-  },
-  deleteText: { fontSize: 12.5, color: c.danger },
-  editHint: { fontSize: 11, color: c.text3 },
-
-  /** 加图菜单：贴在底部，阅读态和编辑态共用 */
-  imageSheet: {
-    position: 'absolute',
-    left: 16,
-    right: 16,
-    bottom: 64,
-    backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.hair,
-    paddingVertical: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.16,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
-  },
-  imageSheetRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  imageSheetCancel: { paddingHorizontal: 16, paddingVertical: 12 },
-  imageSheetText: { fontSize: 13.5, color: c.text },
-  toast: {
-    position: 'absolute',
-    left: 24,
-    right: 24,
-    bottom: 86,
-    alignItems: 'center',
-  },
-  toastText: {
-    fontSize: 12,
-    lineHeight: 18,
-    color: c.text2,
-    backgroundColor: c.card,
-    borderRadius: R.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    overflow: 'hidden',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.hair,
-  },
-
-  /** 全屏看图：纯黑底，只留计数和关闭 */
-  viewer: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: '#000000',
-  },
+  editImages: { flexGrow: 0, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  editImagesContent: { gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 8, alignItems: 'center' },
+  editImageItem: { width: 88 },
+  editImageThumb: { width: 88, height: 72, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
+  editImageRemove: { minHeight: metrics.controlHeight, width: 88, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, alignItems: 'center', justifyContent: 'center', backgroundColor: c.card },
+  editImageRemoveArmed: { backgroundColor: c.danger, borderColor: c.danger },
+  editImageRemoveText: { fontSize: 12, lineHeight: 19, color: c.text2, fontWeight: '600' },
+  editImageRemoveArmedText: { color: c.onDanger },
+  editImageAdd: { width: 80, minHeight: 120, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: c.hairSoft },
+  editImageAddText: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  editInput: { flex: 1, fontSize: 17, lineHeight: 30, color: c.text, paddingHorizontal: metrics.pagePadding + 8, paddingVertical: 16 },
+  editFoot: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
+  deleteButton: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: 8 },
+  deleteText: { fontSize: 13, lineHeight: 20, color: c.danger },
+  editHint: { flexShrink: 1, fontSize: 12, lineHeight: 19, color: c.text2 },
+  // 菜单在布局流里：键盘升起后仍跟着输入区，不再绝对定位在键盘下面。
+  imageSheet: { marginHorizontal: metrics.pagePadding, marginVertical: 8, backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, paddingVertical: 4 },
+  imageSheetRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 },
+  imageSheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 8 },
+  imageSheetText: { fontSize: 14, lineHeight: 22, color: c.text },
+  toast: { paddingHorizontal: metrics.pagePadding, paddingBottom: 8, alignItems: 'center' },
+  toastText: { fontSize: 13, lineHeight: 20, color: c.text2, backgroundColor: c.card, borderRadius: metrics.buttonRadius, paddingHorizontal: 12, paddingVertical: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  viewer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.mediaBackground },
   viewerPage: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerList: { flex: 1 },
   viewerImage: { width: '100%', height: '100%' },
-  viewerBar: {
-    position: 'absolute',
-    top: 10,
-    left: 16,
-    right: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  viewerCount: { fontSize: 12, color: 'rgba(255,255,255,0.85)', fontVariant: ['tabular-nums'] },
-  viewerClose: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.16)',
-  },
-
-  footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: c.hair,
-  },
-  navBtn: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
-  hint: { fontSize: 11.5, color: c.text3 },
+  viewerBar: { position: 'absolute', top: 8, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  viewerCount: { fontSize: 13, lineHeight: 20, color: c.mediaForeground, backgroundColor: c.mediaScrim, paddingHorizontal: 8, paddingVertical: 4, fontVariant: ['tabular-nums'] },
+  viewerClose: { width: metrics.controlHeight, height: metrics.controlHeight, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.mediaForeground, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
+  hint: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2, textAlign: 'center' },
 });

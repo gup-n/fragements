@@ -1,15 +1,17 @@
 /**
- * 调色板 → WebView 主题。
- *
- * 单独一个文件是为了让 `color.ts` 保持「不依赖 react-native」——
- * 那个文件要能被 node 直接跑断言，一 import `theme.tsx` 就连带把 React Native
- * 拖进编译单元，断言脚本就得配 jsx / rn 类型，纯函数层也就不纯了。
+ * 调色板 → WebView 主题。保持纯转换，不在这里导入 RN 运行时。
+ * PDF 的原稿始终画在白纸上；搜索/选区必须用纸面专用深色半透明墨，
+ * 不能套用深色界面的白色 accent，也不能用实心底色盖住 canvas 的字。
  */
-import type { Palette } from '../../theme';
+import type { Palette, ThemeMetrics } from '../../theme';
 import type { PdfTheme } from './pdfProtocol';
 import { withAlpha } from './color';
 
-export function pdfThemeOf(c: Palette): PdfTheme {
+/** 原件例外：PDF.js 未指定纸色的页面仍按白纸呈现，不随界面反相。 */
+const PDF_PAPER = '#FFFFFF';
+
+export function pdfThemeOf(c: Palette, metrics?: ThemeMetrics, reduceMotion = false): PdfTheme {
+  const paperInk = c.mediaBackground;
   return {
     page: c.page,
     text: c.text,
@@ -18,9 +20,16 @@ export function pdfThemeOf(c: Palette): PdfTheme {
     hair: c.hair,
     accent: c.accent,
     accentText: c.accentText,
-    // 半透明：PDF 页面是白底画布，实色高亮会把字整块盖住
-    hitBg: withAlpha(c.amberText, 0.22),
-    hitCurrent: withAlpha(c.amberText, 0.55),
+    paper: PDF_PAPER,
+    surface: c.hairSoft,
+    // 同一灰墨在浅/深界面的白纸上都看得见；保留字形的绝大部分对比度。
+    hitBg: withAlpha(paperInk, 0.12),
+    hitCurrent: withAlpha(paperInk, 0.18),
+    hitOutline: paperInk,
+    selection: withAlpha(paperInk, 0.24),
+    strokeWidth: metrics?.strokeWidth ?? 1,
+    radius: metrics?.cardRadius ?? 14,
+    reduceMotion,
     danger: c.danger,
   };
 }

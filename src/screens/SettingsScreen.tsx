@@ -1,6 +1,6 @@
+import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   Linking,
   Platform,
@@ -17,9 +17,11 @@ import type { SearchProbe } from '../db/types';
 import {
   R,
   THEME_MODE_LABEL,
+  THEME_STYLE_LABEL,
   useTheme,
   useThemedStyles,
   type Palette,
+  type ThemeMetrics,
   type ThemeMode,
 } from '../theme';
 import { repo } from '../db/repo';
@@ -33,6 +35,8 @@ import { looksBinary } from '../util/mdParse';
 import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { ChoiceChip } from '../components/ChoiceChip';
+import { useKeyboardHeight } from '../util/keyboard';
 import { UpdateSheet } from '../components/UpdateSheet';
 import {
   RELEASES_WEB,
@@ -45,7 +49,7 @@ import {
 import { getDownloadBase, setDownloadBase } from '../update/mirror';
 import { getMineruToken, setMineruToken } from '../ai/mineru';
 import { versionLabel } from '../util/semver';
-import type { IoniconName } from '../components/IconButton';
+import { IconButton, type IoniconName } from '../components/IconButton';
 
 interface Props {
   fragments: Fragment[];
@@ -86,7 +90,8 @@ const PANE_TITLE: Record<Pane, string> = {
 
 export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
-  const { mode, setMode } = useTheme();
+  const { mode, setMode, style: themeStyle, setStyle, saveError } = useTheme();
+  const keyboardHeight = useKeyboardHeight();
   /** 当前在哪一层。`root` 是模块菜单，其余是子页 */
   const [pane, setPane] = useState<Pane>('root');
   const [baseUrl, setBaseUrl] = useState('');
@@ -289,21 +294,27 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   }
 
   async function handleConfirmImport() {
-    if (!importPreview) return;
+    if (!importPreview || busy === 'importing') return;
     setBusy('importing');
     setIoMsg(null);
     try {
-      const { inserted } = await applyImport(importPreview.fresh);
+      let inserted: number;
+      try {
+        ({ inserted } = await applyImport(importPreview.fresh));
+      } catch (error) {
+        // 部分成功、源行位置等证据由导入层提供；确认页保留以便安全重试。
+        setIoMsg({ kind: 'err', text: error instanceof Error ? error.message : '导入中断，可以重试未导入的内容' });
+        return;
+      }
       setImportPreview(null);
-      setStats(await repo.stats());
-      onChanged();
-      setIoMsg({
-        kind: 'ok',
-        text: `已导入 ${inserted} 条`,
-      });
-    } catch (e) {
-      // 不回滚：已经写进去的靠判重挡着，重试不会产生重复
-      setIoMsg({ kind: 'err', text: (e as Error).message || '写入失败，可以再点一次导入' });
+      let refreshNote = '';
+      try {
+        setStats(await repo.stats());
+        await onChanged();
+      } catch {
+        refreshNote = '；内容已写入，但页面刷新失败，请返回后重新查看，不要重复导入';
+      }
+      setIoMsg({ kind: 'ok', text: `已导入 ${inserted} 条${refreshNote}` });
     } finally {
       setBusy('idle');
     }
@@ -313,8 +324,9 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
     setBusy('exporting');
     setIoMsg(null);
     try {
-      const todos = await repo.listTodos();
-      const { message } = await exportMarkdown(fragments, todos);
+      // 导出是完整读取，不能复用首页可能只有500条的渲染窗口。
+      const [allFragments, todos] = await Promise.all([repo.listAllFragments(), repo.listTodos()]);
+      const { message } = await exportMarkdown(allFragments, todos);
       setIoMsg({ kind: 'ok', text: message });
     } catch (e) {
       setIoMsg({ kind: 'err', text: (e as Error).message || '导出失败' });
@@ -442,7 +454,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
   const dataValue = `${stats.total} 条 · ${stats.pending} 待整理`;
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { paddingBottom: keyboardHeight }]}><View style={styles.normalContent} importantForAccessibility={importPreview || update ? "no-hide-descendants" : "auto"}>
       <ScreenHeader
         title={PANE_TITLE[pane]}
         subtitle={pane === 'root' ? 'v' + APP_VERSION : undefined}
@@ -478,12 +490,12 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             <MenuRow
               icon="color-palette-outline"
               label="主题"
-              value={THEME_MODE_LABEL[mode]}
+              value={`${THEME_MODE_LABEL[mode]} · ${THEME_STYLE_LABEL[themeStyle]}`}
               onPress={() => setPane('appearance')}
               last
             />
           </View>
-          <Text style={styles.groupHint}>字体大小、背景、风格调整后续也在这里。</Text>
+          <Text style={styles.groupHint}>明暗与界面风格分开设置，修改立即生效。</Text>
 
           <GroupTitle text="数据" />
           <View style={styles.cardTight}>
@@ -495,7 +507,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               last
             />
           </View>
-          <Text style={styles.groupHint}>条数、索引健康度、导出导入都在这一页；数据只在手机本地。</Text>
+          <Text style={styles.groupHint}>查看本地数据与索引；Markdown 是文字迁出，不是完整备份。</Text>
 
           <GroupTitle text="关于" />
           <View style={styles.cardTight}>
@@ -526,7 +538,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               {official ? (
                 <Text style={styles.officialTag}>当前</Text>
               ) : (
-                <Pressable onPress={switchToOfficial} hitSlop={6}>
+                <Pressable onPress={switchToOfficial} style={styles.touchTarget}>
                   <Text style={styles.linkText}>切回官方</Text>
                 </Pressable>
               )}
@@ -544,13 +556,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   placeholderTextColor={c.text3}
                   style={[styles.input, styles.keyInput]}
                 />
-                <Pressable onPress={() => setShowKey((v) => !v)} hitSlop={8}>
-                  <Ionicons
-                    name={showKey ? 'eye-off-outline' : 'eye-outline'}
-                    size={17}
-                    color={c.text3}
-                  />
-                </Pressable>
+<IconButton name={showKey ? "eye-off-outline" : "eye-outline"} size={20} onPress={() => setShowKey((value) => !value)} accessibilityLabel={showKey ? "隐藏API Key" : "显示API Key"} accessibilityState={{ expanded: showKey }} />
               </View>
               <Text style={styles.fieldHint}>
                 只填这一项就能用。Key 在 platform.deepseek.com 的「API keys」里创建。
@@ -571,8 +577,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               </Text>
               <Pressable
                 onPress={() => void refreshBalance(true)}
-                hitSlop={8}
-                accessibilityLabel="刷新余额"
+                accessibilityLabel="刷新余额" style={styles.touchTarget}
               >
                 {balanceBusy ? (
                   <ActivityIndicator size="small" color={c.text3} />
@@ -584,7 +589,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
             <View style={styles.linkRow}>
               <Pressable
-                style={styles.linkBtn}
+                style={[styles.linkBtn, styles.touchTarget]}
                 onPress={() => {
                   Linking.openURL('https://platform.deepseek.com/api_keys').catch(() => undefined);
                 }}
@@ -593,7 +598,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 <Text style={styles.linkText}>去领 Key</Text>
               </Pressable>
               <Pressable
-                style={styles.linkBtn}
+                style={[styles.linkBtn, styles.touchTarget]}
                 onPress={() => {
                   Linking.openURL('https://platform.deepseek.com/top_up').catch(() => undefined);
                 }}
@@ -602,7 +607,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 <Text style={styles.linkText}>充值</Text>
               </Pressable>
               <Pressable
-                style={styles.linkBtn}
+                style={[styles.linkBtn, styles.touchTarget]}
                 onPress={() => {
                   Linking.openURL('https://platform.deepseek.com/usage').catch(() => undefined);
                 }}
@@ -625,24 +630,18 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                   ['deepseek-flash', 'Flash（默认）'],
                   ['deepseek-v4-pro', 'Pro（更强）'],
                 ] as const).map(([id, label]) => (
-                  <Pressable
-                    key={id}
-                    style={[styles.chip, model === id && styles.chipOn]}
-                    onPress={() => setModel(id)}
-                  >
-                    <Text style={[styles.chipText, model === id && styles.chipTextOn]}>{label}</Text>
-                  </Pressable>
+                  <ChoiceChip key={id} label={label} selected={model === id} onPress={() => setModel(id)} />
                 ))}
               </View>
             </View>
 
             <View style={styles.btnRow}>
-              <Pressable style={styles.ghostBtn} onPress={handleSave} disabled={busy !== 'idle'}>
+              <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={handleSave} disabled={busy !== 'idle'}>
                 <Text style={styles.ghostBtnText}>
                   {busy === 'saving' ? '保存中…' : '保存'}
                 </Text>
               </Pressable>
-              <Pressable style={styles.solidBtn} onPress={handleTest} disabled={busy !== 'idle'}>
+              <Pressable style={[styles.solidBtn, styles.touchTarget]} onPress={handleTest} disabled={busy !== 'idle'}>
                 {busy === 'testing' ? (
                   <ActivityIndicator size="small" color={c.onAccent} />
                 ) : (
@@ -652,13 +651,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </View>
 
             {msg && (
-              <Text style={[styles.msg, msg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+              <Text accessibilityLiveRegion="polite" style={[styles.msg, msg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
                 {msg.text}
               </Text>
             )}
 
             {/* 第三方接口：默认收起。打开它的人才需要看 Base URL */}
-            <Pressable style={styles.customToggle} onPress={() => setShowCustom((v) => !v)}>
+            <Pressable style={[styles.customToggle, styles.touchTarget]} onPress={() => setShowCustom((v) => !v)}>
               <Ionicons
                 name={showCustom ? 'chevron-down' : 'chevron-forward'}
                 size={13}
@@ -703,15 +702,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
           <View style={styles.card}>
             <Field label="让模型先想再答" last={!thinking}>
               <View style={styles.toggleRow}>
-                <Pressable
-                  style={[styles.toggle, thinking && styles.toggleOn]}
-                  onPress={() => setThinking((v) => !v)}
-                  hitSlop={6}
-                  accessibilityRole="switch"
-                  accessibilityState={{ checked: thinking }}
-                >
-                  <View style={styles.toggleKnob} />
-                </Pressable>
+                <ChoiceChip
+                  label={thinking ? '开启' : '关闭'}
+                  accessibilityLabel="让模型先想再答"
+                  role="switch"
+                  selected={thinking}
+                  onPress={() => setThinking((value) => !value)}
+                />
                 <Text style={styles.toggleHint}>
                   {thinking ? '整理时能看到它怎么想的' : '关掉后更快更省钱，但看不到过程'}
                 </Text>
@@ -722,15 +719,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               <Field label="思考强度" last>
                 <View style={styles.chipRow}>
                   {(['low', 'high', 'max'] as const).map((e) => (
-                    <Pressable
-                      key={e}
-                      style={[styles.chip, effort === e && styles.chipOn]}
-                      onPress={() => setEffort(e)}
-                    >
-                      <Text style={[styles.chipText, effort === e && styles.chipTextOn]}>
-                        {EFFORT_LABEL[e]}
-                      </Text>
-                    </Pressable>
+<ChoiceChip key={e} label={EFFORT_LABEL[e]} selected={effort === e} onPress={() => setEffort(e)} />
                   ))}
                 </View>
                 <Text style={styles.fieldHint}>
@@ -772,31 +761,32 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       {/* ---------------- 外观 ---------------- */}
       {pane === 'appearance' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <GroupTitle text="主题" />
+          <GroupTitle text="明暗" />
           <View style={styles.card}>
-            <View style={styles.chipRow}>
+            <View style={styles.chipRow} accessibilityLabel="明暗偏好">
               {(['light', 'dark', 'system'] as const).map((m) => (
-                <Pressable
-                  key={m}
-                  style={[styles.chip, mode === m && styles.chipOn]}
-                  onPress={() => setMode(m)}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: mode === m }}
-                >
-                  <Text style={[styles.chipText, mode === m && styles.chipTextOn]}>
-                    {THEME_MODE_LABEL[m]}
-                  </Text>
-                </Pressable>
+                <ChoiceChip key={m} label={THEME_MODE_LABEL[m]} selected={mode === m} onPress={() => setMode(m)} />
+              ))}
+            </View>
+            <Text style={styles.fieldHint}>立即生效，不用保存。「跟随系统」只改变明暗，不会切换下面的界面风格。</Text>
+          </View>
+          <GroupTitle text="界面风格" />
+          <View style={styles.card}>
+            <View style={styles.chipRow} accessibilityLabel="界面风格">
+              {(['default', 'ink'] as const).map((choice) => (
+                <ChoiceChip key={choice} label={THEME_STYLE_LABEL[choice]} selected={themeStyle === choice} onPress={() => setStyle(choice)} />
               ))}
             </View>
             <Text style={styles.fieldHint}>
-              改完立刻生效，不用保存。选「跟随系统」时，系统切到深色它也跟着切。
+              {themeStyle === 'ink'
+                ? '黑白高对比、清晰边线、减少动态效果。图片和 PDF 原稿保持原样，不会灰度或反相。'
+                : '克制的纸面配色；尊重系统减少动态效果设置。'}
             </Text>
+            <Text style={styles.fieldHint}>切回「默认」即可退出墨水风格，明暗偏好与所有记录不变。这不会回退应用版本。</Text>
           </View>
-          <Text style={styles.groupHint}>
-            字体大小、背景、风格调整还没做 —— 但入口会留在这一个模块里，
-            不会再散到别的页去。
-          </Text>
+          {saveError ? (
+            <Text style={[styles.msg, styles.msgErr]} accessibilityLiveRegion="polite">{saveError}</Text>
+          ) : null}
         </ScrollView>
       ) : null}
 
@@ -833,7 +823,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </View>
 
             <Pressable
-              style={styles.ghostBtnWide}
+              style={[styles.ghostBtnWide, styles.touchTarget]}
               onPress={handleRebuildIndex}
               disabled={busy !== 'idle'}
             >
@@ -846,14 +836,14 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
           <GroupTitle text="导入导出" />
           <View style={styles.card}>
-            <Pressable style={styles.ghostBtnWide} onPress={handleExport} disabled={busy !== 'idle'}>
+            <Pressable style={[styles.ghostBtnWide, styles.touchTarget]} onPress={handleExport} disabled={busy !== 'idle'}>
               <Ionicons name="download-outline" size={15} color={c.text} />
               <Text style={styles.ghostBtnText}>
                 {busy === 'exporting' ? '正在导出…' : '导出 Markdown'}
               </Text>
             </Pressable>
             <Pressable
-              style={styles.ghostBtnWide}
+              style={[styles.ghostBtnWide, styles.touchTarget]}
               onPress={handlePickImport}
               disabled={busy !== 'idle'}
             >
@@ -890,7 +880,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               改过什么」在浏览器里一样能看。更新说明本体在 GitHub，App 内不再排一遍。
             */}
             <Pressable
-              style={styles.aboutRow}
+              style={[styles.aboutRow, styles.touchTarget]}
               onPress={() => {
                 Linking.openURL(REPO_WEB).catch(() => undefined);
               }}
@@ -903,7 +893,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             </Pressable>
 
             <Pressable
-              style={styles.aboutRow}
+              style={[styles.aboutRow, styles.touchTarget]}
               onPress={() => {
                 Linking.openURL(RELEASES_WEB).catch(() => undefined);
               }}
@@ -922,7 +912,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
             {Platform.OS === 'android' ? (
               <>
                 <Pressable
-                  style={styles.aboutRow}
+                  style={[styles.aboutRow, styles.touchTarget]}
                   onPress={handleCheckUpdate}
                   disabled={checking}
                 >
@@ -938,7 +928,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                             checkState === 'update' && styles.updateStateNew,
                             checkState === 'error' && styles.updateStateErr,
                           ]}
-                          numberOfLines={1}
+                          numberOfLines={2}
                         >
                           {checkMsg || '点这里检查'}
                         </Text>
@@ -950,19 +940,17 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
 
                 <View style={styles.aboutRow}>
                   <Text style={styles.aboutKey}>启动时自动检查</Text>
-                  <Pressable
-                    style={[styles.toggle, autoCheck && styles.toggleOn]}
+                  <ChoiceChip
+                    label={autoCheck ? '开启' : '关闭'}
+                    accessibilityLabel="启动时自动检查更新"
+                    role="switch"
+                    selected={autoCheck}
                     onPress={() => {
                       const next = !autoCheck;
                       setAutoCheckOn(next);
-                      setAutoCheck(next).catch(() => undefined);
+                      setAutoCheck(next).catch(() => setCheckMsg('本次已切换，但自动检查偏好没有保存成功'));
                     }}
-                    hitSlop={6}
-                    accessibilityRole="switch"
-                    accessibilityState={{ checked: autoCheck }}
-                  >
-                    <View style={styles.toggleKnob} />
-                  </Pressable>
+                  />
                 </View>
               </>
             ) : null}
@@ -1010,12 +998,14 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
         </ScrollView>
       ) : null}
 
+      </View>
       {importPreview && (
         <ImportSheet
           preview={importPreview}
           busy={busy === 'importing'}
           onCancel={() => setImportPreview(null)}
           onConfirm={handleConfirmImport}
+          error={ioMsg?.kind === 'err' ? ioMsg.text : undefined}
         />
       )}
 
@@ -1063,7 +1053,7 @@ function MenuRow({
   const { c, styles } = useThemedStyles(makeStyles);
   return (
     <Pressable
-      style={({ pressed }) => [styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed]}
+      style={({ pressed }) => [[styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed], styles.touchTarget]}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={value ? `${label}，${value}` : label}
@@ -1119,12 +1109,14 @@ function Stat({ num, label }: { num: number; label: string }) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
+  normalContent: { flex: 1 },
   root: { flex: 1, backgroundColor: c.page },
 
   content: { paddingHorizontal: 16, paddingBottom: 40 },
   groupTitle: {
-    fontSize: 11.5,
+    fontSize: 12,
     color: c.text2,
     fontWeight: '600',
     letterSpacing: 0.6,
@@ -1134,7 +1126,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
   groupHint: {
-    fontSize: 11,
+    fontSize: 12,
     color: c.text3,
     lineHeight: 16,
     marginTop: 8,
@@ -1143,16 +1135,16 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   card: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     padding: 14,
   },
   /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
   cardTight: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     overflow: 'hidden',
   },
@@ -1164,27 +1156,28 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 12,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   menuRowLast: { borderBottomWidth: 0 },
   rowPressed: { backgroundColor: c.hairSoft },
   menuLabel: { flex: 1, fontSize: 14.5, color: c.text },
-  menuValueWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '55%' },
-  menuValue: { fontSize: 13, color: c.text3, flexShrink: 1 },
+  menuValueWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '54%' },
+  menuValue: { fontSize: 13, lineHeight: 20, color: c.text2, flexShrink: 1, textAlign: 'right' },
   menuValueWarn: { color: c.danger },
   menuValueLink: { color: c.accentText, fontWeight: '600' },
 
   field: {
     paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
-  fieldLabel: { fontSize: 11, color: c.text3, marginBottom: 5 },
-  fieldHint: { fontSize: 11, color: c.text3, lineHeight: 16, marginTop: 4 },
-  hintOk: { fontSize: 11, color: c.accentText, marginTop: 4 },
-  hintErr: { fontSize: 11, color: c.danger, marginTop: 4 },
+  fieldLabel: { fontSize: 12, color: c.text3, marginBottom: 5 },
+  fieldHint: { fontSize: 12, color: c.text3, lineHeight: 16, marginTop: 4 },
+  hintOk: { fontSize: 12, color: c.accentText, marginTop: 4 },
+  hintErr: { fontSize: 12, color: c.danger, marginTop: 4 },
   input: {
+    minHeight: metrics.controlHeight,
     fontSize: 14.5,
     color: c.text,
     paddingVertical: 2,
@@ -1194,32 +1187,32 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   keyInput: { flex: 1 },
 
   btnRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
-  ghostBtn: {
+  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
     paddingVertical: 10,
-    borderRadius: R.btn,
-    borderWidth: 0.5,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
-  ghostBtnWide: {
+  ghostBtnWide: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 6,
     paddingVertical: 11,
-    borderRadius: R.btn,
-    borderWidth: 0.5,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     marginTop: 14,
   },
   ghostBtnText: { fontSize: 13, color: c.text },
-  solidBtn: {
+  solidBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 10,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent,
   },
   solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
@@ -1229,7 +1222,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   msgErr: { color: c.danger },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  toggleHint: { flex: 1, fontSize: 11.5, color: c.text3, lineHeight: 17 },
+  toggleHint: { flex: 1, fontSize: 12, color: c.text3, lineHeight: 17 },
   toggle: {
     width: 38,
     height: 22,
@@ -1240,7 +1233,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'flex-start',
   },
   toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
-  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: '#FFFFFF' },
+  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: c.controlThumb },
 
   /* ---- 配置：官方区块 ---- */
   officialHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
@@ -1261,12 +1254,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginTop: 10,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   balanceText: { flex: 1, fontSize: 12, lineHeight: 18, color: c.text2 },
   linkRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
-  linkBtn: {
+  linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
@@ -1275,7 +1268,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     borderRadius: R.pill,
     backgroundColor: c.accentBg,
   },
-  linkText: { fontSize: 11.5, color: c.accentText, fontWeight: '500' },
+  linkText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
   modelField: { marginTop: 12, gap: 6 },
 
   /* ---- 配置：第三方折叠 ---- */
@@ -1285,18 +1278,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 5,
     marginTop: 16,
     paddingTop: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
   customToggleText: { fontSize: 12, color: c.text3 },
   customBox: { marginTop: 4 },
 
-  chipRow: { flexDirection: 'row', gap: 7 },
-  chip: {
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     borderRadius: R.pill,
     paddingHorizontal: 14,
     paddingVertical: 5,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
@@ -1307,23 +1300,23 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   stat: {
     flex: 1,
     backgroundColor: c.hairSoft,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingVertical: 12,
     alignItems: 'center',
   },
   statNum: { fontSize: 20, color: c.text, fontWeight: '600' },
-  statLabel: { fontSize: 11, color: c.text3, marginTop: 3 },
+  statLabel: { fontSize: 12, color: c.text3, marginTop: 3 },
 
   indexBox: {
     marginTop: 4,
     backgroundColor: c.hairSoft,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 11,
     paddingVertical: 10,
   },
   indexHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   indexTitle: { flex: 1, fontSize: 12.5, fontWeight: '500', lineHeight: 18 },
-  indexHint: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 4 },
+  indexHint: { fontSize: 12, color: c.text3, lineHeight: 17, marginTop: 4 },
 
   updateValue: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   updateState: { fontSize: 12.5, color: c.text3, maxWidth: 210 },
@@ -1336,7 +1329,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 14,
     paddingVertical: 13,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   aboutKey: { fontSize: 13.5, color: c.text2 },

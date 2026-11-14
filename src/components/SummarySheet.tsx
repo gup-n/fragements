@@ -1,3 +1,4 @@
+import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 /**
  * 月度总结生成面板。
  *
@@ -19,7 +20,6 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   Pressable,
   ScrollView,
@@ -35,7 +35,7 @@ import { loadAiConfig } from '../ai/config';
 import { repo } from '../db/repo';
 import { missingDigests, type MissingDigest } from '../util/digest';
 import { periodLabel, periodRange, recentMonths } from '../util/date';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
 import { ReasoningTrace } from './ReasoningTrace';
@@ -338,7 +338,7 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
         title="月度总结"
         subtitle={inQueue && phase !== 'pick' ? queueTag : undefined}
         backIcon="close"
-        onBack={onClose}
+        onBack={phase === "running" || saving ? undefined : onClose}
       />
 
       {phase === 'running' ? (
@@ -419,11 +419,11 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
               height={220}
             />
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
           </ScrollView>
 
           {existing ? (
-            <Pressable style={styles.replaceRow} onPress={() => setReplaceExisting((v) => !v)}>
+            <Pressable style={[styles.replaceRow, styles.touchTarget]} onPress={() => setReplaceExisting((v) => !v)} accessibilityRole="checkbox" accessibilityLabel="替换这个月原有的月总结" accessibilityState={{ checked: replaceExisting, disabled: saving }} disabled={saving}>
               <View style={[styles.checkBox, replaceExisting && styles.checkBoxOn]}>
                 {replaceExisting ? <Ionicons name="checkmark" size={11} color={c.onAccent} /> : null}
               </View>
@@ -432,13 +432,13 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
           ) : null}
 
           <View style={styles.footer}>
-            <Pressable style={styles.ghostBtn} onPress={skip} disabled={saving}>
+            <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={skip} disabled={saving} accessibilityState={{ disabled: saving, busy: saving }}>
               <Text style={styles.ghostText}>{inQueue ? '跳过这篇' : '重新选'}</Text>
             </Pressable>
             <Pressable
-              style={[styles.primaryBtn, saving && styles.btnDisabled]}
+              style={[[styles.primaryBtn, saving && styles.btnDisabled], styles.touchTarget]}
               onPress={save}
-              disabled={saving}
+              disabled={saving} accessibilityState={{ disabled: saving, busy: saving }}
             >
               {saving ? (
                 <ActivityIndicator size="small" color={c.onAccent} />
@@ -466,7 +466,7 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
                 <View style={styles.backlogHead}>
                   <Text style={styles.sectionLabel}>还没写的 {backlog.length} 个月</Text>
                   {selectedCount > 0 ? (
-                    <Pressable onPress={() => setSelected(new Set())} hitSlop={8}>
+                    <Pressable onPress={() => setSelected(new Set())} style={styles.touchTarget}>
                       <Text style={styles.clearText}>清空</Text>
                     </Pressable>
                   ) : null}
@@ -477,12 +477,12 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
                     return (
                       <Pressable
                         key={b.period}
-                        onPress={() => toggleJob(b.period)}
-                        style={({ pressed }) => [
+                        onPress={() => toggleJob(b.period)} accessibilityRole="checkbox" accessibilityState={{ checked: on }} accessibilityLabel={`为${periodLabel(b.period)}生成月总结`}
+                        style={({ pressed }) => [[
                           styles.backlogRow,
                           i === backlog.length - 1 && styles.backlogRowLast,
                           pressed && { backgroundColor: c.hairSoft },
-                        ]}
+                        ], styles.touchTarget]}
                       >
                         <View style={[styles.checkBox, on && styles.checkBoxOn]}>
                           {on ? <Ionicons name="checkmark" size={11} color={c.onAccent} /> : null}
@@ -519,10 +519,10 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
                     // 单选月份就等于放弃批量，否则按钮文案和实际行为会对不上
                     setSelected(new Set());
                   }}
-                  style={[styles.chip, period === p && styles.chipOn]}
+                  style={[[styles.chip, period === p && styles.chipOn], styles.touchTarget]} accessibilityRole="radio" accessibilityState={{ checked: period === p, selected: period === p }}
                 >
                   <Text style={[styles.chipText, period === p && styles.chipTextOn]}>
-                    {periodLabel(p)}
+                    {period === p ? '✓ ' : ''}{periodLabel(p)}
                   </Text>
                 </Pressable>
               ))}
@@ -545,17 +545,17 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
               ) : null}
             </View>
 
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
           </ScrollView>
 
           <View style={styles.footer}>
             <View style={styles.footerSpacer} />
             <Pressable
-              style={[
+              style={[[
                 styles.primaryBtn,
                 // 勾了批量就一定能点（哪怕当前月份没碎片）；单篇才看 canGenerate
                 selectedCount === 0 && !canGenerate && styles.btnDisabled,
-              ]}
+              ], styles.touchTarget]}
               onPress={selectedCount > 0 ? startQueue : () => generateOne(period)}
               disabled={selectedCount === 0 && !canGenerate}
             >
@@ -570,7 +570,8 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
 
   content: { paddingHorizontal: 16, paddingBottom: 24 },
@@ -590,31 +591,31 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   clearText: { fontSize: 12, color: c.accent },
   backlogBox: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     overflow: 'hidden',
   },
-  backlogRow: {
+  backlogRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 14,
     paddingVertical: 11,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   backlogRowLast: { borderBottomWidth: 0 },
   backlogLabel: { flex: 1, fontSize: 13, color: c.text },
-  backlogCount: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
-  backlogNote: { fontSize: 11, color: c.text3, lineHeight: 18, marginTop: 8 },
+  backlogCount: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
+  backlogNote: { fontSize: 12, color: c.text3, lineHeight: 18, marginTop: 8 },
 
   chipRow: { gap: 8, paddingRight: 16, paddingTop: 8 },
-  chip: {
+  chip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: R.pill,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },
@@ -625,18 +626,18 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   countCard: {
     marginTop: 18,
     padding: 14,
-    borderRadius: R.card,
+    borderRadius: metrics.cardRadius,
     backgroundColor: c.card,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     alignItems: 'center',
   },
   countText: { fontSize: 13, color: c.text2 },
   countNum: { fontSize: 15, color: c.text, fontWeight: '600' },
   countEmpty: { fontSize: 13, color: c.text3 },
-  countWarn: { fontSize: 11, color: c.text3, marginTop: 8, textAlign: 'center', lineHeight: 17 },
+  countWarn: { fontSize: 12, color: c.text3, marginTop: 8, textAlign: 'center', lineHeight: 17 },
 
-  replaceRow: {
+  replaceRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -663,9 +664,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 10,
   },
-  previewMeta: { fontSize: 11, color: c.text3 },
+  previewMeta: { fontSize: 12, color: c.text3 },
   queueBadge: {
-    fontSize: 10.5,
+    fontSize: 11,
     color: c.accentText,
     backgroundColor: c.accentBg,
     paddingHorizontal: 7,
@@ -676,13 +677,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
 
   previewCard: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     padding: 16,
     marginTop: 4,
   },
-  previewLabel: { fontSize: 11, color: c.text3, marginBottom: 10 },
+  previewLabel: { fontSize: 12, color: c.text3, marginBottom: 10 },
   previewBody: { fontSize: 14, lineHeight: 24 },
 
   compareHead: {
@@ -691,22 +692,22 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: 8,
   },
-  compareHint: { fontSize: 11, color: c.text3 },
-  compareDelta: { fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  compareHint: { fontSize: 12, color: c.text3 },
+  compareDelta: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
   deltaDown: { color: c.tealText },
   deltaUp: { color: c.amberText },
 
   compareRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
   compareCol: {
     flex: 1,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     padding: 10,
   },
   compareColOld: { backgroundColor: c.hairSoft, borderColor: c.hair },
   compareColNew: { backgroundColor: c.card, borderColor: c.accentBg },
-  compareLabelOld: { fontSize: 10.5, color: c.text3, marginBottom: 8 },
-  compareLabelNew: { fontSize: 10.5, color: c.accentText, fontWeight: '600', marginBottom: 8 },
+  compareLabelOld: { fontSize: 11, color: c.text3, marginBottom: 8 },
+  compareLabelNew: { fontSize: 11, color: c.accentText, fontWeight: '600', marginBottom: 8 },
   compareBody: { fontSize: 12.5, lineHeight: 20 },
 
   footer: {
@@ -717,25 +718,25 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 10,
     paddingBottom: 18,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
   footerSpacer: { flex: 1 },
-  primaryBtn: {
+  primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 20,
     paddingVertical: 12,
     minWidth: 132,
     alignItems: 'center',
   },
   primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: {
-    borderRadius: R.btn,
+  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },

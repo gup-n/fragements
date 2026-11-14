@@ -1,18 +1,16 @@
 /**
- * Markdown 导出：纯拼接，不碰文件系统。
+ * Markdown 文字导出：纯拼接，不碰文件系统。
  *
- * 单独拆出来只有一个目的——能和 `mdParse.ts` 做**往返测试**：
- * 碎片 → md → 碎片，时间、正文、标签必须原样回来。
- * 导出格式一改，那条测试立刻变红，而不是等用户真去恢复数据时才发现对不上。
+ * 与 `mdParse.ts` 做往返测试：保留分钟时间、压成一行的正文和旧标签，
+ * 图片只迁出已有文字或缺失说明，待办清单只供阅读，不当成完整备份。
  *
- * 刻意不写任何专有格式：换掉 App、丢进 Obsidian、直接 cat 都能读。
- * 代价是 `status` / `project` / 合并关系不落进文件，导入时只能靠推断
- * （有标签=已整理），这一点在 mdParse 的文件头也写了一遍。
+ * 保持普通 Markdown 列表，换掉 App 后也能阅读；`status` / `project` /
+ * 合并关系不还原，导入时只按旧标签推断兼容状态。
  */
 
 import type { Fragment, Todo } from '../types';
 import { dayKey, formatTime, weekdayCN } from './date';
-import { stripImageTokens } from './inlineImages';
+import { exportFragmentText, MARKDOWN_EXPORT_SCOPE } from './mdExport';
 import { flattenTodos } from './todoTree';
 
 export interface ExportFile {
@@ -32,10 +30,8 @@ function daySections(fragments: Fragment[]) {
   return keys.map((key) => {
     const items = byDay.get(key)!.slice().sort((a, b) => a.createdAt - b.createdAt);
     const lines = items.map((f) => {
-      // 正文压成一行：md 列表项里塞换行会把解析和阅读都搞乱
-      // 正文里的 `![](img:12)` 是应用内定位标记，导出时整段去掉 ——
-      // 留在 Markdown 里就是一堆打不开的图片链接
-      const text = stripImageTokens(f.content).replace(/\r?\n/g, ' ').trim();
+      // 正文与图片文字一起压成一行，保留旧列表格式；图片定位标记由投影剥掉。
+      const text = exportFragmentText(f).replace(/\r\n?|\n/g, ' ').trim();
       const tags = f.tags.map((t) => `#${t}`).join(' ');
       const merged = f.mergedInto !== null ? '（已合并）' : '';
       const base = `- ${formatTime(f.createdAt)} ${text}${merged}`;
@@ -65,6 +61,8 @@ export function buildMarkdown(fragments: Fragment[], todos: Todo[] = []): Export
     '',
     `共 ${fragments.length} 条碎片，覆盖 ${sections.length} 天` +
       (tags.length ? `，${tags.length} 个标签。` : '。'),
+    '',
+    MARKDOWN_EXPORT_SCOPE,
     '',
     '---',
     '',

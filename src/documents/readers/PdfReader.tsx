@@ -11,10 +11,11 @@
  * - 加密、损坏、没有文字层都由页面报错误码，这里翻译成用户能读的一句话。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import type { Document } from '../../types';
 import { LOCAL_READER_LIMITS } from '../formats';
-import { useThemedStyles, type Palette } from '../../theme';
+import { useTheme, useThemedStyles, type Palette } from '../../theme';
 import { SearchBar } from './SearchBar';
 import { PdfWebView, PDF_WEBVIEW_SUPPORTED } from './PdfWebView';
 import { pdfHtmlUri } from './pdfAsset';
@@ -27,8 +28,9 @@ interface Props {
 }
 
 export function PdfReader({ document: doc }: Props) {
-  const { c, styles } = useThemedStyles(makeStyles);
-  const theme = useMemo<PdfTheme>(() => pdfThemeOf(c), [c]);
+  const { c, styles, metrics } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
+  const theme = useMemo<PdfTheme>(() => pdfThemeOf(c, metrics, reduceMotion), [c, metrics, reduceMotion]);
 
   const [uri, setUri] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
@@ -139,11 +141,8 @@ export function PdfReader({ document: doc }: Props) {
   useEffect(() => {
     if (!opened || textState !== 'ready') return;
     const q = query.trim();
-    if (!q) {
-      setFind({ total: -1, current: 0 });
-      return;
-    }
     setFind({ total: -1, current: 0 });
+    // 空串也是命令：必须清掉文本层里上一轮的标记，而不只是隐藏RN计数。
     view.current?.send({ type: 'find', query: q });
   }, [opened, query, textState]);
 
@@ -225,16 +224,16 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     alignItems: 'center',
     gap: 10,
   },
-  loadingText: { fontSize: 12.5, color: c.text3 },
+  loadingText: { fontSize: 13, color: c.text2 },
   notice: {
-    fontSize: 11.5,
-    lineHeight: 18,
+    fontSize: 13,
+    lineHeight: 20,
     color: c.amberText,
     backgroundColor: c.amberBg,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingVertical: 8,
   },
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 12.5, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
+  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
+  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
 });

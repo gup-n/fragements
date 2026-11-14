@@ -15,7 +15,7 @@
 import React, { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { AiErrorDetail } from '../ai/chat';
 
 interface Props {
@@ -62,24 +62,23 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
         {code ? <Text style={styles.code}>{code}</Text> : null}
       </View>
 
-      <Text style={styles.message} selectable>
+      <Text style={styles.message} selectable accessibilityLiveRegion="polite">
         {message}
       </Text>
 
       <View style={styles.actions}>
         {onRetry ? (
-          <Pressable style={styles.retry} onPress={onRetry} hitSlop={6}>
+          <Pressable style={[styles.retry, styles.touchTarget]} onPress={onRetry} accessibilityRole="button">
             <Ionicons name="refresh" size={13} color={c.text} />
             <Text style={styles.retryText}>重试</Text>
           </Pressable>
         ) : null}
         {hasMore ? (
           <Pressable
-            style={styles.more}
+            style={[styles.more, styles.touchTarget]}
             onPress={() => setOpen((v) => !v)}
-            hitSlop={6}
             accessibilityRole="button"
-            accessibilityLabel={open ? '收起错误详情' : '展开错误详情'}
+            accessibilityState={{ expanded: open }} accessibilityLabel={open ? '收起错误详情' : '展开错误详情'}
           >
             <Text style={styles.moreText}>{open ? '收起详情' : '查看详情'}</Text>
             <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={12} color={c.text3} />
@@ -113,11 +112,12 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   card: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 13,
     paddingVertical: 11,
@@ -130,40 +130,40 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   message: { fontSize: 13, lineHeight: 20, color: c.text },
 
   actions: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  retry: {
+  retry: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: R.pill,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   retryText: { fontSize: 12, color: c.text },
-  more: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  moreText: { fontSize: 11.5, color: c.text3 },
+  more: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 3 },
+  moreText: { fontSize: 12, color: c.text3 },
 
   detailBox: {
     gap: 6,
     paddingTop: 8,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
   kvRow: { flexDirection: 'row', gap: 8 },
-  k: { width: 96, fontSize: 11, color: c.text3 },
-  v: { flex: 1, fontSize: 11, color: c.text2 },
+  k: { width: 96, fontSize: 12, color: c.text3 },
+  v: { flex: 1, fontSize: 12, color: c.text2 },
   rawBox: {
     maxHeight: 220,
     backgroundColor: c.hairSoft,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     padding: 9,
   },
   raw: {
-    fontSize: 11,
+    fontSize: 12,
     lineHeight: 17,
     color: c.text2,
     fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
   },
-  hint: { fontSize: 10.5, lineHeight: 15, color: c.text3 },
+  hint: { fontSize: 11, lineHeight: 15, color: c.text3 },
 });

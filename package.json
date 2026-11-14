@@ -44,7 +44,10 @@
     "build:web": "node scripts/build_web.mjs",
     "check:docs": "node scripts/check_docs.mjs",
     "test:todos": "node scripts/assert_todos.cjs",
-    "test:ask": "node scripts/assert_ask.cjs"
+    "test:ask": "node scripts/assert_ask.cjs",
+    "test:reliability": "node scripts/assert_reliability.cjs",
+    "test:appearance": "node scripts/assert_appearance.cjs",
+    "test": "npm run typecheck && npm run test:md && npm run test:docs && npm run test:todos && npm run test:ask && npm run test:reliability && npm run test:appearance && npm run check:docs"
   },
   "private": true
 }

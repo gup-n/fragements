@@ -230,8 +230,8 @@ function makeEngine(args: {
  * 1×1 的离屏 WebView 跑提取。
  */
 export function DocumentRuntime(): React.ReactElement | null {
-  const { c } = useTheme();
-  const theme = useMemo<PdfTheme>(() => pdfThemeOf(c), [c]);
+  const { c, metrics, reduceMotion } = useTheme();
+  const theme = useMemo<PdfTheme>(() => pdfThemeOf(c, metrics, reduceMotion), [c, metrics, reduceMotion]);
   const themeRef = useRef(theme);
   themeRef.current = theme;
 

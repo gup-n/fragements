@@ -11,6 +11,12 @@ export type FragmentStatus = 'inbox' | 'tagged' | 'merged';
 /** 内容性质，由 AI 在整理时判定，记录时不要求用户选 */
 export type FragmentNature = 'todo' | 'knowledge' | 'event';
 
+export interface PendingFragmentImage {
+  /** 在本次 App 生命周期内唯一的待发键，形如 p123 */
+  key: string;
+  uri: string;
+}
+
 export interface Fragment {
   id: number;
   content: string;

@@ -282,9 +282,8 @@ export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): str
   if (r.fragments.length) {
     out.push('（引用某条时写 [F编号]，编号就是方括号里的数字）');
     for (const f of r.fragments) {
-      const tags = f.tags.length ? ` #${f.tags.join(' #')}` : '';
       const project = f.project ? ` · ${f.project}` : '';
-      out.push(`[F${f.id}] ${dayKey(f.createdAt)} ${formatTime(f.createdAt)}${tags}${project}`);
+      out.push(`[F${f.id}] ${dayKey(f.createdAt)} ${formatTime(f.createdAt)}${project}`);
       out.push(clip(fragmentText(f), PER_FRAGMENT_CHARS));
       out.push('');
     }
@@ -368,11 +367,10 @@ function buildCitations(
 
   for (const f of r.fragments) {
     if (!refs.has(`F${f.id}`)) continue;
-    const tags = f.tags.length ? ` · ${f.tags.slice(0, 3).join(' / ')}` : '';
     out.push({
       kind: 'F',
       id: f.id,
-      label: `${dayKey(f.createdAt)} ${formatTime(f.createdAt)} · 碎片${tags}`,
+      label: `${dayKey(f.createdAt)} ${formatTime(f.createdAt)} · 碎片`,
       body: citeBody(fragmentText(f), 2_000),
     });
   }

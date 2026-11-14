@@ -144,11 +144,9 @@ export function tokenizeText(text: string): string[] {
   return kept;
 }
 
-/** 碎片进 FTS 的文本：正文 + 标签 + 事项，全部 token 化后用空格拼起来 */
-export function indexText(content: string, tags: string[], project: string | null): string {
-  const tagText = tags.map(normalizeTag).filter(Boolean).join(' ');
-  const all = `${content}\n${tagText}\n${project ?? ''}`;
-  return tokenizeText(all).join(' ');
+/** 碎片 FTS：正文（含图文字）+ 事项；tags 参数仅保留调用兼容，不再索引。 */
+export function indexText(content: string, _tags: string[], project: string | null): string {
+  return tokenizeText(`${content}\n${project ?? ''}`).join(' ');
 }
 
 /** 问题 → FTS5 MATCH 表达式。返回空串表示这个问题没有可用 token */

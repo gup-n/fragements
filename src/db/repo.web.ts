@@ -21,12 +21,13 @@ import { emptyPlan, normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
-import { stripImageTokens } from '../util/inlineImages';
+import { removeImageToken, resolvePendingTokens } from '../util/inlineImages';
+import { fragmentSearchText } from '../util/fragmentText';
+import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 
 /**
- * 浏览器预览用的存储实现，数据落在 localStorage。
- * 只服务于桌面端编译校验，真机走 repo.native.ts 的 SQLite。
- * 行为与 native 版保持语义一致，方便对照排查问题。
+ * localStorage 存储适配，仅供桌面端编译校验；真机走 SQLite。
+ * 不提供浏览器预览，行为与 native 版保持语义一致，便于内存桩回归。
  */
 
 const KEY = 'fragments.webdb.v2';
@@ -143,12 +144,30 @@ function load(): WebDb {
       ...f,
       images: Array.isArray(f.images) ? f.images : [],
     }));
-  } catch {
-    cache = empty();
+  } catch (error) {
+    // 读取/解析失败不等于空库；不能让下一次原子写入用空库覆盖仍存在的数据。
+    // 清掉未完成规范化的缓存，下次调用可以重新读取；旧字段与规范化步骤不变。
+    cache = null;
+    throw error;
   }
   return cache!;
 }
 
+/**
+ * 新写入路径只在独立副本上操作，setItem 抛错时不发布 rows、seq 或提交凭据。
+ * 回调必须同步，不可调用公开的 async Repo 方法。没有 localStorage 时仅用于内存测试。
+ */
+function writeAtomically<T>(write: (d: WebDb) => T): T {
+  const draft: WebDb = JSON.parse(JSON.stringify(load()));
+  const result = write(draft);
+  const serialized = JSON.stringify(draft);
+  // 不捕获配额/权限等错误：调用方必须知道没有成功保存，cache 也仍是旧版本。
+  globalThis.localStorage?.setItem(KEY, serialized);
+  cache = draft;
+  return result;
+}
+
+/** 旧接口的兼容写法；新增原子路径不得调用这个会吞掉持久化错误的函数。 */
 function persist() {
   try {
     globalThis.localStorage?.setItem(KEY, JSON.stringify(load()));
@@ -161,6 +180,31 @@ function nextId(d: WebDb) {
   return d.seq++;
 }
 
+/** 只操作事务副本；正文、图片和导入标签在同一次发布中生效。 */
+function insertFragmentIn(
+  d: WebDb,
+  content: string,
+  source: FragmentSource,
+  createdAt: number,
+  tags: string[] = [],
+): Fragment {
+  const fragment: Fragment = {
+    id: nextId(d),
+    content,
+    createdAt,
+    source,
+    status: tags.length ? 'tagged' : 'inbox',
+    tags: tags.slice(),
+    project: null,
+    mergedInto: null,
+    nature: null,
+    organizedAt: null,
+    images: [],
+  };
+  d.fragments.push(fragment);
+  return fragment;
+}
+
 function active(d: WebDb) {
   return d.fragments.filter((f) => f.mergedInto === null);
 }
@@ -170,8 +214,107 @@ export const repo: Repo = {
     load();
   },
 
+  async commitDraft(input) {
+    validateDraftCommit(input);
+    const key = draftCommitKey(input.draftId);
+    return writeAtomically((d) => {
+      const receipt = readDraftReceipt(d.settings[key]);
+      const before = receipt.documents.length + receipt.todos.length;
+      const now = Date.now();
+      commitDraftEntries(input, receipt, {
+        insertDocument: (doc) => {
+          const id = nextId(d);
+          const content = doc.content;
+          d.documents.push({
+            id,
+            name: doc.title.trim(),
+            ext: 'md',
+            size: content.bodyMd.length,
+            fileUri: null,
+            bodyMd: content.bodyMd,
+            pages: content.pages,
+            charCount: content.bodyMd.length,
+            state: 'done',
+            error: null,
+            contentRevision: 1,
+            indexedRevision: 1,
+            chunkCount: content.chunks.length,
+            contentSource: content.source,
+            origin: 'knowledge',
+            excerpt: doc.excerpt,
+            createdAt: now,
+            updatedAt: now,
+          });
+          content.chunks.forEach((chunk, ordinal) => {
+            d.documentChunks.push({
+              id: nextId(d),
+              documentId: id,
+              contentRevision: 1,
+              ordinal,
+              text: chunk.text,
+              locator: { ...chunk.locator },
+            });
+          });
+          return id;
+        },
+        insertTodo: (text, dueAt, parentId) => {
+          const id = nextId(d);
+          d.todos.push({
+            id, text, dueAt, parentId,
+            done: false,
+            doneAt: null,
+            sourceFragmentId: null,
+            createdAt: now,
+            mergedInto: null,
+          });
+          return id;
+        },
+        findTodo: (id) => {
+          const todo = d.todos.find((t) => t.id === id);
+          return todo ? { parentId: todo.parentId, mergedInto: todo.mergedInto } : null;
+        },
+        reopenTodo: (id) => {
+          const todo = d.todos.find((t) => t.id === id);
+          if (todo) {
+            todo.done = false;
+            todo.doneAt = null;
+          }
+        },
+      });
+
+      // 只有新增了实际条目才推进来源/会话关系；重复调用不能冒充一次新的整理。
+      if (receipt.documents.length + receipt.todos.length > before) {
+        const sourceIds = positiveIds(input.sourceIds);
+        const sources = new Set(sourceIds);
+        for (const f of d.fragments) if (sources.has(f.id)) f.organizedAt = now;
+        const session = input.sessionId === null
+          ? undefined
+          : d.askSessions.find((s) => s.id === input.sessionId);
+        // 迟到写入不复活已删除的会话；旧文档关联与累计凭据合并，只保留仍在库里的文档。
+        if (session) {
+          const existingDocuments = new Set(d.documents.map((doc) => doc.id));
+          const ids = positiveIds([
+            ...positiveIds(session.documentIds), session.documentId,
+            ...receipt.documents.map((doc) => doc.id),
+          ]).filter((id) => existingDocuments.has(id));
+          session.documentIds = ids;
+          session.documentId = ids[0] ?? null;
+          session.sourceIds = positiveIds([...positiveIds(session.sourceIds), ...sourceIds]);
+        }
+      }
+      d.settings[key] = serializeDraftReceipt(receipt);
+      return receipt;
+    });
+  },
+
+  async listAllFragments() {
+    return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+  },
+
   async listFragments(limit = 500) {
-    return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    return [...load().fragments]
+      .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+      .slice(0, limit);
   },
 
   async findFragmentsByIds(ids) {
@@ -206,77 +349,90 @@ export const repo: Repo = {
     content,
     source: FragmentSource,
     createdAt?: number,
-    images?: { path: string; text?: string | null }[],
+    images?: { path: string; text?: string | null; key?: string }[],
   ) {
-    const d = load();
-    const id = nextId(d);
+    const text = content.trim();
+    const pictures = images ?? [];
+    if (!text && !pictures.length) throw new Error('记录没有正文或图片');
+    if (pictures.length > 9 || pictures.some((img) => !img.path)) throw new Error('配图数量或路径无效');
     const at = createdAt ?? Date.now();
-    d.fragments.push({
-      id,
-      content: content.trim(),
-      createdAt: at,
-      source,
-      status: 'inbox',
-      tags: [],
-      project: null,
-      mergedInto: null,
-      nature: null,
-      organizedAt: null,
-      // 网页版没有相册和拍照，但形状必须和 native 一致，
-      // 否则同一个 Fragment 类型在两个端上形状不同，界面代码没法共用
-      images: (images ?? []).map((img) => ({
-        id: nextId(d),
-        path: img.path,
-        text: img.text ?? null,
-        createdAt: at,
-      })),
+    return writeAtomically((d) => {
+      const fragment = insertFragmentIn(d, text, source, at);
+      const mapping: { key: string; imageId: number }[] = [];
+      fragment.images = pictures.map((image) => {
+        const id = nextId(d);
+        if (image.key) mapping.push({ key: image.key, imageId: id });
+        return { id, path: image.path, text: image.text ?? null, createdAt: at };
+      });
+      fragment.content = resolvePendingTokens(text, mapping);
+      return fragment.id;
     });
-    persist();
-    return id;
+  },
+
+  async insertImportedFragment(content, createdAt, tags) {
+    const text = content.trim();
+    if (!text || !Number.isFinite(createdAt)) throw new Error('导入内容或时间无效');
+    const clean = dedupeTags(tags);
+    return writeAtomically((d) => insertFragmentIn(d, text, 'import', createdAt, clean).id);
+  },
+
+  async insertFragmentImages(fragmentId, images) {
+    if (!images.length) return [];
+    return writeAtomically((d) => {
+      const fragment = d.fragments.find((f) => f.id === fragmentId);
+      if (!fragment) throw new Error('这条碎片已经不存在');
+      if (fragment.images.length + images.length > 9 || images.some((img) => !img.path)) {
+        throw new Error('一条碎片最多9张有效配图');
+      }
+      const at = Date.now();
+      const added = images.map((image) => ({
+        id: nextId(d),
+        path: image.path,
+        text: image.text ?? null,
+        createdAt: at,
+      }));
+      fragment.images.push(...added);
+      // 返回值不暴露事务发布后的图片对象，调用方修改数组不会偷偷改动 cache。
+      return added.map((image) => ({ ...image }));
+    });
   },
 
   async insertFragmentImage(fragmentId, path) {
-    const d = load();
-    const f = d.fragments.find((x) => x.id === fragmentId);
-    if (!f) return 0;
-    const id = nextId(d);
-    f.images.push({ id, path, text: null, createdAt: Date.now() });
-    persist();
-    return id;
+    return (await repo.insertFragmentImages(fragmentId, [{ path }]))[0].id;
   },
 
   async setFragmentImageText(imageId, text) {
-    const d = load();
-    for (const f of d.fragments) {
-      const img = f.images.find((i) => i.id === imageId);
-      if (img) {
-        img.text = text;
-        break;
+    writeAtomically((d) => {
+      for (const f of d.fragments) {
+        const img = f.images.find((i) => i.id === imageId);
+        if (img) {
+          img.text = text;
+          break;
+        }
       }
-    }
-    persist();
+    });
   },
 
   async deleteFragmentImage(imageId) {
-    const d = load();
-    let path: string | null = null;
-    for (const f of d.fragments) {
-      const i = f.images.findIndex((x) => x.id === imageId);
-      if (i >= 0) {
-        path = f.images[i].path;
-        f.images.splice(i, 1);
-        break;
+    return writeAtomically((d) => {
+      for (const f of d.fragments) {
+        const i = f.images.findIndex((x) => x.id === imageId);
+        if (i >= 0) {
+          const path = f.images[i].path;
+          f.images.splice(i, 1);
+          f.content = removeImageToken(f.content, imageId);
+          return path;
+        }
       }
-    }
-    persist();
-    return path;
+      return null;
+    });
   },
 
   async updateFragmentContent(id, content) {
-    const d = load();
-    const f = d.fragments.find((x) => x.id === id);
-    if (f) f.content = content.trim();
-    persist();
+    writeAtomically((d) => {
+      const f = d.fragments.find((x) => x.id === id);
+      if (f) f.content = content.trim();
+    });
   },
 
   async markFragmentsOrganized(ids, at) {
@@ -288,18 +444,18 @@ export const repo: Repo = {
   },
 
   async deleteFragment(id) {
-    const d = load();
-    const gone = d.fragments.find((x) => x.id === id);
-    d.fragments = d.fragments.filter((x) => x.id !== id);
-    // 并进它的那几条落回未整理，否则会变成「指向不存在的 id + status=merged」的孤儿
-    d.fragments.forEach((x) => {
-      if (x.mergedInto === id) {
-        x.mergedInto = null;
-        x.status = 'inbox';
-      }
+    return writeAtomically((d) => {
+      const gone = d.fragments.find((x) => x.id === id);
+      d.fragments = d.fragments.filter((x) => x.id !== id);
+      // 并进它的那几条落回未整理，否则会变成「指向不存在的 id + status=merged」的孤儿
+      d.fragments.forEach((x) => {
+        if (x.mergedInto === id) {
+          x.mergedInto = null;
+          x.status = 'inbox';
+        }
+      });
+      return (gone?.images ?? []).map((i) => i.path);
     });
-    persist();
-    return (gone?.images ?? []).map((i) => i.path);
   },
 
   async applyTags(id, labels, project) {
@@ -350,8 +506,8 @@ export const repo: Repo = {
     if (!tokens.length) return [];
     const scored: { f: Fragment; score: number }[] = [];
     for (const f of active(load())) {
-      // 正文里的 `![](img:12)` 是渲染用的定位标记，与 native 的 FTS 同口径剥掉
-      const hay = `${stripImageTokens(f.content)} ${f.tags.join(' ')} ${f.project ?? ''}`.toLowerCase();
+      // 与 native 的可见投影相同：正文 + 图文字 + 事项，不含已经下线的旧标签。
+      const hay = fragmentSearchText(f).toLowerCase();
       let score = 0;
       for (const t of tokens) if (hay.includes(t)) score += t.length >= 2 ? 2 : 1;
       if (score > 0) scored.push({ f, score });
@@ -873,8 +1029,9 @@ export const repo: Repo = {
   },
 
   async setSetting(key, value) {
-    load().settings[key] = value;
-    persist();
+    writeAtomically((d) => {
+      d.settings = { ...d.settings, [key]: value };
+    });
   },
 
   async stats() {

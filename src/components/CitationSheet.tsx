@@ -20,10 +20,11 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { QaCitation } from '../types';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { IconButton, type IoniconName } from './IconButton';
 import { repo } from '../db/repo';
 import { openOriginal } from '../db/docFiles';
+import { useHeadingFocus } from './useHeadingFocus';
 
 /** 五种来源的图标。用线框图标，和页面别处的写法一致 */
 const ICON: Record<QaCitation['kind'], IoniconName> = {
@@ -59,12 +60,15 @@ export function CitationSheet({ cite, onClose }: Props) {
     return () => sub.remove();
   }, [onClose]);
 
+  const headingRef = useHeadingFocus(cite.label);
+  const [linkError, setLinkError] = useState('');
   const url = cite.url;
 
   /** 打不开就算了：链接失效不该弹一个错误盖住正文，用户本来只是想看看 */
   const openUrl = useCallback(() => {
     if (!url) return;
-    Linking.openURL(url).catch(() => {});
+    setLinkError('');
+    Linking.openURL(url).catch(() => setLinkError('打不开这个网页，请稍后重试'));
   }, [url]);
 
   /** 打开原件时的就近提示：原件被删、版本变了、没装能打开的 App 都写在这里 */
@@ -108,8 +112,8 @@ export function CitationSheet({ cite, onClose }: Props) {
   }, [cite.contentRevision, cite.documentId, opening]);
 
   return (
-    <View style={styles.overlay}>
-      <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="关闭引用" />
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={[styles.scrim, styles.touchTarget]} onPress={onClose} accessibilityLabel="关闭引用" />
 
       <View style={styles.panel}>
         <View style={styles.head}>
@@ -118,7 +122,7 @@ export function CitationSheet({ cite, onClose }: Props) {
           </View>
           <View style={styles.headText}>
             <Text style={styles.kind}>{KIND_NAME[cite.kind]}</Text>
-            <Text style={styles.label} numberOfLines={2}>
+            <Text ref={headingRef} accessible accessibilityRole="header" style={styles.label} numberOfLines={2}>
               {cite.label}
             </Text>
           </View>
@@ -150,10 +154,10 @@ export function CitationSheet({ cite, onClose }: Props) {
               </Text>
               <Pressable
                 onPress={openDoc}
-                disabled={opening}
+                disabled={opening} accessibilityState={{ disabled: opening, busy: opening }}
                 accessibilityRole="button"
                 accessibilityLabel="打开原件"
-                style={({ pressed }) => [styles.openBtn, pressed && styles.pressed]}
+                style={({ pressed }) => [[styles.openBtn, pressed && styles.pressed], styles.touchTarget]}
               >
                 <Text style={styles.openText}>{opening ? '正在打开…' : '打开原件'}</Text>
               </Pressable>
@@ -162,6 +166,7 @@ export function CitationSheet({ cite, onClose }: Props) {
           </View>
         ) : null}
 
+        {linkError ? <Text style={styles.docNote} accessibilityLiveRegion="polite">{linkError}</Text> : null}
         {url ? (
           <View style={styles.linkRow}>
             <Text style={styles.url} numberOfLines={1}>
@@ -171,7 +176,7 @@ export function CitationSheet({ cite, onClose }: Props) {
               onPress={openUrl}
               accessibilityRole="button"
               accessibilityLabel="打开网页"
-              style={({ pressed }) => [styles.openBtn, pressed && styles.pressed]}
+              style={({ pressed }) => [[styles.openBtn, pressed && styles.pressed], styles.touchTarget]}
             >
               <Text style={styles.openText}>打开网页</Text>
             </Pressable>
@@ -182,7 +187,8 @@ export function CitationSheet({ cite, onClose }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   overlay: {
     position: 'absolute',
     top: 0,
@@ -206,9 +212,10 @@ const makeStyles = (c: Palette) => StyleSheet.create({
    */
   panel: {
     backgroundColor: c.card,
-    borderTopLeftRadius: R.card,
-    borderTopRightRadius: R.card,
-    maxHeight: '72%',
+    borderTopLeftRadius: metrics.cardRadius,
+    borderTopRightRadius: metrics.cardRadius,
+    maxHeight: '86%',
+    borderWidth: metrics.strokeWidth, borderColor: c.hair,
     paddingBottom: 16,
   },
 
@@ -219,7 +226,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   iconWrap: {
@@ -232,7 +239,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginTop: 1,
   },
   headText: { flex: 1, minWidth: 0 },
-  kind: { fontSize: 11, color: c.text3, letterSpacing: 0.5 },
+  kind: { fontSize: 12, color: c.text3, letterSpacing: 0.5 },
   label: { fontSize: 13, lineHeight: 19, color: c.text, fontWeight: '600', marginTop: 2 },
 
   body: { flexGrow: 0, flexShrink: 1 },
@@ -246,14 +253,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     marginTop: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
-  url: { flex: 1, fontSize: 11.5, color: c.text3 },
-  openBtn: {
+  url: { flex: 1, fontSize: 12, color: c.text3 },
+  openBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accentBg,
   },
   openText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
@@ -264,12 +271,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 12,
     marginTop: 4,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     gap: 6,
   },
   docRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  docHint: { flex: 1, fontSize: 11, lineHeight: 16, color: c.text3 },
+  docHint: { flex: 1, fontSize: 12, lineHeight: 16, color: c.text3 },
   /** 原件被删/版本变了就写在这里，就近反馈，不要另弹一个框 */
-  docNote: { fontSize: 11.5, lineHeight: 17, color: c.danger },
+  docNote: { fontSize: 12, lineHeight: 17, color: c.danger },
 });

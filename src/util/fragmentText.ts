@@ -30,13 +30,22 @@ export function imageTextsOf(f: Pick<Fragment, 'images'>): string[] {
 export function fragmentText(f: Pick<Fragment, 'content' | 'images'>): string {
   // 正文里的 `![](img:12)` 是给渲染层的定位标记，喂给模型 / 索引 / 预览时是噪音
   const body = stripImageTokens(f.content ?? '').trim();
-  const pics = imageTextsOf(f);
-  if (!pics.length) return body;
-  const multi = (f.images ?? []).length > 1;
-  const block = pics
-    .map((t, i) => `${multi ? `${IMAGE_MARK} 第 ${i + 1} 张` : IMAGE_MARK} ${t}`)
+  const images = f.images ?? [];
+  const multi = images.length > 1;
+  const block = images
+    .map((image, i) => {
+      const text = (image.text ?? '').trim();
+      return text ? `${multi ? `${IMAGE_MARK} 第 ${i + 1} 张` : IMAGE_MARK} ${text}` : '';
+    })
+    .filter(Boolean)
     .join('\n');
+  if (!block) return body;
   return body ? `${body}\n${block}` : block;
+}
+
+/** Search only visible content. Retired tags remain stored but never create hidden hits. */
+export function fragmentSearchText(f: Pick<Fragment, 'content' | 'images' | 'project'>): string {
+  return [fragmentText(f), (f.project ?? '').trim()].filter(Boolean).join('\n');
 }
 
 /**

@@ -1,6 +1,6 @@
+import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   Image,
   Platform,
@@ -16,8 +16,8 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
-import type { Fragment, Note } from '../types';
-import { R, useThemedStyles, type Palette } from '../theme';
+import type { Fragment, Note, PendingFragmentImage } from '../types';
+import { R, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
 import { FragmentDetail } from '../components/FragmentDetail';
@@ -27,7 +27,7 @@ import { dayKey, dayLabel, daySubLabel, formatTime, periodAnchor, periodLabel } 
 import { countHits } from '../util/highlight';
 import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
-import { imageStateOf, imageTextsOf } from '../util/fragmentText';
+import { fragmentSearchText, imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { imageToken, removeToken, stripImageTokens } from '../util/inlineImages';
 import { fragmentImageUri } from '../db/fragmentImages';
 
@@ -125,11 +125,11 @@ interface Props {
    */
   draft: string;
   onDraftChange: (text: string) => void;
-  /**
-   * `images` 有值就是「这条带图」，图由上层存盘并逐张异步解析。
-   * `key` 是长文里 `![](img:p1)` 这种待发标记的键，落库时换成真 id。
-   */
-  onAdd: (text: string, images?: { key: string; uri: string }[]) => Promise<void>;
+  pendingImages: PendingFragmentImage[];
+  onPendingImagesChange: React.Dispatch<React.SetStateAction<PendingFragmentImage[]>>;
+  nextImageKey: () => string;
+  /** 返回字符串表示已提交，但刷新等后续步骤需要提示；不能当成保存失败。 */
+  onAdd: (text: string, images?: PendingFragmentImage[]) => Promise<void | string>;
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
@@ -139,7 +139,6 @@ interface Props {
   onOpenReview: () => void;
   /** 文档库（v0.10.0）。入口在页头「问」的左边 */
   onOpenDocs: () => void;
-  onSeed?: () => Promise<void>;
   /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
   /** 读图失败的原因（配图 id → 一句话）。必须能就地重试 */
@@ -160,6 +159,9 @@ export function TimelineScreen({
   doneIds,
   draft,
   onDraftChange,
+  pendingImages: pending,
+  onPendingImagesChange: setPending,
+  nextImageKey,
   onAdd,
   onEdit,
   onDelete,
@@ -168,7 +170,6 @@ export function TimelineScreen({
   onOpenAsk,
   onOpenReview,
   onOpenDocs,
-  onSeed,
   imageBusy,
   imageFail,
   onReparseImage,
@@ -176,10 +177,37 @@ export function TimelineScreen({
   onRemoveImage,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
   const { width } = useWindowDimensions();
-  /** 页头有 4 个图标。窄屏先让副标题让路，不要把品牌名压成省略号 */
-  const tightHeader = width < 380;
+  /** 窄屏让副标题让路，四个入口仍保留可见文字和48dp触控槽。 */
+  const tightHeader = width < 410;
   const [sending, setSending] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const sendingRef = useRef(false);
+  const pickingRef = useRef(false);
+  const alive = useRef(true);
+  const draftRef = useRef(draft);
+  const pendingRef = useRef(pending);
+  draftRef.current = draft;
+  pendingRef.current = pending;
+  const composerBusy = sending || picking;
+  const [composerNotice, setComposerNotice] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  function changeDraft(next: string) {
+    if (sendingRef.current || pickingRef.current) return;
+    draftRef.current = next;
+    onDraftChange(next);
+    setComposerNotice(null);
+  }
+
+  function navigate(run: () => void) {
+    if (!sendingRef.current && !pickingRef.current) run();
+  }
+
+  useEffect(() => {
+    alive.current = true;
+    return () => { alive.current = false; };
+  }, []);
   /**
    * 当前滑开的那一行。存 id 而不是布尔值 —— 父级统一持有才能保证同时只开一行。
    * 展开状态放在父级还有个好处：列表一滚动就能整片收起。
@@ -189,20 +217,12 @@ export function TimelineScreen({
   const [deleteTarget, setDeleteTarget] = useState<Fragment | null>(null);
   /** 底部轻提示，复制成功 / 删除成功都走它 */
   const [toast, setToast] = useState('');
+  const [composerHeight, setComposerHeight] = useState(108);
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
-  /**
-   * 待发送的图（选择器给的临时 uri + 一个待发键）。发送时才落盘 ——
-   * 选了又删掉的图不该在私有目录里留一份。
-   *
-   * 键（`p1` / `p2`…）是给长文里的定位标记用的：那时图还没入库、没有 id，
-   * 只能先写 `![](img:p1)`，发送落库时换成真 id（见 App 的 `handleAdd`）。
-   */
-  const [pending, setPending] = useState<{ key: string; uri: string }[]>([]);
-  /** 待发键的计数器。用 ref 而不是 state：连选几张时同一帧里读不到新 state */
-  const pendingSeq = useRef(0);
+  // 待发图与定位键由 App 持有；本页只持有光标和临时展开状态。
   /** 输入框光标。插图插在光标处，不是一律追加到末尾 */
   const [sel, setSel] = useState({ start: 0, end: 0 });
   /** 加图的方式菜单（拍照 / 相册）。不用 Modal：本项目一律 absolute + 自接返回键 */
@@ -260,15 +280,16 @@ export function TimelineScreen({
   // 长文记录是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App。
   // 顺序是「先关最上面那层」：确认弹层压在长文编辑之上。
   useEffect(() => {
-    if (!deleteTarget && !fullEdit) return;
+    if (!deleteTarget && !fullEdit && !imageMenu && !composerBusy) return;
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (sendingRef.current || pickingRef.current) return true;
       if (imageMenu) setImageMenu(false);
       else if (deleteTarget) setDeleteTarget(null);
       else if (fullEdit) setFullEdit(false);
       return true;
     });
     return () => sub.remove();
-  }, [deleteTarget, fullEdit, imageMenu]);
+  }, [deleteTarget, fullEdit, imageMenu, composerBusy]);
 
   // 卸载时把还没到点的定时器清掉，否则回调落在已卸载的组件上
   useEffect(() => () => {
@@ -300,7 +321,7 @@ export function TimelineScreen({
     const q = query.trim().toLowerCase();
     if (!q) return base;
     return base.filter(
-      (f) => f.content.toLowerCase().includes(q) || (f.project ?? '').toLowerCase().includes(q),
+      (f) => fragmentSearchText(f).toLowerCase().includes(q),
     );
   }, [fragments, query, filter]);
 
@@ -518,7 +539,7 @@ export function TimelineScreen({
   const hitCounts = useMemo(() => {
     const map = new Map<number, number>();
     if (!query.trim()) return map;
-    for (const f of visibleFragments) map.set(f.id, countHits(f.content, query));
+    for (const f of visibleFragments) map.set(f.id, countHits(stripImageTokens(f.content), query));
     return map;
   }, [visibleFragments, query]);
 
@@ -529,8 +550,16 @@ export function TimelineScreen({
     return n;
   }, [hitCounts]);
 
+  const imageHitCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    if (!query.trim()) return counts;
+    for (const fragment of visibleFragments) counts.set(fragment.id, countHits(imageTextsOf(fragment).join('\n'), query));
+    return counts;
+  }, [visibleFragments, query]);
+  const imageHitTotal = useMemo(() => Array.from(imageHitCounts.values()).reduce((sum, count) => sum + count, 0), [imageHitCounts]);
+
   // 只有图没有字也能发：随手拍一张报错屏，不写备注是最常见的用法
-  const canSend = (draft.trim().length > 0 || pending.length > 0) && !sending;
+  const canSend = (draft.trim().length > 0 || pending.length > 0) && !composerBusy;
 
   /** 换成多图后最多几张：九宫格是用户在手机上最熟悉的张数上限，超过就说明该拆成几条了 */
   const MAX_IMAGES = 9;
@@ -546,100 +575,106 @@ export function TimelineScreen({
    * 这样图长在那段文字中间，而不是全都堆到正文上方。
    */
   async function pickImage(from: 'camera' | 'library', inlineHere = false) {
+    if (pickingRef.current || sendingRef.current) return;
     setImageMenu(false);
     if (Platform.OS === 'web') {
-      setToast('网页版加不了图片，在手机上用可以');
+      showToast('网页版加不了图片，请在手机上使用');
       return;
     }
+    pickingRef.current = true;
+    setPicking(true);
     try {
-      /*
-       * 只有相机要权限。相册走的是系统 Photo Picker，Android 13+ 根本不需要
-       * READ_MEDIA_IMAGES —— 手动去 request 反而会拿到 denied（清单里没有这个权限），
-       * 然后把自己挡在门外。
-       */
       if (from === 'camera') {
         const perm = await ImagePicker.requestCameraPermissionsAsync();
+        if (!alive.current) return;
         if (!perm.granted) {
-          setToast('没给相机权限，去系统设置里打开');
+          setComposerNotice({ kind: 'err', text: '没给相机权限，请去系统设置里打开' });
           return;
         }
       }
-      const room = MAX_IMAGES - pending.length;
+      const room = MAX_IMAGES - pendingRef.current.length;
       if (room <= 0) {
-        setToast(`一条最多 ${MAX_IMAGES} 张图，再多就拆成两条记`);
+        showToast(`一条最多 ${MAX_IMAGES} 张图，再多请拆成两条记`);
         return;
       }
-      const res =
-        from === 'camera'
-          ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
-          : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ['images'],
-              quality: 0.5,
-              allowsMultipleSelection: true,
-              selectionLimit: room,
-            });
-      if (res.canceled || !res.assets?.length) return;
-      const picked = res.assets.slice(0, room).map((a) => {
-        pendingSeq.current += 1;
-        return { key: `p${pendingSeq.current}`, uri: a.uri };
-      });
-      setPending((prev) => [...prev, ...picked]);
-      if (inlineHere) insertTokens(picked.map((p) => p.key));
-      if (res.assets.length > room) {
-        setToast(`只加了前 ${room} 张，一条最多 ${MAX_IMAGES} 张`);
-      }
+      const res = from === 'camera'
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5 })
+        : await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ['images'], quality: 0.5, allowsMultipleSelection: true, selectionLimit: room,
+          });
+      // 系统选择器回来时原页面可能已销毁，旧选择不能混入另一份输入。
+      if (!alive.current || res.canceled || !res.assets?.length) return;
+      const available = Math.max(0, MAX_IMAGES - pendingRef.current.length);
+      const picked = res.assets.slice(0, available).map((asset) => ({ key: nextImageKey(), uri: asset.uri }));
+      pendingRef.current = [...pendingRef.current, ...picked];
+      setPending((previous) => [...previous, ...picked]);
+      if (inlineHere && picked.length) insertTokens(picked.map((picture) => picture.key));
+      if (picked.length < res.assets.length) showToast(`只加了前 ${picked.length} 张，一条最多 ${MAX_IMAGES} 张`);
     } catch (e) {
-      setToast(e instanceof Error ? `打不开相册：${e.message}` : '选图失败');
+      if (alive.current) setComposerNotice({ kind: 'err', text: e instanceof Error ? `选图失败：${e.message}` : '选图失败，请重试' });
+    } finally {
+      pickingRef.current = false;
+      if (alive.current) setPicking(false);
     }
   }
 
-  /** 在光标处插一行图片标记（`![](img:p1)`），发出去之后换成真 id */
+  /** 在本次光标处插入由 App 分配、不会在切页后复用的待发键。 */
   function insertTokens(keys: string[]) {
-    const at = Math.min(sel.start, draft.length);
-    const before = draft.slice(0, at);
-    const after = draft.slice(at);
-    const block = keys.map((k) => imageToken(k)).join('\n');
+    const current = draftRef.current;
+    const at = Math.min(sel.start, current.length);
+    const before = current.slice(0, at);
+    const after = current.slice(at);
+    const block = keys.map((key) => imageToken(key)).join('\n');
     const lead = before && !before.endsWith('\n') ? '\n' : '';
     const tail = after && !after.startsWith('\n') ? '\n' : '';
     const next = `${before}${lead}${block}${tail}${after}`;
+    draftRef.current = next;
     onDraftChange(next);
     setSel({ start: at + lead.length + block.length, end: at + lead.length + block.length });
   }
 
-  /** 去掉一张待发图：标记和缩略图一起删，否则正文里会留一行空标记 */
   function dropPending(key: string) {
-    setPending((prev) => prev.filter((p) => p.key !== key));
-    onDraftChange(removeToken(draft, key));
+    if (sendingRef.current || pickingRef.current) return;
+    pendingRef.current = pendingRef.current.filter((picture) => picture.key !== key);
+    setPending((previous) => previous.filter((picture) => picture.key !== key));
+    changeDraft(removeToken(draftRef.current, key));
   }
 
   async function submit() {
-    const text = draft.trim();
-    const pictures = pending;
-    if ((!text && !pictures.length) || sending) return;
+    const submittedDraft = draftRef.current;
+    const text = submittedDraft.trim();
+    const pictures = pendingRef.current.slice();
+    if ((!text && !pictures.length) || sendingRef.current || pickingRef.current) return;
+    sendingRef.current = true;
     setSending(true);
+    setComposerNotice(null);
     try {
-      await onAdd(text, pictures.length ? pictures : undefined);
-      setPending([]);
-      onDraftChange('');
-      // 刚记完必须能看见：万一用户把今天也折叠了，这里替他展开。
-      // 折叠一个「刚往里写了东西的日期」没有任何意义。
-      setCollapsedDays((prev) => {
-        if (!prev || !prev.has(todayKey)) return prev;
-        const next = new Set(prev);
+      const notice = await onAdd(text, pictures.length ? pictures : undefined);
+      if (!alive.current) return;
+      const submittedKeys = new Set(pictures.map((picture) => picture.key));
+      pendingRef.current = pendingRef.current.filter((picture) => !submittedKeys.has(picture.key));
+      setPending((previous) => previous.filter((picture) => !submittedKeys.has(picture.key)));
+      // 不清空异步期间被其它来源更新的文字；只清理本次确实提交的那份。
+      if (draftRef.current === submittedDraft) {
+        draftRef.current = '';
+        onDraftChange('');
+      }
+      setComposerNotice(notice ? { kind: 'ok', text: notice } : null);
+      showToast(notice || '已记录');
+      setCollapsedDays((previous) => {
+        if (!previous || !previous.has(todayKey)) return previous;
+        const next = new Set(previous);
         next.delete(todayKey);
         return next;
       });
+      if (fullEdit) setFullEdit(false);
       inputRef.current?.focus();
       scrollToTopSoon();
     } catch (e) {
-      /*
-       * 存图 / 插库都可能失败（存储满、权限、数据库锁）。
-       * 原来这里没有 catch，异常直接冒到 onPress 的 promise 里 ——
-       * 表现是「点了发送，什么都没发生，输入框里的字还在」。
-       */
-      setToast(e instanceof Error ? `没记上：${e.message}` : '没记上，再试一次');
+      if (alive.current) setComposerNotice({ kind: 'err', text: e instanceof Error ? `没记上：${e.message}` : '没记上，请重试' });
     } finally {
-      setSending(false);
+      sendingRef.current = false;
+      if (alive.current) setSending(false);
     }
   }
 
@@ -653,7 +688,7 @@ export function TimelineScreen({
         listRef.current?.scrollToLocation({
           sectionIndex: 0,
           itemIndex: 0,
-          animated: true,
+          animated: !reduceMotion,
           viewOffset: 0,
         });
       } catch {
@@ -666,7 +701,7 @@ export function TimelineScreen({
   function showToast(text: string) {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(text);
-    toastTimer.current = setTimeout(() => setToast(''), 1800);
+    toastTimer.current = setTimeout(() => setToast(''), 4000);
   }
 
   /**
@@ -703,12 +738,13 @@ export function TimelineScreen({
     const id = deleteTarget.id;
     setDeleteTarget(null);
     setOpenRow(null);
-    await onDelete(id);
-    showToast('已删除');
+    try { await onDelete(id); showToast('已删除'); }
+    catch (error) { showToast(error instanceof Error ? error.message : '删除失败，请重试'); }
   }
 
   /** 点一条碎片先读，不直接进编辑 —— 想通读长文时不该先得到一个光标 */
   function openDetail(f: Fragment, q?: string) {
+    if (sendingRef.current || pickingRef.current) return;
     inputRef.current?.blur();
     setOpenRow(null);
     const i = flat.findIndex((x) => x.id === f.id);
@@ -783,16 +819,16 @@ export function TimelineScreen({
   function imagePickerRow(inlineHere: boolean) {
     return (
       <View style={[styles.pickRow, inlineHere && styles.pickRowFull]}>
-        <Pressable style={styles.pickChip} onPress={() => void pickImage('camera', inlineHere)}>
+        <Pressable style={[styles.pickChip, styles.touchTarget]} onPress={() => void pickImage('camera', inlineHere)}>
           <Ionicons name="camera-outline" size={16} color={c.text2} />
           <Text style={styles.pickChipText}>拍一张</Text>
         </Pressable>
-        <Pressable style={styles.pickChip} onPress={() => void pickImage('library', inlineHere)}>
+        <Pressable style={[styles.pickChip, styles.touchTarget]} onPress={() => void pickImage('library', inlineHere)}>
           <Ionicons name="images-outline" size={16} color={c.text2} />
           <Text style={styles.pickChipText}>从相册选</Text>
         </Pressable>
         <View style={styles.flex} />
-        <Pressable onPress={() => setImageMenu(false)} hitSlop={8} accessibilityLabel="收起加图">
+        <Pressable onPress={() => setImageMenu(false)} style={[styles.dialogAction, styles.touchTarget]} accessibilityRole="button" accessibilityLabel="收起加图">
           <Text style={styles.pickCancel}>取消</Text>
         </Pressable>
       </View>
@@ -801,6 +837,7 @@ export function TimelineScreen({
 
   return (
     <View style={styles.root}>
+      <View style={styles.pageContent} importantForAccessibility={fullEdit || deleteTarget || (detail && detailItems.length > 0) ? 'no-hide-descendants' : 'auto'}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <Text style={styles.brand} numberOfLines={1}>
@@ -821,7 +858,9 @@ export function TimelineScreen({
             tone="soft"
             color={c.text2}
             diameter={34}
-            onPress={onOpenDocs}
+            onPress={() => navigate(onOpenDocs)}
+            disabled={composerBusy}
+            label="文档"
             accessibilityLabel="文档：上传并阅读文档"
           />
           <IconButton
@@ -830,7 +869,9 @@ export function TimelineScreen({
             tone="soft"
             color={c.text2}
             diameter={34}
-            onPress={onOpenReview}
+            onPress={() => navigate(onOpenReview)}
+            disabled={composerBusy}
+            label="回顾"
             accessibilityLabel="回顾待办与小结"
           />
           <IconButton
@@ -839,7 +880,9 @@ export function TimelineScreen({
             tone="soft"
             color={c.text2}
             diameter={34}
-            onPress={onOpenSettings}
+            onPress={() => navigate(onOpenSettings)}
+            disabled={composerBusy}
+            label="设置"
             accessibilityLabel="设置"
           />
           {/*
@@ -852,7 +895,9 @@ export function TimelineScreen({
             tone="accent"
             color={c.accentText}
             diameter={42}
-            onPress={() => onOpenAsk()}
+            onPress={() => navigate(() => onOpenAsk())}
+            disabled={composerBusy}
+            label="问"
             accessibilityLabel="问：查自己的记录，或者让它整理"
           />
         </View>
@@ -872,15 +917,13 @@ export function TimelineScreen({
             autoCapitalize="none"
           />
           {searching ? (
-            <Pressable onPress={() => setQuery('')} hitSlop={10} accessibilityLabel="清除搜索">
-              <Ionicons name="close-circle" size={17} color={c.text3} />
-            </Pressable>
+<IconButton name="close-circle-outline" size={20} onPress={() => setQuery("")} accessibilityLabel="清除搜索" />
           ) : null}
         </View>
         {filter ? (
           <View style={styles.filterRow}>
             <Pressable
-              style={({ pressed }) => [styles.filterChip, pressed && { opacity: 0.6 }]}
+              style={({ pressed }) => [[styles.filterChip, pressed && { opacity: 0.6 }], styles.touchTarget]}
               onPress={() => setFilter(null)}
               accessibilityRole="button"
               accessibilityLabel="取消筛选"
@@ -899,11 +942,9 @@ export function TimelineScreen({
               ? '没有匹配的碎片'
               : !searching
                 ? `找到 ${searchStat.total} 条${searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''}`
-                : hitTotal > 0
-                  ? // 有正文命中就报处数：用户搜「NAS」，想知道的是「一共有几处用得上」
-                    `找到 ${searchStat.total} 条 · ${hitTotal} 处`
-                  : // 只命中了标签 / 事项。报「0 处」会让人以为搜错了，得说清是正文没有
-                    `找到 ${searchStat.total} 条 · 正文无命中`}
+                : hitTotal > 0 || imageHitTotal > 0
+                  ? `找到 ${searchStat.total} 条 · 正文 ${hitTotal} 处${imageHitTotal ? ` · 图片文字 ${imageHitTotal} 处` : ''}`
+                  : `找到 ${searchStat.total} 条 · 事项匹配`}
           </Text>
         ) : null}
       </View>
@@ -929,11 +970,6 @@ export function TimelineScreen({
               <Text style={styles.emptyBody}>
                 想到什么就在下面写一句，{'\n'}不用管分类。攒够了去「问」里说一句整理，它会提炼成知识文档。
               </Text>
-              {Platform.OS === 'web' && onSeed ? (
-                <Pressable onPress={onSeed} hitSlop={8} style={styles.seedBtn}>
-                  <Text style={styles.seedText}>填入示例碎片看看效果</Text>
-                </Pressable>
-              ) : null}
             </View>
           )
         ) : (
@@ -958,11 +994,11 @@ export function TimelineScreen({
               const locked = searching;
               return (
                 <Pressable
-                  style={({ pressed }) => [
+                  style={({ pressed }) => [[
                     styles.sectionHeader,
                     section.nested && styles.sectionHeaderNested,
                     pressed && !locked && styles.sectionHeaderPressed,
-                  ]}
+                  ], styles.touchTarget]}
                   onPress={() => {
                     if (locked) return;
                     if (section.nested) toggleNestedDay(section.key);
@@ -1002,7 +1038,7 @@ export function TimelineScreen({
                 return (
                   <Pressable
                     onPress={() => toggleNote(note.id)}
-                    style={({ pressed }) => [styles.noteRow, pressed && styles.rowPressed]}
+                    style={({ pressed }) => [[styles.noteRow, pressed && styles.rowPressed], styles.touchTarget]}
                   >
                     <Text style={styles.time}>
                       {note.type === 'daily' ? formatTime(item.at) : ''}
@@ -1027,8 +1063,7 @@ export function TimelineScreen({
                         {open && (
                           <Pressable
                             onPress={() => removeNote(note.id)}
-                            hitSlop={8}
-                            style={styles.noteDeleteHit}
+                            style={[styles.noteDeleteHit, styles.touchTarget]}
                           >
                             <Text style={styles.noteDelete}>
                               {armedNoteDelete === note.id ? '再点一次确认删除' : '删除这条总结'}
@@ -1061,15 +1096,15 @@ export function TimelineScreen({
                     icon: 'chatbubble-ellipses-outline',
                     bg: c.accent,
                     fg: c.onAccent,
-                    onPress: () => onOpenAsk(fragment.id),
+                    onPress: () => navigate(() => onOpenAsk(fragment.id)),
                   }}
                   leftInstant
                   rightAction={{
                     label: '删除',
                     icon: 'trash-outline',
                     bg: c.danger,
-                    // 红底上的字只能是白的，深色主题下 c.onAccent 是深蓝，压不住
-                    fg: '#FFFFFF',
+                    // 危险底色使用独立前景色，深色/墨水下不固定白字。
+                    fg: c.onDanger,
                     // 先收起操作区再弹确认：取消之后不该留一条敞开着的红条
                     onPress: () => {
                       setOpenRow(null);
@@ -1106,8 +1141,7 @@ export function TimelineScreen({
                           {long ? (
                             <Pressable
                               onPress={() => toggleExpand(fragment.id)}
-                              hitSlop={8}
-                              style={styles.expandBtn}
+                              style={[styles.expandBtn, styles.touchTarget]}
                             >
                               <Text style={styles.expandText}>
                                 {open ? '收起' : `展开全文 · ${fragment.content.length} 字`}
@@ -1136,11 +1170,11 @@ export function TimelineScreen({
                                 />
                                 {st === 'busy' ? (
                                   <View style={styles.thumbMask}>
-                                    <ActivityIndicator size="small" color="#FFFFFF" />
+                                    <ActivityIndicator size="small" color={c.mediaForeground} />
                                   </View>
                                 ) : st === 'fail' ? (
                                   <View style={styles.thumbMask}>
-                                    <Ionicons name="alert-circle-outline" size={17} color="#FFFFFF" />
+                                    <Ionicons name="alert-circle-outline" size={17} color={c.mediaForeground} />
                                   </View>
                                 ) : null}
                               </View>
@@ -1156,14 +1190,25 @@ export function TimelineScreen({
                         </View>
                         {(() => {
                           const texts = imageTextsOf(fragment);
-                          const reading = fragment.images.some((i) => imageBusy.has(i.id));
+                          const matchCount = imageHitCounts.get(fragment.id) ?? 0;
+                           if (searching && matchCount > 0) {
+                             const combined = texts.join(' · ');
+                             const start = Math.max(0, combined.toLowerCase().indexOf(query.trim().toLowerCase()) - 32);
+                             const excerpt = combined.slice(start, start + Math.max(150, query.trim().length + 64));
+                             return (
+                               <View style={styles.imageMatch}>
+                                 <Text style={styles.imageMatchLabel}>图片文字命中 {matchCount} 处</Text>
+                                 <Text style={styles.imageNote} numberOfLines={4}>{start ? '…' : ''}{excerpt}</Text>
+                               </View>
+                             );
+                           }
+                           const reading = fragment.images.some((i) => imageBusy.has(i.id));
                           const bad = fragment.images.find((i) => imageFail[String(i.id)]);
                           if (reading) return <Text style={styles.imageNote}>正在读图里的字…</Text>;
                           if (bad)
                             return (
                               <Pressable
-                                onPress={() => onReparseImage(fragment, bad.id)}
-                                hitSlop={8}
+                                onPress={() => onReparseImage(fragment, bad.id)} style={styles.touchTarget}
                               >
                                 <Text
                                   style={[styles.imageNote, styles.imageNoteErr]}
@@ -1203,10 +1248,9 @@ export function TimelineScreen({
                         {hitCount > 0 ? (
                           <Pressable
                             onPress={() => openDetail(fragment, hitQuery)}
-                            hitSlop={4}
                             accessibilityRole="button"
                             accessibilityLabel={`正文命中 ${hitCount} 处，点开查看`}
-                            style={({ pressed }) => pressed && { opacity: 0.55 }}
+                            style={({ pressed }) => [pressed && { opacity: 0.55 }, styles.touchTarget]}
                           >
                             <View style={styles.hitBadge}>
                               <Text style={styles.hitBadgeText}>{hitCount} 处</Text>
@@ -1259,17 +1303,21 @@ export function TimelineScreen({
           />
         )}
 
-        <View style={[styles.composerWrap, { paddingBottom: 10 + keyboardHeight }]}>
+        <View onLayout={(event) => setComposerHeight(event.nativeEvent.layout.height)} style={[styles.composerWrap, { paddingBottom: 10 + keyboardHeight }]}>
           {/*
             输入框在上、工具行在下（用户 2026-11-12 要求，参照 DeepSeek 的输入区）：
             文字区域独占整行宽度，展开 / 加图 / 发布退到下面一排 ——
             原来四个按钮挤在同一行里，长句子写两行就被压得只剩半行宽。
           */}
           <View style={styles.composerCard}>
+            {composerNotice ? <Text style={[styles.composerNotice, composerNotice.kind === 'err' && styles.imageNoteErr]} accessibilityLiveRegion="polite">{composerNotice.text}</Text> : null}
+            {composerBusy ? <Text style={styles.composerNotice} accessibilityLiveRegion="polite">{sending ? '正在保存，暂时不能切换页面…' : '正在选择图片…'}</Text> : null}
             <TextInput
               ref={inputRef}
               value={draft}
-              onChangeText={onDraftChange}
+              onChangeText={changeDraft}
+              editable={!composerBusy}
+              selectionColor={c.selection}
               onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
               placeholder={pending.length ? '这张图是什么？可留空' : '随手记一条…'}
               placeholderTextColor={c.text3}
@@ -1298,11 +1346,10 @@ export function TimelineScreen({
                     <Image source={{ uri: p.uri }} style={styles.pendingThumb} />
                     <Pressable
                       onPress={() => dropPending(p.key)}
-                      hitSlop={8}
-                      style={styles.pendingRemove}
-                      accessibilityLabel={`不发第 ${i + 1} 张`}
+                      style={[styles.pendingRemove, styles.touchTarget]}
+                      accessibilityRole="button" accessibilityLabel={`不发第 ${i + 1} 张`} disabled={composerBusy} accessibilityState={{ disabled: composerBusy }}
                     >
-                      <Ionicons name="close" size={12} color="#FFFFFF" />
+                      <View style={styles.pendingRemoveFace}><Ionicons name="close" size={14} color={c.mediaForeground} /></View>
                     </Pressable>
                   </View>
                 ))}
@@ -1321,11 +1368,10 @@ export function TimelineScreen({
                 onPress={() => {
                   // 光标默认落在末尾：展开长文时人通常是接着往下写
                   setSel({ start: draft.length, end: draft.length });
-                  setFullEdit(true);
+                  navigate(() => setFullEdit(true));
                 }}
-                hitSlop={8}
-                style={styles.toolBtn}
-                accessibilityLabel="展开成整页写"
+                style={[styles.toolBtn, styles.touchTarget]}
+                accessibilityRole="button" accessibilityLabel="展开成整页写" disabled={composerBusy} accessibilityState={{ disabled: composerBusy }}
               >
                 <Ionicons name="expand-outline" size={18} color={c.text2} />
               </Pressable>
@@ -1333,9 +1379,10 @@ export function TimelineScreen({
               <View style={styles.flex} />
 
               <Pressable
-                onPress={() => setImageMenu((v) => !v)}
-                hitSlop={8}
-                style={[styles.toolBtn, imageMenu && styles.toolBtnOn]}
+                onPress={() => navigate(() => setImageMenu((v) => !v))}
+                disabled={composerBusy}
+                accessibilityState={{ expanded: imageMenu, disabled: composerBusy }}
+                style={[[styles.toolBtn, imageMenu && styles.toolBtnOn], styles.touchTarget]}
                 accessibilityLabel="加图片"
               >
                 <Ionicons name="image-outline" size={18} color={c.text2} />
@@ -1349,11 +1396,10 @@ export function TimelineScreen({
               <Pressable
                 onPress={submit}
                 disabled={!canSend}
-                style={[styles.send, canSend && styles.sendActive]}
-                hitSlop={6}
-                accessibilityLabel="发布这条碎片"
+                style={[[styles.send, canSend && styles.sendActive], styles.touchTarget]}
+                accessibilityRole="button" accessibilityLabel={sending ? "正在保存" : "发布这条碎片"} accessibilityState={{ disabled: !canSend, busy: sending }}
               >
-                <Ionicons name="arrow-up" size={19} color={canSend ? c.onAccent : c.text3} />
+                <>{sending ? <ActivityIndicator size="small" color={c.text2} /> : <Ionicons name="arrow-up" size={19} color={canSend ? c.onAccent : c.text3} />}</>
               </Pressable>
             </View>
           </View>
@@ -1361,7 +1407,8 @@ export function TimelineScreen({
       </View>
 
       {/* 轻提示排在覆盖层之前：它只该压在列表上，不该盖住确认弹层 */}
-      <Toast text={toast} bottom={80 + keyboardHeight} />
+      <Toast text={toast} bottom={composerHeight + 8} />
+      </View>
 
       {/*
         详情页是全屏覆盖层，JSX 顺序就是层叠顺序，必须排在列表之后。
@@ -1393,8 +1440,8 @@ export function TimelineScreen({
       */}
       {deleteTarget ? (
         // paddingBottom 让卡片落在键盘上方 —— 记完一条顺手滑掉它时，键盘往往还开着
-        <View style={[styles.overlay, styles.dialogOverlay, { paddingBottom: keyboardHeight }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteTarget(null)} />
+        <View accessibilityViewIsModal style={[styles.overlay, styles.dialogOverlay, { paddingBottom: keyboardHeight }]}>
+          <Pressable style={[StyleSheet.absoluteFill, styles.touchTarget]} onPress={() => setDeleteTarget(null)} />
           <View style={styles.dialog}>
             <Text style={styles.dialogTitle}>删除这条碎片？</Text>
             <Text style={styles.dialogBody} numberOfLines={3}>
@@ -1402,10 +1449,10 @@ export function TimelineScreen({
             </Text>
             <Text style={styles.dialogHint}>删除后无法恢复。已经整理进文档的内容不会跟着消失。</Text>
             <View style={styles.dialogActions}>
-              <Pressable onPress={() => setDeleteTarget(null)} hitSlop={8}>
+              <Pressable onPress={() => setDeleteTarget(null)} style={[styles.dialogAction, styles.touchTarget]} accessibilityRole="button">
                 <Text style={styles.muted}>取消</Text>
               </Pressable>
-              <Pressable onPress={confirmDelete} hitSlop={8}>
+              <Pressable onPress={confirmDelete} style={[styles.dialogAction, styles.touchTarget]} accessibilityRole="button">
                 <Text style={styles.dangerText}>删除</Text>
               </Pressable>
             </View>
@@ -1422,17 +1469,16 @@ export function TimelineScreen({
       {fullEdit ? (
         <View style={[styles.overlay, styles.fullOverlay, { paddingBottom: keyboardHeight }]}>
           <View style={styles.fullHeader}>
-            <Pressable onPress={() => setFullEdit(false)} hitSlop={10}>
-              <Text style={styles.muted}>取消</Text>
+            <Pressable onPress={() => navigate(() => setFullEdit(false))} style={[styles.dialogAction, styles.touchTarget]} accessibilityRole="button" accessibilityLabel="收起长文，保留草稿" disabled={composerBusy}>
+              <Text style={styles.muted}>收起</Text>
             </Pressable>
-            <Text style={styles.fullTitle}>长文记录</Text>
+            <Text style={styles.fullTitle} accessibilityRole="header">长文记录</Text>
             <Pressable
               onPress={async () => {
-                setFullEdit(false);
                 await submit();
               }}
-              hitSlop={10}
-              disabled={!canSend}
+              style={[styles.dialogAction, styles.touchTarget]}
+              disabled={!canSend} accessibilityRole="button" accessibilityState={{ disabled: !canSend, busy: sending }}
             >
               <Text style={[styles.primary, !canSend && styles.muted]}>保存</Text>
             </Pressable>
@@ -1440,7 +1486,9 @@ export function TimelineScreen({
           <TextInput
             ref={fullInputRef}
             value={draft}
-            onChangeText={onDraftChange}
+            onChangeText={changeDraft}
+              editable={!composerBusy}
+              selectionColor={c.selection}
             onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
             style={styles.fullInput}
             multiline
@@ -1467,11 +1515,10 @@ export function TimelineScreen({
                   <Image source={{ uri: p.uri }} style={styles.pendingThumb} />
                   <Pressable
                     onPress={() => dropPending(p.key)}
-                    hitSlop={8}
-                    style={styles.pendingRemove}
-                    accessibilityLabel={`不发第 ${i + 1} 张`}
+                    style={[styles.pendingRemove, styles.touchTarget]}
+                    accessibilityRole="button" accessibilityLabel={`不发第 ${i + 1} 张`} disabled={composerBusy} accessibilityState={{ disabled: composerBusy }}
                   >
-                    <Ionicons name="close" size={12} color="#FFFFFF" />
+                    <View style={styles.pendingRemoveFace}><Ionicons name="close" size={14} color={c.mediaForeground} /></View>
                   </Pressable>
                 </View>
               ))}
@@ -1482,14 +1529,16 @@ export function TimelineScreen({
           {imageMenu ? imagePickerRow(true) : null}
 
           <View style={styles.fullBar}>
+            {composerNotice ? <Text style={[styles.composerNotice, composerNotice.kind === 'err' && styles.imageNoteErr]} accessibilityLiveRegion="polite">{composerNotice.text}</Text> : null}
             <Text style={styles.fullCount}>
               {draft.length} 字
               {pending.length ? ` · ${pending.length} 张图插在光标处` : ''}
             </Text>
             <Pressable
-              onPress={() => setImageMenu((v) => !v)}
-              hitSlop={8}
-              style={[styles.toolBtn, imageMenu && styles.toolBtnOn]}
+              onPress={() => navigate(() => setImageMenu((v) => !v))}
+                disabled={composerBusy}
+                accessibilityState={{ expanded: imageMenu, disabled: composerBusy }}
+              style={[[styles.toolBtn, imageMenu && styles.toolBtnOn], styles.touchTarget]}
               accessibilityLabel="在光标处插图"
             >
               <Ionicons name="image-outline" size={18} color={c.text2} />
@@ -1506,7 +1555,14 @@ export function TimelineScreen({
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
+  pageContent: { flex: 1 },
+  dialogAction: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  composerNotice: { fontSize: 12, lineHeight: 18, color: c.text2, paddingVertical: 6, flexShrink: 1 },
+  imageMatch: { borderLeftWidth: 2, borderLeftColor: c.focus, paddingLeft: 8, gap: 4 },
+  imageMatchLabel: { fontSize: 12, lineHeight: 18, color: c.text, fontWeight: '600' },
+  pendingRemoveFace: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
   root: { flex: 1, backgroundColor: c.page },
   flex: { flex: 1 },
   header: {
@@ -1519,19 +1575,19 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingTop: 6,
     paddingBottom: 10,
   },
-  headerLeft: { flexShrink: 1 },
-  brand: { fontSize: 22, color: c.text, fontWeight: '600', letterSpacing: 0.8 },
+  headerLeft: { flexShrink: 1, minWidth: 40 },
+  brand: { fontSize: 20, color: c.text, fontWeight: '600', letterSpacing: 0.8 },
   brandSub: { fontSize: 12, color: c.text3, marginTop: 2 },
-  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
     paddingHorizontal: 20,
     paddingBottom: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   filterRow: { flexDirection: 'row', marginTop: 8 },
-  filterChip: {
+  filterChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
@@ -1546,9 +1602,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    height: 38,
+    minHeight: 48,
     backgroundColor: c.hairSoft,
-    borderRadius: R.btn + 2,
+    borderRadius: metrics.buttonRadius + 2,
     paddingHorizontal: 12,
   },
   searchInput: {
@@ -1558,7 +1614,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingVertical: 0,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  searchStat: { fontSize: 11.5, color: c.text3, marginTop: 7, paddingLeft: 2 },
+  searchStat: { fontSize: 12, color: c.text3, marginTop: 7, paddingLeft: 2 },
 
   listContent: { paddingBottom: 8 },
   // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
@@ -1577,7 +1633,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   sectionSubNested: { color: c.text3 },
   sectionSub: {
     flex: 1,
-    fontSize: 11,
+    fontSize: 12,
     color: c.text3,
     fontVariant: ['tabular-nums'],
   },
@@ -1587,7 +1643,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   rowPressed: { backgroundColor: c.hairSoft },
   time: {
     width: 44,
-    fontSize: 11.5,
+    fontSize: 12,
     color: c.text3,
     paddingTop: 3,
     fontVariant: ['tabular-nums'],
@@ -1606,11 +1662,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   /** 配图区：一排缩略图 + 下面一行状态 */
   imageBlock: { marginTop: 8, gap: 6 },
   thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  thumbWrap: { borderRadius: R.btn, overflow: 'hidden' },
+  thumbWrap: { borderRadius: metrics.buttonRadius, overflow: 'hidden' },
   imageThumb: {
     width: 62,
     height: 62,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   /** 压在图上的「正在读 / 读失败」标记：只有一层薄蒙版，不遮住图本身 */
@@ -1622,19 +1678,19 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     left: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.38)',
+    backgroundColor: c.mediaScrim,
   },
   thumbMore: { alignItems: 'center', justifyContent: 'center' },
   thumbMoreText: { fontSize: 13, color: c.text2, fontWeight: '600' },
-  imageNote: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
+  imageNote: { fontSize: 12, lineHeight: 17, color: c.text3 },
   imageNoteErr: { color: c.danger },
 
   content: { fontSize: 15, lineHeight: 23, color: c.text },
-  expandBtn: { marginTop: 6, alignSelf: 'flex-start' },
+  expandBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, marginTop: 6, alignSelf: 'flex-start' },
   expandText: { fontSize: 12.5, color: c.accent },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  project: { fontSize: 11, color: c.text3, maxWidth: 120 },
-  mergedTag: { fontSize: 11, color: c.text3 },
+  project: { fontSize: 12, color: c.text3, maxWidth: 120 },
+  mergedTag: { fontSize: 12, color: c.text3 },
 
   // 已完成标记：浅青底小胶囊，比标签低调，不和用户自己的 tag 抢注意力
   doneBadge: {
@@ -1647,7 +1703,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 2,
   },
-  doneBadgeText: { fontSize: 10.5, lineHeight: 15, color: c.tealText },
+  doneBadgeText: { fontSize: 11, lineHeight: 15, color: c.tealText },
   /** 「已整理」：和「已完成」并排时不抢戏，用主色淡淡的底 */
   orgBadge: {
     flexDirection: 'row',
@@ -1659,7 +1715,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 2,
   },
-  orgBadgeText: { fontSize: 10.5, lineHeight: 15, color: c.accentText },
+  orgBadgeText: { fontSize: 11, lineHeight: 15, color: c.accentText },
   /**
    * 命中处数徽标。观感贴着小号 TagPill，但颜色固定走 amber 系 ——
    * 标签色是按标签名算的，命中数是系统信息，不该跟着标签的配色跑。
@@ -1670,7 +1726,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  hitBadgeText: { fontSize: 11, lineHeight: 15, color: c.amberText, fontWeight: '500' },
+  hitBadgeText: { fontSize: 12, lineHeight: 15, color: c.amberText, fontWeight: '500' },
 
   // 周期总结条目
   noteRow: { flexDirection: 'row', paddingHorizontal: 20 },
@@ -1685,8 +1741,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   noteCard: {
     flex: 1,
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingHorizontal: 14,
     paddingVertical: 12,
@@ -1694,8 +1750,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginLeft: 2,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  noteKind: { fontSize: 11.5, color: c.accentText, fontWeight: '600' },
-  notePeriod: { flex: 1, fontSize: 11, color: c.text3 },
+  noteKind: { fontSize: 12, color: c.accentText, fontWeight: '600' },
+  notePeriod: { flex: 1, fontSize: 12, color: c.text3 },
   noteBody: { fontSize: 14.5, lineHeight: 23, color: c.text },
   noteFoot: {
     flexDirection: 'row',
@@ -1704,8 +1760,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     marginTop: 10,
   },
   noteToggle: { fontSize: 12.5, color: c.accent },
-  noteDeleteHit: { paddingVertical: 2 },
-  noteDelete: { fontSize: 11, color: c.danger },
+  noteDeleteHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingVertical: 2 },
+  noteDelete: { fontSize: 12, color: c.danger },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
   emptyIcon: {
@@ -1725,14 +1781,12 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     lineHeight: 21,
     marginTop: 10,
   },
-  seedBtn: { marginTop: 22, paddingVertical: 6, paddingHorizontal: 10 },
-  seedText: { fontSize: 12, color: c.accent, textDecorationLine: 'underline' },
 
   composerWrap: {
     paddingHorizontal: 16,
     paddingTop: 9,
     paddingBottom: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
@@ -1740,18 +1794,11 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   pendingStrip: { marginTop: 8 },
   pendingStripContent: { gap: 8, paddingRight: 4 },
   pendingItem: { width: 58, height: 58 },
-  pendingThumb: { width: 58, height: 58, borderRadius: R.btn, backgroundColor: c.hairSoft },
+  pendingThumb: { width: 58, height: 58, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
   pendingRemove: {
-    position: 'absolute',
-    top: -5,
-    right: -5,
-    width: 19,
-    height: 19,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    // 压在小图上必须够深，浅灰底上白色叉号会看不见
-    backgroundColor: 'rgba(0,0,0,0.62)',
+    position: 'absolute', top: -5, right: -5,
+    width: 48, height: 48, padding: 5,
+    alignItems: 'flex-end', justifyContent: 'flex-start',
   },
   /** 加图选择行：在输入卡片内部，跟着输入区一起被键盘顶上来的那一行 */
   pickRow: {
@@ -1762,13 +1809,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingBottom: 2,
     paddingRight: 4,
   },
-  pickChip: {
+  pickChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingHorizontal: 12,
     paddingVertical: 7,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   pickChipText: { fontSize: 12.5, color: c.text },
@@ -1783,8 +1830,8 @@ const makeStyles = (c: Palette) => StyleSheet.create({
    */
   composerCard: {
     backgroundColor: c.card,
-    borderRadius: R.card + 6,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius + 6,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     paddingLeft: 14,
     paddingRight: 8,
@@ -1797,9 +1844,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 4,
     marginTop: 2,
   },
-  toolBtn: {
+  toolBtn: { minWidth: metrics.controlHeight,
     width: 32,
-    height: 32,
+    minHeight: metrics.controlHeight,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1832,9 +1879,9 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingRight: 6,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  send: {
+  send: { minWidth: metrics.controlHeight,
     width: 32,
-    height: 32,
+    minHeight: metrics.controlHeight,
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1848,7 +1895,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 18,
     paddingBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   fullTitle: { fontSize: 14, color: c.text, fontWeight: '500' },
@@ -1862,7 +1909,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     textAlignVertical: 'top',
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  fullCount: { flex: 1, fontSize: 11, color: c.text3 },
+  fullCount: { flex: 1, fontSize: 12, color: c.text3 },
   /** 长文底栏：字数在左、插图在右，贴着键盘上沿 */
   fullBar: {
     flexDirection: 'row',
@@ -1871,7 +1918,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 8,
     paddingBottom: 12,
-    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
   fullThumbs: { flexGrow: 0 },
@@ -1896,13 +1943,13 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   dialog: {
     backgroundColor: c.card,
-    borderRadius: R.card,
+    borderRadius: metrics.cardRadius,
     padding: 20,
     gap: 10,
   },
   dialogTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
   dialogBody: { fontSize: 12.5, color: c.text2, lineHeight: 19 },
-  dialogHint: { fontSize: 11.5, color: c.text3, lineHeight: 17 },
+  dialogHint: { fontSize: 12, color: c.text3, lineHeight: 17 },
   dialogActions: {
     flexDirection: 'row',
     alignItems: 'center',

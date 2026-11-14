@@ -27,7 +27,9 @@ import { normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
-import { stripImageTokens } from '../util/inlineImages';
+import { removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
+import { fragmentSearchText } from '../util/fragmentText';
+import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 
 let _db: SQLite.SQLiteDatabase | null = null;
 
@@ -716,13 +718,17 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
   const like = likeNeedle(query);
   if (!like) return [];
   const rows = d.getAllSync<FragmentRow>(
-    `SELECT * FROM fragments
-      WHERE merged_into IS NULL
-        AND (content LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\' OR project LIKE ? ESCAPE '\\')
-      ORDER BY created_at DESC LIMIT ?`,
-    [like, like, like, limit],
+    `SELECT f.* FROM fragments f
+      WHERE f.merged_into IS NULL
+        AND (f.content LIKE ? ESCAPE '\\' OR f.project LIKE ? ESCAPE '\\'
+          OR EXISTS (SELECT 1 FROM fragment_images i WHERE i.fragment_id = f.id AND i.text LIKE ? ESCAPE '\\'))
+      ORDER BY f.created_at DESC, f.id DESC`,
+    [like, like, like],
   );
-  return attachImages(d, rows.map(toFragment));
+  const needle = query.trim().toLowerCase();
+  return attachImages(d, rows.map(toFragment))
+    .filter((f) => fragmentSearchText(f).toLowerCase().includes(needle))
+    .slice(0, limit);
 }
 
 /** 按 200 条一页重建索引。迁移回填和设置页「重建索引」共用 */
@@ -762,18 +768,54 @@ function rebuildIndex(d: SQLite.SQLiteDatabase): number {
     }
     offset += rows.length;
   }
+  d.runSync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [SEARCH_PROJECTION_KEY, SEARCH_PROJECTION_VERSION]);
   return indexed;
 }
 
-/** 启动时对齐索引和碎片；不一致就重建。数据量大了只会在升级后第一次慢一下 */
+const SEARCH_PROJECTION_KEY = 'search.fragment.projection';
+const SEARCH_PROJECTION_VERSION = '2';
+
+/** 条数与投影版本都一致才可复用；不改变数据库 schema 或历史原文。 */
 function ensureSearchIndex(d: SQLite.SQLiteDatabase) {
   const total = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments')?.n ?? 0;
   const indexed = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragment_fts')?.n ?? 0;
-  if (total !== indexed) rebuildIndex(d);
+  const projection = d.getFirstSync<{ value: string }>('SELECT value FROM settings WHERE key = ?', [SEARCH_PROJECTION_KEY])?.value;
+  if (total !== indexed || projection !== SEARCH_PROJECTION_VERSION) rebuildIndex(d);
 }
 
 function countOf(d: SQLite.SQLiteDatabase, sql: string, params: (string | number)[] = []): number {
   return d.getFirstSync<{ n: number }>(sql, params)?.n ?? 0;
+}
+
+/** Caller owns the transaction; both ordinary replacement and draft commit use this one writer. */
+function replaceDocumentContentIn(
+  d: SQLite.SQLiteDatabase, id: number, content: DocumentContentInput, expectedRevision: number,
+): boolean {
+  const cur = d.getFirstSync<{ content_revision: number }>(
+    'SELECT content_revision FROM documents WHERE id = ?', [id],
+  );
+  if (!cur || (cur.content_revision ?? 0) !== expectedRevision) return false;
+  const next = expectedRevision + 1;
+  d.runSync(
+    `UPDATE documents SET body_md = ?, char_count = ?, pages = ?, state = ?,
+       content_revision = ?, indexed_revision = ?, chunk_count = ?, content_source = ?,
+       error = NULL, updated_at = ? WHERE id = ?`,
+    [content.bodyMd, content.bodyMd.length, content.pages, 'done', next, next,
+      content.chunks.length, content.source, Date.now(), id],
+  );
+  const old = d.getAllSync<{ id: number }>('SELECT id FROM document_chunks WHERE document_id = ?', [id]);
+  for (const row of old) d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
+  d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
+  content.chunks.forEach((chunk, ordinal) => {
+    const inserted = d.runSync(
+      `INSERT INTO document_chunks (document_id, content_revision, ordinal, text, locator_json) VALUES (?, ?, ?, ?, ?)`,
+      [id, next, ordinal, chunk.text, JSON.stringify(chunk.locator)],
+    );
+    d.runSync('INSERT INTO document_chunks_fts(rowid, text) VALUES (?, ?)', [
+      Number(inserted.lastInsertRowId), tokenizeText(chunk.text).join(' '),
+    ]);
+  });
+  return true;
 }
 
 export const repo: Repo = {
@@ -785,10 +827,83 @@ export const repo: Repo = {
     ensureSearchIndex(d);
   },
 
+  async commitDraft(input) {
+    validateDraftCommit(input);
+    const d = db();
+    const key = draftCommitKey(input.draftId);
+    let receipt = readDraftReceipt(null);
+    d.withTransactionSync(() => {
+      const raw = d.getFirstSync<{ value: string }>('SELECT value FROM settings WHERE key = ?', [key])?.value;
+      receipt = readDraftReceipt(raw);
+      const before = receipt.documents.length + receipt.todos.length;
+      const now = Date.now();
+      commitDraftEntries(input, receipt, {
+        insertDocument: (doc) => {
+          const inserted = d.runSync(
+            `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error,
+               origin, excerpt, created_at, updated_at)
+             VALUES (?, 'md', ?, NULL, '', NULL, 0, 'parsing', NULL, 'knowledge', ?, ?, ?)`,
+            [doc.title.trim(), doc.content.bodyMd.length, doc.excerpt, now, now],
+          );
+          const id = Number(inserted.lastInsertRowId);
+          if (!replaceDocumentContentIn(d, id, doc.content, 0)) throw new Error('文档写入版本冲突');
+          return id;
+        },
+        insertTodo: (text, dueAt, parentId) => Number(d.runSync(
+          `INSERT INTO todos (text, due_at, done, source_fragment_id, created_at, parent_id)
+           VALUES (?, ?, 0, NULL, ?, ?)`, [text, dueAt, now, parentId],
+        ).lastInsertRowId),
+        findTodo: (id) => {
+          const row = d.getFirstSync<{ parent_id: number | null; merged_into: number | null }>(
+            'SELECT parent_id, merged_into FROM todos WHERE id = ?', [id],
+          );
+          return row ? { parentId: row.parent_id, mergedInto: row.merged_into } : null;
+        },
+        reopenTodo: (id) => { d.runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [id]); },
+      });
+      if (receipt.documents.length + receipt.todos.length > before) {
+        const sourceIds = positiveIds(input.sourceIds);
+        for (let i = 0; i < sourceIds.length; i += 400) {
+          const ids = sourceIds.slice(i, i + 400);
+          d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids]);
+        }
+        if (input.sessionId !== null) {
+          const session = d.getFirstSync<{ document_id: number | null; document_ids: string | null; source_ids: string | null }>(
+            'SELECT document_id, document_ids, source_ids FROM ask_sessions WHERE id = ?', [input.sessionId],
+          );
+          // A deleted history session is not silently recreated by a late commit.
+          if (session) {
+            const ids = positiveIds([
+              ...positiveIds(parseJson(session.document_ids, [])), session.document_id,
+              ...receipt.documents.map((doc) => doc.id),
+            ]).filter((id) => !!d.getFirstSync('SELECT id FROM documents WHERE id = ?', [id]));
+            const sources = positiveIds([...positiveIds(parseJson(session.source_ids, [])), ...sourceIds]);
+            if (ids.length) {
+              d.runSync('UPDATE ask_sessions SET document_id = ?, document_ids = ?, source_ids = ? WHERE id = ?',
+                [ids[0], JSON.stringify(ids), JSON.stringify(sources), input.sessionId]);
+            } else {
+              d.runSync('UPDATE ask_sessions SET document_id = NULL, document_ids = ?, source_ids = ? WHERE id = ?',
+                ['[]', JSON.stringify(sources), input.sessionId]);
+            }
+          }
+        }
+      }
+      d.runSync('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, serializeDraftReceipt(receipt)]);
+    });
+    return receipt;
+  },
+
+  async listAllFragments() {
+    const d = db();
+    return attachImages(d, d.getAllSync<FragmentRow>(
+      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC',
+    ).map(toFragment));
+  },
+
   async listFragments(limit = 500) {
     const d = db();
     const rows = d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments ORDER BY created_at DESC LIMIT ?',
+      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC LIMIT ?',
       [limit],
     );
     return attachImages(d, rows.map(toFragment));
@@ -855,82 +970,113 @@ export const repo: Repo = {
   async insertFragment(content, source, createdAt, images) {
     const d = db();
     const text = content.trim();
-    const row = createdAt ?? Date.now();
-    /*
-     * 正文和配图必须在同一个事务里：分开写的话，插完碎片那一步失败，
-     * 库里就留一条「有图但图行没写进去」的碎片 —— 界面上是一个空白的
-     * 图片位，而文件其实还在磁盘上。
-     *
-     * image_path / image_text 两列（v15）不再写入：配图改由 fragment_images 承载。
-     */
-    d.execSync('BEGIN');
+    const pictures = images ?? [];
+    if (!text && !pictures.length) throw new Error('记录没有正文或图片');
+    if (pictures.length > 9 || pictures.some((img) => !img.path)) throw new Error('配图数量或路径无效');
+    const at = createdAt ?? Date.now();
     let id = 0;
-    try {
-      const res = d.runSync(
+    d.withTransactionSync(() => {
+      const result = d.runSync(
         'INSERT INTO fragments (content, created_at, source, status) VALUES (?, ?, ?, ?)',
-        [text, row, source, 'inbox'],
+        [text, at, source, 'inbox'],
       );
-      id = Number(res.lastInsertRowId);
-      (images ?? []).forEach((img, i) => {
-        d.runSync(
+      id = Number(result.lastInsertRowId);
+      const mapping: { key: string; imageId: number }[] = [];
+      pictures.forEach((image, ordinal) => {
+        const inserted = d.runSync(
           'INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at) VALUES (?, ?, ?, ?, ?)',
-          [id, img.path, img.text ?? null, i, row],
+          [id, image.path, image.text ?? null, ordinal, at],
         );
+        if (image.key) mapping.push({ key: image.key, imageId: Number(inserted.lastInsertRowId) });
       });
-      d.execSync('COMMIT');
-    } catch (e) {
-      d.execSync('ROLLBACK');
-      throw e;
-    }
-    // 图里的文字也要进索引：不然「搜图里的报错码」永远搜不到
-    reindexFragment(d, id);
+      const resolved = resolvePendingTokens(text, mapping);
+      if (resolved !== text) d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [resolved, id]);
+      // FTS failure rolls back the record as well; there is no post-COMMIT rejecting write.
+      reindexFragment(d, id);
+    });
     return id;
   },
 
-  async insertFragmentImage(fragmentId, path) {
+  async insertImportedFragment(content, createdAt, tags) {
     const d = db();
-    const next =
-      d.getFirstSync<{ n: number | null }>(
-        'SELECT MAX(ordinal) AS n FROM fragment_images WHERE fragment_id = ?',
-        [fragmentId],
+    const text = content.trim();
+    if (!text || !Number.isFinite(createdAt)) throw new Error('导入内容或时间无效');
+    const clean = dedupeTags(tags);
+    let id = 0;
+    d.withTransactionSync(() => {
+      const inserted = d.runSync(
+        'INSERT INTO fragments (content, created_at, source, status, tags) VALUES (?, ?, ?, ?, ?)',
+        [text, createdAt, 'import', clean.length ? 'tagged' : 'inbox', JSON.stringify(clean)],
+      );
+      id = Number(inserted.lastInsertRowId);
+      reindexFragment(d, id);
+    });
+    return id;
+  },
+
+  async insertFragmentImages(fragmentId, images) {
+    if (!images.length) return [];
+    const d = db();
+    const added: FragmentImage[] = [];
+    d.withTransactionSync(() => {
+      if (!d.getFirstSync('SELECT id FROM fragments WHERE id = ?', [fragmentId])) throw new Error('这条碎片已经不存在');
+      const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragment_images WHERE fragment_id = ?', [fragmentId]);
+      if (total + images.length > 9 || images.some((img) => !img.path)) throw new Error('一条碎片最多9张有效配图');
+      const ordinal = d.getFirstSync<{ n: number | null }>(
+        'SELECT MAX(ordinal) AS n FROM fragment_images WHERE fragment_id = ?', [fragmentId],
       )?.n ?? -1;
-    const res = d.runSync(
-      'INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at) VALUES (?, ?, NULL, ?, ?)',
-      [fragmentId, path, next + 1, Date.now()],
-    );
-    reindexFragment(d, fragmentId);
-    return Number(res.lastInsertRowId);
+      const at = Date.now();
+      images.forEach((image, i) => {
+        const inserted = d.runSync(
+          'INSERT INTO fragment_images (fragment_id, path, text, ordinal, created_at) VALUES (?, ?, ?, ?, ?)',
+          [fragmentId, image.path, image.text ?? null, ordinal + i + 1, at],
+        );
+        added.push({ id: Number(inserted.lastInsertRowId), path: image.path, text: image.text ?? null, createdAt: at });
+      });
+      reindexFragment(d, fragmentId);
+    });
+    return added;
+  },
+
+  async insertFragmentImage(fragmentId, path) {
+    return (await repo.insertFragmentImages(fragmentId, [{ path }]))[0].id;
   },
 
   async setFragmentImageText(imageId, text) {
     const d = db();
-    const mine = d.getFirstSync<{ fragment_id: number }>(
-      'SELECT fragment_id FROM fragment_images WHERE id = ?',
-      [imageId],
-    );
-    if (!mine) return;
-    d.runSync('UPDATE fragment_images SET text = ? WHERE id = ?', [text, imageId]);
-    // 重建索引：这段文字是这条碎片内容的一部分，必须能被搜到
-    reindexFragment(d, mine.fragment_id);
+    d.withTransactionSync(() => {
+      const mine = d.getFirstSync<{ fragment_id: number }>(
+        'SELECT fragment_id FROM fragment_images WHERE id = ?', [imageId],
+      );
+      if (!mine) return;
+      d.runSync('UPDATE fragment_images SET text = ? WHERE id = ?', [text, imageId]);
+      reindexFragment(d, mine.fragment_id);
+    });
   },
 
   async deleteFragmentImage(imageId) {
     const d = db();
-    const mine = d.getFirstSync<{ fragment_id: number; path: string }>(
-      'SELECT fragment_id, path FROM fragment_images WHERE id = ?',
-      [imageId],
-    );
-    if (!mine) return null;
-    d.runSync('DELETE FROM fragment_images WHERE id = ?', [imageId]);
-    reindexFragment(d, mine.fragment_id);
-    return mine.path;
+    let path: string | null = null;
+    d.withTransactionSync(() => {
+      const mine = d.getFirstSync<{ fragment_id: number; path: string }>(
+        'SELECT fragment_id, path FROM fragment_images WHERE id = ?', [imageId],
+      );
+      if (!mine) return;
+      const fragment = d.getFirstSync<{ content: string }>('SELECT content FROM fragments WHERE id = ?', [mine.fragment_id]);
+      d.runSync('DELETE FROM fragment_images WHERE id = ?', [imageId]);
+      if (fragment) d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [removeImageToken(fragment.content, imageId), mine.fragment_id]);
+      reindexFragment(d, mine.fragment_id);
+      path = mine.path;
+    });
+    return path;
   },
 
   async updateFragmentContent(id, content) {
     const d = db();
-    const text = content.trim();
-    d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [text, id]);
-    reindexFragment(d, id);
+    d.withTransactionSync(() => {
+      d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [content.trim(), id]);
+      reindexFragment(d, id);
+    });
   },
 
   async markFragmentsOrganized(ids, at) {
@@ -1550,61 +1696,7 @@ export const repo: Repo = {
   async replaceDocumentContent(id, content, expectedRevision) {
     const d = db();
     let ok = false;
-
-    d.withTransactionSync(() => {
-      const cur = d.getFirstSync<{ content_revision: number }>(
-        'SELECT content_revision FROM documents WHERE id = ?',
-        [id],
-      );
-      // 文档没了、或版本已经被别人推进过 → 这次写入是迟到的，丢掉
-      if (!cur || (cur.content_revision ?? 0) !== expectedRevision) return;
-
-      const next = expectedRevision + 1;
-      d.runSync(
-        `UPDATE documents
-            SET body_md = ?, char_count = ?, pages = ?, state = ?,
-                content_revision = ?, indexed_revision = ?, chunk_count = ?,
-                content_source = ?, error = NULL, updated_at = ?
-          WHERE id = ?`,
-        [
-          content.bodyMd,
-          content.bodyMd.length,
-          content.pages,
-          'done',
-          next,
-          next,
-          content.chunks.length,
-          content.source,
-          Date.now(),
-          id,
-        ],
-      );
-
-      // 旧切片整批换掉：这是「内容版本」的物理含义，不是增量更新
-      const old = d.getAllSync<{ id: number }>(
-        'SELECT id FROM document_chunks WHERE document_id = ?',
-        [id],
-      );
-      for (const row of old) {
-        d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
-      }
-      d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
-
-      content.chunks.forEach((chunk, i) => {
-        const res = d.runSync(
-          `INSERT INTO document_chunks (document_id, content_revision, ordinal, text, locator_json)
-           VALUES (?, ?, ?, ?, ?)`,
-          [id, next, i, chunk.text, JSON.stringify(chunk.locator)],
-        );
-        d.runSync('INSERT INTO document_chunks_fts(rowid, text) VALUES (?, ?)', [
-          Number(res.lastInsertRowId),
-          tokenizeText(chunk.text).join(' '),
-        ]);
-      });
-
-      ok = true;
-    });
-
+    d.withTransactionSync(() => { ok = replaceDocumentContentIn(d, id, content, expectedRevision); });
     return ok;
   },
 

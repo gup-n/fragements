@@ -1,3 +1,4 @@
+import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 /**
  * 流式生成时的实时面板：转圈 + 已用秒数 + 思维链滚动区 + 字数统计。
  *
@@ -5,9 +6,9 @@
  * 不依赖任何页面的 StyleSheet —— 周期总结和知识库问答都要用它。
  */
 import React, { useRef } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 function fmtCount(n: number) {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
@@ -31,6 +32,7 @@ interface Props {
 export function ReasoningStream({ title, text, received, elapsed, thinking, height = 200 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const scrollRef = useRef<ScrollViewInstance>(null);
+  const atBottom = useRef(true);
   return (
     <View style={styles.card}>
       <View style={styles.head}>
@@ -48,7 +50,12 @@ export function ReasoningStream({ title, text, received, elapsed, thinking, heig
           contentContainerStyle={styles.scrollBody}
           nestedScrollEnabled
           showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: false })}
+          onScroll={(event) => {
+            const { contentSize, contentOffset, layoutMeasurement } = event.nativeEvent;
+            atBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 48;
+          }}
+          scrollEventThrottle={64}
+          onContentSizeChange={() => { if (atBottom.current) scrollRef.current?.scrollToEnd({ animated: false }); }}
         >
           <Text style={styles.text}>{text}</Text>
         </ScrollView>
@@ -66,21 +73,21 @@ export function ReasoningStream({ title, text, received, elapsed, thinking, heig
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   card: {
     backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.accentBg,
     padding: 12,
   },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   title: { flex: 1, fontSize: 13, color: c.text, fontWeight: '500' },
-  clock: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
-  scroll: { marginTop: 9, backgroundColor: c.hairSoft, borderRadius: R.btn },
+  clock: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
+  scroll: { marginTop: 9, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius },
   scrollBody: { padding: 10 },
   text: { fontSize: 12, lineHeight: 19, color: c.text2 },
   empty: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 9 },
   foot: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 },
-  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  meta: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
 });

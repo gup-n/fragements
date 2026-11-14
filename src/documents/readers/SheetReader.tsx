@@ -20,7 +20,6 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   FlatList,
   Pressable,
   ScrollView,
@@ -33,7 +32,8 @@ import {
   type ScrollViewInstance,
 } from 'react-native';
 import type { Document } from '../../types';
-import { R, useThemedStyles, type Palette } from '../../theme';
+import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
+import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { findHits } from '../../util/highlight';
 import {
   listSheetRows,
@@ -148,10 +148,12 @@ const SheetRowView = React.memo(function SheetRowView({
       <View key={col} style={[styles.td, { width: widths[col] }]}>
         <Text
           selectable
+          accessibilityLabel={key === currentKey ? `当前命中，第 ${row.row + 1} 行，第 ${col + 1} 列：${text}` : undefined}
           style={[styles.cellText, isHit && styles.cellHit, key === currentKey && styles.cellCurrent]}
         >
           {text}
         </Text>
+        {key === currentKey ? <View pointerEvents="none" style={styles.currentOutline} /> : null}
       </View>,
     );
   }
@@ -170,6 +172,7 @@ const SheetRowView = React.memo(function SheetRowView({
 
 export function SheetReader({ document: doc }: { document: Document }) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
   const { width: viewWidth } = useWindowDimensions();
   const [book, setBook] = useState<WorkbookView | null>(null);
   const [phase, setPhase] = useState<'reading' | 'parsing'>('reading');
@@ -258,7 +261,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
     return () => {
       cancelled = true;
     };
-  }, [doc.fileUri, doc.id, doc.updatedAt, doc.size]);
+  }, [doc.fileUri, doc.id, doc.size]);
 
   /**
    * 每张表的行列表**按需**物化。
@@ -411,7 +414,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
       const idx = rowIndexIn.get(h.row) ?? -1;
       if (idx >= 0) {
         try {
-          listRef.current?.scrollToIndex({ index: idx, animated: true, viewPosition: 0.2 });
+          listRef.current?.scrollToIndex({ index: idx, animated: !reduceMotion, viewPosition: 0.2 });
         } catch {
           /* onScrollToIndexFailed 兜住 */
         }
@@ -421,11 +424,11 @@ export function SheetReader({ document: doc }: { document: Document }) {
       // 不夹的话窗口会按一个滚不到的位置算，目标列就被算到窗口左边、高亮不出现
       const maxX = Math.max(0, gridWidth - viewWidth);
       const x = Math.min(maxX, Math.max(0, (offsets[h.col] ?? SHEET_GUTTER) - 60));
-      hRef.current?.scrollTo({ x, animated: true });
+      hRef.current?.scrollTo({ x, animated: !reduceMotion });
       // 横向是动画滚过去的，窗口要立刻跟上，否则高亮要等动画结束才出现
       setScrollX(x);
     },
-    [rowIndexIn, offsets, gridWidth, viewWidth],
+    [rowIndexIn, offsets, gridWidth, viewWidth, reduceMotion],
   );
 
   /**
@@ -457,13 +460,19 @@ export function SheetReader({ document: doc }: { document: Document }) {
     [active, hits, scrollToCell, total],
   );
 
+  const goRef = useRef(go);
+  goRef.current = go;
+  useEffect(() => {
+    if (hits.length) goRef.current(0);
+  }, [hits]);
+
   const hitCells = useMemo(() => {
     const set = new Set<string>();
     for (const h of hits) if (h.sheet === active) set.add(`${h.row},${h.col}`);
     return set;
   }, [hits, active]);
 
-  const currentKey = current ? `${current.row},${current.col}` : '';
+  const currentKey = current?.sheet === active ? `${current.row},${current.col}` : '';
 
   /*
    * 换表那一帧，`win` 还是按上一张表的列宽算的（重置 scrollX 的 effect 在提交后才跑），
@@ -522,8 +531,11 @@ export function SheetReader({ document: doc }: { document: Document }) {
         value={query}
         onChange={setQuery}
         total={q && !index ? -1 : q ? total : -1}
-        current={shown + 1}
-        note={q ? `全部 ${book.sheets.length} 个工作表` : undefined}
+        current={total ? shown + 1 : 0}
+        busy={!!q && !index}
+        note={current
+          ? `${book.sheets[current.sheet]?.name ?? '工作表'} · 第 ${current.row + 1} 行，第 ${current.col + 1} 列`
+          : q ? `全部 ${book.sheets.length} 个工作表` : undefined}
         onPrev={() => go(shown - 1)}
         onNext={() => go(shown + 1)}
         placeholder="在全部工作表里查找"
@@ -543,11 +555,12 @@ export function SheetReader({ document: doc }: { document: Document }) {
                   key={s.name}
                   onPress={() => setActive(i)}
                   style={[styles.tab, i === active && styles.tabOn]}
-                  accessibilityRole="button"
+                  accessibilityRole="tab"
                   accessibilityLabel={`工作表 ${s.name}`}
+                  accessibilityState={{ selected: i === active }}
                 >
                   <Text style={[styles.tabText, i === active && styles.tabTextOn]} numberOfLines={1}>
-                    {s.name}
+                    {i === active ? '✓ ' : ''}{s.name}
                   </Text>
                 </Pressable>
               ))}
@@ -565,6 +578,10 @@ export function SheetReader({ document: doc }: { document: Document }) {
               只显示前 {Math.min(VIEW_ROWS, rows.length)} 行、{Math.min(VIEW_COLS, sheet.cols)} 列
               （原表 {rows.length} 行、{sheet.cols} 列）。提取正文时不受这个显示限制。
             </Text>
+          ) : null}
+
+          {current?.sheet === active && (!rowIndexIn.has(current.row) || current.col >= widths.length) ? (
+            <Text style={styles.notice}>当前命中在第 {current.row + 1} 行、第 {current.col + 1} 列，超出本页显示范围。请用「打开原件」查看，不会把未显示的单元格当作已读。</Text>
           ) : null}
 
           {!sheet || rows.length === 0 ? (
@@ -600,7 +617,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
                     setTimeout(() => {
                       listRef.current?.scrollToIndex({
                         index: info.index,
-                        animated: true,
+                        animated: !reduceMotion,
                         viewPosition: 0.2,
                       });
                     }, 60);
@@ -616,63 +633,42 @@ export function SheetReader({ document: doc }: { document: Document }) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1 },
-  tabsWrap: {
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: c.hair,
-    backgroundColor: c.page,
-  },
-  tabs: { paddingHorizontal: 12, paddingVertical: 8, gap: 8 },
+  tabsWrap: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, backgroundColor: c.page },
+  tabs: { paddingHorizontal: metrics.pagePadding, paddingVertical: 4, gap: 8 },
   tab: {
-    maxWidth: 160,
-    paddingHorizontal: 12,
-    height: 30,
-    borderRadius: R.pill,
-    backgroundColor: c.hairSoft,
-    justifyContent: 'center',
+    maxWidth: 180, minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth, borderColor: c.hair, backgroundColor: c.card, justifyContent: 'center',
   },
-  tabOn: { backgroundColor: c.accentBg },
-  tabText: { fontSize: 12.5, color: c.text2 },
+  tabOn: { backgroundColor: c.accentBg, borderColor: c.focus },
+  tabText: { fontSize: 13, lineHeight: 20, color: c.text2 },
   tabTextOn: { color: c.accentText, fontWeight: '600' },
-
   notice: {
-    fontSize: 11.5,
-    lineHeight: 18,
-    color: c.amberText,
-    backgroundColor: c.amberBg,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    fontSize: 13, lineHeight: 20, color: c.amberText, backgroundColor: c.amberBg,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: 8,
   },
-
   gridScroll: { flex: 1 },
   gridContent: { flexGrow: 1 },
   grid: { flex: 1 },
-
-  tr: { flexDirection: 'row', borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.hair },
+  tr: { flexDirection: 'row', borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
   trAlt: { backgroundColor: c.hairSoft },
   gutter: {
-    width: SHEET_GUTTER,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: c.hair,
-    alignItems: 'flex-end',
+    width: SHEET_GUTTER, paddingHorizontal: 8, paddingVertical: 8,
+    borderRightWidth: metrics.strokeWidth, borderRightColor: c.hair, alignItems: 'flex-end',
   },
-  gutterText: { fontSize: 10.5, color: c.text3, fontVariant: ['tabular-nums'] },
-  td: {
-    paddingHorizontal: 9,
-    paddingVertical: 7,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: c.hair,
-  },
-  cellText: { fontSize: 12.5, lineHeight: 19, color: c.text },
+  gutterText: { fontSize: 12, color: c.text2, fontVariant: ['tabular-nums'] },
+  td: { paddingHorizontal: 9, paddingVertical: 8, borderRightWidth: metrics.strokeWidth, borderRightColor: c.hair },
+  cellText: { fontSize: 13, lineHeight: 21, color: c.text },
   cellHit: { backgroundColor: c.amberBg },
-  /** 当前这一处再重一档：同一屏里可能有好几处命中，得知道跳到哪一格 */
-  cellCurrent: { backgroundColor: c.amberText, color: c.page },
-
+  cellCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
+  currentOutline: {
+    position: 'absolute', top: 1, left: 1, right: 1, bottom: 1,
+    borderWidth: 2, borderColor: c.focus,
+  },
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 12.5, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
-  stateTip: { fontSize: 11.5, lineHeight: 17, color: c.text3, textAlign: 'center', maxWidth: 280 },
+  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
+  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
+  stateTip: { fontSize: 12, lineHeight: 19, color: c.text2, textAlign: 'center', maxWidth: 280 },
 });

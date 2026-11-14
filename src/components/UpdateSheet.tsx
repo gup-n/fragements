@@ -1,3 +1,5 @@
+import { useHeadingFocus } from './useHeadingFocus';
+import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 /**
  * 更新弹窗。四个状态：发现新版 → 下载中 → 待安装 → 失败。
  *
@@ -13,10 +15,10 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   BackHandler,
   Linking,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -36,7 +38,7 @@ import {
 } from '../update/download';
 import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { versionLabel } from '../util/semver';
 
 type Phase = 'prompt' | 'downloading' | 'ready' | 'error';
@@ -156,7 +158,8 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
       // 通知会停在切走那一刻的数字，回到应用后立刻接上
       if (now - notifyAtRef.current > 1000) {
         notifyAtRef.current = now;
-        const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
+        const headingRef = useHeadingFocus(`更新-${phase}`);
+  const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
         const size = `${formatBytes(p.written)}${p.total > 0 ? ` / ${formatBytes(p.total)}` : ''}`;
         notifyProgress(release.version, size, pct);
       }
@@ -248,6 +251,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     }
   }
 
+  const headingRef = useHeadingFocus(`更新-${phase}`);
   const pct =
     progress.total > 0 ? Math.min(100, Math.round((progress.written / progress.total) * 100)) : 0;
   const unknownTotal = progress.total <= 0;
@@ -256,19 +260,19 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   const brief = noteBrief(release.notes);
 
   return (
-    <View style={styles.overlay}>
+    <View style={styles.overlay} accessibilityViewIsModal>
       <Pressable
-        style={styles.backdrop}
+        style={[styles.backdrop, styles.touchTarget]}
         onPress={phase === 'downloading' ? undefined : dismiss}
       />
 
-      <View style={styles.card}>
+      <ScrollView style={styles.card} contentContainerStyle={styles.cardContent} keyboardShouldPersistTaps="handled">
         <View style={styles.head}>
           <View style={styles.iconWrap}>
             <Ionicons name="cloud-download-outline" size={17} color={c.accentText} />
           </View>
           <View style={styles.headText}>
-            <Text style={styles.title}>
+            <Text ref={headingRef} accessible accessibilityRole="header" style={styles.title}>
               {phase === 'prompt'
                 ? `发现新版本 ${versionLabel(release.version)}`
                 : phase === 'downloading'
@@ -301,14 +305,14 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
           <>
             <View style={styles.notesBox}>
               {brief ? <Text style={styles.notesBrief}>{brief}</Text> : null}
-              <Pressable style={styles.linkBtn} onPress={openNotes} hitSlop={4}>
+              <Pressable style={[styles.linkBtn, styles.touchTarget]} onPress={openNotes}>
                 <Ionicons name="open-outline" size={13} color={c.accentText} />
                 <Text style={styles.linkText}>查看更新说明</Text>
               </Pressable>
               {linkErr ? <Text style={styles.linkErr}>{linkErr}</Text> : null}
             </View>
 
-            <Pressable style={styles.skipRow} onPress={() => setSkip((v) => !v)}>
+            <Pressable style={[styles.skipRow, styles.touchTarget]} onPress={() => setSkip((v) => !v)} accessibilityRole="checkbox" accessibilityLabel="不再提示这个版本" accessibilityState={{ checked: skip }}>
               <View style={[styles.checkBox, skip && styles.checkBoxOn]}>
                 {skip ? <Ionicons name="checkmark" size={11} color={c.onAccent} /> : null}
               </View>
@@ -318,7 +322,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
         ) : null}
 
         {phase === 'downloading' ? (
-          <View style={styles.progressBox}>
+          <View style={styles.progressBox} accessibilityRole="progressbar" accessibilityLabel="更新下载进度" accessibilityValue={unknownTotal ? { text: `已下载 ${formatBytes(progress.written)}` } : { min: 0, max: 100, now: pct }}>
             <View style={styles.bar}>
               <View
                 style={[
@@ -337,31 +341,31 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
         {phase === 'error' ? (
           <View style={styles.errBox}>
             <Ionicons name="alert-circle-outline" size={15} color={c.danger} />
-            <Text style={styles.errText}>{error}</Text>
+            <Text style={styles.errText} accessibilityLiveRegion="polite">{error}</Text>
           </View>
         ) : null}
 
         <View style={styles.footer}>
           {phase === 'prompt' ? (
             <>
-              <Pressable style={styles.ghostBtn} onPress={dismiss}>
+              <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={dismiss}>
                 <Text style={styles.ghostText}>以后再说</Text>
               </Pressable>
-              <Pressable style={styles.primaryBtn} onPress={startDownload}>
+              <Pressable style={[styles.primaryBtn, styles.touchTarget]} onPress={startDownload}>
                 <Text style={styles.primaryText}>下载更新</Text>
               </Pressable>
             </>
           ) : phase === 'downloading' ? (
-            <Pressable style={styles.ghostBtn} onPress={() => cancelRef.current?.()}>
+            <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={() => cancelRef.current?.()}>
               <Text style={styles.ghostText}>取消下载</Text>
             </Pressable>
           ) : phase === 'ready' ? (
             <>
-              <Pressable style={styles.ghostBtn} onPress={() => setPhase('prompt')}>
+              <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={() => setPhase('prompt')}>
                 <Text style={styles.ghostText}>返回</Text>
               </Pressable>
               <Pressable
-                style={[styles.primaryBtn, installing && styles.btnDisabled]}
+                style={[[styles.primaryBtn, installing && styles.btnDisabled], styles.touchTarget]}
                 onPress={install}
                 disabled={installing}
               >
@@ -374,12 +378,12 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
             </>
           ) : (
             <>
-              <Pressable style={styles.ghostBtn} onPress={dismiss}>
+              <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={dismiss}>
                 <Text style={styles.ghostText}>关闭</Text>
               </Pressable>
               {needPermission ? (
                 <Pressable
-                  style={styles.primaryBtn}
+                  style={[styles.primaryBtn, styles.touchTarget]}
                   onPress={() => {
                     openInstallPermissionSettings().catch(() => undefined);
                   }}
@@ -387,19 +391,20 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
                   <Text style={styles.primaryText}>去授权</Text>
                 </Pressable>
               ) : (
-                <Pressable style={styles.primaryBtn} onPress={startDownload}>
+                <Pressable style={[styles.primaryBtn, styles.touchTarget]} onPress={startDownload}>
                   <Text style={styles.primaryText}>重试</Text>
                 </Pressable>
               )}
             </>
           )}
         </View>
-      </View>
+      </ScrollView>
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   overlay: {
     position: 'absolute',
     top: 0,
@@ -408,7 +413,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     left: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24,
+    paddingHorizontal: 24, paddingVertical: 16,
   },
   backdrop: {
     position: 'absolute',
@@ -418,14 +423,14 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     left: 0,
     backgroundColor: c.scrim,
   },
-  card: {
+  cardContent: { padding: 18 },
+  card: { flexGrow: 0, maxHeight: '100%',
     width: '100%',
     maxWidth: 420,
     backgroundColor: c.card,
-    borderRadius: R.card + 4,
-    borderWidth: 0.5,
+    borderRadius: metrics.cardRadius + 4,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
-    padding: 18,
   },
 
   head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
@@ -439,25 +444,25 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   headText: { flex: 1 },
   title: { fontSize: 15.5, color: c.text, fontWeight: '600' },
-  sub: { fontSize: 11.5, color: c.text3, marginTop: 4, lineHeight: 17 },
+  sub: { fontSize: 12, color: c.text3, marginTop: 4, lineHeight: 17 },
 
   notesBox: { marginTop: 14, alignItems: 'flex-start' },
   notesBrief: { fontSize: 12, color: c.text2, lineHeight: 19 },
-  linkBtn: {
+  linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
     marginTop: 2,
     paddingVertical: 7,
     paddingHorizontal: 12,
-    borderRadius: R.btn,
-    borderWidth: 0.5,
+    borderRadius: metrics.buttonRadius,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
   },
   linkText: { fontSize: 12.5, color: c.accentText },
-  linkErr: { fontSize: 11.5, color: c.danger, marginTop: 6 },
+  linkErr: { fontSize: 12, color: c.danger, marginTop: 6 },
 
-  skipRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  skipRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
   checkBox: {
     width: 16,
     height: 16,
@@ -479,7 +484,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
   },
   barFill: { height: '100%', borderRadius: 4, backgroundColor: c.accent },
   progressText: {
-    fontSize: 11.5,
+    fontSize: 12,
     color: c.text3,
     marginTop: 8,
     textAlign: 'right',
@@ -492,26 +497,26 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     gap: 8,
     marginTop: 14,
     padding: 11,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   errText: { flex: 1, fontSize: 12, color: c.danger, lineHeight: 18 },
 
   footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 18 },
-  primaryBtn: {
+  primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
-    borderRadius: R.btn,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 20,
     paddingVertical: 11,
     minWidth: 104,
     alignItems: 'center',
   },
   primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: {
-    borderRadius: R.btn,
+  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: 16,
     paddingVertical: 11,
-    borderWidth: 0.5,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.hair,
     backgroundColor: c.card,
   },

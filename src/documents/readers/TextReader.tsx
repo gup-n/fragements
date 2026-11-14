@@ -1,273 +1,153 @@
 /**
- * TXT / Markdown 阅读器。
- *
- * 两个格式共用一个文件，但**渲染路径不同**，这不是偷懒：
- *
- * - Markdown 交给 `NoteBody`（必须传 `literalCitations`）。文档正文里的 `[F12]`
- *   是作者写的字面量，不传这个开关就会被当成我们这轮的引用标记整个吞掉 ——
- *   等于把用户文档改了字。
- * - TXT 不能被 Markdown 解析：`# 第 3 章` 会变成标题，`*` 会变成圆点。
- *   TXT 就按纯文本画，除了换行什么都不解释。
- *
- * 查找计数跟着各自的渲染走，所以两条路径的口径也分开：
- * Markdown 按「渲染出来的片段」数（和 `FragmentDetail` 完全同一套），
- * TXT 按原文偏移数（它显示的就是原文）。
+ * TXT / Markdown / 云解析快照共用分块虚拟化。
+ * TXT 原文显示；Markdown 保留作者的 [F12] 等字面引用。
+ * 查找与高亮只用 findHits，位置来自真实块/原文偏移，不编PDF页码。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  StyleSheet,
-  Text,
-  View,
-  type TextStyle,
-} from 'react-native';
+import { FlatList, StyleSheet, Text, View } from 'react-native';
 import type { Document } from '../../types';
-import { useThemedStyles, type Palette } from '../../theme';
+import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
+import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { NoteBody } from '../../components/NoteBody';
-import { countHits, findHits } from '../../util/highlight';
-import { parseBlocks, type Seg } from '../../util/mdBlocks';
+import { findHits } from '../../util/highlight';
 import { SearchBar } from './SearchBar';
 import { readDocText } from './readerFiles';
 import { readerMessage } from './errors';
 import { blockAt, buildBlocks, type Block } from './textBlocks';
+import { markdownHitBlocks } from './markdownSearch';
 
-/** 单次查找最多认多少处。超过就不再往上加，界面显示 99+ */
 const MAX_HITS = 999;
-
-/**
- * 一个 seg 在「字面量模式」下显示成什么。
- *
- * NoteBody 传了 `literalCitations` 之后 `[F12]` 会原样显示，
- * 这里必须还原成同样的字符串，计数才和屏幕上看到的一致。
- */
-function segText(seg: Seg): string {
-  return seg.cite ? `[${seg.cite.kind}${seg.cite.id}]` : seg.text;
-}
 
 interface Props {
   document: Document;
   mode: 'text' | 'markdown';
-  /**
-   * 直接给正文，不读原文件。
-   *
-   * 云解析出来的 Word / PPT 只有一段 Markdown 快照（库里 `bodyMd`），没有可读的
-   * 原版式。以前这条分支在 `DocumentReader` 里自己包一个 ScrollView 把整篇塞
-   * 给 `NoteBody`：几百个块一次布局，越长的文档越顿，而且**没有查找**。
-   * 走这里就自动拿到分块虚拟化和查找栏。
-   */
+  /** 已有正文快照，不再读原文件。 */
   text?: string;
-  /** 正文上方的说明（例如「这是转出来的，不是原版式」）。跟内容一起滚走 */
+  /** 跟正文滚走，不常驻挤占阅读区。 */
   notice?: string;
 }
 
-/**
- * 库里这份正文是不是**就是这个文件本身**？
- *
- * txt/md 的本地提取产物就是原文件（`contentSource` 与格式一一对应），
- * 所以能拿它顶替「再读一次磁盘 + 再解一次 UTF-8」——4 MB 的文本这一下
- * 通常是几百毫秒。云解析（mineru）的正文**绝不能**用在这里：那是 OCR 结果，
- * 和原文件不是一个东西，拿来显示等于偷偷改了用户的文档。
- */
 function storedBodyOf(doc: Document, mode: 'text' | 'markdown'): string | null {
-  if (doc.contentRevision <= 0) return null;
-  if (doc.contentSource !== mode) return null;
-  const body = doc.bodyMd ?? '';
-  return body.length > 0 ? body : null;
+  if (doc.contentRevision <= 0 || doc.contentSource !== mode) return null;
+  return doc.bodyMd?.length ? doc.bodyMd : null;
 }
 
 export function TextReader({ document: doc, mode, text: providedText, notice }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
+  const { reduceMotion } = useTheme();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [hitIndex, setHitIndex] = useState(0);
   const listRef = useRef<FlatList<Block>>(null);
-  const alive = useRef(true);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
+  useEffect(() => () => { if (retryTimer.current) clearTimeout(retryTimer.current); }, []);
 
   useEffect(() => {
     setText(null);
     setError(null);
     setHitIndex(0);
     setQuery('');
+    if (retryTimer.current) clearTimeout(retryTimer.current);
     let cancelled = false;
-
-    // 已经拿在手上的正文（云解析快照）：不必再碰磁盘，也就没有读取失败这一步
     if (providedText !== undefined) {
       setText(providedText);
       return;
     }
-
-    // 本机提取过、且提取的就是这个文件本身：库里的正文和文件逐字相同，直接用它
     const stored = storedBodyOf(doc, mode);
     if (stored !== null) {
       setText(stored);
       return;
     }
-
     (async () => {
       try {
-        // 原件已经不在了（用户清理过存储）但正文快照还在：这时候读库里的 bodyMd。
-        // 快照可以「旧」，但「打不开」是不可接受的 —— 用户问过的内容不能凭空消失。
-        const body = doc.fileUri
-          ? await readDocText(doc.fileUri)
-          : doc.bodyMd ?? '';
-        if (!cancelled && alive.current) setText(body);
+        const body = doc.fileUri ? await readDocText(doc.fileUri) : doc.bodyMd ?? '';
+        if (!cancelled) setText(body);
       } catch (e) {
-        if (!cancelled && alive.current) setError(readerMessage(e, '读不了这个文件'));
+        if (!cancelled) setError(readerMessage(e, '读不了这个文件'));
       }
     })();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    // 逐个字段而不是整个 `doc`：父层刷新时会给出新的对象，引用一变就会把用户的
-    // 查找词和滚动位置清掉。这几项变了才真的代表「正文换了一份」。
-    doc.fileUri,
-    doc.id,
-    doc.updatedAt,
-    doc.bodyMd,
-    doc.contentSource,
-    doc.contentRevision,
-    mode,
-    providedText,
-  ]);
+    return () => { cancelled = true; };
+    // 不依赖主题、整个doc对象或仅元数据updatedAt，避免刷新时丢查询和阅读位置。
+  }, [doc.fileUri, doc.id, doc.bodyMd, doc.contentSource, doc.contentRevision, mode, providedText]);
 
-  const blocks = useMemo(() => (text === null ? [] : buildBlocks(text)), [text]);
+  const blocks = useMemo(() => text === null ? [] : buildBlocks(text), [text]);
   const q = query.trim();
-
-  /** TXT 的命中在原文上算一次，块映射和行号都用它，避免每次渲染重扫 4 MB */
   const textHits = useMemo(
-    () => (mode === 'text' && text !== null && q ? findHits(text, q, MAX_HITS) : []),
+    () => mode === 'text' && text !== null && q ? findHits(text, q, MAX_HITS) : [],
     [mode, q, text],
   );
-
-  /**
-   * 命中 → 块下标。数组长度就是命中总数，所以计数不用另算一遍。
-   *
-   * Markdown 走「渲染片段」计数：`# 标题` 里的 `#` 用户根本看不到，
-   * 按原文数会数出一堆点不中的命中。
-   */
   const hitBlocks = useMemo(() => {
     if (!q || text === null) return [] as number[];
     if (mode === 'text') return textHits.map((h) => blockAt(blocks, h.start));
-
-    const at: number[] = [];
-    blocks.forEach((b, bi) => {
-      let n = 0;
-      for (const blk of parseBlocks(b.text)) {
-        if (blk.kind === 'table') {
-          for (const seg of blk.head.flat()) n += countHits(segText(seg), q);
-          for (const row of blk.rows) for (const seg of row.flat()) n += countHits(segText(seg), q);
-        } else if (blk.kind === 'code') {
-          n += countHits(blk.text, q);
-        } else if (blk.kind !== 'hr' && blk.kind !== 'image') {
-          for (const seg of blk.segs) n += countHits(segText(seg), q);
-        }
-      }
-      for (let k = 0; k < n && at.length < MAX_HITS; k++) at.push(bi);
-    });
-    return at;
+    const out: number[] = [];
+    for (let index = 0; index < blocks.length && out.length < MAX_HITS; index++) {
+      for (const _ of markdownHitBlocks(blocks[index].text, q, true, MAX_HITS - out.length)) out.push(index);
+    }
+    return out;
   }, [blocks, mode, q, text, textHits]);
-
   const total = hitBlocks.length;
-  const shown = total > 0 ? Math.min(hitIndex, total - 1) : 0;
+  const shown = total ? Math.min(hitIndex, total - 1) : 0;
+  const currentBlock = total ? hitBlocks[shown] : -1;
+  const currentInBlock = total ? shown - hitBlocks.indexOf(currentBlock) : -1;
 
-  /** 说明文字跟内容一起滚走，不占着屏幕顶部 */
-  const header = useMemo(
-    () => (notice ? <Text style={styles.notice}>{notice}</Text> : undefined),
-    [notice, styles.notice],
-  );
-
+  const jump = useCallback((next: number) => {
+    if (!total) return;
+    const at = Math.min(Math.max(next, 0), total - 1);
+    setHitIndex(at);
+    try {
+      listRef.current?.scrollToIndex({ index: hitBlocks[at], animated: !reduceMotion, viewPosition: 0.15 });
+    } catch { /* 未测量块由onScrollToIndexFailed继续定位 */ }
+  }, [hitBlocks, total, reduceMotion]);
+  const jumpRef = useRef(jump);
+  jumpRef.current = jump;
   useEffect(() => {
     setHitIndex(0);
-  }, [query]);
+    if (hitBlocks.length) jumpRef.current(0);
+  }, [hitBlocks]);
 
-  /** 当前命中在第几行。TXT 有精确偏移，Markdown 只知道块从哪行开始 */
   const lineNote = useMemo(() => {
-    if (!total || !text) return undefined;
-    if (mode !== 'text') return undefined;
-    const h = textHits[shown];
-    if (!h) return undefined;
-    return `第 ${text.slice(0, h.start).split('\n').length} 行`;
-  }, [mode, shown, text, textHits, total]);
+    const hit = textHits[shown];
+    if (mode !== 'text' || !hit || !text) return undefined;
+    return `第 ${text.slice(0, hit.start).split('\n').length} 行`;
+  }, [mode, shown, text, textHits]);
 
-  const jump = useCallback(
-    (next: number) => {
-      if (!total) return;
-      const clamped = Math.min(Math.max(next, 0), total - 1);
-      setHitIndex(clamped);
-      const bi = hitBlocks[clamped];
-      if (bi === undefined) return;
-      try {
-        listRef.current?.scrollToIndex({ index: bi, animated: true, viewPosition: 0.15 });
-      } catch {
-        /* 未测到位置时会抛，onScrollToIndexFailed 兜住 */
-      }
-    },
-    [hitBlocks, total],
-  );
-
-  /** TXT 高亮：只描底色，不改字色（深色主题下改字色会读不出来） */
-  const plain = useCallback(
-    (body: string, style: TextStyle): React.ReactNode => {
-      if (!q) return body;
-      const hits = findHits(body, q, MAX_HITS);
-      if (!hits.length) return body;
-      const out: React.ReactNode[] = [];
-      let last = 0;
-      hits.forEach((h, i) => {
-        if (h.start > last) out.push(body.slice(last, h.start));
-        out.push(
-          <Text key={i} style={style}>
-            {body.slice(h.start, h.end)}
-          </Text>,
-        );
-        last = h.end;
-      });
-      if (last < body.length) out.push(body.slice(last));
-      return out;
-    },
-    [q],
-  );
+  // TXT直接按全文真实偏移切高亮，跨虚拟块的命中也不会丢掉可见部分。
+  const plain = (block: Block): React.ReactNode => {
+    if (!q) return block.text;
+    const parts: React.ReactNode[] = [];
+    let last = 0;
+    const end = block.start + block.text.length;
+    textHits.forEach((hit, index) => {
+      if (hit.end <= block.start || hit.start >= end) return;
+      const from = Math.max(0, hit.start - block.start);
+      const to = Math.min(block.text.length, hit.end - block.start);
+      if (from > last) parts.push(block.text.slice(last, from));
+      parts.push(
+        <Text key={index} style={[styles.hit, index === shown && styles.hitCurrent]}>
+          {block.text.slice(from, to)}
+        </Text>,
+      );
+      last = to;
+    });
+    if (last < block.text.length) parts.push(block.text.slice(last));
+    return parts;
+  };
 
   if (error) {
-    return (
-      <View style={styles.state}>
-        <Text style={styles.stateTitle}>打不开这个文件</Text>
-        <Text style={styles.stateHint}>{error}</Text>
-      </View>
-    );
+    return <View style={styles.state}><Text style={styles.stateTitle}>打不开这个文件</Text><Text style={styles.stateHint}>{error}</Text></View>;
   }
-
   if (text === null) {
-    return (
-      <View style={styles.state}>
-        <ActivityIndicator color={c.accent} />
-        <Text style={styles.stateHint}>正在读取原文件…</Text>
-      </View>
-    );
+    return <View style={styles.state}><ActivityIndicator color={c.accent} /><Text style={styles.stateHint}>正在读取原文件…</Text></View>;
   }
 
   return (
     <View style={styles.root}>
       <SearchBar
-        value={query}
-        onChange={setQuery}
-        total={q ? total : -1}
-        current={shown + 1}
-        note={lineNote}
-        onPrev={() => jump(shown - 1)}
-        onNext={() => jump(shown + 1)}
+        value={query} onChange={setQuery} total={q ? total : -1} current={total ? shown + 1 : 0}
+        note={lineNote} onPrev={() => jump(shown - 1)} onNext={() => jump(shown + 1)}
       />
-
       {text.length === 0 ? (
         <View style={styles.state}>
           <Text style={styles.stateTitle}>这是一个空文件</Text>
@@ -275,61 +155,47 @@ export function TextReader({ document: doc, mode, text: providedText, notice }: 
         </View>
       ) : (
         <FlatList
-          ref={listRef}
-          data={blocks}
-          keyExtractor={(_, i) => String(i)}
-          ListHeaderComponent={header}
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          initialNumToRender={10}
-          maxToRenderPerBatch={10}
-          windowSize={9}
-          removeClippedSubviews
-          // 未测到某块位置时先按平均高度估一个偏移再滚一次，避免「跳转没反应」
+          ref={listRef} data={blocks} keyExtractor={(_, i) => String(i)}
+          ListHeaderComponent={notice ? <Text style={styles.notice}>{notice}</Text> : undefined}
+          style={styles.list} contentContainerStyle={styles.listContent}
+          keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}
+          initialNumToRender={10} maxToRenderPerBatch={10} windowSize={9} removeClippedSubviews
           onScrollToIndexFailed={(info) => {
-            listRef.current?.scrollToOffset({
-              offset: info.averageItemLength * info.index,
-              animated: false,
-            });
-            setTimeout(() => {
-              listRef.current?.scrollToIndex({ index: info.index, animated: true, viewPosition: 0.15 });
+            listRef.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            if (retryTimer.current) clearTimeout(retryTimer.current);
+            retryTimer.current = setTimeout(() => {
+              try {
+                listRef.current?.scrollToIndex({ index: info.index, animated: !reduceMotion, viewPosition: 0.15 });
+              } catch { /* 下次布局后仍可使用前后命中按钮重新定位 */ }
             }, 60);
           }}
-          renderItem={({ item }) =>
-            mode === 'markdown' ? (
-              <View style={styles.block}>
+          renderItem={({ item, index }) => (
+            <View style={[styles.block, index === currentBlock && styles.currentBlock]}>
+              {mode === 'markdown' ? (
                 <NoteBody
-                  text={item.text}
-                  variant="reading"
-                  selectable
-                  highlight={q || undefined}
-                  literalCitations
+                  text={item.text} variant="reading" selectable literalCitations highlight={q || undefined}
+                  activeHit={index === currentBlock ? currentInBlock : undefined}
                 />
-              </View>
-            ) : (
-              <View style={styles.block}>
-                <Text style={styles.body} selectable>
-                  {plain(item.text, styles.hit)}
-                </Text>
-              </View>
-            )
-          }
+              ) : <Text style={styles.body} selectable>{plain(item)}</Text>}
+            </View>
+          )}
         />
       )}
     </View>
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1 },
   list: { flex: 1 },
-  listContent: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 60 },
-  block: { marginBottom: 6 },
-  notice: { fontSize: 12, lineHeight: 18, color: c.text3, marginBottom: 12 },
-  body: { fontSize: 16, lineHeight: 27, color: c.text, letterSpacing: 0.2 },
-  hit: { backgroundColor: c.amberBg, borderRadius: 3 },
+  listContent: { paddingHorizontal: metrics.pagePadding, paddingTop: 16, paddingBottom: 40 },
+  block: { marginBottom: 8, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: 'transparent' },
+  currentBlock: { borderLeftColor: c.focus },
+  notice: { fontSize: 13, lineHeight: 20, color: c.text2, marginBottom: 12 },
+  body: { fontSize: 17, lineHeight: 30, color: c.text },
+  hit: { backgroundColor: c.amberBg },
+  hitCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
   state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 12.5, lineHeight: 19, color: c.text3, textAlign: 'center', maxWidth: 300 },
+  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
+  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
 });

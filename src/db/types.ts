@@ -52,10 +52,42 @@ export interface SearchProbe {
   misses: { id: number; needle: string; foundIds: number[] }[];
 }
 
+export interface DraftCommitDocument {
+  key: string;
+  title: string;
+  excerpt: string;
+  content: DocumentContentInput;
+}
+
+export interface DraftCommitTodo {
+  key: string;
+  text: string;
+  dueAt: string | null;
+  children: { key: string; text: string; dueAt: string | null }[];
+}
+
+export interface DraftCommitInput {
+  draftId: string;
+  documents: DraftCommitDocument[];
+  todos: DraftCommitTodo[];
+  sourceIds: number[];
+  sessionId: number | null;
+}
+
+/** 包含这份草稿至今所有已提交条目；key 是稳定本地身份，不是数组下标。 */
+export interface DraftCommitReceipt {
+  documents: { key: string; id: number; name: string }[];
+  todos: { key: string; id: number }[];
+}
+
 export interface Repo {
   init(): Promise<void>;
 
   listFragments(limit?: number): Promise<Fragment[]>;
+  /** 完整读取，不受首页窗口上限影响；导出不能用 listFragments 默认值。 */
+  listAllFragments(): Promise<Fragment[]>;
+  /** 内容、切片、待办与幂等凭据一次提交；同 draftId/key 重试不复制。 */
+  commitDraft(input: DraftCommitInput): Promise<DraftCommitReceipt>;
   /**
    * 按 id 取碎片，顺序不保证。
    *
@@ -86,8 +118,12 @@ export interface Repo {
     content: string,
     source: FragmentSource,
     createdAt?: number,
-    images?: { path: string; text?: string | null }[],
+    images?: { path: string; text?: string | null; key?: string }[],
   ): Promise<number>;
+  /** Markdown恢复的正文、旧标签与索引原子写入，不标记新的 organizedAt。 */
+  insertImportedFragment(content: string, createdAt: number, tags: string[]): Promise<number>;
+  /** 同一碎片的一批图片与索引原子加入；失败不留下部分图片行。 */
+  insertFragmentImages(fragmentId: number, images: { path: string; text?: string | null }[]): Promise<import('../types').FragmentImage[]>;
   /** 给已有碎片补一张图，返回这张图的 id（详情页「加一张」用） */
   insertFragmentImage(fragmentId: number, path: string): Promise<number>;
   /** 某张图解析完：把文字层写回去，并重建这一条的全文索引（图里的字要能搜到） */

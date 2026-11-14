@@ -17,7 +17,7 @@
 import React, { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette } from '../theme';
+import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ScreenHeader } from './ScreenHeader';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -70,6 +70,7 @@ export function DraftDocPage({
         right={
           <Pressable
             onPress={() => setMode(mode === 'read' ? 'edit' : 'read')}
+            disabled={saving || saved}
             hitSlop={8}
             style={styles.modeBtn}
             accessibilityRole="button"
@@ -92,7 +93,7 @@ export function DraftDocPage({
           keyboardShouldPersistTaps="handled"
         >
           {doc.summary.trim() ? <Text style={styles.summary}>{doc.summary}</Text> : null}
-          <NoteBody text={doc.bodyMd} variant="reading" selectable />
+          <NoteBody text={doc.bodyMd} variant="reading" selectable literalCitations />
         </ScrollView>
       ) : (
         <View style={[styles.editWrap, { paddingBottom: keyboardHeight }]}>
@@ -102,9 +103,10 @@ export function DraftDocPage({
             onChangeText={(title) => onChange({ title })}
             placeholder="这篇文档叫什么"
             placeholderTextColor={c.text3}
+            selectionColor={c.selection}
             style={styles.titleInput}
             maxLength={40}
-            editable={!saving}
+            editable={!saving && !saved}
           />
           <Text style={styles.fieldLabel}>正文（Markdown）</Text>
           <TextInput
@@ -112,10 +114,11 @@ export function DraftDocPage({
             onChangeText={(bodyMd) => onChange({ bodyMd })}
             placeholder="Markdown 正文；表格用 | 列 | 列 |"
             placeholderTextColor={c.text3}
+            selectionColor={c.selection}
             style={styles.bodyInput}
             multiline
             textAlignVertical="top"
-            editable={!saving}
+            editable={!saving && !saved}
           />
           <Text style={styles.editHint}>
             表格要写成 Markdown：第一行是表头，第二行是 |---|---|，之后每行一条。
@@ -124,6 +127,12 @@ export function DraftDocPage({
       )}
 
       <View style={styles.footer}>
+        {!saved ? (
+          <Pressable style={styles.choice} onPress={() => onChange({ keep: !doc.keep })} disabled={saving} accessibilityRole="checkbox" accessibilityState={{ checked: doc.keep, disabled: saving }} accessibilityLabel="将这篇列入待写入内容">
+            <Ionicons name={doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+            <Text style={styles.ghostText}>{doc.keep ? '已选择这篇' : '未选择这篇 · 点此确认'}</Text>
+          </Pressable>
+        ) : <Text style={styles.editHint}>此处显示已写入的草稿快照，不会通过改稿覆盖已保存文档。</Text>}
         {problem && !saved ? <Text style={styles.problem}>{problem}</Text> : null}
         <View style={styles.footerRow}>
           <Pressable style={styles.ghost} onPress={onClose} disabled={saving}>
@@ -149,17 +158,19 @@ export function DraftDocPage({
   );
 }
 
-const makeStyles = (c: Palette) =>
+const makeStyles = (c: Palette, metrics: ThemeMetrics) =>
   StyleSheet.create({
     page: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
     flex: { flex: 1 },
     modeBtn: {
+      minHeight: metrics.controlHeight,
+      justifyContent: 'center',
       flexDirection: 'row',
       alignItems: 'center',
       gap: 4,
       paddingHorizontal: 10,
       paddingVertical: 5,
-      borderRadius: R.pill,
+      borderRadius: metrics.buttonRadius,
       backgroundColor: c.accentBg,
     },
     modeText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
@@ -181,9 +192,9 @@ const makeStyles = (c: Palette) =>
       fontWeight: '600',
       paddingVertical: 9,
       paddingHorizontal: 11,
-      borderRadius: R.btn,
+      borderRadius: metrics.buttonRadius,
       backgroundColor: c.card,
-      borderWidth: StyleSheet.hairlineWidth,
+      borderWidth: metrics.strokeWidth,
       borderColor: c.hair,
     },
     bodyInput: {
@@ -192,9 +203,9 @@ const makeStyles = (c: Palette) =>
       lineHeight: 20,
       color: c.text,
       padding: 11,
-      borderRadius: R.btn,
+      borderRadius: metrics.buttonRadius,
       backgroundColor: c.card,
-      borderWidth: StyleSheet.hairlineWidth,
+      borderWidth: metrics.strokeWidth,
       borderColor: c.hair,
       fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
     },
@@ -204,39 +215,45 @@ const makeStyles = (c: Palette) =>
       paddingTop: 10,
       paddingBottom: 12,
       gap: 8,
-      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopWidth: metrics.strokeWidth,
       borderTopColor: c.hair,
       backgroundColor: c.page,
     },
     problem: { fontSize: 11, color: c.danger },
     footerRow: { flexDirection: 'row', gap: 10 },
     ghost: {
+      minHeight: metrics.controlHeight,
+      justifyContent: 'center',
       flex: 1,
       alignItems: 'center',
       paddingVertical: 11,
-      borderRadius: R.btn,
-      borderWidth: 0.5,
+      borderRadius: metrics.buttonRadius,
+      borderWidth: metrics.strokeWidth,
       borderColor: c.hair,
     },
     ghostText: { fontSize: 13, color: c.text },
     solid: {
+      minHeight: metrics.controlHeight,
+      justifyContent: 'center',
       flex: 1.6,
       alignItems: 'center',
       paddingVertical: 11,
-      borderRadius: R.btn,
+      borderRadius: metrics.buttonRadius,
       backgroundColor: c.accent,
     },
     solidText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },
     doneBox: {
+      minHeight: metrics.controlHeight,
       flex: 1.6,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 6,
       paddingVertical: 11,
-      borderRadius: R.btn,
+      borderRadius: metrics.buttonRadius,
       backgroundColor: c.hairSoft,
     },
     doneText: { fontSize: 13, color: c.text2, fontWeight: '600' },
+    choice: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10 },
     off: { opacity: 0.4 },
   });

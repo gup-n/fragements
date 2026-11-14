@@ -1,6 +1,7 @@
 /**
  * 导出的 IO 部分：拼内容在 `util/mdBuild.ts`（纯函数，能和导入做往返测试），
- * 这里只负责把字符串变成文件、交给系统分享。
+ * 这里只负责把字符串变成文件、交给系统分享。调用方须独立读取完整碎片范围。
+ * 这是文字迁出，不含原图、文档、月总结或会话；待办仅供阅读，不是完整备份。
  */
 
 import { Platform } from 'react-native';
@@ -27,7 +28,7 @@ export async function exportMarkdown(
     a.click();
     doc.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    return { message: `已下载 ${file.name}` };
+    return { message: `已下载 ${file.name}（仅文字迁出，非完整备份）` };
   }
 
   let uri = '';
@@ -52,5 +53,5 @@ export async function exportMarkdown(
       UTI: 'net.daringfireball.markdown',
     });
   }
-  return { message: `已生成 ${file.name}` };
+  return { message: `已生成 ${file.name}（仅文字迁出，非完整备份）` };
 }
