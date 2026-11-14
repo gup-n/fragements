@@ -275,7 +275,7 @@ function clip(text: string, max: number) {
 }
 
 /** 把装填好的资料拼成一段可读的上下文 */
-export function buildMaterials(r: Retrieval, web: WebHit[]): string {
+export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): string {
   const out: string[] = [];
 
   out.push('【你的记录 · 碎片原文】');
@@ -329,7 +329,18 @@ export function buildMaterials(r: Retrieval, web: WebHit[]): string {
       out.push('');
     }
   } else {
-    out.push('【网络资料】（这一轮没有联网资料）');
+    /*
+     * 「没开」和「开了但没搜到」是两句话。
+     *
+     * 原来两种情况都写「这一轮没有联网资料」，模型于是回一句「我没有联网能力」——
+     * 而用户明明打开了联网开关，界面上也显示着在搜。这句提示要分清楚，
+     * 模型才能说「这次没搜到网页」而不是否认自己有联网。
+     */
+    out.push(
+      useWeb
+        ? '【网络资料】（联网已开启，但这一轮没搜到可用的网页 —— 回答时说「这次没搜到网页」，不要说自己不能联网）'
+        : '【网络资料】（这次没有开启联网）',
+    );
   }
 
   return out.join('\n').trim();
@@ -411,9 +422,14 @@ const SYSTEM_PROMPT = `你是一个私人记录问答助手。用户把平时的
 4. **绝不能把网页内容说成用户记过的事**。网页资料只能挂在 [W] 引用下，并且要和本地记录分开描述。
    标了「（整页）」的是用户给的链接读回来的原文，可以说「这篇里写了…」；
    标了「（搜索摘要）」的只有概述，**不能据此断言原文没提到的细节**。
-5. 不要凭印象补细节：时间、型号、金额、人名，资料里没写就不写。
-6. 用中文，简洁。能三句说清就不要写五句，不要用小标题包装一句结论。
-7. 不需要罗列「我查了哪些资料」，也不要复述资料原文。`;
+5. **联网是应用替你做的，不是你的能力**。你没有调用工具的本事，也不用有：用户开了联网，
+   应用就会先去搜，结果就在【网络资料】里。
+   - 不许回答「我无法联网」「我没有搜索能力」「建议你自己去搜」——这类话在联网开着的时候是错的。
+   - 用了网络资料就写 [W编号]，并保持链接可查；「网上怎么说」和「你记录里怎么说」要分开表述。
+   - 【网络资料】里写着「没搜到」时，就说「这次没搜到相关网页」，别把责任推给「我没有联网功能」。
+6. 不要凭印象补细节：时间、型号、金额、人名，资料里没写就不写。
+7. 用中文，简洁。能三句说清就不要写五句，不要用小标题包装一句结论。
+8. 不需要罗列「我查了哪些资料」，也不要复述资料原文。`;
 
 /**
  * 文档模式的提示词。两条和记录模式不同的硬要求：
@@ -607,7 +623,7 @@ async function askRecords(
 
   const outcome = await requestChat(
     config,
-    buildMessages(SYSTEM_PROMPT, plan.turns, buildMaterials(retrieval, web), question),
+    buildMessages(SYSTEM_PROMPT, plan.turns, buildMaterials(retrieval, web, useWeb), question),
     onProgress,
     // json 必须关：开了以后整篇回答会被塞进一个 JSON 字符串，换行全变 \n
     { json: false, effort: thinking ? 'high' : undefined },

@@ -100,3 +100,28 @@ export const TASK_SEED: Record<Exclude<AskTask, 'answer'>, string> = {
   todos: '把这些碎片里能做的事整理成待办',
   digest: '帮我写这个月的月小结',
 };
+
+/**
+ * 草稿开着的时候，用户新打的一句话算「改稿」还是「新的一轮整理」。
+ *
+ * 这是 v0.20.3 修「第二次说话没反应」时抽出来的判据 —— 它以前散在页面里，
+ * 结果是**任何一句话都被当成改稿**：用户明明说「再整理一下待办」，
+ * 模型却拿着一份文档草稿去改，改不出东西，看起来就像没生效。
+ *
+ * 三条规则：
+ * 1. 明显说要整理 / 整理待办，且草稿里没有还没写入的东西 → 开新一轮；
+ * 2. 明显说要整理，但草稿还没写入 → **挡住**，并告诉用户先写入或丢弃
+ *    （直接覆盖等于把人家没保存的产出扔掉，那是不可逆的）；
+ * 3. 其余一律当改稿 —— 「把第二段并进第一段」这种话，任何意图分类器都会判成问答。
+ */
+export type DraftInput =
+  | { kind: 'revise' }
+  | { kind: 'new'; mode: 'knowledge' | 'todos' }
+  | { kind: 'blocked' };
+
+export function planDraftInput(question: string, pending: number): DraftInput {
+  const intent = routeAsk(question);
+  if (intent.task !== 'organize' && intent.task !== 'todos') return { kind: 'revise' };
+  if (pending > 0) return { kind: 'blocked' };
+  return { kind: 'new', mode: intent.task === 'todos' ? 'todos' : 'knowledge' };
+}

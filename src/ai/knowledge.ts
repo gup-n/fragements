@@ -276,7 +276,7 @@ export async function extractKnowledge(options: ExtractOptions): Promise<Extract
   return { draft, reasoning: outcome.reasoning, truncated, used: count };
 }
 
-const REVISE_SYSTEM = `你在改一批用户已经看过、正在修改的文档草稿和待办。用户会给你当前草稿和一句修改要求。
+const REVISE_SYSTEM = `你在改一批用户已经看过、正在修改的文档草稿和待办。用户会给你当前草稿、这一轮之前说过的话、必要时还有原始材料，以及一句新要求。
 
 只输出 JSON：${SHAPE}
 
@@ -286,25 +286,52 @@ const REVISE_SYSTEM = `你在改一批用户已经看过、正在修改的文档
 - 用户说"第一篇并进第二篇"就真的合并，其余篇不许动。
 - 用户说"短一点"就删冗余，不要删事实；说"详细点"只展开材料里已有的内容，不许编。
 - 表格仍然用 GFM 格式；改完要保证表格每行的竖线数量一致。
-- todos 没被要求改就原样返回（含 children）。`;
+- todos 没被要求改就原样返回（含 children）。
+- **用户要的是"再多一点"而不是"改哪一句"时**（比如"还有没有别的"、"再抽几条待办"、
+  "漏了什么"），要给的是**增量**：在保留已有内容的前提下，从材料里补出没被覆盖的部分；
+  材料里确实没有了，就在 note 里说清楚「材料里就这些」，不要拿重复的东西凑数。
+- 补出来的内容不能和已有条目重复（措辞不同也算同一件）。
+- 有了材料就不要凭印象补事实：数字、型号、命令、路径仍以材料为准。`;
 
 export interface ReviseOptions {
   draft: KnowledgeDraft;
   instruction: string;
   config: AiConfig;
   onProgress?: (patch: ChatProgress) => void;
+  /**
+   * 这一轮之前用户说过的要求，从旧到新。
+   *
+   * 原来只发「当前草稿 + 这一句」，于是「上面那条」指代不明、连着三轮的要求互相覆盖 ——
+   * 用户看到的就是「第二轮说的话没起作用」。草稿一变，前一句就再也找不回来了，
+   * 所以必须显式带着走。
+   */
+  history?: string[];
+  /**
+   * 原始材料（整理时那批碎片的正文）。
+   *
+   * 改稿原来**看不到材料**：让它「再抽两条待办」、「漏了什么补上」时，它只有草稿，
+   * 草稿里没有的东西就永远出不来 —— 这是「第二次对话无效果」的根因。
+   * 材料可能很长，调用方已经按预算裁过。
+   */
+  material?: string;
+  /** 已有待办（含刚写进去的）。不给就会把已经存在的事再抽一遍 */
+  existingTodos?: TodoSnapshot[];
 }
 
 export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraft> {
-  const { draft, instruction, config, onProgress } = options;
+  const { draft, instruction, config, onProgress, history, material, existingTodos } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   if (!instruction.trim()) throw new AiError('format', '还没说要改什么');
 
+  const priorTurns = (history ?? []).filter((h) => h.trim()).slice(-6);
   const messages: ChatMessage[] = [
     { role: 'system', content: REVISE_SYSTEM },
     {
       role: 'user',
       content: [
+        priorTurns.length
+          ? `这一轮之前你已经按这些要求改过：\n${priorTurns.map((h, i) => `${i + 1}. ${h}`).join('\n')}`
+          : '',
         '当前草稿：',
         JSON.stringify(
           {
@@ -322,9 +349,13 @@ export async function reviseDraft(options: ReviseOptions): Promise<KnowledgeDraf
           null,
           2,
         ),
+        material ? `\n原始材料（草稿就是从这些里提炼的；要补充时只能用它）：\n${material}` : '',
+        existingTodos ? `\n已有待办（不要重复输出）：\n${formatExistingTodos(existingTodos)}` : '',
         '',
         `用户要求：${instruction.trim()}`,
-      ].join('\n'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
     },
   ];
 

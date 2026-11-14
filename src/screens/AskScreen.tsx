@@ -24,6 +24,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ActivityIndicator,
   Animated,
+  Linking,
   PanResponder,
   Platform,
   Pressable,
@@ -33,6 +34,8 @@ import {
   TextInput,
   View,
   useWindowDimensions,
+  type NativeScrollEvent,
+  type NativeSyntheticEvent,
   type ScrollViewInstance,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -52,7 +55,9 @@ import { AiError, type AiErrorDetail } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
 import {
   extractKnowledge,
+  formatFragments,
   reviseDraft,
+  trimMaterial,
   type KnowledgeSource,
   type TodoSnapshot,
 } from '../ai/knowledge';
@@ -70,7 +75,7 @@ import {
   type DraftMode,
   type KnowledgeDraft,
 } from '../util/knowledgeDoc';
-import { routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
+import { planDraftInput, routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
 import { packFragments, sliceBatches } from '../util/batch';
 import { hasReadableText } from '../util/fragmentText';
 import { IMAGE_READ_LIMIT, pendingImagesOf } from '../util/pendingImages';
@@ -253,6 +258,8 @@ function TurnAnswer({
     [cites],
   );
   const [sourcesOpen, setSourcesOpen] = useState(false);
+  /** 打不开链接的原因。就近写在那一块下面，不弹框 */
+  const [linkErr, setLinkErr] = useState('');
 
   const citeLabel = useCallback(
     (ref: CiteRef) => labels.get(citeKey(ref.kind, ref.id)) ?? null,
@@ -307,6 +314,43 @@ function TurnAnswer({
                 </Pressable>
               ))
             : null}
+        </View>
+      ) : null}
+
+      {/*
+        网页来源：**不依赖模型有没有写 [W 编号]**。
+        它只在自己真的搜过网时出现，点一下直接开浏览器 ——
+        用户说的「网页链接没法点」就是这里缺了一块：内容进了回答，链接却没落地。
+      */}
+      {turn.webSources?.length ? (
+        <View style={styles.webBlock}>
+          <Text style={styles.webTitle}>网页来源</Text>
+          {turn.webSources.slice(0, 4).map((w) => (
+            <Pressable
+              key={w.url}
+              style={({ pressed }) => [styles.webRow, pressed && { opacity: 0.6 }]}
+              onPress={() => {
+                setLinkErr('');
+                Linking.openURL(w.url).catch(() =>
+                  setLinkErr(`打不开这个链接：${w.url}`),
+                );
+              }}
+              accessibilityRole="link"
+              accessibilityLabel={`打开网页 ${w.title}`}
+            >
+              <Ionicons name="globe-outline" size={12} color={c.text3} />
+              <Text style={styles.webRowText} numberOfLines={1}>
+                {w.title}
+              </Text>
+              <Ionicons name="open-outline" size={12} color={c.text3} />
+            </Pressable>
+          ))}
+          {turn.webSources.length > 4 ? (
+            <Text style={styles.webMore}>
+              还有 {turn.webSources.length - 4} 条，展开上面的「参考」可以看到
+            </Text>
+          ) : null}
+          {linkErr ? <Text style={styles.webErr}>{linkErr}</Text> : null}
         </View>
       ) : null}
     </View>
@@ -410,6 +454,13 @@ export function AskScreen({
   const [draftReasoning, setDraftReasoning] = useState('');
   /** 过程日志。整理这件事现在是「看得见在干什么」的，不再只报一个字数 */
   const [draftSteps, setDraftSteps] = useState<AgentStep[]>([]);
+  /**
+   * 这一份草稿被要求改过哪些话（从旧到新）。
+   *
+   * 改稿只看草稿和这一句，就会出现「第二轮说的话没起作用」：上一轮的要求随着
+   * 草稿一起变了，模型不知道用户已经让改过一次。带着走之后，「上面那条」才有指代。
+   */
+  const [reviseHistory, setReviseHistory] = useState<string[]>([]);
   const [savingDraft, setSavingDraft] = useState(false);
   /** 写入权限。默认开，但一定要看得见、关得掉 */
   const [allowDoc, setAllowDoc] = useState(true);
@@ -557,6 +608,30 @@ export function AskScreen({
   const scrollToEnd = useCallback(() => {
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
   }, []);
+
+  /**
+   * 是不是已经贴着底。
+   *
+   * 键盘弹起会**缩短可视区**（底部那一块让给了输入区），滚动偏移不变，
+   * 于是最后几条回答就沉到键盘底下 —— 用户看到的是「键盘挡住了 AI 的记录」。
+   * 但也不能一弹键盘就无条件滚到底：正在往上翻旧对话的人会被拽回来。
+   * 所以只在「本来就在底部附近」时才跟。
+   */
+  const atBottomRef = useRef(true);
+  const onScroll = useCallback((e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const { contentOffset, contentSize, layoutMeasurement } = e.nativeEvent;
+    const gap = contentSize.height - (contentOffset.y + layoutMeasurement.height);
+    atBottomRef.current = gap < 80;
+  }, []);
+
+  useEffect(() => {
+    if (keyboardHeight <= 0) return;
+    // 等一帧让 footer 的高度先落定，否则按旧的可视区算，滚不到真正的底
+    const timer = setTimeout(() => {
+      if (atBottomRef.current) scrollToEnd();
+    }, 80);
+    return () => clearTimeout(timer);
+  }, [keyboardHeight, scrollToEnd]);
 
   /**
    * 点历史行上的「已写入」徽标。
@@ -901,6 +976,7 @@ export function AskScreen({
     setDraftBusy(false);
     setDraftErr(null);
     setSavedDocs([]);
+    setReviseHistory([]);
     setContext(null);
     // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
     setScope(pageScope.scope);
@@ -953,6 +1029,7 @@ export function AskScreen({
     setDraftBusy(false);
     setDraftErr(null);
     setSavedDocs([]);
+    setReviseHistory([]);
     setContext(null);
     /*
      * 换了一整场会话，应该直接看到最新一轮。
@@ -992,13 +1069,31 @@ export function AskScreen({
     }
 
     /*
-     * 草稿开着的时候，这一句话就是「改哪里」。
+     * 草稿开着的时候，这一句话默认是「改哪里」——「把第二段并进第一段」这种话
+     * 任何意图分类器都会判成问答，所以不能靠分类器分流。
      *
-     * 不在这里再判意图：草稿已经在屏幕上了，用户打的字如果是「把第二段并进
-     * 第一段」，任何意图分类器都会把它判成问答。规则简单一点反而不会错 ——
-     * 想提问就先把草稿收掉，卡片上有按钮。
+     * 但有一条例外：用户明确又要「整理」/「整理待办」。那不是改稿，是要新的一轮。
+     * 以前这种话会被塞进改稿，模型拿着草稿改不出新东西，用户看到的就是
+     * 「第二次说话没反应」。所以这里分流：
+     * - 草稿里**没有还没写入的内容** → 直接开新一轮（丢掉它不会失去任何东西）；
+     * - 有没写入的 → 不吞这句话、也不偷偷替换草稿，而是说清下一步该按哪里。
      */
     if (draft) {
+      // 「还没写入」按两类分别算：文档看已写篇数，待办写进去之后草稿里就清空了
+      const unsavedDocs =
+        draft.mode === 'knowledge' ? Math.max(0, keptDocs(draft).length - savedDocs.length) : 0;
+      const unsavedTodos = allowTodos ? keptTodos(draft).length : 0;
+      const plan = planDraftInput(question, unsavedDocs + unsavedTodos);
+      if (plan.kind === 'blocked') {
+        // 输入不清空：那句话还在，处理完草稿可以直接再发
+        showToast('当前草稿还没写入。先点卡片上的「写入」或「丢弃」，再开新一轮整理');
+        return;
+      }
+      if (plan.kind === 'new') {
+        discardDraft();
+        await startDraft(plan.mode, { instruction: question });
+        return;
+      }
       void reviseCurrent(question);
       return;
     }
@@ -1066,6 +1161,14 @@ export function AskScreen({
         answer: run.answer,
         sourceIds: run.cited.map((f) => f.id),
         citations: run.citations,
+        /*
+         * 网页来源单独存一份：模型没写 [W] 标记时，引用列表里一条网页都没有，
+         * 用户就找不到可以点的链接了。这里把这一轮真搜到的页面留下来，
+         * 只留标题和 url（正文在 citations 的快照里）。
+         */
+        webSources: run.web.length
+          ? run.web.slice(0, 8).map((h) => ({ title: h.title || h.url, url: h.url }))
+          : undefined,
         reasoning: run.reasoning,
         truncated: run.truncated,
         documentCoverage: run.documentCoverage,
@@ -1307,6 +1410,8 @@ export function AskScreen({
       setSavedDocs([]);
       setDraft(emptyDraft(mode, []));
       setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
+      // 新的一轮整理，上一份草稿的改稿要求不能跟过来
+      setReviseHistory([]);
     }
     setDraftSession(opts.session?.id ?? sessionIdRef.current);
     setDraftBusy(true);
@@ -1490,13 +1595,43 @@ export function AskScreen({
     setDraftRecv(0);
     setDraftElapsed(0);
     setDraftBusy(true);
+    /*
+     * 用户说的这句话必须留在过程里。以前只 push 一句「正在按你说的改…」，
+     * 自己刚打的字从输入框里消失、草稿又看不出变化 —— 看起来就是「第二次对话没反应」。
+     */
+    pushStep({ text: `你说：${instruction.trim()}`, state: 'done' });
     pushStep({ text: '正在按你说的改…', state: 'running' });
     try {
       const config = await loadAiConfig();
+      /*
+       * 把材料带上。改稿原来只看到草稿，「再抽两条待办」「还有没有别的」这类要求
+       * 根本没有可依据的东西，只能把原样吐回来 —— 用户于是说「第二次没效果」。
+       * 材料就是当初那批碎片（`sourceIds`），按整理时同一套口径截断。
+       */
+      let material = '';
+      if (draft.sourceIds.length) {
+        try {
+          const frags = await repo.findFragmentsByIds(draft.sourceIds);
+          if (frags.length) material = trimMaterial(formatFragments(frags)).text;
+        } catch {
+          /* 碎片被删了就算了：没有材料也能改措辞，只是补不出新内容 */
+        }
+      }
+      let existing: TodoSnapshot[] | undefined;
+      try {
+        existing = await loadTodoSnapshots();
+      } catch {
+        /* 读不到就不带去重清单，最坏情况是多抽两条重复的 */
+      }
+      if (draftGenRef.current !== gen) return;
+
       const next = await reviseDraft({
         draft,
         instruction,
         config,
+        material: material || undefined,
+        history: reviseHistory,
+        existingTodos: existing,
         onProgress: (patch) => {
           if (draftGenRef.current !== gen) return;
           if (patch.content !== undefined) setDraftRecv(patch.content.length);
@@ -1504,6 +1639,7 @@ export function AskScreen({
       });
       if (draftGenRef.current !== gen) return;
       setDraft(next);
+      setReviseHistory((prev) => [...prev, instruction.trim()].slice(-6));
       markLastStep({ text: '已按你说的改过', state: 'done' });
       setDraftNote('不满意可以继续说；改好的每一篇都可以单独加入文档库');
     } catch (e) {
@@ -1523,6 +1659,7 @@ export function AskScreen({
     setDraftErr(null);
     setDraftNote('');
     setDraftSteps([]);
+    setReviseHistory([]);
     setSavedDocs([]);
     setDraftSession(null);
   }
@@ -1967,6 +2104,8 @@ export function AskScreen({
           ref={scrollRef}
           contentContainerStyle={[styles.content, !hasContent && !pendingQ && styles.contentEmpty]}
           keyboardShouldPersistTaps="handled"
+          onScroll={onScroll}
+          scrollEventThrottle={64}
           onContentSizeChange={() => {
             // 只在「正在生成」时跟到底。展开内容、弹键盘也会改高度，
             // 无条件滚到底就是用户说的「打开和编辑自动跳转底部」
@@ -2612,6 +2751,20 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     textAlign: 'center',
   },
   srcTitle: { flex: 1, fontSize: 12.5, color: c.text2 },
+
+  /* ---- 网页来源：这一轮真搜到的页面，点一下开浏览器 ---- */
+  webBlock: { marginTop: 10, gap: 4 },
+  webTitle: { fontSize: 11, color: c.text3, letterSpacing: 0.3 },
+  webRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+  },
+  webRowText: { flex: 1, fontSize: 12.5, color: c.accentText },
+  webMore: { fontSize: 11, color: c.text3, lineHeight: 16 },
+  webErr: { fontSize: 11, color: c.danger, lineHeight: 16 },
 
   webNote: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 10 },
   errText: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 10 },

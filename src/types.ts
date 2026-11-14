@@ -351,6 +351,15 @@ export interface QaTurn {
   answer: string;
   sourceIds: number[];
   citations?: QaCitation[];
+  /**
+   * 这一轮联网查到的网页（标题 + 链接），**不管模型有没有引用**。
+   *
+   * 引用列表只收模型真写了 `[W1]` 的那几条 —— 但它经常只用内容不带标记，
+   * 于是用户看得见「联网补了 8 条」，却找不到一条能点的链接。
+   * 这个字段专门给「网页来源」那一块用，点一下直接开浏览器。
+   * 只存标题和 url，不存正文：正文在 citations 的快照里已经有了，重复存会把会话撑大。
+   */
+  webSources?: { title: string; url: string }[];
   reasoning?: string;
   truncated?: boolean;
   documentCoverage?: DocumentCoverage[];

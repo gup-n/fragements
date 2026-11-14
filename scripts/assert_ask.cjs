@@ -85,7 +85,7 @@ try {
   process.exit(1);
 }
 
-const { routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
+const { planDraftInput, routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
 const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
 const batch = require(path.join(outDir, 'util', 'batch.js'));
 const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
@@ -133,6 +133,30 @@ check('空输入不会误判', () => {
   eq(routeAsk('   ').task, 'answer', '任务');
 });
 
+// ---------------------------------------------------------------------------
+// 1.9 草稿开着时，新的一句话算改稿还是新的一轮（v0.20.3）
+// ---------------------------------------------------------------------------
+check('草稿开着说「再整理一下待办」：新开一轮待办，不是拿去改稿', () => {
+  const plan = planDraftInput('再整理一下待办', 0);
+  eq(plan.kind, 'new', '应当开新一轮');
+  eq(plan.mode, 'todos', '模式是待办');
+});
+
+check('「整理所有碎片」在草稿没有待写入时也开新一轮，模式是知识', () => {
+  const plan = planDraftInput('整理所有碎片', 0);
+  eq(plan.kind, 'new', '新开一轮');
+  eq(plan.mode, 'knowledge', '知识文档');
+});
+
+check('草稿里还有没写入的东西：新整理被挡住，不能悄悄覆盖', () => {
+  eq(planDraftInput('整理所有碎片', 2).kind, 'blocked', '有没写入的就挡');
+  eq(planDraftInput('整理待办', 1).kind, 'blocked', '待办也一样');
+});
+
+check('「把第二段并进第一段」是改稿，不是新任务', () => {
+  eq(planDraftInput('把第二段并进第一段', 3).kind, 'revise', '改稿');
+  eq(planDraftInput('短一点', 0).kind, 'revise', '没提到整理就还是改稿');
+});
 // ---------------------------------------------------------------------------
 // 2. 模型 JSON → 草稿
 // ---------------------------------------------------------------------------
