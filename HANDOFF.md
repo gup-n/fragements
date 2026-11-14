@@ -112,6 +112,18 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 产物 `android/app/build/outputs/apk/release/app-release.apk` → 复制成 `fragments-v<版本>.apk` 放根目录。
 增量 2–3 分钟；首次全量约 45 分钟。详细环境与三个坑见 SPEC 第 12 节。
 
+**本地资源现状（2026-11-14 清理后）**：
+
+| 项 | 体积 | 说明 |
+|---|---|---|
+| `node_modules/` | ~508 MB | 跑断言要用，别删 |
+| `android/` | ~13 MB | 只剩工程骨架。`android/app/build`（288 MB 产物）与 `.gradle/` 已清，下次 `assembleRelease` 自己重建 |
+| `assets/` | 3.3 MB | 含 `pdfjs/reader.html`；`pdf.min.mjs` / `worker` / `cmaps` 是 `npm run prepare:pdf` 的副产物，不在库里 |
+| `.git/` | 4.4 MB | 没有历史 APK，没膨胀 |
+
+三个旧安装包（`fragments-v0.8.7/8/9.apk`，共 70 MB）已删 —— 发布只认 GitHub Release 的 asset，
+本地留 APK 只会让人装错版本。需要哪个版本就回 Release 页下。
+
 ---
 
 ## 4. 代码地图

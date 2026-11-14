@@ -48,7 +48,26 @@ cd android && ./gradlew assembleRelease
 
 所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
 `npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途：产物打进 `.tmp-bundle/`，
-同一次运行里量完体积就删掉。**UI 改动的唯一验证手段是用户装 APK 真机反馈。**
+同一次运行里量完体积就删掉。
+
+**能真机操作测试，但要用户先把手机接上**（2026-11-14 起）：
+
+```bash
+ADB=/c/Users/14428/AppData/Local/Android/Sdk/platform-tools/adb.exe
+"$ADB" devices                       # 空列表 = 没设备，别往下试
+"$ADB" install -r fragments-v0.20.3.apk
+"$ADB" exec-out screencap -p > shot.png        # 截图后直接看
+"$ADB" shell input tap 540 1820                # 点按（坐标来自截图）
+"$ADB" shell input swipe 900 1200 200 1200 250 # 滑动（抽屉 / 翻页）
+"$ADB" shell input text "hello"                # 英文可以，中文不行
+"$ADB" shell input keyevent 4                  # 返回键
+"$ADB" logcat -d -s ReactNativeJS:V | tail -40
+```
+
+能验的：布局有没有被键盘盖住、点得到点不到、跳转对不对、列表滚不滚、闪退与 JS 报错。
+验不了的：字体渲染与配色好不好看、动效是否跟手、中文输入法行为。
+**每次操作后必须截图确认改了哪一屏**，不要凭「命令返回 0」就宣布通过。
+用户没接手机时，UI 的唯一验证手段仍然是装 APK 后的人工反馈。
 
 ## 发版：走 CI，不本地打包
 

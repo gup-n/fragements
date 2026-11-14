@@ -302,7 +302,9 @@ npx expo start              # dev server，手机 Expo Go 扫码
 ```
 
 > **不做界面预览**（用户 2026-10-25 明确要求）。`build:web` 的产物落在 `.tmp-bundle/`
-> 并在同一次运行里删掉，根目录不会留下能起静态服务的东西；UI 只靠装 APK 真机反馈验证。
+> 并在同一次运行里删掉，根目录不会留下能起静态服务的东西。
+> UI 验证有两条路：手机用 USB 连上并开 USB 调试后，`adb` 可以装包、截图、模拟点按滑动
+> 做真机操作测试（做法见 `AGENTS.md`）；没接设备时就只能装 APK 靠人工反馈。
 
 新增依赖用 `npm install <pkg>@<与 SDK 匹配的版本> --registry=https://registry.npmmirror.com`。
 `npx expo install` 在这台机器上曾卡 9 分钟无输出（其实已经装好了），所以不用它；
