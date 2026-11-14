@@ -144,6 +144,27 @@ B 段七项里**能在这台机器上做完并验到的两项**。它们都不�
 **做不到的部分**（写在设置页说明里，不假装能做）：在通知栏里直接打字需要原生
 `RemoteInput`，这一版没有。
 
+### 三、系统分享接收
+
+从微信、相册、文件管理器点「分享 / 用其他应用打开 → 碎片」，直接进来。
+
+Expo 没有分享接收模块，`ACTION_SEND` 也不是 URL（`expo-linking` 拿不到），所以只能动原生 ——
+但**没有新增依赖、没有新增 Activity**：
+
+- `plugins/withShareReceiver.js` 给 MainActivity 加 `ACTION_SEND` 的 intent-filter，
+  并往 `MainActivity.kt` 注入一段 `captureShare`；
+- **在原生就把文件复制到 `files/incoming/`**。`content://` 的读权限跟着 Activity 走，
+  用户切走或进程被回收就打不开了，等 JS 再回来读基本是失败；
+- 交接靠一份 `incoming-share.json`（`at` / `mime` / `text` / `file`），JS 读它；
+- `src/shareInbox.ts` 用 `settings.share_last_at` 做幂等键：只处理比上次新的，
+  **先落库再返回**（反过来的话，读取中切走会在下次启动重复消费同一条）。
+
+两个必须接的时机：启动读完后一次，以及 `AppState` 回到 active。MainActivity 是
+`singleTask`，App 开着时分享进来**不重启**，只走 `onNewIntent` —— 只监听启动会漏掉绝大多数分享。
+
+分流：文本拼在已有草稿**后面**（不覆盖用户写了一半的话）；图片直接存成一条碎片；
+PDF / doc 这类提示去「文档」页导入，不硬塞进时间轴。
+
 ## v0.20.4 — 整理这一块改成聊天那样
 
 用户 2026-11-14 在真机上看着整理结果说的：

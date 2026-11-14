@@ -47,7 +47,8 @@
       "expo-sharing",
       "./plugins/withNoSplashAnimation",
       "./plugins/withBuildOptimizations",
-      "expo-notifications"
+      "expo-notifications",
+      "./plugins/withShareReceiver"
     ]
   }
 }

@@ -315,6 +315,21 @@
 | 聚焦 | App 用自增 `focusSignal` 传给时间轴：页面已经在这不会重新挂载，只有值变才再聚焦一次 |
 | 做不到 | 通知栏内直接输入需要原生 `RemoteInput`，本版没有；设置页说明里写着这一点 |
 
+### 4.1.5 系统分享接收（v0.20.5）
+
+从微信 / 相册 / 文件管理器点「分享 → 碎片」直接进来。
+
+| 环节 | 做法 |
+|---|---|
+| 声明 | `plugins/withShareReceiver.js`：给 MainActivity 加 `ACTION_SEND`（`text/plain` / `image/*` / `application/pdf`），并把接收逻辑注入 `MainActivity.kt` |
+| 落盘 | **在原生就把文件复制到 `files/incoming/`**。`content://` 的读权限跟着 Activity 走，等 JS 回来读多半已经打不开 |
+| 交接 | 写 `incoming/incoming-share.json`（`at` / `mime` / `text` / `file`），JS 读同一份 |
+| 消费 | `src/shareInbox.ts` 用 `settings.share_last_at` 做幂等键：只处理比上次新的，**先落库再返回** |
+| 时机 | 启动读完后一次 + `AppState` 回到 active 时一次。MainActivity 是 `singleTask`，已开着时分享进来只走 `onNewIntent`，不重启 |
+| 文本 | 拼在已有草稿**后面**（不覆盖用户写了一半的话），停在时间轴等用户确认再发布 |
+| 图片 | 直接存成一条碎片（带上分享时附的那句文字） |
+| 其它类型 | 不硬塞进时间轴：提示去「文档」页导入 |
+
 ### 4.2 设置页的四个模块（v0.20）
 
 原来是**一根长滚动条**：主题、Key、模型、思考强度、MinerU、统计、索引、导入导出、更新、包名连着排下来。

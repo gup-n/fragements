@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BackHandler, Platform, StyleSheet, useColorScheme, View } from 'react-native';
+import { AppState, BackHandler, Platform, StyleSheet, useColorScheme, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import type { Fragment, Note, PendingFragmentImage } from './src/types';
@@ -28,6 +28,7 @@ import { Toast } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
+import { takeIncomingShare } from './src/shareInbox';
 
 type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
@@ -375,6 +376,7 @@ function Shell({ booted }: { booted: boolean }) {
   /**
    * 详情页「加图」：先落盘、再插一行配图。**不读字** ——
    * 读字统一在整理/提问前做（`ai/imageReads.ts`），也可以由用户在图下面点一下立刻读。
+   *
    * 返回新建的配图（正文要拿 id 插 `![](img:id)` 定位标记）。
    */
   const handleAddImages = useCallback(
@@ -396,6 +398,52 @@ function Shell({ booted }: { booted: boolean }) {
     },
     [reload],
   );
+
+  /**
+   * 接系统分享进来的内容（原生那半边见 plugins/withShareReceiver.js）。
+   *
+   * 两个时机都要查：启动读完后一次；从后台回到前台一次。MainActivity 是
+   * singleTask，App 已经开着时分享进来**不会重启**，只走 onNewIntent，
+   * 所以必须靠 AppState 变化去捞 —— 只看启动会漏掉绝大多数分享。
+   */
+  useEffect(() => {
+    if (isWeb || !ready) return;
+    let alive = true;
+
+    const take = async () => {
+      try {
+        const inc = await takeIncomingShare();
+        if (!inc || !alive) return;
+        if (inc.kind === 'text') {
+          // 拼在已有草稿后面：用户可能已经写了一半，直接覆盖等于把他的话删了
+          setDraft((prev) => (prev.trim() ? `${prev}\n${inc.text}` : inc.text));
+          setRoute('timeline');
+          setWriteNotice('已把分享的文字放进输入框，确认后再发布');
+        } else if (inc.kind === 'image' && inc.fileUri) {
+          await handleAdd(inc.text, [{ key: `p${inc.at}`, uri: inc.fileUri }]);
+          if (!alive) return;
+          setRoute('timeline');
+          setWriteNotice('已把分享的图片存成一条碎片');
+        } else {
+          // PDF / doc 这类要走文档导入链路，这里不硬塞进时间轴
+          setWriteNotice('这种文件还不支持从分享进来，去「文档」页导入更稳');
+        }
+      } catch (e) {
+        if (alive) {
+          setWriteNotice(e instanceof Error ? `没接住这次分享：${e.message}` : '没接住这次分享');
+        }
+      }
+    };
+
+    void take();
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void take();
+    });
+    return () => {
+      alive = false;
+      sub.remove();
+    };
+  }, [ready, handleAdd]);
 
   /** 详情页删掉一张图：数据库那行先删，再删文件（顺序反了会留下指向空文件的图） */
   const handleRemoveImage = useCallback(
