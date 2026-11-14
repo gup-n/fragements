@@ -1,7 +1,7 @@
 # 交接文档（给下一个模型）
 
 > 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-10 更新到 v0.16.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.20.3（versionCode 54）**。
+> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.20.4（versionCode 55）**。
 >
 > **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
 > + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
@@ -24,7 +24,7 @@ v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、�
 |---|---|
 | 路径 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`（固定，改包名等于换 App） |
-| 版本 | v0.20.3 / versionCode 54 |
+| 版本 | v0.20.4 / versionCode 55 |
 | 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
 | 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
 | 数据 | 本地 SQLite，无账号、无后端、无同步 |
@@ -41,7 +41,7 @@ v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、�
 | 编译 | `tsc --noEmit` 零错误 |
 | Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
 | 自动化测试 | 没有单测框架，但有一组机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run test:docs`（阅读器 47 / 任务 8 / 问答 16）、`npm run test:todos`（待办与小结 18 项）、`npm run test:ask`（指令路由与整理草稿 21 项）、`npm run check:docs`、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，173 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
+| 真机验证 | v0.7 / v0.8 这批**基本没验**，176 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
 | 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
 | 月总结格式 | **一张按天的「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限（v0.16，见 `TEXTS.md` 1.3） |
 | 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
@@ -128,7 +128,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 ## 4. 代码地图
 
-`App.tsx` + `src/` 共 **32,241 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
+`App.tsx` + `src/` 共 **32,284 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
 
 ### 入口与页面
 
@@ -136,7 +136,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 |---|---|---|
 | `App.tsx` | 589 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
 | `src/screens/TimelineScreen.tsx` | 1916 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、事项筛选、输入框（**加图选择行在卡片内部**）、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
-| `src/screens/AskScreen.tsx` | 3045 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
+| `src/screens/AskScreen.tsx` | 3067 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
 | `src/screens/ReviewScreen.tsx` | 276 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
 | `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
 | `src/screens/SettingsScreen.tsx` | 1344 | 设置四模块菜单（配置 / 外观 / 数据 / 关于）+ 四个子页：模型服务（官方只填 Key + 余额 + 跳转，第三方折叠）、思考过程与强度、MinerU、主题、索引健康度与自检、导入导出、统计、更新与下载地址 |
@@ -220,7 +220,7 @@ export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
 
 | 文件 | 行 | 干什么 |
 |---|---|---|
-| `src/util/askIntent.ts` | 127 | **指令路由唯一判据**：`routeAsk`（月小结 → 待办 → 碎片整理 → 问答）、`wantsAll`（说了「所有」才整理全库）、`planDraftInput`（草稿开着时：改稿 / 新开一轮 / 被挡住，v0.20.3）、提示框种子的默认指令 |
+| `src/util/askIntent.ts` | 148 | **指令路由唯一判据**：`routeAsk`（月小结 → 待办 → 碎片整理 → 问答）、`wantsAll`（说了「所有」才整理全库）、`planDraftInput`（草稿开着时：改稿 / 新开一轮 / 被挡住，v0.20.3）、提示框种子的默认指令 |
 | `src/util/knowledgeDoc.ts` | 371 | 整理草稿：模型 JSON 收敛、日期真校验、摘要、`mergeDrafts`（跨批同名去重）、`describeForHistory`、`draftProblem` 写入前校验 |
 | `src/util/organizePlan.ts` | 465 | **唯一业务判据**：`mergeBatchResult`、`buildTagGroups`、`finalizePlan`、`appendSummary` |
 | `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
@@ -646,7 +646,7 @@ CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
 
 ## 9. 真机待验
 
-173 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
+176 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
 
 1. 50 条以上能不能**一路跑完**
 2. 确认页标签分组条数**加起来对不对**

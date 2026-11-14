@@ -186,11 +186,8 @@ export function KnowledgeDraftCard({
     <View style={styles.card}>
       {/* ---- 头 ---- */}
       <View style={styles.headRow}>
-        <Ionicons
-          name={busy ? 'sync-outline' : isTodosOnly ? 'checkbox-outline' : 'sparkles-outline'}
-          size={15}
-          color={c.accentText}
-        />
+        {/* 只在跑着的时候占一个位置：转圈是「还在进行」，图标只是装饰 */}
+        {busy ? <ActivityIndicator size="small" color={c.text3} /> : null}
         <Text style={styles.headTitle}>{headTitle}</Text>
         <View style={styles.flex} />
         {busy ? <Text style={styles.elapsed}>{elapsed}s</Text> : null}
@@ -431,18 +428,21 @@ export function KnowledgeDraftCard({
 
 const makeStyles = (c: Palette) =>
   StyleSheet.create({
+    /*
+     * 不再套一张带边框的卡（v0.20.4）。
+     *
+     * 用户原话「希望跟聊天一样」：问答那半页里，用户是右侧气泡、助手是左侧正文，
+     * 只有整理这一段突然变成一张灰边卡片 —— 同一屏两种语言，看起来像系统通知
+     * 而不是回答。现在它只是助手那一段的开头，产出小卡、步骤、按钮各自有自己的底。
+     */
     card: {
-      backgroundColor: c.card,
-      borderRadius: R.card,
-      borderWidth: 0.5,
-      borderColor: c.accentHair,
-      padding: 14,
-      marginTop: 14,
+      paddingTop: 2,
+      marginTop: 10,
       gap: 8,
     },
     flex: { flex: 1 },
-    headRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    headTitle: { fontSize: 13.5, color: c.text, fontWeight: '600', flexShrink: 1 },
+    headRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+    headTitle: { fontSize: 14, lineHeight: 21, color: c.text, fontWeight: '600', flexShrink: 1 },
     elapsed: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
 
     /* 过程日志 */

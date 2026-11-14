@@ -85,7 +85,7 @@ try {
   process.exit(1);
 }
 
-const { planDraftInput, routeAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
+const { planDraftInput, routeAsk, showsDraftAsk, wantsAll } = require(path.join(outDir, 'util', 'askIntent.js'));
 const doc = require(path.join(outDir, 'util', 'knowledgeDoc.js'));
 const batch = require(path.join(outDir, 'util', 'batch.js'));
 const json = require(path.join(outDir, 'util', 'jsonRepair.js'));
@@ -156,6 +156,26 @@ check('草稿里还有没写入的东西：新整理被挡住，不能悄悄覆�
 check('「把第二段并进第一段」是改稿，不是新任务', () => {
   eq(planDraftInput('把第二段并进第一段', 3).kind, 'revise', '改稿');
   eq(planDraftInput('短一点', 0).kind, 'revise', '没提到整理就还是改稿');
+});
+
+// ---------------------------------------------------------------------------
+// 1.10 草稿上方的用户气泡要不要画（v0.20.4）
+// ---------------------------------------------------------------------------
+check('草稿刚开、历史里还没有这一轮：气泡要画', () => {
+  eq(showsDraftAsk([], '整理一下碎片'), true, '空历史要画');
+  eq(showsDraftAsk([{ question: '你好', kind: undefined }], '整理一下碎片'), true, '上面是问答也要画');
+});
+
+check('历史最后一条已经是同一句整理：气泡让位，不能出现两次', () => {
+  const turns = [{ question: '整理一下碎片', kind: 'organize' }];
+  eq(showsDraftAsk(turns, '整理一下碎片'), false, '同一句不画');
+  eq(showsDraftAsk(turns, '  整理一下碎片  '), false, '前后空格不算不同');
+});
+
+check('改过稿之后气泡回来（历史里那句已经旧了）', () => {
+  const turns = [{ question: '整理一下碎片', kind: 'organize' }];
+  eq(showsDraftAsk(turns, '短一点'), true, '新句要显示');
+  eq(showsDraftAsk(turns, ''), false, '没有话就不画');
 });
 // ---------------------------------------------------------------------------
 // 2. 模型 JSON → 草稿

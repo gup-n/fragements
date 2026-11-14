@@ -75,7 +75,7 @@ import {
   type DraftMode,
   type KnowledgeDraft,
 } from '../util/knowledgeDoc';
-import { planDraftInput, routeAsk, TASK_SEED, wantsAll } from '../util/askIntent';
+import { planDraftInput, routeAsk, showsDraftAsk, TASK_SEED, wantsAll } from '../util/askIntent';
 import { packFragments, sliceBatches } from '../util/batch';
 import { hasReadableText } from '../util/fragmentText';
 import { IMAGE_READ_LIMIT, pendingImagesOf } from '../util/pendingImages';
@@ -454,6 +454,13 @@ export function AskScreen({
   const [draftReasoning, setDraftReasoning] = useState('');
   /** 过程日志。整理这件事现在是「看得见在干什么」的，不再只报一个字数 */
   const [draftSteps, setDraftSteps] = useState<AgentStep[]>([]);
+  /**
+   * 屏幕上这份草稿是「因为哪句话」才有的。
+   *
+   * 它要显示成右侧的用户气泡 —— 否则整段整理只有助手那半边，
+   * 屏幕上没有「我问了什么」，读起来就不像对话（用户 v0.20.4 的要求）。
+   */
+  const [draftAsk, setDraftAsk] = useState('');
   /**
    * 这一份草稿被要求改过哪些话（从旧到新）。
    *
@@ -977,6 +984,7 @@ export function AskScreen({
     setDraftErr(null);
     setSavedDocs([]);
     setReviseHistory([]);
+    setDraftAsk('');
     setContext(null);
     // 新会话回到「进页面时选定的范围」：历史会话的临时范围不继承
     setScope(pageScope.scope);
@@ -1030,6 +1038,7 @@ export function AskScreen({
     setDraftErr(null);
     setSavedDocs([]);
     setReviseHistory([]);
+    setDraftAsk('');
     setContext(null);
     /*
      * 换了一整场会话，应该直接看到最新一轮。
@@ -1404,12 +1413,17 @@ export function AskScreen({
     setLeftover(0);
     setInput('');
     if (append) {
-      // 接着上一轮的草稿：文档还在等用户过目，步骤日志也留着
+      // 接着上一轮的草稿：文档还在等用户过目，步骤日志也留着。
+      // 气泡也不换 —— 用户这一下没说话，只是让上一轮继续说完
       pushStep({ text: '继续整理剩下的碎片…', state: 'running' });
     } else {
       setSavedDocs([]);
       setDraft(emptyDraft(mode, []));
       setDraftSteps([{ text: '正在读材料…', state: 'running' }]);
+      // 与写进历史的那句同源：屏幕上看到的气泡，就是历史里能找回来的那句
+      setDraftAsk(
+        (opts.instruction ?? '').trim() || (mode === 'todos' ? '整理待办' : '整理碎片'),
+      );
       // 新的一轮整理，上一份草稿的改稿要求不能跟过来
       setReviseHistory([]);
     }
@@ -1438,6 +1452,7 @@ export function AskScreen({
           if (!append) {
             setDraft(null);
             setDraftSteps([]);
+            setDraftAsk('');
           } else {
             markLastStep({ text: '没有剩下的碎片了', state: 'done' });
           }
@@ -1600,6 +1615,8 @@ export function AskScreen({
      * 自己刚打的字从输入框里消失、草稿又看不出变化 —— 看起来就是「第二次对话没反应」。
      */
     pushStep({ text: `你说：${instruction.trim()}`, state: 'done' });
+    // 气泡跟着换成这一句：屏幕上得看得见「我刚说了什么」（更早的句子在步骤日志里）
+    setDraftAsk(instruction.trim());
     pushStep({ text: '正在按你说的改…', state: 'running' });
     try {
       const config = await loadAiConfig();
@@ -1659,6 +1676,7 @@ export function AskScreen({
     setDraftErr(null);
     setDraftNote('');
     setDraftSteps([]);
+    setDraftAsk('');
     setReviseHistory([]);
     setSavedDocs([]);
     setDraftSession(null);
@@ -2167,17 +2185,22 @@ export function AskScreen({
           {turns.map((t, i) =>
             t.kind === 'organize' ? (
               /*
-               * 整理轮不画成一问一答：它问的不是问题，是动作。
-               * 一张窄卡（说了什么 + 产出了什么）才让人一眼认出「这条是整理」。
+               * 整理轮也照问答画（v0.20.4）。
+               *
+               * 以前它是一张窄卡：✨ + 小字标题 + 小字摘要。同一屏里问答是
+               * 「右边气泡 / 左边正文」，整理却是一张灰边卡 —— 用户的评价是
+               * 「不太像聊天」。信息一个字没少，只是把「我说了什么」放回右边、
+               * 「它产出了什么」放回左边。
                */
-              <View key={`${i}-org`} style={styles.orgTurn}>
-                <View style={styles.orgHead}>
-                  <Ionicons name="sparkles-outline" size={13} color={c.accentText} />
-                  <Text style={styles.orgTitle} numberOfLines={2}>
-                    {t.question}
-                  </Text>
+              <View key={`${i}-org`}>
+                <View style={styles.qRow}>
+                  <View style={styles.qBubble}>
+                    <Text style={styles.qText}>{t.question}</Text>
+                  </View>
                 </View>
-                <Text style={styles.orgAnswer}>{t.answer}</Text>
+                <View style={styles.aRow}>
+                  <Text style={styles.aText}>{t.answer}</Text>
+                </View>
               </View>
             ) : (
               <View key={`${i}-${t.question.slice(0, 8)}`}>
@@ -2228,6 +2251,19 @@ export function AskScreen({
               thinking={thinkingOn}
               height={180}
             />
+          ) : null}
+
+          {/*
+            草稿卡上方那个用户气泡：这次整理是「因为哪句话」才有的。
+            判据在 util/askIntent.showsDraftAsk：最后一条历史轮已经是同一句时不画，
+            否则写完历史回头一看，同一句话在屏幕上出现两次。
+          */}
+          {draft && showsDraftAsk(turns, draftAsk) ? (
+            <View style={styles.qRow}>
+              <View style={styles.qBubble}>
+                <Text style={styles.qText}>{draftAsk}</Text>
+              </View>
+            </View>
           ) : null}
 
           {draft ? (
@@ -2853,20 +2889,6 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     bottom: 0,
     backgroundColor: '#000000',
   },
-  /** 整理轮：一条记录，不是一问一答 */
-  orgTurn: {
-    backgroundColor: c.card,
-    borderRadius: R.card,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: c.accentHair,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    marginTop: 12,
-    gap: 4,
-  },
-  orgHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  orgTitle: { flex: 1, fontSize: 12.5, lineHeight: 18, color: c.text, fontWeight: '600' },
-  orgAnswer: { fontSize: 12, lineHeight: 18, color: c.text2 },
   historyPage: {
     position: 'absolute',
     top: 0,

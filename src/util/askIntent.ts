@@ -125,3 +125,24 @@ export function planDraftInput(question: string, pending: number): DraftInput {
   if (pending > 0) return { kind: 'blocked' };
   return { kind: 'new', mode: intent.task === 'todos' ? 'todos' : 'knowledge' };
 }
+
+/**
+ * 草稿上方那个「我说了什么」的右气泡，要不要画。
+ *
+ * 判据抽出来是因为它有一个很容易漏的边界：整理**跑完**之后，`recordOrganize`
+ * 会把同一句话写进历史轮次 —— 那时屏幕上同时有「气泡」和「历史里那条」，
+ * 一句话出现两次。看起来像消息重了，实际是两处各自的真相。
+ *
+ * 所以：最后一条历史轮已经是同一句整理时，气泡让位。
+ * 改稿后 `draftAsk` 换成新句、和旧的历史轮不再相等，气泡就回来了 —— 那正是
+ * 「我刚说了什么」该出现的时候。
+ */
+export function showsDraftAsk(
+  turns: { kind?: string; question: string }[],
+  draftAsk: string,
+): boolean {
+  const q = draftAsk.trim();
+  if (!q) return false;
+  const last = turns[turns.length - 1];
+  return !(last && last.kind === 'organize' && last.question.trim() === q);
+}
