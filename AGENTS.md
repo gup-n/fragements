@@ -1,649 +1,188 @@
-# 给 AI 助手的速查
+# 项目 Agent 速查
 
-**先读 [`HANDOFF.md`](./HANDOFF.md)** —— 那是完整的项目交接文档（状态、代码地图、踩过的坑、下一步）。
-本文件只放「读代码时立刻会踩的雷」。
+先读[当前交接](<HANDOFF.md>)、[SPEC 最新批准节](<SPEC.md#2026-11-14-已批准可靠性修复与两轴外观>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)，再读本次任务涉及的源码。历史原因在[CHANGELOG](<CHANGELOG.md>)，不要把旧说明当现行实现。
 
----
+本文件是项目专属规则，不替代[上级工作区规范](<../AGENTS.md>)。2026-11-14 方案 A 已批准，当前在 `feat/ui-refresh-ink-20261114` 开发；仍为 **v0.20.4 / versionCode 55**，新增改版**未发布、未真机验收**。
 
-## 这个项目不是标准的 Expo 模板
+## 1. 固定边界
 
-模板自带的这份 AGENTS.md 让用 Expo Router，**本项目没有用**。页面栈是 `App.tsx` 里一个 `route` state：
-
-```ts
-type Route = 'timeline' | 'organize' | 'settings' | 'review' | 'ask';
-```
-
-没有 `src/app/`、没有 `_layout.tsx`、没有 `expo-router` 依赖。**不要引入。**
-
-## 命令
-
-```bash
-npx tsc --noEmit                                  # 改完必跑，当前零错误
-npm run build:web                                 # Web 平台打一遍包再删产物，**只当编译校验，不许给用户看**
-npm install <pkg>@<ver> --registry=https://registry.npmmirror.com
-                                                  # 装依赖用 npm，别用 npx expo install：
-                                                  # 本机跑它曾卡 9 分钟无输出（实际已装好）。
-                                                  # npm 也慢，超时先查 node_modules 和 package.json
-
-npm run test:md                                   # 导入/导出的 24 项回归断言
-npm run check:docs                                # 文档一致性（版本号 / 行数表 / 死链 / 提示词抄录）
-
-npx expo prebuild --platform android --no-install --no-clean   # --no-clean 不能省！
-cd android && ./gradlew assembleRelease
-```
-
-除了 `test:md` 和 `check:docs`，项目**没有别的自动化测试**。其它纯函数层
-（`util/organizePlan.ts`、`util/tokenize.ts`、`util/qaNote.ts`）改动时，用
-`npx tsc --ignoreConfig <files> --outDir .tmpassert --module commonjs --target es2020`
-编译到临时目录、写几条 `assert` 跑一遍，**跑完立刻删**。
-
-为什么这两个是例外：**都是「改了一处漏了另一处」的高发区**。
-`test:md` 守着备份链路（碎片 → md → 碎片，任一边改了立刻红）；
-`check:docs` 守着文档（版本号三处、行数表、`TEXTS.md` 抄的提示词、死链、条数）。
-两者都在 CI 里跑，**别绕过它们发版**。
-
-## 给用户看界面：**不做预览**（用户 2026-10-25 明确要求）
-
-用户原话：「不要再开预览了，我要你直接生图而不是 html 的预览，不能生图就不要做预览的步骤」。
-
-所以：**不生成单文件 HTML、不起本地预览服务、不用 `present_files` 打开网页**。
-`npm run build:web` 只剩「Web 平台能不能编译通过」这一个用途：产物打进 `.tmp-bundle/`，
-同一次运行里量完体积就删掉。
-
-**能真机操作测试，但要用户先把手机接上**（2026-11-14 起）：
-
-```bash
-ADB=/c/Users/14428/AppData/Local/Android/Sdk/platform-tools/adb.exe
-"$ADB" devices                       # 空列表 = 没设备，别往下试
-"$ADB" install -r fragments-v0.20.3.apk
-"$ADB" exec-out screencap -p > shot.png        # 截图后直接看
-"$ADB" shell input tap 540 1820                # 点按（坐标来自截图）
-"$ADB" shell input swipe 900 1200 200 1200 250 # 滑动（抽屉 / 翻页）
-"$ADB" shell input text "hello"                # 英文可以，中文不行
-"$ADB" shell input keyevent 4                  # 返回键
-"$ADB" logcat -d -s ReactNativeJS:V | tail -40
-```
-
-能验的：布局有没有被键盘盖住、点得到点不到、跳转对不对、列表滚不滚、闪退与 JS 报错。
-验不了的：字体渲染与配色好不好看、动效是否跟手、中文输入法行为。
-**每次操作后必须截图确认改了哪一屏**，不要凭「命令返回 0」就宣布通过。
-用户没接手机时，UI 的唯一验证手段仍然是装 APK 后的人工反馈。
-
-## 发版：走 CI，不本地打包
-
-用户 2026-10-31 改的口径（**覆盖**此前 2026-10-22 的「自己打包」）：**构建交给 GitHub Actions，发版走 tag → Release。**
-不要在本机跑 `gradlew assembleRelease`，也不要让用户自己跑。
-
-```bash
-git commit && git push origin master
-git tag v0.12.0 && git push origin v0.12.0
-```
-
-CI（`.github/workflows/android.yml`）跑 `tsc` → `test:md` → `check:docs` → `assembleRelease`，
-成功后自动建 Release 并挂 **raw APK**。这一步的产物是唯一可信的：
-
-- artifact 是 zip、要登录才能下；**Release 的 asset 才是手机端匿名可下、也是应用内「检查更新」唯一认的地址**；
-- 所以 tag 必须打，只 push master 不会产出 Release。
-
-本地只做快速冒烟：`npx tsc --noEmit`、`npm run test:md`、`npm run check:docs`、`npm run build:web`
-（`build:web` 只当编译校验，产物脚本自己删）。
-
-真需要本地打包时的环境（CI 不可用才用）：
-
-```bash
-npx expo prebuild --platform android --no-install --no-clean   # app.json 改了才需要
-cd android && export JAVA_HOME="D:/Program Files/Java/jdk-21" && export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
-./gradlew assembleRelease --console=plain > build-vXXX.log 2>&1   # 别管道给 tail，会缓冲看不到进度
-```
-
-## 九条硬规矩
-
-1. **`prebuild` 必须加 `--no-clean`**。不加会尝试删除整个 `android/`，连 12 MB 的 CMake 缓存一起没，下次编译 45 分钟。
-2. **不要手改 `android/`**。它是 `.gitignore` 里的 prebuild 生成物。Gradle 属性改 `plugins/withBuildOptimizations.js`。
-3. **不要用 `KeyboardAvoidingView`**。RN 0.88 + edge-to-edge 下算出的位移恒为 0。用 `useKeyboardHeight()`（`src/util/keyboard.ts`）加 `paddingBottom`。
-4. **不要用 `Modal`**。它带 `FLAG_LAYOUT_NO_LIMITS`，会画到状态栏下且收不到键盘事件。用 `position:absolute` 覆盖层 + 自己的 `BackHandler`。
-5. **存储层改一处要改两处**。`repo.native.ts`（SQLite）和 `repo.web.ts`（localStorage）都要动，否则 `npm run build:web` 编译校验会挂。
-6. **改功能先改 `SPEC.md`**。文档是唯一设计依据。
-7. **标签不是实体**，只是 `fragments.tags` 这个 JSON 数组里的字符串，没有 `tags` 表。改名 / 合并 / 删除统一走
-   `repo.renameTag / mergeTags / deleteTag`（底层是 `rewriteTags`），**不要在各个页面里自己遍历碎片改 JSON**。
-   仓库里唯一一份实现，就是为了不出现「界面上改了 3 条、库里只改了 2 条」。
-8. **全屏详情页的「正在看哪一个」只能存 id，不能存对象快照**。存对象的话上层刷新后它还是旧的，
-   页面看起来「没变」，得关掉重进。碎片详情页（v0.4.2）栽过一次。
-   正确做法：存 `id` / `ids[]`，内容用 `useMemo` 从当前 props 里实时查。
-9. **颜色一律从 `c` 来，不许写死**。`StyleSheet.create` 在模块加载时把色值固化，
-   所以带颜色的样式必须是 `const makeStyles = (c: Palette) => StyleSheet.create({...})`。
-   详见下面「主题」一节。
-
-## 最容易搞错的概念
-
-- **v0.7 起没有知识库**。没有 `knowledge_cards`、没有 `topic` / `subtopic`、没有 `ask_logs`。
-  **时间轴就是知识库**：碎片原文 + 标签 + 时间就是全部沉淀。别再往「卡」的方向加东西。
-- **Metro 默认就把 `html` 和 `pdf` 当资源**（`expo/metro-config` 的 `resolver.assetExts`），
-  所以 `import x from './reader.html'` 直接可用，**不要为它新造 `metro.config.js`**。
-  真要加别的扩展名才需要动配置，而那种改动会影响整个打包链路，先问清楚再动。
-- **Excel / docx 是 zip，解压和遍历都有坑**。用 `fflate` 解，但 ZIP64 的畸形包在
-  `0.8.2` 会死循环（已升到 `0.8.3`）；SheetJS 读表要按**实际存在的单元格**遍历，**不能按
-  `!ref` 面积**，而且要同时认 `dense` 的 `!data` 和对象键两种结构 —— 见「文档」一节。
-- **「整理」在 v0.16 只剩一件事：把碎片读成一篇文档**。不再打标签、不再合并重复、
-  不再分批判处理。产出一篇 Markdown，**先在对话里给用户看**，改完点「通过并写入」才进文档区
-  （`documents/knowledge.ts`）。原碎片一个字不动。
-- **整理产出的不是碎片**。碎片是「你当时记的」，带时间戳、不可替代；整理出来的是跨时间的结论，
-  它没有「几点几分」这回事。硬塞回时间轴只会把原始记录压下去 —— 这条是用户 2026-11-10 定下的。
-- **写入前必须有权限位**。文档和待办是两件不同的事，界面上两个开关分别看得见、关得掉；
-  关掉任一个就只写另一个，两个都关就报「没有可写的内容」，不许静默成功。
-- **小结只有一个写入路径**：`SummarySheet` → `repo.upsertNote`。整理流程不产出小结。
-  判断「这个周期写过没有」用 `repo.findNote`，不要拿 `listNotes(n)` 自己筛。
-
-## 整理：草稿与写入（v0.16 的核心，最容易改错）
-
-分层是死的，别越界：
-
-| 层 | 文件 | 职责 |
-|---|---|---|
-| 指令路由 | `util/askIntent.ts` | `routeAsk`：这句话是提问 / 整理碎片 / 整理待办 / 写月小结 |
-| 材料与请求 | `ai/knowledge.ts` | 装填材料、调模型、`normalizeDraft` 收敛形状 |
-| 草稿收敛 | `util/knowledgeDoc.ts` | 日期真校验、摘要、`draftProblem` |
-| 写库 | `documents/knowledge.ts` | 插记录 → `replaceDocumentContent`（正文 + 切片 + FTS 一个事务） |
-
-- **路由顺序不能改**：月小结 → 待办 → 碎片整理 → 问答。「整理这个月的碎片」同时命中
-  「整理」和「这个月」；先判「整理」，这句话就永远写不出月总结。
-- **草稿开着时，任何一句话都是「改哪里」**。不再判意图 —— 让「在改稿还是在提问」变成一条
-  明确规则，比让分类器猜靠谱。想提问就先把草稿收掉。
-- **`reviseDraft` 只改用户点到的地方**。提示词里那句「没提到的段落一律原样保留」删掉之后，
-  模型每次改稿都重写全文，用户改三轮发现第一轮的措辞全没了，然后不再用它改稿。
-- **写正文必须走 `replaceDocumentContent`**。`updateDocument({bodyMd})` 只写正文不建切片：
-  文档能读、能按标题搜到，但「就这份文档提问」查不到它的任何一段。
-- **写失败要删掉空壳**。留一条 `parsing` 的空文档，用户点开是空白，而且没有入口能清掉它。
-- **先文档、后待办、最后改会话标记**。顺序反了会出现「待办进去了、文档没进去」，
-  用户没法从界面上判断缺了哪一半。
-- **重新整理要用 `findFragmentsByIds`**。拿 `listFragments(limit)` 再自己筛，
-  limit 一旦小于总数，较早的碎片查不到，重跑会静默少一半材料。
-
-## 标签（v0.7 重写，两个函数别混）
-
-| 函数 | 干什么 | 用在哪 |
-|---|---|---|
-| `cleanTag(raw)` | 去 `#`、全角转半角、压空白、截 12 字，**保留大小写** | 存库的显示形式 |
-| `normalizeTag(raw)` | 在 `cleanTag` 基础上再小写 | **只做比较键**，绝不存库 |
-| `dedupeTags(list, max=3)` | 按归一化键去重，保留第一次出现的写法 | 写库与计划层共用 |
-
-- **标签只能有一个来源**：`repo.applyTags` 走 `dedupeTags`，计划层 `mergeBatchResult` 也走它。
-  各写一份的下场是「界面显示 3 个标签、库里存了 2 个」。
-- 以前按 `normalizeTag` 存库，把 `NAS` 存成 `nas`、`AI` 存成 `ai`，界面上像个错别字。
-  **键归键、显示归显示。**
-- 把新标签对到已有写法上靠 `canonical` Map（`normalizeTag` → 已有写法）。
-  模型写「nas」、库里有「NAS」，就存「NAS」。
-- **一条碎片的标签全被取消时，直接跳过，不写空数组**。静默清空是那种「事后才发现、找不回来」的破坏。
-- 一个碎片可能同时属于多组标签，**先合并成一条 `labels` 再写一次**；
-  逐组 `applyTags` 会让后一次覆盖前一次。
-
-## 主题：颜色不能静态定义（v0.8.0）
-
-两套调色板 + 三档模式（浅 / 深 / 跟随系统），`src/theme.tsx`。
+- 个人单机 Android 应用：不引账号、后端、同步、导航库、状态库或设备级墨水屏驱动。本轮不新增依赖或数据库表结构。
+- 实际技术栈以[依赖清单](<package.json>)为准：Expo SDK58、RN0.88、React19.3、TypeScript6。不要照标准 Expo Router 模板开发。
+- 路由由[App](<App.tsx>)的state管理，当前是：
 
 ```ts
-const makeStyles = (c: Palette) => StyleSheet.create({ ... });
-
-export function Foo() {
-  const { c, styles } = useThemedStyles(makeStyles);   // 同时拿到色板和样式表
-  ...
-}
+type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 ```
 
-**为什么不能只改 `C` 的值**：`StyleSheet.create` 在模块加载那一刻就把色值注册进去了，
-之后改模块变量，旧样式表不会跟着变。所以整个项目没有 `C` 这个东西了，只有 `c`。
+- **没有标签入口、独立整理页或知识卡实体。** 整理在「问」里，以聊天和可审阅草稿呈现；产出文档/待办，不造新碎片，不改写来源原文。
+- 回顾只有待办/小结；现行小结生成只有月。旧字段、旧记录或兼容解析的存在不代表要恢复已下线入口。
+- 工作前检查分支、Git状态和差异，保护已有修改。多人按共享任务 `list → get → claim → complete` 工作；不越write scope，不擅改共享契约。Lead统一整合、全测、生成资源和Git操作。
+- 本轮子Agent不commit/push，不切分支、不装依赖、不启动服务、不本地构建APK、不调用真实AI或外发用户文件。推送、合并主分支、tag/Release和真实数据操作须另获明确授权。
+- `master` 和 `backup/pre-ui-20261114` 保留改版前 `5befe65`。Git恢复的是代码，不是手机数据库、附件或APK降级能力。
 
-三条必须守的：
+## 2. 验证与发布
 
-- JSX 内联颜色（`<Ionicons color={...}>`、`placeholderTextColor`）也要走 `c`
-- 模块级常量数组里不能放颜色（拿不到 `c`），要改成函数（`IconButton` 的 `toneBg`）
-- 实心按钮上的字用 `c.onAccent`，不是 `#FFFFFF` —— 深色的 `accent` 是亮蓝，压白字只有 2.5:1
+[包脚本](<package.json>)是入口清单，[Android CI](<.github/workflows/android.yml>)是构建流程来源。
 
-## 提示词（三处，各管一件事）
-
-| 位置 | 管什么 | 输出 |
-|---|---|---|
-| `ai/prompt.ts` 的 `SYSTEM_PROMPT` | 整理：打标签、抽待办、合并 | JSON |
-| `ai/summarize.ts` 的 `buildSystemPrompt` | 小结：日/周/月那篇文字 | Markdown |
-| `ai/qa.ts` 的 `SYSTEM_PROMPT` | 问：怎么回答、怎么引用 | Markdown |
-
-**改文风先看 `TEXTS.md`** —— 那里有全部提示词的原文和行号，改完记得同步回去。
-`npm run check:docs` 会逐行比这两处提示词，改漏一个字就红。
-
-三条不能碰的契约（改了整条链路断，且 `tsc` 不会报）：
-
-- 整理输出那七个字段名：`tags` / `todos` / `merge` / `todo_done` / `drop_todos` / `merge_todos` / `batch_summary`
-- 问答的引用标记：`[F12]` / `[N3]` / `[T5]` / `[W1]`。`qa.ts` 靠 `answer.includes('[F'+id+']')` 判定引用
-- 小结的小节标题：v0.8.2 起统一为 `## 重点` / `## 进展` / `## 待处理`。
-  `NoteBody` 只按 `##` 认层级、不认名字，所以改名字不会渲染错，
-  但**已经生成的小结不会跟着变**——新旧结构会长期并存，这是预期行为
-
-**验证只有一条路：真机生成两篇读**。`tsc` 看不见字符串里的字，断言只能证明「文本没丢、变量接对了」，
-证明不了读起来像不像人写的。两篇都要看 —— 一篇可能是运气好。
-
-调文风的经验写在 `TEXTS.md` 的 1.3 节末尾。
-
-## 正文渲染（v0.8.7）
-
-`NoteBody` 现在吃三种输入：小结（提示词限定只用 `##` 和 `- `）、「问」的回答
-（模型自由写，会给表格、代码块）、**碎片正文**（v0.8.9 起，会话转出来的碎片也是 Markdown）。
-**别按窄的那种假设实现** —— 一句话就能让模型输出表格，屏幕上就是一堆竖线。
-
-碎片调用点：
-- 时间轴：`<NoteBody text={fragment.content} numberOfLines={...} muted={merged} />`
-- 详情页：`variant="reading"` + `selectable`，正文 17/30，标题和代码跟着放大
-- `muted` 让已合并碎片整体降色；`p` / `b` / `bold` 不能再写死颜色，否则置灰失效
-
-四条硬约束：
-
-- **表格必须用 View 排。** 空格对齐在中文和字母混排下一定歪，等宽字体也救不了。
-  解析在 `util/mdBlocks.ts`（纯函数，能断言），画在 `NoteBody.tsx`（看不见）。
-- **不要在表格里套横向 ScrollView。** 碎片详情是横向分页的 FlatList，
-  手指在表上左右滑会滚表格、翻不了页。列多的表让它变高。
-- **`numberOfLines` 存在时必须退回单 Text。** View 没法被截断，卡片预览会撑破。
-  表格降级成「华为 · F2 · F12」一行。
-- **旧的加粗不能删。** v0.7 那版小结里每条都是 `- **换盘**：一句话`，
-  渲染器要向后兼容已经存进库的内容。
-
-## 全文检索（FTS5 + bigram）
-
-- **中文必须 bigram**（相邻两字一组）。`unicode61` 把整句当一个词，`trigram` 对 <3 字查询不命中
-  —— 「报销」「NAS」会直接搜不到，而且**没有任何报错**。`util/tokenize.ts` 里写死了这条。
-- `fragment_fts` 的 `rowid` **就是 `fragments.id`**，不另建映射表。
-  写入一律「先 `DELETE WHERE rowid = ?` 再 INSERT」（`indexFragment`）。
-- 每次改碎片内容 / 标签 / 合并 / 删除都要同步索引。漏一处，搜索结果就会指向一条已经改过的原文。
-- `ensureSearchIndex` 在启动时比条数，不一致就整库重建。设置页另有手动「重建搜索索引」。
-- **FTS 失败或 0 命中时退回 `LIKE`**（`likeNeedle` 转义 `%` / `_`）。
-  宁可慢一点，也不能让用户搜出空结果还不知道为什么。
-
-## 搜索命中（v0.10.0）
-
-- **计数与高亮只能有一份实现**：`util/highlight.ts` 的 `findHits`。时间轴徽标、详情页「第 i / N 处」、
-  正文描色全走它。各写一份的结果是「标 3 处、只描出 2 段」，用户以为看漏了。
-- **高亮只加底色，不改字色**（`c.amberBg`）。深色主题正文是浅灰，改字色会变成深色压深色。
-- **跳转按段落实测 y**：`NoteBody.onBlockLayout` 给每个块（含表格、代码块）回调。
-  不要按字符比例估位置 —— 中文一行 18 字、英文 40 个，估出来差半屏。
-- **`numberOfLines` 预览分支不测位置**：View 截不了行，卡片预览必须退回单 Text。
-- 换页时命中下标归零（`useEffect` 依赖 `current`），否则上一页的「3/5」会带到下一屏。
-
-## 文档（v0.10.0 起；v0.12 重做成工作区）
-
-### 四个能力分开，别混着说
-
-**导入 → 读 → 提取成正文 → 建索引** 是四件事，各有各的前置条件：
-
-| 能力 | 门槛 | 不成立时 |
-|---|---|---|
-| 导入保存原件 | 什么都不需要 | 复制失败/空间不足才失败 |
-| 应用内阅读 | 格式在 `supportsLocalDocument` 里且不超 `LOCAL_READER_LIMITS` | 用外部应用打开 |
-| 提取成正文 | 同上（本地），或用户确认后的 MinerU | 保持「已保存」状态 |
-| 能问 | `isDocumentReady(doc)` 为真 | 列进「待准备」清单，不能静默丢 |
-
-最常见的错是拿「能打开」当「能搜/能问」。PDF 渲染出来了不代表有文本层——
-扫描件能翻页但提取是空的，这时必须说「没有文字层」，不能报「全文无命中」。
-
-### 导入只保存，不触发任何解析
-
-选文件 → 复制进 `Paths.document/documents/` → **核验副本真实字节数** → 同名去冲突 →
-`insertDocument({ state: 'stored' })` → 提示「已保存」。
-
-**不得**在这条路径里读正文、调 `parseDocFile`、调 MinerU、调模型、发任何网络请求。
-飞行模式、无 Token、500 MB 的文件都必须能保存成功。云解析的格式/容量限制**不是**本地导入门槛——
-v0.11.0 把它们混在一起，导致「MinerU 不认这个格式」变成了「文件传不进来」。
-
-### 任务不能挂在页面上
-
-`documents/jobs.ts` 是唯一执行内容写回的地方，页面只订阅。原因很具体：v0.11.0 里
-列表页和阅读器各能起一个任务，同一篇文档会被上传两次；用户离开页面后进度就断了。
-
-- **单文档互斥**：同一 `documentId` 同时只跑一个任务
-- **`runId` + `expectedRevision`**：写回用 `replaceDocumentContent(id, content, expectedRevision)`，
-  返回 `false` 说明版本变了或文档已删 → **丢弃这次结果**，不许覆盖
-- **取消是用户动作不是失败**：`isCancelled(e)` 为真时要把状态还原，不是写 `failed`
-- **取消不撤回已上传的字节**：预签名地址发出去就收不回，文案不许暗示能撤回
-- **杀进程后**：启动时把 `state === 'parsing'` 但没有任务的记录标成失败（「上次没跑完」），
-  **不自动重发**
-
-### 云解析每一次都要重新确认
-
-首次、重试、换通道，三种情况都要弹确认卡（文件名 / 大小 / mineru.net / 轻量还是精准 / 各自上限）。
-浏览、查找、勾选文档**都不能**顺手触发云解析。
-
-### 发送与外发的三条线
-
-1. **MinerU**：发整个原文件，必须确认；
-2. **AI 服务**：只发选中文档的**片段**，用户按下发送才发，交互里要写清接收方；
-3. **本地**：导入、阅读、查找全在手机上，零请求。
-
-别把 1 和 2 说成同一件事，也别用「文档只在本地」这种话概括全部。
-
-### MinerU 通道（v0.11.0 加精准，仍然有效）
-
-- **通道选择只有一份判据**：`util/docSupport.ts` 的 `planForDoc(ext, size, hasToken)`。
-  上传预判、确认卡文案、失败重试全走它。**页面里不许再写「这个后缀算不算文本」** ——
-  v0.10.0 时 `isPlainText` 在列表页和阅读器里各有一份，加第二条通道必然分叉。
-- **上传不带 `Content-Type`**，两条通道都是预签名地址，多一个头就签名对不上。
-- **上限不同**：轻量 10 MB / 20 页（免 Token），精准 200 MB / 200 页（要 Token，每天 1000 页）。
-  错误码 -30001 大小、-30002 类型、-30003 页数、-30004 参数；精准另有 -60018 额度用尽。
-- **精准接口返回 zip，只解 `full.md`**：`unzipSync(buf, { filter })`。
-  包里还有 `layout.json`、`*_content_list.json` 和图片，大文档全解开直接 OOM。
-- **重试不是「再发一次」**：v0.12.0 起 `parseDocFile(file, token, onStage, { channel })`
-  只认用户明确选的通道，没有 `preferPro` 这种隐式切换。重试同样要过确认卡 ——
-  重发一次等于再做一次上传决定，用户得知道这次走哪条路。
-- **页数现在本地能拿到**：PDF 提取会写入 `documents.pages`。有它就按真实页数判，
-  没有再退回只按大小估（`planForDoc` 不猜页数）。
-
-### 正文、版本、切片
-
-- **`documents.body_md` 不参与列表查询**。几十万字的正文每次都读，首屏会明显卡；
-  列表只查元数据列（`listDocuments` 返回 `DocumentMeta`）。
-- **`contentRevision` 与 `indexedRevision` 必须分开存**。两者不一致时（正文换了、索引还没重建）
-  问答要拒绝使用，但用户仍应读到新正文。用一个字段表达不了这种中间态。
-- **写正文只有 `replaceDocumentContent` 一条路**：正文 + 版本 + 切片 + FTS 必须在同一个事务里。
-  只写正文不写切片，就会拿旧切片配新正文，引用指到错误的位置。
-- **文档切片进 `document_chunks_fts`，不进 `fragment_fts`**。一条碎片和一段 PDF 段落
-  混在同一个索引里，时间轴搜索会被文档内容污染。
-- **切片基于完整文本，不基于 `mdBlocks` 的展示 AST**。那个 AST 会裁宽表、去引用标记，
-  是有损的；拿它建索引就是「搜不到用户明明看到的字」。
-
-### 阅读与查找
-
-- **格式判断只有一份**：`documents/formats.ts`。`documentFormat` / `supportsLocalDocument` /
-  `isDocumentReady` / `notReadyReason` / `locatorLabel` / `LOCAL_READER_LIMITS` 都在这里。
-- **查找是确定性字面匹配**（`util/highlight.ts`），不是 FTS。FTS 的 OR/topK 结果是排序后的
-  候选集，不能用来报「共有 N 处」。
-- **位置不许编**。`DocumentLocator` 只能来自原件或提取过程：PDF 的 page、Excel 的 sheet/cell、
-  文本的 line。**旧 Markdown 正文反推不出原页码**，那种情况只标「正文第 N 段」。
-- **超限不静默截断**：宽表裁列要显示「另 N 列未显示」，命中超 99 显示「99+」，
-  正文超 200 万字明确报错。原件始终保留，外部应用仍能打开。
-- **Excel 按实际存在的单元格遍历**，**不按 `!ref` 面积**。一个 `A1:XFD1048576` 的稀疏表
-  按面积遍历是一万亿格 —— 实测 3 个真实单元格的表写成 `A1:Z1000` 就已经是 26000 次。
-  两种表结构都要认：`dense:true`（`readWorkbook` 用的）是 `!data` 二维数组里非 `undefined`
-  的格子，`dense:false` 是 `Object.keys(ws)` 过滤 `!` 开头的元数据键。**只认一种会得到一张
-  空表，而且不报错** —— 断言和外部调用会直接塞内存 `WorkBook` 进来。
-- **解析结果有两层缓存**：内存（`workbookCache.ts`，单槽，按 `fileUri + size`）和磁盘
-  （`viewCache.ts`，`documents/.cache/<原名>.view.json`）。两层都必须是「读不出来就当没有」，
-  **不许因为缓存坏了把「打开文档」变成本打不开**。删文档时要一起删（`dropViewCache`）。
-- **合并单元格只有左上角有值**；一行全在 merge 里时看起来是空行，实际有内容。
-- **不执行宏、表单脚本、文档指令、自动外链**。文档内容是数据，不是指令。
-
-### 文档正文不能按引用标记解析
-
-用户文档里写的 `[F12]` 是作者的字面量。按引用解析会把它整个吞掉——那不是显示问题，
-是改用户的内容。
-
-- 阅读器（`documents/readers/*`）自己排版，不经过 `NoteBody`，天然不受影响。
-- 剩下唯一会渲染文档文本的地方是**引用快照**（`NoteBody`）。那里必须传
-  `literalCitations`，否则从文档里剪出来的片段会把 `[F12]` 吃掉。
-
-
-## 导出与导入（v0.7.2）
-
-导出和导入是**同一份格式的两个方向**，分开在 `util/mdBuild.ts` 和 `util/mdParse.ts`。
-两边各改各的，等用户真去恢复数据时才发现对不上——那时候数据已经在文件里了。
-
-**唯一的保障是 `npm run test:md` 那 24 项断言**。改导出格式、改解析规则，
-两边必须一起改，然后让往返测试（碎片 → md → 碎片）重新绿。
-
-四条别踩：
-
-1. **判重指纹只能有一份**：`mdParse.fragmentKey(createdAt, content)`。
-   导入层和库里现有碎片比对时调的是同一个函数。各写一份的下场是
-   「明明重复了却导进来两份」，而且没人会发现。
-2. **文件选择器别按 MIME 过滤**。安卓上 `.md` 的注册类型五花八门，
-   按 `text/markdown` 过滤会让一部分机型根本看不到自己的文件。传通配符，
-   选错文件由 `looksBinary` 兜（NUL 字节 / 大量 `\uFFFD`）。
-3. **日期要真校验，不是只校验形状**。`\d{4}-\d{2}-\d{2}` 会放 `2026-13-99` 进来。
-   而且格式对不上时**不能静默落到今天**——用户会完全不知道自己的日期被忽略了。
-4. **块注释里别写 MIME 通配符**。那个字符串里含 `*/`，会把注释提前闭合，
-   报的是一串莫名其妙的语法错。写成「传通配符」就不会中招。
-
-## 小结只有月，但位置仍分两处（v0.15 收窄）
-
-v0.15 起只剩月总结，可「这篇总结落在时间轴哪儿、在回顾页排第几」还是两处实现：
-
-| 位置 | 在哪 | 机制 |
-|---|---|---|
-| 时间轴 | `screens/TimelineScreen.tsx` | 按 `periodAnchor(period)` 落回**月末那天**的分区，排在那天所有碎片之前 |
-| 回顾页 | `util/digest.ts` 的 `groupNotes` | 按月 → 主题分组，组内不重排 |
-
-v0.7.3 只改了其中一处，用户翻另一处看到的还是老样子 —— 同一个诉求答了一半。
-**以后碰「总结怎么排」，先确认这两处都要不要改。**
-
-两个约束：
-
-1. `periodAnchor` 对月份返回的是**月末 23:59:00.000**，所以月总结落在该月最后一天，
-   不是「整月最上方」。想做月级分区得另外造一个 key（周总结当年就是 `week:<period>`），
-   v0.15 把那段删了：周数据已经不存在，留着只会让人以为周总结还在。
-2. `groupNotes` **组内不重排**。`listNotes` 已经是 `createdAt DESC`，
-   这里再排一次就等于有两套「哪条更新」的口径。
-
-## 小结的浏览与批量（v0.8.3；v0.15 只剩月）
-
-两个坑，都属于「看起来对、跑起来错」。
-
-**阅读器的滑动范围必须和列表一致。**
-`<NoteViewer notes={notes}>`，传的就是列表渲染的那一份。以前在筛选器还在时传错过，
-表现是「界面显示月，滑出来是日」—— 判断依据只有一条：
-**滑动顺序必须和列表看到的顺序一致**。
-
-**批量生成的任务参数不能用 state。**
-`generateOne(period)` 收参数，不读 `period` 这个 state。队列里 `setPeriod` 之后
-那一帧 state 还是旧的，用它去查碎片会查到上一个月 —— 表现是「勾了 3 个月，
-生成的都是同一个」。同一条也适用于任何「点一次连跑多轮」的流程
-（v0.6.4 的分批游标栽在同类问题上）。
-
-**阅读器必须等实测宽度再挂 FlatList。**
-`initialScrollIndex` / `getItemLayout` 都按每页宽度算偏移，宽度还是 0 的时候挂上去
-会停在第一页。从第 5 篇点进去显示第 1 篇。FragmentDetail（v0.4.2）栽过，照抄别改。
-
-## 待办的两层子项（v0.15）
-
-`todos.parent_id` 自引用，只有两层。勾选级联的四条规则**只写在
-`util/todoTree.planToggle`**，两份 repo（SQLite / localStorage）都调它 ——
-在 repo 里各写一份 SQL 迟早对不上，而错的表现是「父项打勾了但子项还有没做的」，
-用户没有任何办法修回来。
-
-四个已经踩过或差点踩到的点：
-
-1. **算兄弟时必须过滤 `merged_into IS NULL`**。被合并的条目还在库里，把它们算进
-   「这一组还有几条没做」，父项就永远差一条勾不完 —— 而界面上看不出来，
-   因为那条根本不显示。
-2. **父项不在这份列表里就不许回写**。`planToggle` 收到的是「还在用的待办」，
-   父项若被合并就不在其中；照着 `parent_id` 直接 UPDATE 会把那条隐藏的父项标成完成，
-   等哪天撤回合并就露馅。（这条是写断言时逮到的。）
-3. **给已完成的父项加子项，父项要退回未完成**。否则列表上是「父项打着勾、
-   底下挂着一条没做的子项」，而它自洽不了：勾子项会把父项顶成完成，看着像没反应。
-4. **取消父项要连子项一起取消**。留下「父项未完成、子项全完成」的中间态，
-   下一次勾任何子项都会把父项改成完成 —— 用户会以为自己点错了。
-
-删除与合并的边界：
-
-- `deleteTodo` 先把子项 `parent_id` 置空，再删自己。**不连带删子项** ——
-  删一条不该顺手删掉用户另外写的内容。
-- `mergeTodos` 把被合并项的子项搬到保留项下面。不搬就是指向隐藏条目的孤儿，
-  界面上永远看不到，也勾不掉。
-- 导出与问答都走 `util/todoTree.flattenTodos`：前者缩进两格，后者加 `· ` 前缀。
-  各写一份遍历，总有一边会漏掉孤儿。
-
-## 自更新（v0.8.4）
-
-四件事全是硬约束，不是选择。
-
-**更新源只能是 GitHub Release。**
-Actions 的 artifact 下载要登录，手机端匿名访问 403 —— 和「CI 日志下不来」
-是同一个限制。所以发版必须打 tag，CI 建 Release 挂 APK。
-
-**下载走多源回退（v0.9.0，v0.11.0 反转顺序）。**
-GitHub 的 APK 实际从 `objects.githubusercontent.com` 这类 CDN 下发，大陆直连可能极慢。
-所以 `download.ts` 按「自定义地址 → **GitHub 官方** → 内置加速镜像」逐个尝试
-（候选在 `update/mirror.ts` 的 `buildCandidates`）。**官方必须排在镜像前面**，
-这是实测的结论：镜像时快时慢，而「卡住的连接」既不报错也不出字节。
-自定义地址最前，有自己服务器的用户才吃得满带宽。
-
-**每个源都必须能被掐掉（v0.11.0）。**
-巡检每 3s 读 `bytesWritten`：15s 没有新字节、或跑满 60s 平均 < 25 KB/s 且进度未过 30%
-（**且后面还有源**）就 `cancel()` 换下一个。判据必须是「字节数有没有变」，
-**不能看进度回调有没有来** —— 卡死的连接照样按频率回调。
-掐源文案里**不能出现 abort / cancel**：上层拿这两个词判断「用户主动取消」，混了就把换源当取消。
-
-**版本比较不能比字符串。**
-`'0.10.0' > '0.9.9'` 在 JS 里是 **false**，正好反了；`parseFloat('0.10')` 又和
-`'0.1'` 撞成同一个数。用 `util/semver.ts`。解析不了一律判「相同」——
-宁可漏报，也不能因为 tag 格式怪就每天弹假更新。
-
-**安装必须走 content://。**
-Android 7+ 禁止把 `file://` 交给别的应用（FileUriExposedException），而安装器是
-另一个进程。`expo-file-system` 已注册 `FileSystemFileProvider`（paths 覆盖
-files 和 cache），所以要先 `getContentUriAsync` 再交给 `IntentLauncher`。
-**这是全项目唯一故意混用新旧 API 的地方**：下载用新 API（有进度），
-取 content URI 用 legacy（新 API 没这个方法）。
-
-**下载完必须校验字节数。**
-半包也能拉起安装器，但装到一半失败，用户只看到「应用未安装」，
-猜不到是没下全。比对 `file.info().size` 与 `asset.size`，差 >1 KB 就重下。
-
-部署相关的坑写在 `HANDOFF.md` 8.7。
-
-## 「问」（v0.7.1）
-
-- **只给模型筛过的资料**，不是全库。18 条 / 单条 1200 字 / 总 36000 字，FTS 命中优先。
-  上一版全库塞上下文，问题一具体就答偏。
-- 检索是**四路并集**：全文、时间意图（今天/上周/最近 N 天）、标签意图、上一轮引用。
-  加一条新路之前先想清楚它和已有四路的重叠。
-- **联网与本地检索并行**，搜索失败只置 `webError`，本地照常答。
-- `[F12]` / `[N3]` / `[T5]` / `[W1]` 四类引用。**反查只认本轮真的给过的编号**
-  （`answer.includes('[F' + id + ']')`），模型编的编号不算来源。
-- **`json: false` 不能省**。开着 `response_format: json_object` 会把整篇 Markdown 压成一个字符串，
-  换行全变 `\n`。
-- **多轮只带「问题 + 回答」，不带上一轮资料**。资料每轮重新检索；
-  重复塞进去既撑爆上下文，又会让模型拿旧资料答新问题。
-- **返回键由 `App` 转发**。`AskScreen` 关闭时要按层关闭引用面板 / 删除确认 /
-  会话菜单 / 历史列表，所以通过 `registerClose` 把 `attemptClose` 交给 App；
-  `registerClose` 必须 `useCallback` 固定身份。
-- **右滑带入的上下文碎片优先装填**，而且**绕过 `merged_into` 过滤** ——
-  用户是明确指着这条进来的，被合并过也得让模型看到，否则「就这条」会答成没有。
-- **思维链不能只在 `busy` 时渲染。** 答完 `busy` 变 false，组件一卸载就是「闪一下没了」。
-  现在 `QaTurn.reasoning` 持久化，`ReasoningFold` 在答案上方折叠，最新一轮默认展开。
-- **会话转碎片先 AI 提炼，再预览确认。** `summarizeQaSession` 出 300-800 字精要，
-  `buildQaFragment` 包装，用户点「存为碎片」才写库。不要直接存全文，也不要按字数硬截。
-- **AI 失败要留兜底。** 「保存全文」走 `buildQaNote`（完整转录、不截断），
-  否则没配 Key / 断网时用户会卡在预览页。
-
-## 时间轴手势与问页历史（v0.8.8）
-
-### 时间轴一行三种动作
-
-| 手势 | 结果 | 实现 |
-|---|---|---|
-| 长按 | 复制正文 | `expo-clipboard` + `Toast`；不要抢滑动手势 |
-| 左滑 | 露出「删除」，点了再二次确认 | `SwipeRow` 的 `rightAction` |
-| 右滑 | 直接进「问」并带上下文 | `SwipeRow` 的 `leftAction` + `leftInstant` |
-| 点击 | 进详情页 | 编辑仍在详情页做 |
-
-- **方向是用户定的：左滑 → 右侧删除，右滑 → 左侧问。** 别按直觉反过来写。
-  `leftAction` 是右滑露出的那块，`rightAction` 是左滑露出的那块。
-- **`SwipeRow` 不能加 `overflow:'hidden'`**。时间轴竖线用 `bottom:-8` 伸到下一行，
-  裁了每行底部会缺 8px，整条线变虚线。横向滑出的内容本来就在屏幕外。
-- **回弹动画必须 `useNativeDriver: false`**。拖动时用 `tx.setValue()` 逐帧写值；
-  同一个 Value 再交给原生驱动，部分安卓机上直接不动。
-- **只在横向意图明确时接管**：`|dx| > 8 && |dx| > |dy| * 1.5`，否则列表滚不动。
-- **长按复制和滑动不能抢**：手指没移动时 PanResponder 不接管，Pressable 的
-  `onLongPress` 才会触发。
-- **删除必须二次确认**。滑一下只是露出按钮，点按钮才弹确认；确认框仍是覆盖层，
-  不是 `Modal`。
-
-### 问页历史会话
-
-- **会话存 `ask_sessions`，不存 `fragments`**。聊天记录每轮都变，写进时间轴会把
-  知识库变成聊天日志；只有用户点「整理为碎片」才调用 `buildQaNote` 落一条纪要。
-- **每答完一轮立刻 `saveAskSession`**，不要等退出。退出不再弹「要不要留纪要」。
-- **保存必须带会话代次**（`sessionGenRef`）。新建 / 切换会话时 +1；旧请求回来发现
-  代次变了就只落库、不改当前界面状态，否则旧标题和旧 id 会写到新会话上。
-- **不要每次关闭都重存**。`dirtyRef` 只标记「有还没成功落库的新轮次」；否则点开
-  历史再退出，会话会被顶到列表最前。
-- **归档不动 `updated_at`**。归档是收纳，不是新活动。
-- **删除是物理删除会话**，有二次确认；已经整理出的碎片副本不受影响。
-- **历史会话存引用快照**（`QaTurn.citations`）。碎片可删、待办可合并、小结会被覆盖，
-  只存 id 的话历史里点引用只能得到空面板。
-
-### 引用小标（v0.8.8）
-
-- **模型输出契约不变**：仍然是 `[F12]` / `[N3]` / `[T5]` / `[W1]`；
-  变的是渲染层，不再把原文摆给用户。
-- **解析顺序**：先认行内代码，再认加粗，最后在普通文字里切引用。
-  代码块 / 行内代码里的 `[F12]` 不是引用。
-- **编号按正文第一次出现的顺序**，不是按 `citations` 数组下标。
-  同一个来源出现两次必须还是同一个号。
-- **点开的正文走快照，不回库查**。回查会在碎片删除 / 待办合并后得到空面板。
-- **引用面板是 `position:absolute` 覆盖层**，不是 `Modal`；它自己接 `BackHandler`。
-
-## 流式与思考过程（v0.2.4）
-
-- **读流必须用 `import { fetch } from 'expo/fetch'`**。RN 自带的 fetch 没有 `response.body`。
-- **`TextDecoder` 必须 `{ stream: true }`**，否则跨分片的中文会解成乱码。
-- **`delta.reasoning_content`（思维链）只上屏，`delta.content` 才进解析**。两者绝不能拼进同一个缓冲区。
-- **超时是四段**（建连 90s / 首字 120s / 空闲 60s / 硬上限 12min），不要改回单一总时长。
-  硬上限是 12 分钟而不是 6 —— 输出额度 64K 之后，正常生成本来就要十几分钟。
-- **UI 更新要节流**（120ms），否则几百个 chunk 的 setState 会卡死。
-- **模型名**：只能用 `deepseek-flash` / `deepseek-v4-pro`。`deepseek-chat`、`deepseek-reasoner` **已于 2026-07-24 停用**，
-  调不通。别在示例或文档里再写这两个旧名字。
-
-## 输出额度与 `finish_reason`（v0.6.3）
-
-- **`max_tokens` 同时限制「思考链 + 正文」，不是只管正文。** 官方额度（64K）照抄，第三方 clamp 到 8K。
-  照着旧注释设 8000，思考一长正文就一个字都出不来，界面上表现为「思考到一半突然停住 + 没有内容」。
-- **`finish_reason` 必须读，而且要在读 `delta` 之前读。** 它挂在最后一个 chunk 上，
-  而那个 chunk 的 `delta` 是空对象 `{}` —— 任何「先看 delta，没内容就 return」的写法都会漏掉它。
-- **空结果要按原因分开报**：`length` = 撞额度（重试没用，得拆批次），
-  `insufficient_system_resource` = 对方资源不足（过一会儿再试）。
-- **正文非空但 `finish_reason === 'length'` 更危险**：JSON 一定是残的。
-  `organize` 必须在 `parseJsonLoose` **之前**拦下来（抛 `AiError('truncated')`），
-  否则会误导成「不是合法 JSON，再试一次就好」。
-
-## 思考强度（v0.6.4）
-
-- **`reasoning_effort: high` 不是「想久一点」，是加压指令。** 官方实现是在 prompt 最前面插一段
-  「Absolute maximum, no shortcuts permitted…穷举所有边界情况、写出每个被否决的假设」。
-  对「打标签 / 抽待办」这种机械抽取纯属浪费。`pickEffort`：首轮且 ≤15 条用 `low`，其余用 `high`。
-  `low` 不等于关闭思考 —— 官方 low = **不加任何前缀**。
-- **`RequestOptions.effort` 只能对官方接口生效**。第三方网关不收 `reasoning_effort`，
-  撞额度时只能建议换回官方地址或减小批次。
-
-## SQL 里清空字段要写 `NULL` 字面量（v0.6.1）
-
-```ts
-// 对：关键字进 SQL 文本，没有注入面
-db().runSync(`UPDATE fragments SET project = NULL WHERE id IN (${ph})`, ids);
-// 错：靠 ? 绑 JS null，expo-sqlite 在部分版本上会当成「没给参数」或绑成字符串，
-//     UPDATE 改 0 行却正常返回 → 设得上、删不掉，且零报错
-db().runSync(`UPDATE fragments SET project = ? WHERE id IN (${ph})`, [null, ...ids]);
-```
-
-## 别用返回的 `changed` 判断成败
-
-不同 SQLite 驱动对「新值和旧值相同算不算一次修改」说法不一，有的返回 0。
-拿 0 当失败，就会出现「其实已经删掉了，界面却提示失败、面板还关不掉」。
-写库之后一律以 `onChanged()` 重新查询的结果为准。标签改名 / 合并同理。
-
-## Expo 会发破坏性变更，别信训练数据
-
-动 Expo / RN API 之前：
-
-1. 看 `package.json` 里 `expo` 的主版本（当前 **SDK 58**）
-2. 查对应版本文档：`https://docs.expo.dev/versions/v58.0.0/`
-3. 其他问题查 https://docs.expo.dev/llms.txt
-
-不要凭记忆回答 Expo API。
-
-## 文档地图
-
-| 文件 | 用途 |
+| 入口 | 覆盖 |
 |---|---|
-| `HANDOFF.md` | **交接文档，先读这个** |
-| `SPEC.md` | 需求与设计唯一依据（数据模型、AI 契约、Android 红线、构建环境） |
-| `README.md` | 给人看的项目说明与构建指引 |
-| `ROADMAP.md` | 还没做的事、明确不做的事、待决问题 |
-| `CHANGELOG.md` | 每个版本改了什么、为什么、踩了什么坑。**想知道「为什么写成这样」来这查，别猜** |
-| `TEXTS.md` | 三处模型提示词全文 + 全部界面文案的位置索引。**改文风先看它**，不属于六份正式文档 |
-| `AGENTS.md` | 就是本文：读代码前先知道的雷 |
+| `npm run typecheck` | TypeScript |
+| `npm run test:md` | Markdown导入/导出往返 |
+| `npm run test:docs` | 阅读器、文档任务、限定文档问答 |
+| `npm run test:todos` | 待办层级、月总结 |
+| `npm run test:ask` | 意图与整理草稿规则 |
+| `npm run test:reliability` | 真实控制流、故障注入、授权与恢复 |
+| `npm run test:appearance` | 两轴主题、对比度与PDF协议 |
+| `npm run check:docs` | 版本、文件行数、路径/链接、提示词等 |
+| `npm test` | 以上检查的串行聚合 |
+| `npm run prepare:pdf` | 生成产品PDF阅读器资源，Lead/CI执行 |
+| `npm run build:web` | Web编译校验，产物同次清理，不供预览 |
+
+- 并行开发期间不要各自跑整套检查、争用测试临时目录或生成PDF资源。可以做获分配范围的内存断言，最终集中验证由Lead负责。
+- 不删测试、不降低断言、不忽略失败来制造绿灯；临时目录清理前核对绝对路径，只清理自己生成的可恢复产物。
+- **构建交给CI，发布走获授权的tag → Release。** 只推主分支不会产生Release；手机更新只认Release的raw APK asset，不认需登录下载的artifact压缩包。
+- 不把过去“自己本地打包”的说明当授权。不要手改原生生成目录；配置由[构建插件](<plugins/withBuildOptimizations.js>)和[启动窗插件](<plugins/withNoSplashAnimation.js>)维护。在已有本地工程上获准运行prebuild时必须带 `--no-clean`，不得默认清工程。
+- CI使用Node22/JDK21；本机版本差异要记录。CI已有SDK，不盲加会与预装目录冲突的安装action；缓存键在prebuild后取。保持Release非draft及asset名称核验，不绕过现有发布检查。
+
+## 3. 不做预览，不虚报视觉验收
+
+- **不生成单文件HTML界面预览、不起预览服务、不用文件展示工具打开网页。** 产品PDF模板是运行资源源文件，不是预览。
+- UI验证需设备已连接、安装包来源与版本已核对，并获得相应操作授权。先检查设备，没有设备就停止真机步骤，不去猜坐标或代称截图已看过。
+- 每次模拟点按、滑动、返回后都要截图确认实际页面。命令exit 0不等于UI通过。
+- ADB输入不能替代中文输入法测试；布局、手势、配色、字体、TalkBack、冷启动和原生WebView须按真实覆盖情况报告。没有图像能力时不能声称完成视觉审阅。
+- 不为了验证新改版让用户下载安装旧Release；本分支尚未发布。Markdown不是完整备份，不能随意卸载/清数据做试验。
+
+## 4. Android UI与主题
+
+- 禁用 `Modal`、`KeyboardAvoidingView`。覆盖层用 `position:absolute`，按层处理 `BackHandler`；键盘占位用[键盘高度hook](<src/util/keyboard.ts>)，不改变既有edge-to-edge约定。
+- [App](<App.tsx>)向Ask转发关闭动作，`registerClose`等回调身份必须稳定。关闭顺序先顶层确认/引用/图片/菜单，再编辑或页面；不能一按返回丢掉未保存草稿。
+- 详情只持有id/序列位置，从当前props/Repo得到新内容，不留业务对象快照。分页FlatList等实测宽度大于0才挂载；滑动集合和顺序必须与列表一致。
+- 时间轴方向固定：长按复制、左滑露出删除并确认、右滑进入「问」。[SwipeRow](<src/components/SwipeRow.tsx>)不能裁掉伸出的时间线；只在明确横向意图时接管，不抢纵滚与长按。
+- 拖动中的Animated值不要混原生/JS驱动。减少动效不能取消手指拖动反馈或隐藏任务状态；墨水/系统偏好通过 `reduceMotion` 控制程序滚动、回弹与装饰动画。
+- 输入文字占整行，工具行展开在左、图片/发布在右；图片选择行必须在布局流里，不能绝对定位到键盘下面。Ask只在原本接近底部时随键盘滚动，不把正在读旧消息的人拉到底。
+- 图标和页头优先复用[IconButton](<src/components/IconButton.tsx>)、[ScreenHeader](<src/components/ScreenHeader.tsx>)。实际触控槽至少48dp，不以相互重叠的hitSlop代替布局。
+- 常用导航有短标签；selected/checked/disabled/expanded/busy等有语义与就近反馈，不只改变颜色。覆盖层隐藏下层无障碍树；[标题聚焦hook](<src/components/useHeadingFocus.ts>)只面向屏幕阅读器，关闭回焦须真机确认。
+
+### 两轴外观（本分支开发中）
+
+[主题Provider](<src/theme.tsx>)是唯一入口，[纯外观模块](<src/util/appearance.ts>)管理四套调色板、规范化与metrics。
+
+- `ui_theme`：light/dark/system；`ui_style`：default/ink。两轴独立，非法旧设置安全回退；最终一次选择获胜。持久化失败要说“本次已应用但未保存”，不能假称永久成功。
+- 颜色来自 `c`；圆角、边线、48dp控件高度和页面间距来自 `metrics`。旧单参数样式工厂兼容，新工厂可接两参数：
+
+```ts
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  button: {
+    minHeight: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accent,
+  },
+});
+const { c, styles, metrics } = useThemedStyles(makeStyles);
+```
+
+- JSX内联颜色也用 `c`；不要在模块加载时固化带色StyleSheet或带色常量数组。实心强调按钮用 `c.onAccent`，危险按钮用 `c.onDanger`，媒体背景/字色/遮罩用媒体语义色。
+- 不以主题值作为页面、编辑器或WebView的key，切风格不得重挂而丢页码、查询、正文或附件。
+- 墨水是界面风格：照片/PDF canvas保原色，不全局反相或灰度。PDF白纸上的高亮用纸面专用半透明墨与轮廓，不能用深色界面的白色accent盖白纸。
+- 原生启动窗早于JS偏好加载；没有原生偏好桥，不承诺完全消除冷启动色差或提供设备级局刷/防残影。
+
+## 5. 存储、历史兼容与配图
+
+- [Repo接口](<src/db/types.ts>)、[Native实现](<src/db/repo.native.ts>)和[Web实现](<src/db/repo.web.ts>)必须同步。Web驱动服务编译/内存测试，不证明原生SQLite迁移、文件或事务故障已验。
+- **16段已发布迁移不改写，旧id/字段/原件路径不随清理删除。** 数据库结构仍v16；原生迁移事务和完整恢复点尚需专门故障验收，不能拿Git分支代替。
+- 保留旧 `tags`、`nature`、旧会话指针等兼容字段。标签不是实体，不建标签表或恢复管理UI；清理导入标签时 `cleanTag` 保留显示大小写，`normalizeTag` 只作比较键，统一去重逻辑。
+- v16已把单图列迁入 `fragment_images`；旧 `image_path` / `image_text` 列不删。每张图有独立id、路径、ordinal和文字状态，忙碌/失败集合的键是**配图id**。
+- `text === null` 表示未读，空串表示已读但无字；两者不能混。自动读图只在需要材料时发生，保存图片不触发模型。读图应串行、守预算，失败和剩余数量如实报告。
+- 读图结果写库后还要更新本次材料对象；每次await后核对取消/代次，停止后不发后续图片，也不让迟到结果写入新状态。停止不等于撤回已上传字节。
+- 新增碎片的正文、配图、待发标记替换与FTS在一次提交内；已有碎片一批加图走 `insertFragmentImages`，不能单张循环造成部分成功。
+- 文件只在**确定未提交**时清理。提交后刷新失败属于非致命提示，不能删已引用文件、清掉后来新输入或诱导重复发布。
+- App持有记录正文、待发图片、唯一待发键；它们跨页面/风格保留，但当前没有进程重启恢复承诺。不要和整理工作区的持久化混为一谈。
+- 正文配图标记仅走[inlineImages](<src/util/inlineImages.ts>)：光标插入、pending键换id、去重与删除标记。模型材料、检索、文字导出剥离定位语法；原图与图片文字不是同一数据。
+- 历史SQL清空字段沿用 `NULL` 字面量，不把已踩过坑的UPDATE改回绑定null；不拿驱动返回的 `changed === 0` 判失败。刷新与实际提交状态分别处理。
+
+## 6. 搜索与Markdown文字迁出
+
+- [fragmentText](<src/util/fragmentText.ts>)统一正文/图文字；`fragmentSearchText`只投影可见正文、OCR和事项，不以已下线标签形成隐形命中。
+- 中文检索保持FTS5+bigram，不能换成unicode61整句或对短词无效的trigram。碎片FTS rowid就是碎片id；影响投影的写入同步重建该条。
+- 索引复用同时核对条数和投影版本；版本变更需主动重建，不能只比条数。FTS失败/零命中保留转义后的LIKE兜底，不丢掉中文短词。
+- 导出必须独立 `listAllFragments`，不能沿用首页窗口或仅提高limit。时间范围查询、按id查材料也不能先取有限列表再自己筛。
+- [mdBuild](<src/util/mdBuild.ts>)、[mdParse](<src/util/mdParse.ts>)和[mdExport](<src/util/mdExport.ts>)是同一文字格式的两端/投影，修改须一起验证。
+- Markdown包含可读碎片文字、分钟时间和旧标签；已有图文字是文本，未读/无字图明确占位；原图、文档、月总结、会话和完整元数据不在里面。多行压为一行、事项/合并关系不能原样恢复，待办清单只供阅读且不导入。**不得声称完整备份。**
+- 导入只从用户确认的预览写入，判重用唯一 `fragmentKey`；时间查询覆盖首尾整分钟。每次写入重新查询，导入调用串行化；每条原子提交，整份部分成功要报已写条数并支持安全重试，不冒充全文件回滚。
+- 导入支持旧正文与新文字迁出投影判重；纯图没有旧正文时不能登记共享空串别名，否则会吞掉不同图片条目。
+- 文件选择器不按单一Markdown MIME过滤；错误文件由二进制检查拦。日期需真实校验，回退日期或无日期必须在预览明确说明，不能静默当今天。块注释不要直接写会提前结束注释的MIME通配符。
+
+## 7. 文档任务与阅读器
+
+- **保存原件、应用内读、提取正文、能问是四种能力。** 本地格式/容量由[formats](<src/documents/formats.ts>)和[docSupport](<src/util/docSupport.ts>)的现有判据决定；[readerAvailability](<src/documents/readers/readerAvailability.ts>)分派原件/快照，不把 `isDocumentReady` 用作阅读门槛。
+- 导入只复制原件、核验真实字节数、去冲突并写stored元数据；不提取、不建索引、不发请求。云配额不是导入上限。
+- 本地准备/云解析只向[应用级任务服务](<src/documents/jobs.ts>)下单。每文档互斥；`runId` 与 `expectedRevision` 防迟到写回，删除/取消后结果不得覆盖新内容。启动收拾失去任务的parsing记录，不自动重发。
+- 云上传每一次（首次/重试/换通道）都先显示文件、大小、`mineru.net`、所选通道和限制。浏览、查找、多选不能顺手上传；取消不撤回已上传字节。
+- 云通道只走 `planForDoc`，不在页面抄后缀表。轻量10 MB/20页；精准200 MB/200页、需Token。已知页数用真实值，不编页码。
+- 预签名上传不加Content-Type；精准zip只解 `full.md`，不要把图片/layout全解到内存。fflate保留已修ZIP64问题的版本，不回退旧版本。
+- 列表只读DocumentMeta，不取大正文。正文版本与索引版本分离；换正文必须通过正文/切片/FTS一致的提交路径。文档切片进专用FTS，不进碎片索引；切片基于完整文本，不基于有损展示AST。
+- 原文件丢失但快照仍在时明确读快照；不支持或超限时保留外部打开路径，不静默截断成完整结果。
+- Excel按实际单元格遍历，不按 `!ref` 面积；兼容dense `!data` 与稀疏键。合并单元格只有左上角有值，公式只读缓存，不执行宏。
+- 内存/磁盘阅读缓存均“读坏当没有”，不能阻断原文件打开；删除原件清理对应缓存。行列窗口和虚拟化保留，超出显示范围要明确提示。
+- PDF提取运行时挂App根，不跟阅读页退出而丢任务。阅读先出页面，文字索引另行进行；`hasText` 的null/true/false不混，索引结束补发查询，清空查询也清标记。
+- 改PDF同步[pdfProtocol](<src/documents/readers/pdfProtocol.ts>)、[pdfTheme](<src/documents/readers/pdfTheme.ts>)、[产品模板](<src/documents/readers/pdfjs/reader.template.html>)；Lead统一生成资源。禁止直接改生成HTML、扩大WebView外链/CSP权限或运行PDF脚本。
+- Metro本来支持HTML/PDF资源，不为它新造Metro配置。原件/文档/网页内容都是不可信资料，不执行宏、文档指令或自动外链。
+
+### 正文与查找不能丢的约束
+
+- [NoteBody](<src/components/NoteBody.tsx>)同时服务碎片、小结、回答和文档快照，保留标题、加粗、行内代码、表格、代码块及图片块；不要按单一提示词的窄格式重写。
+- 表格用View排，不用空格对齐；碎片横向分页内不再套横向表格ScrollView。`numberOfLines`预览必须退回单Text；裁列明确说“另N列未显示”。
+- 文档和OCR中的 `[F12]` 是作者字面文字，传 `literalCitations`；引用快照也不能吞字。回答引用才按本轮真实编号渲染。
+- 计数/高亮用[findHits](<src/util/highlight.ts>)；Markdown计数与渲染用[markdownSearch](<src/documents/readers/markdownSearch.ts>)同口径。碎片OCR/正文/事项位置用[fragmentSearch](<src/documents/readers/fragmentSearch.ts>)；不能拿FTS候选数当精确命中数。
+- 当前命中用下划线/轮廓等非颜色标识，不遮字或强改字色。定位采用实际块y并加上图片/标题/容器偏移，不按字符比例猜位置；切页重置命中下标。
+
+## 8. 整理草稿与原子写入（本分支开发中）
+
+现行分层：[意图路由](<src/util/askIntent.ts>) → [useOrganize](<src/organize/useOrganize.ts>) / [run](<src/organize/run.ts>) → [AI材料与请求](<src/ai/knowledge.ts>) → [workspace](<src/organize/workspace.ts>) / [storage](<src/organize/storage.ts>) → Repo `commitDraft`。
+
+- 路由顺序保持月小结 → 待办 → 碎片整理 → 问答。草稿打开时通过 `planDraftInput` 分流：修改默认走改稿，新任务不能直接盖掉待处理草稿；有未写内容先明确处理。
+- 模型内容结构是 `docs[] / todos[] / note`；文档含title/summary/body_md，待办含text/due/children。日期真校验，空结果如实说明。旧单篇形状只为兼容收敛，不恢复旧标签/合并规划流程。
+- 只从材料提炼事实，保留参数、命令、路径、报错原文；每次请求的材料预算和截断说明与源码一致。输出受限必须在JSON修复前拦截，不补出一份“完整”残稿。
+- 稳定 `draftId` 和条目key由本地掌握，不能用数组下标当已写身份。改稿只修内容；用户取消的keep/权限不得恢复。不能唯一匹配的新项保守不勾，并提示需重审；已写入内容不被模型重写。
+- 每篇产出都能审阅；展示计数、按钮文案和实际写入只用 `selectDraftTargets`，不能隐藏后几篇却让“全部写入”包含它们。
+- 来源明确为fragment ids或session turns。历史“整理成文档”必须真正执行会话来源提炼；重试保留原材料/要求/会话，不换成最近记录。限定文档会话的提炼不夹带全库待办。
+- 全量整理固定id范围与次序，不按日期排序后再用最大id当进度。当前批次/失败请求保留准确材料；缺失来源单列，不标成已处理。
+- 草稿、授权、已处理id和pending批次一起存现有settings的 `organize.workspace.v1`，先留准确请求再发送。保存失败不能抹掉内存产出或让页面无声退出。
+- 恢复先对账 `draft.commit.<draftId>` 的事务凭据；凭据/快照损坏或冲突必须停下来，不换新身份重插。恢复只恢复本地状态，不自动重发AI。
+- 写入使用 `commitDraft`：只传用户批准目标；文档正文/切片/FTS、父子待办、来源标记、会话关联及凭据同事务提交。重复key不复制，已写项后来被用户删除也不偷偷重建。
+- 已提交后的刷新/草稿快照保存失败和未提交失败分别提示；回调核对草稿/会话代次，不把旧请求写到新会话。
+- [organizePlan](<src/util/organizePlan.ts>)用于Web加载旧sessions的兼容读取，旧游标不能证明内容已保存。[旧文档工具](<src/documents/knowledge.ts>)不承担当前整理写入；是否进一步删除以引用审查为准，兼容旧数据不等于保留所有旧写入API。本期不扩大旧Repo接口删减。
+
+## 9. 问答、流式与历史
+
+- 请求统一经[chat](<src/ai/chat.ts>)；流式用 `expo/fetch`，同一TextDecoder实例逐块调用 `decode(chunk, { stream: true })`，不要换回没有response.body的旧RN fetch。
+- reasoning_content只展示/按既有字段保存，content才参与答案或JSON解析；UI流更新节流。思考展示不依赖busy存活，答完不能消失。
+- 四段超时保持建连90秒、首字120秒、空闲60秒、硬上限12分钟；不要改成一个总超时。
+- `max_tokens`包含思考与正文。先读finish_reason再读可能为空的delta；length/资源不足/空输出分别解释。额度遵从当前请求函数与服务商能力，不抄旧12K/6K或整齐但失真的统一数字。
+- 官方模型使用已配置支持的 `deepseek-flash` / `deepseek-v4-pro`，不用已停用旧名；effort只对支持它的官方接口生效，不把“high”等同于显示思考的开关。
+- 问答用 `json:false`。只装填检索后的资料并守总预算，历史只带问题/回答，资料每轮重新检索。直接上下文碎片优先且可绕过merged过滤；不恢复已删除的标签意图检索。
+- 文档范围合法且锁定，空/非法范围不回退全库；用[D引用检索](<src/ai/documentRetrieval.ts>)保留版本、片段与真实定位，不把局部检索说成通读全文。
+- F/N/T/W/D引用只接受本轮给过的编号，编号按首次出现顺序；历史引用用快照，不依赖原记录仍在。行内/块代码的标记不是引用。
+- 联网只有用户打开后发送才执行：有链接走fetch，没有才search；失败保留本地回答与明确失败信息。网页标题/链接可作为独立来源显示，不依赖模型一定写W标记。
+- `ask_sessions`与碎片分开；每轮完成保存，切会话校验代次，不因重复退出把旧历史顶到最前；归档不改活动时间，删除有确认且不连带删已产出文档。旧document_id与document_ids指针兼容读写，删文档两者都处理。
+- 错误保留阶段、状态码、finish和原始返回等证据，默认短提示、需要时展开；日志/诊断不得包含API密钥或未经授权的用户全文。
+
+## 10. 待办与月总结
+
+- 两层父子关系只用[todoTree](<src/util/todoTree.ts>)的规则，两端Repo共用。父项勾选级联，子项全部完成才完成父项，取消子项取消父项，取消父项也取消子项。
+- 计算兄弟时排除merged项；父项不在有效列表不能回写。给已完成父项加子项要重开父项。
+- 删除父待办先解除子项parent_id，不连带删子项；合并要转移子项。导出/问答统一flatten，不漏孤儿。
+- 已完成清理仍按真实完成时间及旧数据回退规则保留最近5条，不要改成永久存档或声称待办导出能恢复它。
+- 月总结保存仍走 [SummarySheet](<src/components/SummarySheet.tsx>) → `upsertNote`；同周期查询用 `findNote`，不取有限列表自己筛。批量生成传明确period参数，不在队列里读取尚未更新的state。
+- 月总结现行格式是按日事件表和重要事件/进展，不强制旧三节。旧已存Markdown继续可读，不重写历史内容。
+- 时间轴与回顾的排序分别核对；`periodAnchor`为月末锚点，时间轴还会按月/日结构展示；[groupNotes](<src/util/digest.ts>)组内不另排序。阅读器传列表同一批数据并保持顺序。
+
+## 11. 更新、SDK与文档维护
+
+- 更新源只认GitHub Release。候选顺序自定义地址 → 官方 → 内置镜像；保留停滞/低速切源，按bytesWritten而非“是否收到回调”判进展。切源提示不能与用户主动取消混淆。
+- 下载完成核验字节数；安装通过content URI交给系统，不能直接传file URI。保留当前新文件API与legacy content URI桥的明确分工；后台JS被挂起时通知数字不实时，不承诺前台服务能力。
+- 版本比较用[semver工具](<src/util/semver.ts>)，不比较字符串/parseFloat。不要因网络失败伪称有更新或无更新。
+- Expo/RN接口先核对已安装版本的源码/类型与对应版本文档。网络fetch401等失败只说明没取得资料，不凭记忆编造新版API，不自主改搜索/代理配置或装依赖。
+- 正式记录各司其职：[README](<README.md>)讲产品，[SPEC](<SPEC.md>)讲批准设计，[HANDOFF](<HANDOFF.md>)讲现状，[ROADMAP](<ROADMAP.md>)讲剩余事项，[CHANGELOG](<CHANGELOG.md>)留历史；[TEXTS](<TEXTS.md>)是提示词与文案索引。
+- 改功能先由相应owner更新批准规格；提示词改动同步对应文案记录。机器检查只覆盖部分完整抄录，不代表节选/业务含义无漂移。
+- 保留HANDOFF主要源码行数表并同步新增模块；不删地图、不改正则、不弱化检查来躲漂移。开发中先写测试入口/范围，源码冻结后由Lead填最终行数、实跑数量和未验项。

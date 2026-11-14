@@ -1,691 +1,312 @@
-# 交接文档（给下一个模型）
+# 项目交接：当前开发分支
 
-> 写于 2026-10-24，**2026-10-25 重整过结构**，**2026-11-10 更新到 v0.16.0**：变更记录迁到 [CHANGELOG.md](./CHANGELOG.md)，
-> 本文只留「现在的状态」和「怎么接着干」。对应版本 **v0.20.4（versionCode 55）**。
->
-> **阅读顺序**：本文件（10 分钟）→ [SPEC.md](./SPEC.md) 第 0 节（v0.7 定稿）+ 第 6 节（请求层）
-> + 第 8.1 节（Android UI 红线）→ [ROADMAP.md](./ROADMAP.md) 未完成项。
-> 想知道「某个设计为什么长这样」，翻 [CHANGELOG.md](./CHANGELOG.md)；`AGENTS.md` 是速查，
-> `README.md` 是给人看的门面。
-
----
+最后整理：2026-11-14。本文记录当前工作树与接手入口，**不是发布说明**。先读[SPEC最新批准节](<SPEC.md#2026-11-14-已批准可靠性修复与两轴外观>)、[方案A](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)和[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)；操作规则见[项目AGENTS](<AGENTS.md>)，历史原因查[CHANGELOG](<CHANGELOG.md>)。
 
 ## 1. 三十秒速览
 
-一个**个人单机 Android 应用**，叫「碎片」。核心是「随手记 + 在同一个地方问和整理」：
-
-随手记一条 → 想整理时在「问」里说一句「整理这些碎片」→ AI 读最近的碎片写出一篇文档
-→ **先在对话里给你看、你可以直接改、也可以继续说「第二段并进第一段」** → 点「通过并写入」才进文档区。
-想不起来时还是同一页问，答案带引用。
-
-v0.16 起**没有独立的整理页**：整理、整理待办、写月小结、提问，全在「问」里用一句话发起。
+个人单机Android应用「碎片」：随手记文字/图片，之后在「问」里提问、整理碎片/待办或发起月总结。整理以聊天和可审阅草稿呈现，确认后写文档/待办，来源碎片原文不改。
 
 | 项 | 值 |
 |---|---|
-| 路径 | `F:/coding/python/project/Test/fragments` |
-| 包名 | `com.local.fragments`（固定，改包名等于换 App） |
+| 工作目录 | `F:/coding/python/project/Test/fragments` |
+| 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.20.4 / versionCode 55 |
-| 技术 | RN 0.88 + Expo SDK 58 + TS 6.0，Android 单端，SQLite v9 |
-| 模型 | DeepSeek `deepseek-flash`（`deepseek-chat` / `-reasoner` 已停用） |
-| 数据 | 本地 SQLite，无账号、无后端、无同步 |
+| 开发分支 | `feat/ui-refresh-ink-20261114` |
+| 发布状态 | 2026-11-14改版开发中，未发布；版本号仍沿用发布基线 |
+| 基线与代码恢复点 | `master`、`backup/pre-ui-20261114` 均保留 `5befe65` |
+| 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
+| 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
+| AI | 配置的OpenAI兼容服务；官方支持模型使用 `deepseek-flash` / `deepseek-v4-pro` |
 
-**v0.7 是推倒重做**：删掉了知识卡、主题、问答记录三块，理由见 CHANGELOG v0.7.0 第一节。
-现在**时间轴就是知识库**，没有第二份数据、没有第二套 id。
+**不要恢复旧入口：** 没有独立整理页、知识卡实体或标签管理/筛选。回顾只有待办和小结；现行小结生成只有月。旧tags、旧类型、旧表或兼容解析仍保留，不表示有对应UI。
 
----
+路由由App的state管理：timeline / settings / review / ask / docs，没有Expo Router。记录正文/待发图保存在App生命周期；整理工作区另有settings持久化，两者不是同一恢复机制。
 
-## 2. 现在是什么状态
+## 2. 当前进度与未覆盖项
 
-| 项 | 状态 |
+用户已回复「开始」批准方案A。以下是**本分支代码改动**，仍需Lead最终整合检查和后续设备验收；现有Release安装包不包含本分支新增改版。
+
+- 主题改为明暗 `ui_theme` 与风格 `ui_style` 两轴；新增默认/墨水四套配色、动态几何、48dp控件、非颜色状态和减少动效策略。没有原生偏好桥或实体墨水屏刷新驱动。
+- 主页面、输入、问答/整理、回顾与阅读器使用共享控件。文档操作可展开收纳；PDF白纸原色不动，高亮/选区用半透明灰墨与轮廓，主题只发消息不重挂WebView。
+- App/两端Repo调整记录与图片原子提交、全量读取、可见搜索投影和文字迁出；提交后刷新失败不清已引用文件。
+- 整理执行移至organize模块：稳定身份、逐项授权、真实session-source、原材料重试、固定id范围、草稿/进度一起保存。批准写入使用原子提交与持久凭据，恢复与凭据对账，不自动重发AI。
+- 清理只限已确认的孤立组件、未使用取色函数和Web演示注入。旧迁移、存储字段、平台变体和兼容解析仍保留。
+- 新可靠性/外观检查已加入包脚本和本地CI配置；本轮未以此宣称已经在远端发布成功。
+
+### 验证入口与范围
+
+源码已冻结，2026-11-14 由 Lead 串行实跑下列检查。**这是本机（Node 24.14.1）在开发分支上的结果，不是发布验收。**
+
+| 入口 | 实跑结果 |
 |---|---|
-| 编译 | `tsc --noEmit` 零错误 |
-| Web 编译校验 | `npm run build:web` 通过（约 1.28 MiB，产物跑完即删） |
-| 自动化测试 | 没有单测框架，但有一组机器检查：`npm run test:md`（导入导出往返 24 项）、`npm run test:docs`（阅读器 47 / 任务 8 / 问答 16）、`npm run test:todos`（待办与小结 18 项）、`npm run test:ask`（指令路由与整理草稿 21 项）、`npm run check:docs`、`npm run typecheck` |
-| 真机验证 | v0.7 / v0.8 这批**基本没验**，176 条清单在 [ROADMAP P0-1](./ROADMAP.md) |
-| 外观 | 深色 / 浅色 / 跟随系统三档，默认跟随系统（v0.8.0） |
-| 月总结格式 | **一张按天的「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限（v0.16，见 `TEXTS.md` 1.3） |
-| 已知阻塞 | 无。剩下的是「验」和「补」（通知栏快速记录入口） |
-| 数据迁移 | v16。碎片 / 待办 / 小结 / 文档 / 配图全保留。v16 建 `fragment_images` 并把 v15 的 `image_path` / `image_text` 搬进去（老列不删，只是不再读写），一条碎片从此可以多张图；v14 记录「已整理」时间；v13 支持一场整理产出多篇；v12 给 `documents` 加 `origin`（原件 / 整理产出）与 `excerpt`（列表摘要），给 `ask_sessions` 加 `document_id` / `source_ids`（会话跳转与重新整理）；v11 删掉库里日/周小结并给 `todos` 加 `parent_id`；v7 加 `todos.done_at`；v8 建 `ask_sessions`；v9 建 `documents`；v10 加切片与版本号 |
+| `npm run typecheck` | 通过，0 错误 |
+| `npm run test:md` | 24 项通过 |
+| `npm run test:docs` | 71 项通过（问答 16 + 任务 8 + 阅读器 47） |
+| `npm run test:todos` | 18 项通过 |
+| `npm run test:ask` | 83 项通过 |
+| `npm run test:reliability` | 88 项通过（真实控制流 + 内存桩） |
+| `npm run test:appearance` | 45 项通过（两轴主题 + PDF 协议） |
+| `npm run check:docs` | 通过 |
+| `npm run build:web` | 通过，产物同次删除（不供预览） |
+| `npm run prepare:pdf` + `--check` | 资源已按冻结模板重建且校验最新 |
 
-**一句话：功能完整，但 v0.7 的重做还没经过真机检验。** 别在这之前继续叠功能。
+旧回归 196 项与新增 133 项（88 + 45）合计 **329 项机器检查通过**。另有一次性的 Node 内置内存 SQLite 实验（17 场景、132 条断言）验证了 native Repo 的真实 SQL 语义；它不在 CI 套件内，也不等于 Expo Android 驱动或真机迁移验收。
 
-> **v0.7.3（2026-10-26）**：已完成待办只留最近 5 条（迁移 v7 + 物理清理）、小结改为书面语、
-> 时间轴周总结独占周级分区置顶。三处只动保留策略与展示，未改整理 / 问答链路。
->
-> **v0.7.4（2026-10-26）**：回顾页「小结」也按粒度分组（`util/digest.ts` 的 `groupNotes`），
-> 月 → 周 → 日 → 主题，组内才按时间倒序；summary prompt 的禁令写具体（禁排比、禁空泛动词、
-> 允许省略小节）。只动展示与 prompt。
->
-> **v0.8.8（2026-10-31）**：时间轴手势重排（长按复制 / 左滑删除 / 右滑问），
-> 去掉长按编辑小窗；问页改为历史会话自动落库 + 引用小标 + 左滑开历史；
-> 设置页删掉三段说明文字；SQLite v8 新增 `ask_sessions`。
->
-> **v0.8.9（2026-10-31）**：修三个真机反馈 —— 深度思考答完不再消失（`QaTurn.reasoning`
-> + `ReasoningFold`）；「整理为碎片」改为**先调 AI 提炼精要、预览确认后写库**
-> （`ai/qaSummary.ts` + `buildQaFragment`，失败退回 `buildQaNote` 完整转录兜底）；
-> 时间轴 / 碎片详情用 `NoteBody` 渲染 Markdown。版本 0.8.9 / code 36。
->
-> **v0.9.0（2026-10-31）**：更新下载改多源回退 —— 自定义地址（NAS / 自建）→
-> 内置加速镜像（ghproxy 系）→ GitHub 官方，逐个尝试、失败换下一个。
-> 新增 `update/mirror.ts`（候选地址构建 + 下载地址设置），设置页「关于」加「下载地址」输入。
-> 版本 0.9.0 / code 37。
->
-> **v0.10.0（2026-11-02）**：三件事。① 搜索命中可视化：正文描底色、每条标「N 处」、
-> 详情页「第 i / N 处」逐处跳转（段落实测 y，不按字符比例估）。② 新增文档库：
-> 上传 PDF / Word / PPT / Excel / 图片 / txt / md，原文件留在手机，正文走 MinerU
-> 轻量接口转 Markdown（免 Token，≤10 MB / 20 页）；SQLite v9 新增 `documents`。
-> ③ 更新公告改成「一行摘要 + GitHub 链接」，设置页加仓库与更新记录入口，
-> 线上历史 Release 说明一并压到要点。版本 0.10.0 / code 38。
->
-> **v0.11.0（2026-11-02）**：真机反馈两条。① **下载**：v0.9.0 的回退链把镜像排在最前，
-> 实测镜像更慢且卡住不切 —— 根因是没有超时（连接建住了但不出字节不算报错）。
-> 顺序改成 自定义 → **GitHub 官方** → 镜像兜底，并加巡检：15s 无新字节或
-> 60s 平均 < 25 KB/s（且还有下一个源）就掐掉换源；进度 setState 节流到 250ms 治界面卡顿。
-> ② **文档**：轻量接口本来就认 xlsx（不认 xls/csv），真正缺的是大文件通道。新增 MinerU
-> 精准 `/api/v4`（Token、200 MB / 200 页、每天 1000 页），设置页加「文档解析 → MinerU Token」。
-> 支持矩阵收敛成 `util/docSupport.ts` 的 `planForDoc`，上传预判 / 确认卡 / 失败重试都走它。
-> 新增依赖 `fflate`（只解 zip 里的 `full.md`）。数据库不动。版本 0.11.0 / code 39。
+**不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
----
+**仍单列的风险：** 16段历史迁移执行器未完成专门的事务/备份故障验收；Markdown不是完整数据库/附件备份；Git恢复点不能恢复手机数据；冷启动原生颜色与JS偏好可能不同。不要写“功能完整、只差装包”。
 
-## 3. 跑起来
+## 3. 接手与执行顺序
 
-```bash
-cd F:/coding/python/project/Test/fragments
-npm run typecheck      # tsc --noEmit
-npm run build:web      # 只当编译校验，产物在同一次运行里删掉
-npx expo start         # 手机 Expo Go 扫码（AI 功能需要配 API Key）
-```
+1. 读最新批准节、契约、本交接与对应源码，检查分支和未提交差异；不能只看旧版本历史推断现状。
+2. 多Agent先 `list/get/claim`，按write scope开发；共享契约、App/Repo及最终Git/构建归Lead。不因同一工作目录可写就跨scope。
+3. 冻结源码后由Lead串行跑完整检查、生成PDF资源、更新本节结果和行数地图。失败要修真实问题，不通过删断言/删地图避开。
+4. 当前不commit/push/tag/Release，不装依赖、不起服务、不做HTML界面预览、不本地构建APK。正式发布需另获明确授权，APK交CI产出。
+5. 获准设备测试时先确认设备、包来源和版本；每次动作后截图核对。没有设备或无法看图时停止视觉步骤，如实列未验。
 
-**打包**（改完必须自己打，用户明确要求过）：
+依赖/脚本以[package](<package.json>)为准。当前[Android CI](<.github/workflows/android.yml>)使用Node22/JDK21：生成PDF资源 → 类型与各组断言 → 文档检查 → 原生工程/APK。只有版本tag会创建Release并挂raw APK；artifact与Release asset不是一回事。本分支改版尚无新Release。
 
-```bash
-npx expo prebuild --platform android --no-install --no-clean   # app.json 改了才需要
-cd android
-unset JAVA_HOME
-export ANDROID_HOME="C:/Users/14428/AppData/Local/Android/Sdk"
-export JAVA_HOME="D:/Program Files/Java/jdk-21"
-export PATH="/d/Program Files/Java/jdk-21/bin:$PATH"
-./gradlew assembleRelease --console=plain > build-vXXX.log 2>&1
-```
+本地已有工程如需获准prebuild，必须保留 `--no-clean`；不要手改原生生成目录，不根据旧日志擅自删工程或重装依赖。文件清理先核对绝对路径，保护用户数据及其它Agent产物。
 
-产物 `android/app/build/outputs/apk/release/app-release.apk` → 复制成 `fragments-v<版本>.apk` 放根目录。
-增量 2–3 分钟；首次全量约 45 分钟。详细环境与三个坑见 SPEC 第 12 节。
+## 4. 主要源码行数地图
 
-**本地资源现状（2026-11-14 清理后）**：
+**行数采样于2026-11-14当前工作树，仍可能随最后修复变化。** Lead在源码冻结后统一刷新；不删除行数表或改变检查规则。第一列的源码标识保持现有机器可识别格式，后附打开链接。测试脚本的行数是文件长度，**不是用例数量**。
 
-| 项 | 体积 | 说明 |
+### 4.1 入口、页面、主题与类型
+
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `node_modules/` | ~508 MB | 跑断言要用，别删 |
-| `android/` | ~13 MB | 只剩工程骨架。`android/app/build`（288 MB 产物）与 `.gradle/` 已清，下次 `assembleRelease` 自己重建 |
-| `assets/` | 3.3 MB | 含 `pdfjs/reader.html`；`pdf.min.mjs` / `worker` / `cmaps` 是 `npm run prepare:pdf` 的副产物，不在库里 |
-| `.git/` | 4.4 MB | 没有历史 APK，没膨胀 |
+| `App.tsx` [打开](<App.tsx>) | 549 | route state、两轴偏好落盘、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1963 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2290 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 280 | 待办/小结两类回顾，没有标签tab |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 988 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1337 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/theme.tsx` [打开](<src/theme.tsx>) | 91 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
+| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 225 | 四套完整色表、两轴规范化、语义色和metrics，纯函数可测试 |
+| `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
+| `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 
-三个旧安装包（`fragments-v0.8.7/8/9.apk`，共 70 MB）已删 —— 发布只认 GitHub Release 的 asset，
-本地留 APK 只会让人装错版本。需要哪个版本就回 Release 页下。
+### 4.2 Repo、文件与文字迁出
 
----
-
-## 4. 代码地图
-
-`App.tsx` + `src/` 共 **32,284 行**（不含 `android/`、`node_modules/`）。行数每次发版校正。
-
-### 入口与页面
-
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` | 589 | 外壳：`ThemeProvider` 接线 + 读 `ui_theme`；`Shell` 里是路由 state、全局 BackHandler、`draft` / `settingsFrom` / `askContextId`、数据加载 |
-| `src/screens/TimelineScreen.tsx` | 1916 | 时间轴：**本月按日、更早按月（展开还原成天）**折叠，搜索、事项筛选、输入框（**加图选择行在卡片内部**）、详情页入口、长按复制 / 左滑删除 / 右滑问；页头 4 图标，「问」在最右且加大 |
-| `src/screens/AskScreen.tsx` | 3067 | 「问」：**提问 / 整理碎片 / 整理待办 / 写月小结四合一**；指令路由、agent 式整理（分批 + 游标 + 步骤日志 + 多篇产出）、整理轮进历史、错误详情、**右滑拉出历史抽屉（跟手动画）**、跳文档 / 重新整理 / 删除、引用小标 |
-| `src/screens/ReviewScreen.tsx` | 276 | 回顾：待办 / 小结 / 标签三个 tab；只负责取数与切 tab，列表在 `TodoPanel` |
-| `src/screens/DocsScreen.tsx` | 1061 | 文档库：上传确认、保存原文件、解析流水线、列表状态、删除确认 |
-| `src/screens/SettingsScreen.tsx` | 1344 | 设置四模块菜单（配置 / 外观 / 数据 / 关于）+ 四个子页：模型服务（官方只填 Key + 余额 + 跳转，第三方折叠）、思考过程与强度、MinerU、主题、索引健康度与自检、导入导出、统计、更新与下载地址 |
-| `src/theme.tsx` | 216 | 两套调色板、`ThemeProvider`、`useThemedStyles`、`tagColor` |
+| `src/db/types.ts` [打开](<src/db/types.ts>) | 369 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 1815 | SQLite、16段历史迁移、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1047 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
+| `src/db/draftCommit.ts` [打开](<src/db/draftCommit.ts>) | 135 | 输入/凭据验证、稳定key、共享提交项处理，平台事务内调用 |
+| `src/db/importMd.ts` [打开](<src/db/importMd.ts>) | 187 | 系统选文件、预览、完整分钟判重、串行单条原子导入与部分失败说明 |
+| `src/db/fragmentImages.ts` [打开](<src/db/fragmentImages.ts>) | 95 | 图片私有文件保存、读取与删除；引用/清理时机由上层提交边界决定 |
+| `src/db/docFiles.ts` [打开](<src/db/docFiles.ts>) | 327 | 文档原件保存/读取/删除及外部应用content URI打开 |
+| `src/export/markdown.ts` [打开](<src/export/markdown.ts>) | 57 | 全量碎片读取、Markdown文件IO与系统分享 |
+| `src/util/mdExport.ts` [打开](<src/util/mdExport.ts>) | 26 | 可读文字迁出投影、未读/无字图片占位和备份范围声明 |
+| `src/util/mdBuild.ts` [打开](<src/util/mdBuild.ts>) | 113 | 兼容Markdown拼接：按日文字、只读待办清单、旧标签索引 |
+| `src/util/mdParse.ts` [打开](<src/util/mdParse.ts>) | 286 | 旧格式解析、日期警告、二进制判断与唯一判重指纹 |
 
-### AI 层
+### 4.3 AI与问答资料
 
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/ai/chat.ts` | 558 | **唯一请求层**：四段超时、SSE 解析调用、`finish_reason` 判定、错误映射；`AiError.detail` 带原始证据 |
-| `src/ai/stream.ts` | 148 | SSE 逐块解析（`reasoning_content` 与 `content` 分开） |
-| `src/ai/config.ts` | 35 | 读写 AI 配置 |
-| `src/ai/keyStore.ts` | 37 | API Key 存 SecureStore |
-| `src/ai/knowledge.ts` | 394 | **整理成文档**：只收知识的判据、多篇拆分、材料装填（70/30 截断）、已有待办去重、`extractKnowledge` / `reviseDraft`（v0.20.3 起改稿带原始材料 + 前几轮要求 + 已有待办） |
-| `src/ai/qa.ts` | 765 | 「问」：四路检索 + 上下文碎片、预算装填、并行联网、引用反查与快照 |
-| `src/ai/summarize.ts` | 302 | 月总结 prompt（表格 + 重要事件）与素材装填 |
-| `src/ai/search.ts` | 196 | `/v1/tools/search`，退避重试、结果兜底 |
-| `src/ai/fetchPage.ts` | 148 | 读网页：`POST /v1/tools/fetch`，返回 Markdown；一次最多 2 个链接，失败的单独报 |
-| `src/ai/vision.ts` | 90 | 单张图片转文字层：原样抄字 / 保留结构 / 没字就描述。**只在 `ai/imageReads` 里被调用** |
-| `src/ai/imageReads.ts` | 77 | 读图时机的唯一入口：整理前读 6 张、提问前读 3 张，串行、失败不拦整件事、读完写回内存与库 |
-| `src/ai/balance.ts` | 122 | 官方余额：`GET /user/balance`、只认官方域名、失败不拦任何功能 |
-| `src/ai/mineru.ts` | 648 | 文档解析两条通道：轻量（免 Token，≤10 MB/20 页）+ 精准 `/api/v4`（Token，≤200 MB/200 页）；签名上传 PUT（不带 Content-Type）、状态轮询、zip 只解 `full.md`、错误码映射 |
+| `src/ai/chat.ts` [打开](<src/ai/chat.ts>) | 558 | 唯一请求层，四段超时、SSE、finish_reason、额度与错误证据 |
+| `src/ai/stream.ts` [打开](<src/ai/stream.ts>) | 148 | 流分片解析，reasoning/content分离 |
+| `src/ai/config.ts` [打开](<src/ai/config.ts>) | 35 | 模型服务配置读取/保存 |
+| `src/ai/keyStore.ts` [打开](<src/ai/keyStore.ts>) | 37 | 系统安全存储中的API Key |
+| `src/ai/knowledge.ts` [打开](<src/ai/knowledge.ts>) | 403 | fragments/session材料、docs/todos/note输出、预算、改稿与身份/授权对账 |
+| `src/ai/qa.ts` [打开](<src/ai/qa.ts>) | 763 | 记录问答、按需检索与预算、联网、真实引用和历史快照 |
+| `src/ai/documentRetrieval.ts` [打开](<src/ai/documentRetrieval.ts>) | 530 | 限定文档检索、公平装填、内容版本与D引用快照 |
+| `src/ai/summarize.ts` [打开](<src/ai/summarize.ts>) | 303 | 月总结材料与提示词，按日事件表/重要进展 |
+| `src/ai/search.ts` [打开](<src/ai/search.ts>) | 196 | 官方工具搜索、退避与结果兜底 |
+| `src/ai/fetchPage.ts` [打开](<src/ai/fetchPage.ts>) | 148 | 用户打开联网并发送链接后的页面读取 |
+| `src/ai/vision.ts` [打开](<src/ai/vision.ts>) | 90 | 指定图片的文字/内容识别请求，不在保存图片时调用 |
+| `src/ai/imageReads.ts` [打开](<src/ai/imageReads.ts>) | 86 | 按需串行读图、预算/失败/剩余统计、取消代次与库/内存同步 |
+| `src/ai/balance.ts` [打开](<src/ai/balance.ts>) | 122 | 官方服务余额查询，失败不阻断其它功能 |
+| `src/ai/mineru.ts` [打开](<src/ai/mineru.ts>) | 648 | 显式通道云解析、预签名上传、轮询、过滤zip与服务错误 |
 
-### 数据层
+### 4.4 整理工作区
 
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/db/types.ts` | 333 | `Repo` 接口（唯一契约）、`parseTags`、`OrganizeSessionPatch`、问答会话方法 |
-| `src/db/repo.native.ts` | 1723 | SQLite 实现 + 迁移 v1–v16 + FTS 索引维护（`reindexFragment` 是唯一入口）+ 配图增删改 + 问答会话 |
-| `src/db/repo.web.ts` | 890 | localStorage 实现（只为编译校验，**不能验证真实数据流**） |
-| `src/db/repo.ts` | 7 | 平台分流入口（Metro 解析 `.native.ts` / `.web.ts`） |
-| `src/db/importMd.ts` | 148 | Markdown 导入：选文件 / 读文本 / 判重 / 落库（解析全在 `util/mdParse.ts`） |
-| `src/db/fragmentImages.ts` | 95 | 碎片配图文件层：存到私有目录（相对名入库）、读 base64、删除；失败不抛 |
-| `src/db/docFiles.ts` | 327 | 文档文件层：选文件、复制进私有目录、读纯文本、`content://` 交给系统打开 |
+| `src/organize/workspace.ts` [打开](<src/organize/workspace.ts>) | 372 | 稳定草稿/条目身份、改稿授权对账、批次合并、统一写入计划与严格恢复验证 |
+| `src/organize/storage.ts` [打开](<src/organize/storage.ts>) | 47 | settings单键串行保存、快照恢复、与原子提交凭据对账 |
+| `src/organize/run.ts` [打开](<src/organize/run.ts>) | 157 | 可注入真实执行器，固定来源、pending批次、检查点与代次防迟到 |
+| `src/organize/useOrganize.ts` [打开](<src/organize/useOrganize.ts>) | 394 | Ask控制器：发起/改稿/原源重试/批准/暂停/保存/恢复/放弃 |
+| `src/util/askIntent.ts` [打开](<src/util/askIntent.ts>) | 148 | 月总结/待办/整理/问答路由、草稿输入分流与气泡显示判据 |
+| `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 352 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
+| `src/util/batch.ts` [打开](<src/util/batch.ts>) | 61 | 条数/字数装箱与批次数边界，至少保留一条材料 |
+| `src/util/organizePlan.ts` [打开](<src/util/organizePlan.ts>) | 465 | 旧计划形状和兼容读取工具，不是现行整理页面/执行链 |
 
-### 文档层（v0.12.0 起）
+### 4.5 文档、PDF与其它阅读器
 
-导入只保存原件，读与问都建立在「正文 + 切片」上。**判据只有一份**（`documents/formats.ts`），
-页面不许自己写「这个后缀算不算能读」。
-
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/documents/formats.ts` | 128 | 格式判定与唯一判据：`documentFormat` / `isDocumentReady` / `notReadyReason` / `locatorLabel` / `LOCAL_READER_LIMITS` |
-| `src/documents/jobs.ts` | 487 | **应用级任务服务**：单文档互斥、`runId` + `expectedRevision` 写回、`AbortSignal` 取消、离页不中断、杀进程后收拾 `parsing` 尸体 |
-| `src/documents/readers/extract.ts` | 164 | 本地提取总入口：按格式分派，产出正文 + 切片 + locator；表格复用解析缓存 |
-| `src/documents/readers/chunk.ts` | 182 | 切片：按段落/行切、真实行号、`contentFromText`；超片数明确失败 |
-| `src/documents/readers/excelWorkbook.ts` | 421 | 表格解析：`dense` 二维数组、**不按 `!ref` 遍历**、宽表不丢列、公式只读缓存值、先认文件头 |
-| `src/documents/readers/workbookCache.ts` | 39 | 工作簿解析结果**单槽内存缓存**（键 = `fileUri + size`），阅读器与本地准备共用 |
-| `src/documents/readers/viewCache.ts` | 128 | 解析结果**落盘缓存**（`documents/.cache/<原名>.view.json`）：重启后不用重解析；损坏或大小不符一律当没有 |
-| `src/documents/readers/sheetWindow.ts` | 96 | 表格分列渲染的窗口计算（纯函数）：列偏移、可见列区间、左右占位 |
-| `src/documents/readers/pdfRuntime.tsx` | 301 | 常驻 PDF 提取队列，`<DocumentRuntime />` 挂在 App 根，不跟页面生死 |
-| `src/documents/readers/PdfReader.tsx` | 240 | PDF 阅读：PDF.js 文本层 + 跨页查找；首屏不等文字索引，索引完成后才放开查找 |
-| `src/documents/readers/SheetReader.tsx` | 678 | 表格阅读：工作表切换、单元格/行列定位、内查找；列按视口窗口渲染 |
-| `src/documents/readers/TextReader.tsx` | 335 | txt / md / **云解析快照**共用：分块虚拟化、真实行号、内查找；本机提取过就直接用库里的正文，不再读盘 |
-| `src/documents/readers/textBlocks.ts` | 92 | 正文分块（纯函数）：代码围栏与表格不切断；断言「切完拼回去一个字不少」 |
-| `src/documents/readers/SearchBar.tsx` | 156 | 阅读器查找栏：`disabled`（没有文字）与 `busy`（正在索引）是两种状态，不能合并 |
-| `src/ai/documentRetrieval.ts` | 530 | 文档检索与装填：逐篇检索、每篇保底预算、概括类覆盖策略、D 引用快照 |
-| `src/util/qaScope.ts` | 70 | 问答范围：`normalizeQaScope` / `qaScopeKey` / `sameQaScope` |
+| `src/documents/formats.ts` [打开](<src/documents/formats.ts>) | 128 | 本机格式、容量、能问判据和真实定位标签 |
+| `src/documents/jobs.ts` [打开](<src/documents/jobs.ts>) | 487 | 应用级本地/云准备任务，每文档互斥、取消与版本写回 |
+| `src/documents/knowledge.ts` [打开](<src/documents/knowledge.ts>) | 86 | 旧文档写入工具，不承担当前整理写入；是否删除须再做引用审查，主链为Repo commitDraft |
+| `src/documents/readers/DocumentReader.tsx` [打开](<src/documents/readers/DocumentReader.tsx>) | 72 | 只读分派，嵌入时不再外包滚动容器 |
+| `src/documents/readers/readerAvailability.ts` [打开](<src/documents/readers/readerAvailability.ts>) | 18 | original/snapshot/unavailable纯判据，不依赖能问索引状态 |
+| `src/documents/readers/extract.ts` [打开](<src/documents/readers/extract.ts>) | 164 | 本地提取分派，完整正文/切片/定位 |
+| `src/documents/readers/chunk.ts` [打开](<src/documents/readers/chunk.ts>) | 182 | 按完整文本切片、真实行号和contentFromText |
+| `src/documents/readers/PdfReader.tsx` [打开](<src/documents/readers/PdfReader.tsx>) | 239 | PDF阅读与本地查找命令、文字索引三态、主题消息更新 |
+| `src/documents/readers/PdfWebView.tsx` [打开](<src/documents/readers/PdfWebView.tsx>) | 83 | 稳定source、命令桥、本地导航与WebView安全边界 |
+| `src/documents/readers/PdfWebView.web.tsx` [打开](<src/documents/readers/PdfWebView.web.tsx>) | 22 | Web编译占位，非PDF网页产品 |
+| `src/documents/readers/pdfRuntime.tsx` [打开](<src/documents/readers/pdfRuntime.tsx>) | 301 | App根常驻的串行PDF提取队列 |
+| `src/documents/readers/pdfProtocol.ts` [打开](<src/documents/readers/pdfProtocol.ts>) | 94 | RN/WebView消息及纸面主题字段契约 |
+| `src/documents/readers/pdfTheme.ts` [打开](<src/documents/readers/pdfTheme.ts>) | 35 | 白纸专用灰墨/轮廓/选区与动态几何转换 |
+| `src/documents/readers/pdfjs/reader.template.html` [打开](<src/documents/readers/pdfjs/reader.template.html>) | 772 | 产品PDF源模板：本地渲染/查找、CSS变量与低内存页窗口；不是界面预览 |
+| `src/documents/readers/SheetReader.tsx` [打开](<src/documents/readers/SheetReader.tsx>) | 674 | 只读工作表、真实行列定位、当前命中、按视口渲染列 |
+| `src/documents/readers/excelWorkbook.ts` [打开](<src/documents/readers/excelWorkbook.ts>) | 421 | dense/稀疏有效单元格解析、不按!ref面积遍历 |
+| `src/documents/readers/workbookCache.ts` [打开](<src/documents/readers/workbookCache.ts>) | 39 | 按fileUri+size的单槽内存缓存 |
+| `src/documents/readers/viewCache.ts` [打开](<src/documents/readers/viewCache.ts>) | 128 | 磁盘视图缓存，损坏当缓存未命中 |
+| `src/documents/readers/sheetWindow.ts` [打开](<src/documents/readers/sheetWindow.ts>) | 96 | 列窗口、偏移与占位计算 |
+| `src/documents/readers/TextReader.tsx` [打开](<src/documents/readers/TextReader.tsx>) | 201 | TXT/Markdown/快照的分块虚拟化与字面查找，当前命中非颜色标识 |
+| `src/documents/readers/textBlocks.ts` [打开](<src/documents/readers/textBlocks.ts>) | 92 | 正文分块，保留代码围栏与连续表格 |
+| `src/documents/readers/SearchBar.tsx` [打开](<src/documents/readers/SearchBar.tsx>) | 112 | 48dp查找/清除/前后命中，busy与disabled分开 |
+| `src/documents/readers/markdownSearch.ts` [打开](<src/documents/readers/markdownSearch.ts>) | 30 | 与NoteBody一致的可见Markdown块命中计数 |
+| `src/documents/readers/fragmentSearch.ts` [打开](<src/documents/readers/fragmentSearch.ts>) | 32 | 详情OCR→正文→事项的真实命中目标与局部序号 |
 
-**阅读器的三条口径**（v0.13.0 起，改这里先看这三条）：
+### 4.6 共用组件与覆盖层
 
-1. **`hasText` 是三态**：`true` / `false` / `null`（= 还没索引）。`null` 不能当 `false` 显示，
-   否则每份正常 PDF 打开都会闪一下「没有文字层」。界面用 `SearchBar` 的 `busy` 表达它。
-2. **PDF 首屏与文字索引解耦**：`open()` 在阅读模式下只建占位、画第一页，
-   `startTextIndex()` 在首屏之后跑；索引完成后 RN 要把当前查询词**补发一次**，否则「打开就搜」永远没结果。
-3. **长正文一律分块**：`textBlocks.buildBlocks` 是唯一实现，txt / md / 云解析快照共用。
-   它有两处不许切（代码围栏、表格行之间），`assert_readers` 里既有「拼回去不少字」也有这两条。
-
-**表格打开的四层**（v0.14.0 起，按顺序试，命中就返回）：
-
-1. 内存单槽 `recallWorkbook`（同一次运行内，退出再进就没了）；
-2. 磁盘 `readViewCache` → `documents/.cache/<原名>.view.json`（**重启后仍然有效**，
-   读回来 40 ms vs 重新解析 340 ms）；原件连读都不读；
-3. `readDocBytes` + `readWorkbook`（`dense:true`，手机上一张 10 万格的表 1.1–2.2 秒冻结）；
-4. 解析完落盘（首屏之后 300 ms，不 await，失败只影响下次）。
-
-第 3 步省不掉：`XLSX.read` 是同步的，进了就交不出主线程。已经做的只有「进去之前先把
-『正在解析 N MB』画出来」。缓存这一层**不能抛** —— 任何读不出来都当作没有缓存。
-
-### 纯函数层（改动时最好写断言）
-
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/util/askIntent.ts` | 148 | **指令路由唯一判据**：`routeAsk`（月小结 → 待办 → 碎片整理 → 问答）、`wantsAll`（说了「所有」才整理全库）、`planDraftInput`（草稿开着时：改稿 / 新开一轮 / 被挡住，v0.20.3）、提示框种子的默认指令 |
-| `src/util/knowledgeDoc.ts` | 371 | 整理草稿：模型 JSON 收敛、日期真校验、摘要、`mergeDrafts`（跨批同名去重）、`describeForHistory`、`draftProblem` 写入前校验 |
-| `src/util/organizePlan.ts` | 465 | **唯一业务判据**：`mergeBatchResult`、`buildTagGroups`、`finalizePlan`、`appendSummary` |
-| `src/util/tokenize.ts` | 167 | 中文 bigram、`buildFtsQuery`、`cleanTag` / `normalizeTag` / `dedupeTags` |
-| `src/util/jsonRepair.ts` | 193 | 模型 JSON 的宽容解析：剥围栏 / 括号配对切片 / 修非法转义与裸控制字符 / 报出位置 |
-| `src/util/urls.ts` | 61 | 从一句话里认链接（剥微信尾巴 / 句末标点）、拼搜索 query（去链接、标点处截断） |
-| `src/util/pendingImages.ts` | 52 | 纯函数：这一批里哪些图还没读过（`text === null`）、按记录顺序排队、一轮有上限；判据错一处就会重复读或永远不读 |
-| `src/util/fragmentText.ts` | 72 | 碎片全文 = 正文 + 各图文字层（多图编号）；`imageStateOf` 是图状态的唯一判据；整理 / 问答 / 装箱 / 预览共用 |
-| `src/util/batch.ts` | 71 | `packFragments`（条数 + 字数双上限，至少收一条）、`sliceBatches`（整理全部分批，上限 10 批）、`pendingOnly` |
-| `src/util/qaNote.ts` | 20 | 会话转碎片：AI 精要包装 `buildQaFragment` + 完整转录兜底 `buildQaNote` + 来源清单 |
-| `src/util/text.ts` | 32 | `normText` / `containsText` / `clip` |
-| `src/util/mdBuild.ts` | 115 | 导出拼接（时间轴 + 待办 + 标签索引），正文里的图片定位标记在这一层剥掉。纯函数，只为和 `mdParse` 做往返测试 |
-| `src/util/mdParse.ts` | 285 | 导入解析：日期分节、`- HH:MM 正文 #tag`、`fragmentKey` 判重指纹、`looksBinary` |
-| `src/util/date.ts` | 188 | 日 / 周 / 月键、`periodAnchor`、格式化；`recentMonths` 只算月 |
-| `src/util/digest.ts` | 106 | 待补月总结清单（按月倒序，跳过本月与已写的月） |
-| `src/util/todoTree.ts` | 125 | **待办父子唯一判据**：`buildTodoTree` / `planToggle`（四条级联规则）/ `flattenTodos` |
-| `src/util/keyboard.ts` | 39 | `useKeyboardHeight()`（替代 `KeyboardAvoidingView`） |
-| `src/util/highlight.ts` | 55 | 搜索命中位置：`findHits` / `countHits`。**计数与高亮共用同一份实现** |
-| `src/util/docSupport.ts` | 212 | 文档支持矩阵与通道判据：`planForDoc`（local / lite / pro）+ `parseDocFile` 统一入口 + `SUPPORT_HINT`。**页面里不允许另写后缀判断** |
+| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 120 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
+| `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 69 | 共享页头、返回/右侧动作及标题聚焦 |
+| `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 23 | 减少动效时静态忙碌图形，不改变业务进度 |
+| `src/components/ChoiceChip.tsx` [打开](<src/components/ChoiceChip.tsx>) | 49 | 带文字/状态的共享选项控件 |
+| `src/components/useHeadingFocus.ts` [打开](<src/components/useHeadingFocus.ts>) | 20 | 只为屏幕阅读器聚焦新标题，不抢普通键盘 |
+| `src/components/KnowledgeDraft.tsx` [打开](<src/components/KnowledgeDraft.tsx>) | 213 | 全部产出可审阅、稳定key、逐项授权与统一写入计数 |
+| `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 259 | 草稿单篇整页阅读/编辑与批准入口 |
+| `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1042 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
+| `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 426 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
+| `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 598 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
+| `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 108 | 小结整页阅读与列表同序分页 |
+| `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 745 | 月总结单篇/缺口队列、原稿对照和确认保存 |
+| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 511 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
+| `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 250 | 全屏覆盖编辑、子项和到期日 |
+| `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 525 | 更新提示/下载/安装/错误状态 |
+| `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 209 | 文字导入预览、范围/日期警告与确认 |
+| `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 282 | 引用快照、真实来源位置，不回库猜原文 |
+| `src/components/SwipeRow.tsx` [打开](<src/components/SwipeRow.tsx>) | 302 | 固定方向的时间轴手势，保留纵滚/长按和减少动效 |
+| `src/components/Toast.tsx` [打开](<src/components/Toast.tsx>) | 55 | 就近消息呈现，不自行决定业务成功或计时 |
+| `src/components/ReasoningFold.tsx` [打开](<src/components/ReasoningFold.tsx>) | 84 | 答后仍可打开的思考折叠 |
+| `src/components/ReasoningStream.tsx` [打开](<src/components/ReasoningStream.tsx>) | 93 | 流式思考展示，减少动效与滚动策略 |
+| `src/components/ReasoningTrace.tsx` [打开](<src/components/ReasoningTrace.tsx>) | 70 | 过程轨迹显示 |
+| `src/components/AgentError.tsx` [打开](<src/components/AgentError.tsx>) | 169 | 错误短提示/阶段/原始证据展开，不吞掉失败原因 |
 
-### 组件与类型
+### 4.7 共用纯函数
 
-| 文件 | 行 | 干什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/components/KnowledgeDraft.tsx` | 569 | 整理草稿卡：步骤日志、思考折叠、产出小卡（查看 / 编辑走整页）、待办勾选、**写入权限位**、已写入标记、「还有 N 条，继续」 |
-| `src/components/DraftDocPage.tsx` | 242 | 草稿单篇整页：阅读（真渲染器）/ 编辑（Markdown 源）切换、标题与正文、加入文档库 |
-| `src/components/FragmentDetail.tsx` | 1269 | 全屏详情：左右滑、整屏内联编辑、当天小结；多图原比例 + 全屏看图、阅读/编辑态就地加图与删图；搜索命中高亮与逐处跳转 |
-| `src/components/DocViewer.tsx` | 803 | 文档阅读器：Markdown 阅读、打开原文件、重新解析、删除（二次确认） |
-| `src/components/SummarySheet.tsx` | 744 | 月度总结面板：单篇 / 勾选缺口排队、新旧左右对照、替换确认、保存 |
-| `src/components/TodoPanel.tsx` | 551 | 待办列表：两层缩进、勾选级联、折叠、多选合并、已合并撤回 |
-| `src/components/TodoEditor.tsx` | 245 | 待办编辑层：新建 / 加子项 / 改文字与到期日（全屏覆盖，不用 Modal） |
-| `src/components/UpdateSheet.tsx` | 520 | 更新弹窗：发现新版 / 下载中 / 待安装 / 失败四态；下载中显示当前源 |
-| `src/update/check.ts` | 176 | 查 GitHub Release、6 小时节流、跳过版本、自动检查开关 |
-| `src/update/mirror.ts` | 66 | 下载源候选构建：自定义地址 → **GitHub 官方** → 内置镜像（只留一个）；下载地址设置 |
-| `src/update/download.ts` | 316 | 多源回退下载 + **停滞/低速巡检自动切源**（15s 无字节或 60s 低速）+ 校验字节数 + 拉起系统安装器 |
-| `src/update/notify.ts` | 142 | 下载进度通知（LOW 渠道、sticky）。**JS 在后台被挂起，通知数字会停在切走那刻** |
-| `src/util/semver.ts` | 62 | 版本号拆段比较（**不能比字符串**：`'0.10.0' < '0.9.9'`） |
-| `src/components/NoteViewer.tsx` | 220 | 小结全屏阅读器：左右滑动在筛选集内切换 |
-| `src/components/ImportSheet.tsx` | 202 | 导入预览：共读到多少 / 新增多少 / 跳过多少，确认才写库 |
-| `src/components/NoteBody.tsx` | 647 | 正文渲染：标题 / 列表 / 表格 / 代码块 / 分隔线 / 引用小标 / **图片块（`![](img:id)` 按比例铺满）**；`variant` / `selectable` / `muted` 支持碎片与详情页。**表格用 View 排** |
-| `src/util/mdBlocks.ts` | 488 | Markdown 分块解析 + 引用标记识别 + **图片定位块**（纯函数，可断言）。渲染本地看不见，能验的都在这里 |
-| `src/components/IconButton.tsx` · `ScreenHeader.tsx` | 101 / 84 | 全项目唯一的图标按钮与页头；`ScreenHeader` 的左侧按钮可换成「历史」 |
-| `src/components/SwipeRow.tsx` | 279 | 时间轴行的手势：左滑露出删除、右滑直接进问。**不能加 `overflow:'hidden'`**，会切断时间轴竖线 |
-| `src/components/CitationSheet.tsx` | 275 | 点引用小标后从底部展开的来源面板；正文走快照，不回库查 |
-| `src/components/Toast.tsx` | 55 | 复制 / 归档 / 删除成功的轻提示；不自己计时 |
-| `src/components/Reasoning*.tsx` | 75 / 86 / 69 | 思维链实时流 / 整理页折叠 / 轨迹 |
-| `src/components/ReasoningFold.tsx` | 83 | 「问」页每轮答案上方的深度思考折叠块；最新一轮默认展开 |
-| `src/types.ts` | 526 | 全部领域类型（`Fragment` / `QaTurn` / `QaCitation` / `AskSession` …；`QaTurn.reasoning` v0.8.9、`kind` 区分整理轮 v0.18、`webSources` 存这一轮搜到的网页 v0.20.3） |
-| `src/export/markdown.ts` | 56 | 导出的 IO 部分：写文件 + 系统分享（拼接在 `util/mdBuild.ts`） |
-| `src/version.ts` | 8 | 版本号常量（与 app.json 手工同步） |
+| `src/util/fragmentText.ts` [打开](<src/util/fragmentText.ts>) | 81 | 材料文字、可见检索投影、配图文字与状态判据 |
+| `src/util/inlineImages.ts` [打开](<src/util/inlineImages.ts>) | 99 | 图片定位标记、待发键替换、删除和无定位图判定 |
+| `src/util/pendingImages.ts` [打开](<src/util/pendingImages.ts>) | 52 | 按图id选择未读图片、保持顺序与读图预算 |
+| `src/util/tokenize.ts` [打开](<src/util/tokenize.ts>) | 165 | 中文bigram/FTS查询与旧标签规范化兼容工具 |
+| `src/util/highlight.ts` [打开](<src/util/highlight.ts>) | 55 | 唯一字面命中findHits/countHits |
+| `src/util/mdBlocks.ts` [打开](<src/util/mdBlocks.ts>) | 488 | Markdown、表格、代码、引用与图片块解析 |
+| `src/util/text.ts` [打开](<src/util/text.ts>) | 32 | 文本规范化、包含判断与截取 |
+| `src/util/date.ts` [打开](<src/util/date.ts>) | 188 | 日/月等历史日期键、标签与月末锚点 |
+| `src/util/digest.ts` [打开](<src/util/digest.ts>) | 106 | 月总结缺口与历史小结分组，组内不重排 |
+| `src/util/todoTree.ts` [打开](<src/util/todoTree.ts>) | 125 | 父子树、唯一完成级联计划与展开 |
+| `src/util/qaScope.ts` [打开](<src/util/qaScope.ts>) | 70 | 记录/文档范围规范化、身份与比较 |
+| `src/util/qaNote.ts` [打开](<src/util/qaNote.ts>) | 20 | 历史纪要文本包装工具，不是恢复旧整理产物入口 |
+| `src/util/jsonRepair.ts` [打开](<src/util/jsonRepair.ts>) | 193 | JSON语法宽容修复与出错位置，不补残缺结构 |
+| `src/util/urls.ts` [打开](<src/util/urls.ts>) | 61 | 链接提取与查询词构建 |
+| `src/util/keyboard.ts` [打开](<src/util/keyboard.ts>) | 39 | edge-to-edge键盘高度与占位 |
+| `src/util/docSupport.ts` [打开](<src/util/docSupport.ts>) | 212 | 云通道判据、显式解析分派和本地容量说明 |
 
----
+### 4.8 自更新
 
-## 5. 数据模型（SQLite v11）
-
-```sql
-fragments         id, content, created_at, source, status, tags(JSON), project, merged_into, nature
-todos             id, text, due_at, done, done_at, source_fragment_id, created_at, merged_into, parent_id
-notes             id, type(monthly|theme), title, body_md, period, created_at   -- v11 起只有 monthly 会被写入
-settings          key, value
-organize_runs     id, started_at, fragment_ids, model, result_json, applied   -- 历史表，v0.7 起不再写入
-organize_sessions id, scope, pending_ids, cursor, plan_json, context_summary, finished, created_at, updated_at
-ask_sessions      id, title, turns_json, scope_json, archived, fragment_id, created_at, updated_at
-documents         id, name, ext, size, file_uri, body_md, pages, char_count, state, error, content_revision, indexed_revision, chunk_count, content_source, created_at, updated_at
-document_chunks   id, document_id, content_revision, ordinal, text, locator_json
-document_chunks_fts FTS5(text)  —— rowid 就是 document_chunks.id
-fragment_fts      FTS5(text)  —— rowid 就是 fragments.id
-```
-
-索引：`fragments(created_at DESC)`、`todos(done)`、`todos(merged_into)`、`todos(parent_id)`、
-`idx_todos_done_at(done_at DESC)`、`idx_sessions_open(finished, updated_at DESC)`、
-`idx_ask_sessions_updated(archived, updated_at DESC)`、`idx_documents_updated(updated_at DESC)`、
-`idx_document_chunks_doc(document_id, content_revision, ordinal)`。
-
-**v6 迁移做了三件事**：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、
-建 `fragment_fts` 与 `organize_sessions`。
-
-**v7 只干一件事**：`todos` 加 `done_at`，并用 `created_at` 回填已有的已完成项。
-「已完成只保留最近 5 条」靠它排序 —— 没有完成时间，就只能按创建时间清，会把
-刚勾掉的旧待办先删掉。注意这一步**会物理删除**超出的条目（v0.7.3 升级时一次性收敛）。
-
-**v8 只干一件事**：建 `ask_sessions`。`turns_json` 存 `QaTurn[]`，每轮带
-`citations` 快照（kind / id / label / body / url），所以历史会话重开时点引用
-不依赖碎片、待办、小结还在不在。它**不写 `fragments`**：只有用户点「整理为碎片」
-才落一条纪要。
-
-**v9 只干一件事**：建 `documents`。正文单独一列 `body_md`，**列表查询不取它** ——
-一篇几十万字的文档每次都读一遍，首屏会肉眼可见地卡。`char_count` 由写入方按
-`body_md.length` 一起写，调用方不要自己算。文档**不进** `fragment_fts`。
-
-**v10 只干一件事**：给文档补「可检索」的那一半 —— `documents` 加
-`content_revision` / `indexed_revision` / `chunk_count` / `content_source`，
-建 `document_chunks` 与 `document_chunks_fts`，并给 `ask_sessions` 加 `scope_json`。
-
-- 两个版本号的作用是**判断检索结果还能不能用**：`content_revision` 是正文被写了几次，
-  `indexed_revision` 是索引建到第几版。两者不等时，切片查出来的是旧正文的片段，
-  `searchDocumentChunks` 必须把它们排除掉，否则回答会引用一段已经不存在的文字。
-- 已有文档的 `content_revision` 保持 0（正文在库里，没有切片），**迁移故意不自动建索引**：
-  建索引要跑分词和入库，属于用户点「准备」的动作，不能借迁移之名悄悄做掉。
-- 切片**不进 `fragment_fts`**：一条碎片和一段 PDF 正文混在同一个索引里，时间轴搜索会被
-  文档段落污染。文档有自己的一份 FTS。
-
-**v11 干两件事**：`todos` 加 `parent_id`（两层子项，自引用，另加索引
-`idx_todos_parent`），以及 `DELETE FROM notes WHERE type IN ('daily','weekly')`
-—— 日 / 周小结下线，旧内容一并清掉（用户 2026-11-10 要求「更新后也不保存」）。
-
-- 子项用**自引用而不是独立表**：两者字段完全一样，拆表之后「列出所有未完成待办」
-  要 UNION，父项完成时还得跨表更新，而「一条待办能挂子项、也能被挂」本来就是自引用。
-- 删除**不用 `hidden` 标记**：加了标记迟早有某条查询忘了过滤；直接删干净。
-  `monthly` 与更早的 `theme` 不动。
-- 迁移**不重建任何索引**，也不回填父子关系 —— 旧数据全是顶层，这是正确的默认。
-
-**v12 干两件事**：`documents` 加 `origin`（`file` / `knowledge`）与 `excerpt`，
-`ask_sessions` 加 `document_id` 与 `source_ids`。
-
-- `origin` 不能省成「`file_uri` 为空就是知识文档」：导入的原件被用户清掉之后
-  `file_uri` 也会变空，那时它是「原件没了但正文还在」，要提示重新导入；
-  而知识文档天生没有原件。**两种状态用一个字段表达，最后一定是两处判据对不上。**
-- `excerpt` 在写入时算一次。列表查询**永远不会**为了一行摘要去读 `body_md` ——
-  那等于把「列表不带正文」这条规矩废掉。
-- `source_ids` 存的是当初喂给模型的碎片 id，供「重新整理」复现同一批输入。
-  不存的话，重新整理只能拿「最近 40 条」重跑，结果和上次不是一回事。
-
-前十一段迁移原样保留（回滚就得重放），`PRAGMA user_version` 就是「跑过几条」。
-
-几个容易误解的点：
-
-- **`nature` 字段还在，但没人读**。v0.7 起不再写 `knowledge`，v0.16 起整理也不再改它。
-  留着只为兼容旧数据，不要基于它做判断。
-- **`notes.type = 'theme'` 同样只是历史遗留**，新数据只有 `monthly`（v0.15 起日/周已下线，
-  v11 迁移会把库里的 daily/weekly 删掉）。`NOTE_GROUP_LABEL` 里仍留着四种文案，
-  是因为**万一某台设备的迁移没跑到**，旧数据要能照常显示，而不是凭空消失。
-- **标签没有表**。`fragments.tags` 是 JSON 数组，`listTags()` 是遍历所有碎片统计出来的。
-  改名 / 合并 / 删除走 `rewriteTags`，全库重写 JSON 并重建索引。
-- **`notes` 的 `(type, period)` 唯一性由应用层保证**（`upsertNote` 先查后写）。
-  period 可空，SQLite 的 UNIQUE 对 NULL 不去重。
-- **`done_at` 为空但有 `done = 1` 的是旧数据**（v7 迁移前完成的）。清理逻辑用
-  `COALESCE(done_at, created_at)` 兜底，别直接拿 `done_at` 排序，否则这些会全排到最后。
-- **`organize_runs` / `organize_sessions` 是死数据**。v0.16 删掉了整理页与批循环，
-  这两张表只剩历史价值：`Repo.saveRun` / `saveSession` 还在接口里，**没有任何调用点**。
-  别以为它在记录历史；也不要基于 `organize_sessions` 做「续跑」——那个功能已经不存在。
-
----
-
-## 6. AI 契约
-
-**服务商** DeepSeek，OpenAI 兼容 `POST {baseUrl}/chat/completions`，默认模型 `deepseek-flash`。
-`deepseek-chat` / `deepseek-reasoner` 已于 2026-07-24 停用，别写。
-
-| 功能 | 文件 | 输出 | `json` | 备注 |
-|---|---|---|---|---|
-| 整理成文档 | `ai/knowledge.ts` | `{title, body_md, todos, note}` | `true` | 12K 额度，`effort: high`；撞额度直接抛错，草稿不落地 |
-| 只抽待办 | `ai/knowledge.ts` | 同上（`body_md` 空） | `true` | 6K 额度，`effort: low` |
-| 改稿 | `ai/knowledge.ts` | 同结构 | `true` | 只改用户点到的地方，其余原样返回 |
-| 月总结 | `ai/summarize.ts` | Markdown（表格 + 列表） | **`false`** | 撞额度直接抛错，不保存 |
-| 问 | `ai/qa.ts` | Markdown + `[F]/[N]/[T]/[W]` 引用 | **`false`** | 撞额度标 `truncated` |
-
-### 整理草稿的输出契约
-
-```json
-{
-  "title": "群晖换盘",
-  "body_md": "## 结论\n4 块 8T，RAID5 重建 30 小时完成。",
-  "todos": [{"text": "把旧盘跑一次 SMART 长检", "due": null}],
-  "note": "覆盖换盘全过程，2 条待办"
-}
-```
-
-四个字段都可能为空，但**形状不能变**：`normalizeDraft` 按名字取，改一个字母草稿就是空的。
-`due` 只接受 `YYYY-MM-DD` 且必须是真实日期 —— `2026-02-31` 会被 `Date` 悄悄滚到 3 月 3 日，
-所以 `dueValid` 解析回来还要和输入比对一次。
-
-### 整理的材料与预算
-
-| 项 | 值 | 为什么 |
+| 文件 | 行 | 当前职责 |
 |---|---|---|
-| 单次条数 | 40 条 | 再多输出会撞额度，而撞额度等于这一批白跑 |
-| 单次字数 | 16,000 字 | 与 `packFragments` 同一口径（条数 + 字数双上限，至少收一条） |
-| 超长材料 | 保留前 70% + 后 30% | 只留前面丢结论，只留后面丢起因；截断要在卡片上如实写出来 |
-| 输出额度 | 12,000（文档）/ 6,000（待办） | **思考链和正文共用**，给少了会「想到一半停住」 |
+| `src/update/check.ts` [打开](<src/update/check.ts>) | 176 | Release查询、节流、自动检查/跳过版本 |
+| `src/update/mirror.ts` [打开](<src/update/mirror.ts>) | 66 | 自定义→官方→镜像候选顺序 |
+| `src/update/download.ts` [打开](<src/update/download.ts>) | 316 | 停滞/低速切源、字节核验和content URI安装 |
+| `src/update/notify.ts` [打开](<src/update/notify.ts>) | 142 | 下载状态通知；后台JS挂起时数字可能暂停 |
+| `src/util/semver.ts` [打开](<src/util/semver.ts>) | 62 | 数值分段比较版本，不比较字符串 |
 
----
+### 4.9 检查脚本
 
-## 7. 五条主流程
+| 文件 | 行 | 当前职责 |
+|---|---|---|
+| `scripts/assert_md.cjs` [打开](<scripts/assert_md.cjs>) | 303 | 原有Markdown往返断言 |
+| `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 482 | 限定文档问答/预算/引用 |
+| `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 567 | 文档任务控制流 |
+| `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |
+| `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 340 | 父子待办和月总结规则 |
+| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 776 | 问页意图、草稿与输出兼容 |
+| `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1727 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
+| `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 390 | 两轴外观、真实对比度、PDF与阅读器契约 |
+| `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
+| `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 264 | 文档机器一致性；不得通过降低覆盖率躲检查 |
 
-### 7.1 「问」里的四种任务：路由 → 执行 → 草稿 → 写入
+## 5. 数据模型与可靠性边界
 
-```
-用户输入
-  ↓ routeAsk(text)                     util/askIntent.ts（唯一判据）
-  ├─ digest   → 打开 SummarySheet（月小结）
-  ├─ todos    → extractKnowledge(mode:'todos')
-  ├─ organize → extractKnowledge(mode:'knowledge')
-  └─ answer   → askQuestion(...)       原有问答链路
-        ↓
-   整理类：草稿落在对话流里（KnowledgeDraft）
-        ├─ 直接改（标题 / 正文 / 待办逐条勾）
-        ├─ 继续说一句 → reviseDraft（只改点到的地方）
-        └─ 通过并写入 → writeKnowledgeDocument + insertTodo
-```
+结构版本仍为16，**没有本轮新表或改写历史迁移**。
 
-**路由顺序不能改**：月小结 → 待办 → 碎片整理 → 问答。「整理这个月的碎片」同时命中
-「整理」和「这个月」，先判「整理」的话这句话永远写不出月总结。
-
-**草稿开着时，任何一句话都是「改哪里」**，不再重新判意图。想提问就先把草稿收掉
-（卡片上有按钮）—— 让「这到底是在改稿还是在提问」变成一条明确的规则，比让分类器猜靠谱。
-
-### 7.2 写入的三条纪律（`documents/knowledge.ts`）
-
-1. **先插一条 `parsing` 记录，再 `replaceDocumentContent` 写正文**。
-   正文要靠 document id 才能写；而 `replaceDocumentContent` 会把 state 改成 `done`。
-   直接 `updateDocument({bodyMd})` 只写正文、不建切片 —— 文档能读、能按标题搜到，
-   但「就这份文档提问」查不到它的任何一段。
-2. **写失败要把空壳删掉**。留一条 `parsing` 的空文档，用户点开是空白，而且没有入口能清掉它。
-3. **先文档、后待办、最后改会话标记**。顺序反了就可能「待办进去了、文档没进去」，
-   用户没法从界面上判断缺了哪一半。
-
-### 7.3 问：四路检索 → 装填 → 并行联网 → 回答
-
-```
-retrieveLocal(question, turns, contextIds)
-  ├─ contextIds（右滑带入的那条，绕过 merged 过滤）  ⭐ v0.8.8
-  ├─ repo.searchFragments(question, 40)          FTS5 + LIKE 兜底
-  ├─ timeRange(question) → listFragmentsBetween  今天/上周/最近 N 天…
-  ├─ 提到的标签名（≥2 字，最多 2 个）→ listFragmentsByTag
-  └─ 上一轮 sourceIds 最后 12 条
-  ↓ 去重、去 merged（上下文那条除外）、按 18 条 / 单条 1200 字 / 总 36000 字装填
-  ↓ 小结按 token 命中取前 6 篇（没命中就不给）；待办 40 未完成 + 20 已完成
-  ↓ useWeb ? searchWeb() 并行（失败只记 webError）
-requestChat({json:false, effort: thinking ? 'high' : undefined})
-  ↓ 引用反查：只认本轮给过的 [F id]
-  ↓ buildCitations：F/N/T/W 各取正文快照，随 QaTurn 一起存
-```
-
-- 多轮只带「问题 + 回答」，最多 8 轮；**不带上一轮资料**（每轮重新检索）。
-- 网络资料单独成段，硬性要求 `[W]` 引用，**不许说成「你记过的事」**。
-- 每答完一轮 `AskScreen` 立刻 `repo.saveAskSession`；失败只静默，不拦回答。
-  保存带**会话代次**（`sessionGenRef`）：切换/新建会话后，旧请求回来不能再改新会话的标题和 id。
-
-### 7.4 从历史会话整理：跳转、重跑、删除
-
-历史行上如果 `document_id` 非空，就带一个「已写入文档」徽标，点它直接打开那篇文档
-（`DocViewer` 以内嵌覆盖层打开，不跳页）。会话操作面板有三项：
-
-| 操作 | 行为 |
+| 存储 | 当前用途与兼容边界 |
 |---|---|
-| 整理成文档（AI 提炼） | 把**这场会话的问答**当材料，走同一条 `extractKnowledge` |
-| 打开整理出的文档 | 只有整理过才出现；指向 `document_id` |
-| 重新整理 | 优先用 `source_ids` 找回**当初那批碎片**；碎片被删了才退回会话原文 |
+| fragments / fragment_images | 原始记录与多张配图；保留旧tags/nature/单图列，定位标记和检索投影受同一提交保护 |
+| todos | parent_id自引用两层；保留merged恢复关系，已完成仍有最近5条清理规则 |
+| notes | 现行写月总结，旧类型仅兼容；不要重新执行历史日/周清理或恢复其入口 |
+| documents / document_chunks / 专用FTS | 原件元数据、正文版本、切片与定位；正文不参加列表查询，索引必须与内容版本一致 |
+| ask_sessions | 会话范围、问答/整理轮与引用快照；旧document_id与多篇document_ids兼容，删会话不删文档 |
+| settings | 配置、两轴外观、搜索投影版本、整理工作区与草稿提交凭据，不需要为本轮另建表 |
+| organize_runs / organize_sessions | 旧历史兼容存储，不是当前草稿恢复机制；不能因旧游标存在就认定内容已保存 |
 
-- 重新整理走 `findFragmentsByIds`，**不能**用 `listFragments(limit)` 再自己筛：
-  limit 一旦小于总数，较早的碎片就查不到，重跑会静默少一半材料。
-- 删除会话**不删文档**：文档已经是独立的一篇东西，删会话把它带走等于「删聊天记录顺手删了笔记」。
-  删除确认卡上写清了这一点。
-- 写入成功后 `markAskSessionDocument(sessionId, docId, sourceIds)`；同一场会话再整理一次会覆盖指向，
-  旧文档留在文档区（不自动删，用户可能已经引用过它）。
+- Native与Web接口同步，但Web内存测试不等于SQLite升级/文件系统故障测试。迁移执行器及完整备份仍需独立验收，不宣称本轮无schema变化已解决它们。
+- 图片先落私有文件，再经Repo提交引用。失败只清确定未提交的文件；提交成功后刷新失败不能删引用或诱导重复发布。
+- `insertFragmentImages`是一批提交；记录正文/定位/FTS、导入单条文字/旧标签/状态都守同一事务边界。
+- `commitDraft`验证本地key与输入，只写明确批准目标。文档、父子待办、来源标记、会话关系和 `draft.commit.<draftId>` 凭据同事务；重复key/已删除旧目标不偷偷重建。
+- 记录输入草稿在App内存持有；整理工作区存 `organize.workspace.v1`。不要把前者的跨页保留写成进程重启也可恢复。
 
-### 7.5 小结、待办与导出
+## 6. 当前主要流程
 
-- 月总结：`SummarySheet` 取该月全部碎片 → `summarizePeriod()` → 预览 → `upsertNote`。
-  入口现在只在「问」里（提示框或一句「写个月小结」）。输出是**一张按天的
-  「日期 \| 事件」表 + 3–6 条重要事件与进展**，650 字上限，素材预算 60k 字。
-  有旧稿时左右对照；缺口可勾选排队生成、逐篇确认。**完整规格见 SPEC §6.3，这里不重复。**
-- 待办：勾选级联全在 `util/todoTree.planToggle`，两份 repo 只负责执行；
-  两层子项、可新建/编辑/多选合并。**四条级联规则与四个边界坑见 AGENTS「待办的两层子项」。**
-- 导出：`# 碎片导出 · 日期` → `## 时间轴`（按天 `###`）→ `## 待办`（未完成 / 已完成，子项缩进两格）
-  → `## 标签索引`。
+### 6.1 记录与查找
 
----
+App拥有正文、待发图片与唯一key → Repo提交记录/配图/定位/FTS → UI清除该次已提交草稿并刷新。提交与刷新错误分开处理，晚到回调不清后来新输入。
 
-## 8. 踩过的坑（v0.7 相关优先）
+搜索投影是可见正文+图文字+事项，去掉图片定位语法，不含旧标签。Native索引同时核对条数和投影版本；FTS/LIKE兜底仍保留中文bigram口径。阅读器字面查找另用findHits及可见Markdown块，不拿相关性检索候选数报全文命中。
 
-### 8.1 循环与游标
+### 6.2 聊天式整理与恢复
 
-- **别用 offset / 池子长度算进度。** v0.6 两次翻车都在这里：批次永远从池子头部装填，
-  重构不改变碎片状态，点多少次「继续」都是同一批。现在只用「快照 − 已处理 − 已跳过」。
-  删掉的碎片会让「total − 池子长度」偏大，所以进度也只按集合算。
-- **`skipBatch` 不标状态。** 跳过的是这一次的请求，不是这些内容。
-- **装箱至少收一条。** 否则一条超长碎片会让批次永远为空，那条就永远整理不了。
-- **`truncated` 对半拆，不是失败。** 拆到只剩一条还截断，才报错。
-- **校验用原始 `todos`，不是有效视图。** 计划里的变更没落库，拿有效视图校验会把合法 id 判掉。
-
-### 8.2 标签
-
-- **`cleanTag` 存库，`normalizeTag` 只做比较。** 混用会把 `NAS` 存成 `nas`。
-- **`normalizeTag(' # NAS')` 曾经返回 `#nas`。** 只削 `^#+` 匹配不到带前导空格的写法；
-  改成 `^[\s#]+`。从正文复制标签时很容易带空格。
-- **一条碎片的多个标签组要先合并再写。** 逐组 `applyTags` 会互相覆盖。
-- **标签全被取消时不要写空数组。** 静默清空找不回来。
-
-### 8.3 全文检索
-
-- **中文只能 bigram。** `unicode61` 把整句当一个词；`trigram` 对 <3 字查询不命中（「报销」搜不到）。
-  两种都是**零报错**的静默失败。
-- **`fragment_fts.rowid = fragments.id`。** 写入先删后插；改内容 / 改标签 / 合并 / 删除都要同步。
-- **FTS 0 命中要退回 LIKE。** 慢一点可以，不能给空结果还说是搜过了。
-
-### 8.4 问答
-
-- **只给筛过的资料。** 全库塞上下文会让问题越具体、答得越偏。
-- **引用反查只认本轮编号。** 模型会编 `[F999]`。
-- **`json:false` 不能省。** 否则整篇 Markdown 被压成一个字符串，换行变 `\n`。
-- **返回键由 App 转发。** 页面自己注册的 `BackHandler` 抢不过 App 那个（后注册优先），
-  而「要不要存纪要」是页面内部状态，只能由 App 反过来调 `registerClose`。
-- **`buildQaNote` 不用正则 lookbehind。** Hermes 对零宽断言的支持看版本，且 `tsc` / Web 构建都不报。
-
-### 8.5 历史坑（仍然有效，压缩）
-
-- **`prebuild` 必须 `--no-clean`**，否则删掉整个 android/，下次编译 45 分钟。
-- **`max_tokens` 含思考链**。空结果先看 `finish_reason`：`length` = 撞额度，
-  `insufficient_system_resource` = 对方资源不足。两者不能报同一句话。
-- **`reasoning_effort: high` 是加压指令**，不是「想久一点」。机械抽取用 `low`（= 不加前缀）。
-- **`finish_reason` 要在读 `delta` 之前读**，它挂在最后一个 `delta` 为空的 chunk 上。
-- **SQL 清空字段写 `NULL` 字面量**，别用 `?` 绑 JS null（部分版本会静默改 0 行）。
-- **别用 `changed` 判断成败**，写库后重新查询。
-- **全屏详情只存 id**，内容 `useMemo` 派生；存对象快照会「看起来没变」。
-- **跨页面草稿要提到 `App`**。`TimelineScreen` 切走就卸载。
-- **显示与写入共用同一个函数**。两份实现迟早漂移，表现是「界面说改 A，实际改 B」。
-
----
-
-### 8.7 CI（v0.8.3）
-
-仓库 `github.com/gup-n/fragements`（拼写就是 fragements）。推送 master 触发构建，
-8 分钟左右出 APK artifact。
-
-- **不要加 `android-actions/setup-android`**。runner 自带 SDK，再加会和预装目录抢。
-  用预装的 `$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager` 补组件。
-- **`local.properties` 要手写**：prebuild 生成的工程里没有它，gradle 有时找不到 SDK。
-- **缓存 key 要在 prebuild 之后算**，否则 hash 的是还没生成的文件。
-- **`cancel-in-progress: true` 会在连推时取消上一次**。构建要 8 分钟，
-  短时间内推两次等于白跑第一次 —— 想每次都留产物就把它关掉。
-- 公开仓库的**构建日志要 admin 权限**才能通过 API 下载（403），
-  失败时只能靠 steps 状态反推，必要时去网页点开看。
-- **CI 里有一道 `npm run check:docs`**（v0.8.7 起）。它挡的是「改了代码没改文档」：
-  版本号三处不一致、HANDOFF 行数表漂了、`TEXTS.md` 抄的提示词和源码不一样、
-  死链、路径写错、「N 条清单」和 ROADMAP 对不上。**这些不用人眼扫，别绕过它。**
-
-### 8.8 发版流程（v0.8.4 起）
-
-```
-# 1. 改版本号三处：src/version.ts、package.json、app.json(version + versionCode)
-# 2. 写 CHANGELOG 的本版小节 —— Release 说明从这里抠，别另写一份
-# 3. prebuild + assembleRelease，本地验一遍
-# 4. 提交并推送 master
-git push origin master
-# 5. 打 tag 并推 —— 这一步才会建 Release
-git tag -a v0.8.5 -m "v0.8.5 xxx"
-git push origin v0.8.5
+```text
+routeAsk / planDraftInput
+  → useOrganize：选择来源、持有草稿与锁、按会话代次接线
+  → executeOrganize：固定范围、pending材料、按需读图、保存检查点
+  → extractKnowledge：fragments或session实际提炼，docs/todos/note
+  → workspace：稳定身份、保留授权、可审阅产出、selectDraftTargets
+  → commitDraft：原子写目标与凭据
+  → 保存UI快照、刷新/历史（失败不否认已经提交）
 ```
 
-CI 在 tag 构建成功后用 `gh release create` 建 Release，asset 是
-`fragments-v0.8.5.apk`，说明来自 `scripts/release_notes.mjs`（读 CHANGELOG）。
+- 全量范围是固定id列表，不按排序后的最大id推进；每批真实材料先留存，再发送。处理完成id与草稿一起保存，来源缺失另列。
+- session-source真的使用所选会话问答；重试/改稿保留原来源、要求与历史，不退回最近40条。文档范围会话不夹带全库待办。
+- 初始模型内容形状是docs/todos/note，内部使用bodyMd/keep/key等字段；key和授权由应用掌握，不让模型重新批准。新项无法唯一对上旧项时保守不勾。
+- 存储串行化保存快照；恢复严格验证，和提交凭据对账。损坏/冲突停止并说明，不清掉后伪装一份新草稿；恢复不自动调用AI。
+- 暂停阻止后续批次/未发图片与迟到写回，不能撤回已发送请求。保存失败需保留页面或提供明确补救，不悄悄丢产出。
+- 单次输入预算、篇数和输出额度以当前函数为准；截断如实标明，JSON未完成不得补结构后写库。已保存项和逐项选择不靠数组下标识别。
 
-**没打 tag 就不会有 Release**，App 也就查不到更新。反过来说，
-推 master 只跑构建、不发布，可以放心推。
+### 6.3 文档与问答
 
-两个注意：
+导入仅复制/核验原件 → 可读判据分派原件或快照 → 用户另行选择本地准备/逐次确认云解析 → 应用级任务按版本写正文/切片/FTS → `isDocumentReady`允许限定提问。
 
-- Release 需要 `permissions: contents: write`，workflow 里已经写了。
-  不加的话 `gh release create` 会 403，而且报错不明显。
-- **删过 tag 再重建，旧 Release 会变成草稿**（`gh release view` 查得到，匿名访问 404）。
-  v0.12.0 第一次重建就栽在这：CI 全绿、步骤显示「创建 Release 成功」，手机端更新却下不到。
-  workflow 现在**无条件**再跑一次 `gh release edit --draft=false` 并打印最终状态，
-  别把那一行删掉。同一版重跑也只更新说明和 APK，不会重复建。
-- asset 名要先 `cp` 再传，不要用 `gh` 的 `file#name` 语法 —— v0.8.4 试过，
-  没生效，落成了 `app-release.apk`。
+- 阅读不要求索引已就绪；扫描PDF能看页面不代表有文字层/可问，超过本地上限仍能外部打开。
+- 云解析发送整份原文件至mineru.net，每次重新确认。问答只发送所选资料片段到配置AI；图片识别会发图像，联网会发查询/链接，不能统称资料永远不离开手机。
+- 文档会话最多8份且范围锁定，未就绪项不静默丢弃；空/非法范围不回退全库。D引用来自真实版本/切片/定位，旧正文不能反推PDF页码。
+- PDF模板、协议、主题源需同步，生成物归Lead。白纸canvas不反相，高亮不盖字；主题变化不重挂。Excel按有效单元格、两层缓存和窗口渲染，文档长文本保持虚拟化。
 
-### 8.6 主题（v0.8.0）
+### 6.4 月总结、待办与文字迁出
 
-- **`StyleSheet.create` 会在模块加载时把色值固化。** 所以「给 `C` 加个 setter 就行」
-  是错的 —— 换主题后旧样式表不会变。任何带颜色的样式必须是
-  `const makeStyles = (c: Palette) => StyleSheet.create({...})`，
-  组件里 `const { c, styles } = useThemedStyles(makeStyles)`。
-- **JSX 内联的颜色也要走 `c`。** `<Ionicons color={c.text2}>`、`placeholderTextColor`。
-  写死一个 `#FFFFFF`，深色下就是一块拍在脸上的白。
-- **模块级常量拿不到 `c`。** `IconButton` 的 `TONE_BG` 因此改成了函数。
-- **实心按钮上的字不能恒白。** 深色的 `accent` 是 `#5B9BD8`，压白字只有 2.5:1，
-  要用 `c.onAccent`。
-- **`userInterfaceStyle: "automatic"` 要装 `expo-system-ui`**，不装 prebuild 会警告、
-  Android 侧开关不生效。
-- **启动屏有第二份颜色。** `plugins/withNoSplashAnimation.js` 会写
-  `values-night/colors.xml`，改 `DARK.page` 时记得同步 `PAGE_COLOR_DARK`。
+- 月总结仍由SummarySheet审阅并 `upsertNote`，不经整理草稿产生小结。按日事件表与重要进展替代旧固定三节；保留旧Markdown阅读兼容。
+- 父子待办级联只认todoTree，合并过滤有效项；删父解除子关系而不连带删，合并转移子项；给完成父项加子项需重开父项。
+- Markdown全量迁出已有可读文字、分钟时间与旧标签；原图、文档、月总结、会话、完整元数据不在里面。待办清单不导入，图片文字回来只是普通正文，多行及关系信息有损。
+- 导入先审阅日期与范围，再出队重新判重，查询覆盖整分钟；部分成功报实际已写数并支持重试，不把每条原子提交说成全文件回滚。
 
-### 8.9 问页会话与引用（v0.8.8）
+## 7. 后续验收与交付提醒
 
-- **会话保存是异步的，必须带代次。** `sessionGenRef` 在新建 / 切换会话时 +1；
-  旧请求回来发现代次变了就只落库、不改当前界面状态。否则上一场的标题和 id
-  会写到新会话上，表现是「新会话一打开就带着旧标题」。
-- **不要每次关闭都重存会话。** `dirtyRef` 只标记「有还没成功落库的新轮次」；
-  否则点开历史再退出，会话就被顶到列表最前，排序会莫名其妙地变。
-- **归档不动 `updated_at`。** 归档是收纳，不是新活动；动了排序就会把归档项顶上来。
-- **引用编号按正文首次出现顺序。** 同一个来源在回答里出现两次，必须还是同一个号；
-  不能用 `citations` 数组下标 —— 那个顺序是 F→N→T→W，和正文对不上。
-- **代码块里的 `[F12]` 不是引用。** `parseInline` 先认代码，再由 `pushText` 认引用；
-  顺序反了会把示例命令变成可点来源。
-- **历史会话里的引用走快照，不回库查。** 碎片可删、待办可合并、小结会被覆盖；
-  回查会得到空面板，而用户明明看到「按 [F3] 的做法」。
-- **思维链不能只在 `busy` 时渲染。** 答完 `busy` 变 false，组件一卸载就是「闪一下没了」；
-  现在 `QaTurn.reasoning` 持久化，`ReasoningFold` 在答案上方折叠，最新一轮默认展开。
-- **会话转碎片先 AI 提炼，再预览确认。** `summarizeQaSession` 出 300-800 字精要，
-  `buildQaFragment` 包装，用户点「存为碎片」才写库。不要直接存全文，也不要按字数硬截。
-- **AI 失败要留兜底。** 「保存全文」走 `buildQaNote`（完整转录、不截断），
-  否则没配 Key / 断网时用户会卡在预览页。
-- **碎片正文也要走 `NoteBody`。** 会话转出来的碎片有 `##` / `- ` / 表格 / 代码；
-  时间轴和详情页都不能再拿 `<Text>` 原样显示。详情页传 `variant="reading"` + `selectable`。
-- **引用小标不能画成 `[F12]` 原文。** 用户不知道 F 是什么；渲染层只给序号，
-  详情放到 `CitationSheet`。
-
-### 8.10 时间轴手势（v0.8.8）
-
-- **方向是用户定的：左滑 → 右侧「删除」；右滑 → 左侧「问」。** 别再按直觉反过来写。
-  `SwipeRow` 的 `leftAction` 由右滑露出（`leftInstant` 时直接执行），
-  `rightAction` 由左滑露出。
-- **SwipeRow 不能加 `overflow:'hidden'`。** 时间轴竖线靠 `bottom:-8` 伸到下一行，
-  裁了每行底部会缺 8px，整条线变成虚线。横向滑出的内容本来就在屏幕外，不需要裁。
-- **回弹动画必须 `useNativeDriver: false`。** 拖动时用 `tx.setValue()` 逐帧写值，
-  同一个 Value 再交给原生驱动，部分安卓机上直接不动。
-- **只在横向意图明确时接管手势。** `|dx| > 8` 且 `|dx| > |dy| * 1.5`；否则列表滚不动。
-- **长按复制不要和滑动抢。** 手指没移动时 PanResponder 不接管，Pressable 的
-  `onLongPress` 才会正常触发。
-- **删除必须二次确认。** 滑一下只是露出按钮，点按钮才弹确认；确认框仍是覆盖层，
-  不是 `Modal`。
-
-## 9. 真机待验
-
-176 条清单在 [ROADMAP.md P0-1](./ROADMAP.md)，按风险排序。最要紧的七条：
-
-1. 50 条以上能不能**一路跑完**
-2. 确认页标签分组条数**加起来对不对**
-3. 「应用」回报的写入数与实际变化**对不对**
-4. 跑到一半杀 App，重进有没有**继续上次**
-5. 「问」的引用 `[F12]` 点开**是不是原文**
-6. **导出 → 卸载重装 → 导入**，条数/时间/标签能不能原样回来（这条最像「真的会用到」）
-7. 新生成一篇日小结，**读起来像不像 AI 写的** —— prompt 只能压形状，最终看语感
-
-v0.6.x 的老功能（折叠、搜索、详情页、导出、小结）已经在之前版本验过，
-但v7 迁移（`todos.done_at`）之后升级路径必须验一次：**从更早的版本直接升到最新，旧数据要在**。
-
----
-
-## 10. 我犯过的错（给接手的人）
-
-- **把「结构问题」当成「prompt 问题」修了很久。** 知识卡重复、主题裂开，本质是
-  「主题是免费新建的字符串、卡片没有唯一约束」，改 prompt 只是在拖时间。v0.7 才承认这一点。
-- **提需求时替用户预设了答案。** 问「问答基于什么资料」时直接给了三个形态，
-  用户反问「这个要看怎么整理」。应该先问「你希望沉淀成什么」，再给方案。
-- **一个变量服务两个语义。** `overflow = available - batch.length` 被当成「还有没有剩」，
-  50 条跑完 30 条后它是 0，按钮消失。判「有没有剩」看 `available`，显示「下一批几条」看 `batch.length`。
-- **判重分母用 `min()`。** 一张只引用 1 条原文的窄卡能把 10 条来源的大卡判成「被取代」。
-  用 Jaccard（两边都进分母）。
-- **空结果没留出口。** `acceptedCount === 0` 时主按钮禁用，于是「放弃 → 重进 → 同一批 → 还是空」死循环。
-  现在 0 项时主按钮变「跳过这批」。
-- **写了「移除方向」但藏在输入框留空里。** 真机上没人发现。
-  **隐藏的语义等于没有功能**，破坏性或非常规动作必须做成看得见的按钮。
-
----
-
-## 11. 下一步（按顺序）
-
-1. **装 `fragments-v0.12.0.apk`，按 ROADMAP 的清单验。** 有问题先修，不要叠新功能。
-   如果手机已经是 v0.8.5 以上，直接打开 App 就能收到更新提示，不用手动装。
-2. 通知栏常驻的「快速记录」入口（ROADMAP P0-2）。通知库 v0.8.6 已经因为下载进度通知装好了，
-   剩下是 JS 改动，见 ROADMAP 里重估过的成本。
-3. 大库性能：几千条时时间轴全量读进内存会开始慢，等量真上来再动。
-4. OTA（EAS Update）要不要上，等用户定 —— GitHub Release 已经在用，装包这件事不疼了。
-
-> 「从 Markdown 导入」已在 v0.7.2 补上，回归测试是 `npm run test:md`，**改导出格式前后都要跑**。
-> 发版流程见 8.8：改三处版本号 → 写 CHANGELOG → 打 tag。**没打 tag 就不会有 Release**。
+1. Lead继续真实问题修复，冻结所有源码/测试后更新本表行数与最终验证结果，串行跑聚合检查、PDF生成及Web编译校验。不要由多个Agent抢同一生成物/临时目录。
+2. 新增回归应使用真实模块和故障桩，覆盖提交凭据恢复、读图停止、OCR/事项/旧标签检索边界、500+文字导出、部分写入及连续重试；不要把手工等价算法测试当真实控制流通过。
+3. Android设备验收按[ROADMAP](<ROADMAP.md>)与本轮提案补充：默认/墨水×明暗、窄屏/大字体、中文输入法、实际热区、草稿/附件切页、返回层级、PDF/表格定位、TalkBack与回焦。
+4. 独立设计并验证完整备份/恢复与原生迁移故障保护；不得为试验直接清空真实库、卸载App或改历史迁移。
+5. 通知栏快速记录、分享接收、Word/PPT本地版式等仍是后续范围，不因已有依赖就宣称完成。
+6. 未获发布授权前不push/tag/Release。获准后由CI产出并核对Release非draft、raw APK asset、版本和字节数；代码恢复点、外观切回和手机数据恢复分别说明。
