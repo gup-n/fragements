@@ -6,14 +6,14 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.21.0 已打 tag 并提交 GitHub Actions 构建。** 构建完成后从 [Releases](https://github.com/gup-n/fragements/releases) 下载 raw APK asset（不要用需登录的 Actions artifact）。上一版 [v0.20.9](https://github.com/gup-n/fragements/releases/download/v0.20.9/fragments-v0.20.9.apk) 可回退（26,214,938 字节，SHA-256 `6647d319ac73398c38198354d6a5d9678657ef6ec98df7226a7436630a3b9c37`；那一版发布时本机代理连 `release-assets` 报 502，下载未经实测）。真机界面、覆盖安装和数据恢复仍未实测。
+**v0.21.1 已打 tag 并提交 GitHub Actions 构建。** 构建完成后从 [Releases](https://github.com/gup-n/fragements/releases) 下载 raw APK asset（不要用需登录的 Actions artifact）。上一版 [v0.21.0](https://github.com/gup-n/fragements/releases/download/v0.21.0/fragments-v0.21.0.apk) 可回退（26,212,086 字节，SHA-256 `828dbe8e9c958c6dd8a465a2785a515195c535ce0333e101431e5afc75beb176`）。两者只差三层灰阶的校准，界面其余部分相同。真机界面、覆盖安装和数据恢复仍未实测。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.21.0（versionCode 61） |
-| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.0 的 tag 都从该分支提交构建，master 未合并 |
+| 当前版本 | v0.21.1（versionCode 62） |
+| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |
 | 数据 | 本地 SQLite 与 App 私有文件；数据库已有 v1–v16 迁移 |
@@ -152,7 +152,7 @@ Git恢复分支只恢复代码，不恢复手机数据；设置切回默认风�
 
 ## 5. 安装、开发与发布
 
-已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.21.0正在CI构建，包名和签名与v0.20.9相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
+已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.21.1正在CI构建，包名和签名与v0.21.0相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
 
 技术栈为 React Native 0.88、Expo SDK 58、React 19.3、TypeScript 6、SQLite/FTS5与中文bigram；PDF.js、SheetJS、fflate承担本地阅读相关工作。路由由[App](<App.tsx>)的state管理，没有Expo Router、后端或新增导航库。
 

@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.21.0 / versionCode 61 |
+| 版本 | v0.21.1 / versionCode 62 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.21.0 已打 tag 并提交 CI，构建/Release 结果见 Actions。上一版 v0.20.9（[CI 43690382156](https://github.com/gup-n/fragements/actions/runs/43690382156)，26,214,938 字节，`draft=false`）可回退；那一版发布时本机代理连 release-assets 报 502，下载未实测。两者真机均未验 |
+| 发布状态 | v0.21.1 已打 tag 并提交 CI，结果见 Actions。上一版 v0.21.0（[CI 43717633121](https://github.com/gup-n/fragements/actions/runs/43717633121)，26,212,086 字节，`draft=false`）可回退；两者只差三层灰阶的校准。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
@@ -177,7 +177,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1008 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
-| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 279 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
+| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 50 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
 | `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
