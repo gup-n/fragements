@@ -17,8 +17,30 @@
  */
 const { withAndroidManifest, withMainActivity } = require('expo/config-plugins');
 
-/** 能接的类型。微信里「用其他应用打开」有时不报准确 mime，所以图片留了通配 */
-const MIME = ['text/plain', 'image/*', 'application/pdf'];
+/**
+ * 能接的类型。
+ *
+ * `image/*` 留通配：微信里「用其他应用打开」有时不报准确 mime。
+ * Office 那几种必须逐个写全 —— 微信分享 docx 时报的是
+ * `application/vnd.openxmlformats-officedocument.wordprocessingml.document`，
+ * 只声明 `application/*` 反而会让碎片出现在一堆不相干的「打开方式」里。
+ *
+ * **没做的**：`application/octet-stream`。部分机型上微信对未知后缀会报这个，
+ * 收下它等于让碎片对任何二进制文件都出现。等真机上确认确实遇到再放开。
+ */
+const MIME = [
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'image/*',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+];
 const INCOMING_DIR = 'incoming';
 
 const KOTLIN_IMPORTS = `import android.content.Intent
@@ -27,10 +49,35 @@ import java.io.File`;
 
 const KOTLIN_BODY = `
   /**
+   * 分享进来那条 Uri 的**真实文件名**。
+   *
+   * 微信给的是 \`content://\` 形式的 Uri，它的 lastPathSegment 往往是一串数字 id，
+   * 直接拿来当文件名会丢掉扩展名 —— 文档库里就会多一条既读不了也认不出类型的记录。
+   * \`OpenableColumns.DISPLAY_NAME\` 才是系统保存的原始名字（中文也在）。
+   */
+  private fun displayNameOf(uri: Uri): String? {
+    if (uri.scheme != "content") return null
+    return try {
+      contentResolver.query(
+        uri,
+        arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+        null, null, null,
+      )?.use { cursor ->
+        if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+      }
+    } catch (e: Exception) {
+      null
+    }
+  }
+
+  /**
    * 把分享进来的文字与文件落到私有目录，JS 只读本地（见 src/shareInbox.ts）。
    *
    * 同一个时间戳写进 json 和文件名，JS 靠 it 判断「是不是同一次分享」，
    * 避免把上一次留下的文件当成这次的内容。
+   *
+   * \`file\` 是磁盘上的名字（ASCII 安全化过），\`name\` 是给人看的原名 ——
+   * 两者必须分开：中文文件名换了安全字符之后在文档库里就是一片下划线。
    */
   private fun captureShare(incoming: Intent?) {
     val action = incoming?.action ?: return
@@ -44,13 +91,19 @@ const KOTLIN_BODY = `
     val uri = incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
     val mime = incoming.type ?: ""
     var savedName = ""
+    var originalName = ""
 
     if (uri != null) {
       try {
         val name = incoming.getStringExtra(Intent.EXTRA_TITLE)
+          ?: displayNameOf(uri)
           ?: uri.lastPathSegment?.substringAfterLast('/')
           ?: "share.bin"
-        val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+        originalName = name
+        // 磁盘名只用字母数字和 . _ -；\`isLetterOrDigit\` 认 Unicode，中文不会被吃掉
+        val safe = name.map { ch ->
+          if (ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-') ch else '_'
+        }.joinToString("")
         val target = File(dir, "$stamp-$safe")
         contentResolver.openInputStream(uri)?.use { input ->
           target.outputStream().use { output -> input.copyTo(output) }
@@ -59,6 +112,7 @@ const KOTLIN_BODY = `
       } catch (e: Exception) {
         // 复制失败就只留文字；不因为一个文件把整次分享丢掉
         savedName = ""
+        originalName = ""
       }
     }
 
@@ -69,6 +123,7 @@ const KOTLIN_BODY = `
     json.put("mime", mime)
     json.put("text", text)
     json.put("file", savedName)
+    json.put("name", originalName)
     File(dir, "incoming-share.json").writeText(json.toString())
   }
 

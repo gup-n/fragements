@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.23.0 / versionCode 65 |
+| 版本 | v0.23.1 / versionCode 66 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.22.1 已由[CI 43726821471](https://github.com/gup-n/fragements/actions/runs/43726821471)构建并发布（26,223,238 字节，SHA-256 `72211d43…7305`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。上一版 v0.22.0（[CI 43723065111](https://github.com/gup-n/fragements/actions/runs/43723065111)，26,222,930 字节）可回退。真机均未验 |
+| 发布状态 | v0.23.1 已推 tag，等 CI 构建（结果未回填）。上一版 v0.23.0 已发布（26,203,618 字节，SHA-256 `fcac4e06…b3bb`，跟随重定向后 HTTP 200、Content-Length 与资产一致）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
@@ -58,6 +58,8 @@
   `2 件事没做完 · 3 个月小结没写`。**通知形式的主动提醒仍然没做**，理由见 ROADMAP §6。
 - **间距**：36 处裸数字（数值正好等于 `SPACE` 档位）换成 token，**数值一个没动**；
   新断言要求「等于档位的裸数字必须换成 `SPACE.*`」，而 2/3/5/6/7/10/14 这类基线微调保持裸写。
+- **顺带删掉 `documents/knowledge.ts`**（86 行）：`writeKnowledgeDocument` / `rewriteKnowledgeDocument` 零引用，
+  现行写入只走 `Repo.commitDraft`。SPEC §0.3 第 8 条原来写的是这个旧工具，一并改正。
 - **SPEC §6.2 / §9 重写**：那一章描述的是 v0.7 的六类契约，点名的五个文件全不存在，
   照着读会把删掉的东西重建一遍。
 
@@ -201,7 +203,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 统一排版体系 | 本轮新增TYPE/SPACE并接入主页面、聊天/草稿与阅读内容；不是全工程每个字号都已替换，后续局部界面按实际需要继续接入 |
 | 应用内图标体系 | 本轮重新统一图标载体、主次和可见标签；桌面PNG/自适应品牌资源未重绘，不宣称全品牌图标设计完成 |
 | TalkBack 关闭回焦 | 只有开层标题聚焦（`useHeadingFocus`）；关闭覆盖层后回到触发点未实现，仍依赖系统 |
-| 旧业务清理（第一批之外） | v0.23 已删：`organizePlan` 整文件、5 个整理会话方法、`saveRun`/`markRunApplied`、`listFragmentIds`/`countFragments`/`markMerged`/`markStatus`/`setFragmentNature`/`countInbox`、8 个旧类型。仍在的有：`documents/knowledge.ts` 的旧写入工具与 `findFragmentsByIds`/`listFragmentsByIds`——两者都有现行调用方，删前要改调用点 |
+| 旧业务清理（第一批之外） | v0.23 已删：`organizePlan` 整文件、5 个整理会话方法、`saveRun`/`markRunApplied`、`listFragmentIds`/`countFragments`/`markMerged`/`markStatus`/`setFragmentNature`/`countInbox`、8 个旧类型。v0.23.0 又补删了 `documents/knowledge.ts`（86 行，零引用）。仍在的有 `findFragmentsByIds`/`listFragmentsByIds`——都有现行调用方，删前要改调用点 |
 | 通知栏快速记录、Android 分享接收、完整本地备份 | 已在v0.20.5有实现，本轮保留；测试backup纯判据，不代表真实手机恢复/系统Intent验收 |
 | 设备级墨水屏优化、OTA、原生偏好桥、桌面品牌图标 | 本轮未实现；原生冷启动/系统级刷新与媒体观感仍需专门设计和设备验证 |
 
@@ -225,13 +227,13 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 662 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 677 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
-| `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
+| `src/shareInbox.ts` | 126 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1910 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2205 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 647 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1026 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1013 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
@@ -293,9 +295,9 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
+| `src/documents/importLocal.ts` [打开](<src/documents/importLocal.ts>) | 55 | 本地文件入库的唯一顺序：先落原文件→再写记录→失败删原件；选择器与系统分享共用 |
 | `src/documents/formats.ts` [打开](<src/documents/formats.ts>) | 128 | 本机格式、容量、能问判据和真实定位标签 |
 | `src/documents/jobs.ts` [打开](<src/documents/jobs.ts>) | 487 | 应用级本地/云准备任务，每文档互斥、取消与版本写回 |
-| `src/documents/knowledge.ts` [打开](<src/documents/knowledge.ts>) | 86 | 旧文档写入工具，不承担当前整理写入；是否删除须再做引用审查，主链为Repo commitDraft |
 | `src/documents/readers/DocumentReader.tsx` [打开](<src/documents/readers/DocumentReader.tsx>) | 72 | 只读分派，嵌入时不再外包滚动容器 |
 | `src/documents/readers/readerAvailability.ts` [打开](<src/documents/readers/readerAvailability.ts>) | 18 | original/snapshot/unavailable纯判据，不依赖能问索引状态 |
 | `src/documents/readers/extract.ts` [打开](<src/documents/readers/extract.ts>) | 164 | 本地提取分派，完整正文/切片/定位 |

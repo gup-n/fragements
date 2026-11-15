@@ -387,7 +387,8 @@ test('整理计划那条死路径不许复活', () => {
   const text = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
 
   assert.ok(!fs.existsSync('src/util/organizePlan.ts'), 'organizePlan.ts 已删，别再建回来');
-  const deadNames = /OrganizePlan|OrganizeScope|saveOrganizeSession|updateOrganizeSession|saveRun\b|markRunApplied|markMerged|markStatus|setFragmentNature|countInbox|countFragments|listFragmentIds/;
+  assert.ok(!fs.existsSync('src/documents/knowledge.ts'), '旧文档写入工具已删，写入只走 Repo.commitDraft');
+  const deadNames = /OrganizePlan|OrganizeScope|saveOrganizeSession|updateOrganizeSession|saveRun\b|markRunApplied|markMerged|markStatus|setFragmentNature|countInbox|countFragments|listFragmentIds|writeKnowledgeDocument/;
   const hits = [...text].filter(([, src]) => deadNames.test(src)).map(([f]) => f);
   assert.deepEqual(hits, [], '整理计划与标签时代的方法不许有人再引用');
   // 两张旧表只许出现在建表语句里，不许有读写
@@ -433,6 +434,53 @@ test('间距档位必须走 SPACE，微调数字保持裸写', () => {
     });
   }
   assert.deepEqual(bad, [], '等于档位的裸数字要换成 SPACE.*，否则下次就多出一个「6」');
+});
+
+/*
+ * v0.23：系统分享进来的**文件**要真的入库，而且中转副本用完要删。
+ *
+ * 原来只弹一句「去文档页导入更稳」—— 文件已经在私有目录里了，缺的只是写一条记录，
+ * 让用户从头再做一遍是把动作丢了再要回来。另外原生每次分享都往 incoming/ 复制一份，
+ * 不删就是「每分享一次多存一份」。
+ */
+test('分享进来的文件进文档库，中转副本用完就删', () => {
+  const app = parseSource('App.tsx').getText();
+  const inbox = parseSource('src/shareInbox.ts').getText();
+  assert.ok(app.includes('importLocalFile({ uri: inc.fileUri, name: inc.name ?? inc.file })'), '文件分享要直接入库，且用原始文件名');
+  assert.ok(!app.includes('这种文件还不支持从分享进来'), '不能再让用户「去文档页导入」做第二遍');
+  const importAt = app.indexOf('await importLocalFile(');
+  const dropAt = app.indexOf('await dropIncomingFile(inc.file)', importAt);
+  assert.ok(importAt > 0 && dropAt > importAt, '入库成功之后才删中转副本（失败要留着下次再读）');
+  assert.ok(inbox.includes('export async function dropIncomingFile'), '删中转副本的入口在 shareInbox');
+  // 图片那条路同样要删：内容已经复制进碎片目录
+  assert.ok(app.includes('await dropIncomingFile(inc.file);'), '图片分享也要清理中转副本');
+});
+
+/*
+ * 原生注入的那段 Kotlin 只能靠读字符串来验（本地没有 Gradle，CI 才编译）。
+ *
+ * 两条都是真踩过的坑：
+ * - 微信给的是 `content://` Uri，`lastPathSegment` 常常是数字 id，用它当文件名会丢扩展名；
+ * - 磁盘名做过 ASCII 安全化，中文文件名会变成一片下划线 —— 显示名必须单独带一份。
+ */
+test('分享接收的 Kotlin：取真实文件名、单独带一份原名', () => {
+  const fs = require('node:fs');
+  const src = fs.readFileSync('plugins/withShareReceiver.js', 'utf8');
+  const open = 'const KOTLIN_BODY = `';
+  const start = src.indexOf(open) + open.length;
+  const end = src.indexOf('\n`;', start);
+  assert.ok(start > open.length && end > start, '找不到 KOTLIN_BODY');
+  const body = new Function(`INCOMING_DIR`, `return \`${src.slice(start, end)}\`;`)('incoming');
+
+  assert.ok(body.includes('displayNameOf(uri)'), '要问系统要原始文件名，不能只用 lastPathSegment');
+  assert.ok(body.includes('OpenableColumns.DISPLAY_NAME'), 'DISPLAY_NAME 才是真名');
+  assert.ok(body.includes('json.put("name", originalName)'), 'json 里要单独带原名');
+  assert.ok(body.includes('isLetterOrDigit'), '中文文件名不能被安全化成下划线');
+  assert.ok(!body.includes('\\p{'), 'Kotlin 字符串里写 \\p{…} 是非法转义，别用正则字符类');
+  // 微信分享 docx 报的是完整的长 mime，只声明 pdf 的话它压根不会出现在「打开方式」里
+  for (const mime of ['application/pdf', 'wordprocessingml.document', 'spreadsheetml.sheet']) {
+    assert.ok(src.includes(mime), `manifest 要声明 ${mime}`);
+  }
 });
 
 suite.run();

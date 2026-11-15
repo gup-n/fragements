@@ -6,13 +6,13 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.22.1 已由 GitHub Actions 构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.22.1/fragments-v0.22.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.22.1)。26,223,238 字节，SHA-256 `72211d4388350682c87aef386a894c9194b9de2f717f4b728280f82470637305`，`draft=false`，下载链接匿名可通（跟随重定向后 HTTP 200、Content-Length 与资产一致）。上一版 [v0.22.0](https://github.com/gup-n/fragements/releases/download/v0.22.0/fragments-v0.22.0.apk) 可回退（26,222,930 字节）；这一版是一次全库审阅，没有新界面。真机界面与覆盖安装仍未实测。
+**v0.23.1 已推 tag，正在构建**（构建完成后这里补下载链接与校验值）。上一版 [v0.23.0](https://github.com/gup-n/fragements/releases/download/v0.23.0/fragments-v0.23.0.apk) 可回退（26,203,618 字节，SHA-256 `fcac4e06f0644d36bcf78b31055497b8758276e50be427803532b2ecf231b3bb`）；这一版让微信分享进来的文件直接进文档库。真机分享链路仍未实测。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.23.0（versionCode 65） |
+| 当前版本 | v0.23.1（versionCode 66） |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

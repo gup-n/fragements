@@ -24,6 +24,12 @@ export interface IncomingShare {
   text: string;
   /** 已复制到私有目录的文件名；null = 只有文字 */
   file: string | null;
+  /**
+   * 文件的**原始文件名**（中文、空格都在）。`file` 是磁盘上的安全名，
+   * 入库和显示都必须用这个 —— 把 `2026-11-15T…-____.docx` 当文档名给用户看是错的。
+   * 原生没带上时退回 `file`。
+   */
+  name: string | null;
   /** 能给 <Image> / 导入链路直接用的绝对 uri */
   fileUri: string | null;
   kind: 'text' | 'image' | 'other';
@@ -76,6 +82,7 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
   const mime = typeof parsed.mime === 'string' ? parsed.mime : '';
   const text = typeof parsed.text === 'string' ? parsed.text : '';
   const file = typeof parsed.file === 'string' && parsed.file ? parsed.file : null;
+  const name = typeof parsed.name === 'string' && parsed.name ? parsed.name : null;
   let fileUri: string | null = null;
   if (file) {
     try {
@@ -96,5 +103,24 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
       ? 'image'
       : 'other';
 
-  return { at, mime, text, file, fileUri, kind };
+  return { at, mime, text, file, name, fileUri, kind };
+}
+
+/**
+ * 用完把中转的那份删掉。
+ *
+ * 原生每次分享都会往 `incoming/` 里复制一份带时间戳的新文件，而这里读完之后
+ * 内容已经进了碎片或文档库 —— 不删的话每分享一次就多存一份，用户看不到，
+ * 只能在系统设置的存储占用里发现问题。
+ *
+ * **只在消费成功之后调**：失败时留着那份，下次启动还能再读一次。
+ */
+export async function dropIncomingFile(name: string | null): Promise<void> {
+  if (!name) return;
+  try {
+    const f = new File(Paths.document, DIR, name);
+    if (f.exists) f.delete();
+  } catch {
+    /* 删不掉不影响内容已经入库 */
+  }
 }

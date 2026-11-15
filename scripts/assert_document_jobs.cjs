@@ -547,9 +547,18 @@ async function main() {
     for (const forbidden of ['parseDocFile', 'parseWithMineru', 'prepareDocument', 'readPlainText', 'extractLocalDocument', 'fetch(']) {
       eq(body.includes(forbidden), false, `导入流程里不该出现 ${forbidden}`);
     }
-    ok(body.includes("state: 'stored'"), '导入应当写入 stored 状态');
-    ok(body.includes('saveOriginal'), '导入必须先落原文件');
-    ok(body.includes('saved.size'), '入库大小要用副本真实大小，不能用选择器报的');
+    // v0.23.1：落盘/写库那三步挪到 documents/importLocal，与系统分享共用一份顺序。
+    // 这里仍然要钉住「只存原件」，只是钉在真正实现它的那个文件上。
+    ok(body.includes('importLocalFile('), '导入要走共用的 importLocalFile');
+
+    const impl = fs.readFileSync(path.join(SRC, 'documents', 'importLocal.ts'), 'utf8');
+    ok(impl.includes("state: 'stored'"), '导入应当写入 stored 状态');
+    ok(impl.includes('saveOriginal'), '导入必须先落原文件');
+    ok(impl.includes('saved.size'), '入库大小要用副本真实大小，不能用选择器报的');
+    ok(impl.includes('deleteOriginal'), '写记录失败要把刚复制的原件删掉，不留孤儿');
+    for (const forbidden of ['extractLocalDocument', 'fetch(', 'parseWithMineru']) {
+      eq(impl.includes(forbidden), false, `importLocal 里不该出现 ${forbidden}`);
+    }
   });
 
   /* 汇总 ------------------------------------------------------------ */

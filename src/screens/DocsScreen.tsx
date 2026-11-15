@@ -33,7 +33,8 @@ import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
-import { deleteOriginal, pickDocumentFile, saveOriginal } from '../db/docFiles';
+import { deleteOriginal, pickDocumentFile } from '../db/docFiles';
+import { importLocalFile } from '../documents/importLocal';
 import { dropViewCache } from '../documents/readers/viewCache';
 import { getMineruToken } from '../ai/mineru';
 import {
@@ -222,9 +223,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   /**
    * 导入 = 只保存原件。
    *
-   * 顺序不能换：**先落原文件、核验大小，再写记录**。反过来的话，写库成功但复制失败，
-   * 列表里就多一条永远「打开原文件失败」的记录，用户只能删掉重来。
-   * 记录没写成时要把刚复制的那份删掉，否则私有目录里会攒下孤儿文件。
+   * 「先落原文件、再写记录、失败删原件」这三步在 `documents/importLocal` 里，
+   * 与系统分享进来那条路共用同一份顺序 —— 各写一遍早晚有一处会漏掉清理。
    */
   async function handlePick() {
     if (picking) return;
@@ -233,20 +233,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     try {
       const file = await pickDocumentFile();
       if (!file) return;
-      const saved = await saveOriginal(file.uri, file.name);
-      try {
-        await repo.insertDocument({
-          name: file.name,
-          ext: file.ext,
-          size: saved.size,
-          fileUri: saved.uri,
-          state: 'stored',
-        });
-      } catch (e) {
-        // 记录没写成，刚复制的那份就是孤儿，顺手清掉
-        await deleteOriginal(saved.uri);
-        throw e;
-      }
+      await importLocalFile({ uri: file.uri, name: file.name });
       await refresh();
       setDocVersion((v) => v + 1);
       showToast(`已保存「${file.name}」`);

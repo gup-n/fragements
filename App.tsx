@@ -17,6 +17,7 @@ import {
   type ThemeStyle,
 } from './src/theme';
 import { repo } from './src/db/repo';
+import { importLocalFile } from './src/documents/importLocal';
 import { TimelineScreen } from './src/screens/TimelineScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
@@ -31,7 +32,7 @@ import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
-import { takeIncomingShare } from './src/shareInbox';
+import { dropIncomingFile, takeIncomingShare } from './src/shareInbox';
 
 /**
  * 路由就是底栏上的那五个页面，没有第六个。
@@ -452,12 +453,26 @@ function Shell({ booted }: { booted: boolean }) {
           setWriteNotice('已把分享的文字放进输入框，确认后再发布');
         } else if (inc.kind === 'image' && inc.fileUri) {
           await handleAdd(inc.text, [{ key: `p${inc.at}`, uri: inc.fileUri }]);
+          // 内容已经进了碎片，中转那份留着只会让「每分享一次多存一份」
+          await dropIncomingFile(inc.file);
           if (!alive) return;
           setRoute('timeline');
           setWriteNotice('已把分享的图片存成一条碎片');
+        } else if (inc.fileUri && inc.file) {
+          /*
+           * PDF / Word / 表格这类**直接进文档库**（v0.23）。
+           *
+           * 原来这里只弹一句「去文档页导入更稳」—— 那是把用户已经做完的动作
+           * 又让他做一遍：文件已经到私有目录了，缺的只是写一条记录。
+           * 存成 `stored` 之后文档页自己会说这份能不能本地读、能不能云解析。
+           */
+          const saved = await importLocalFile({ uri: inc.fileUri, name: inc.name ?? inc.file });
+          await dropIncomingFile(inc.file);
+          if (!alive) return;
+          setRoute('docs');
+          setWriteNotice(`已存进文档库：${saved.name}`);
         } else {
-          // PDF / doc 这类要走文档导入链路，这里不硬塞进时间轴
-          setWriteNotice('这种文件还不支持从分享进来，去「文档」页导入更稳');
+          setWriteNotice('这次分享里没有可保存的文件');
         }
       } catch (e) {
         if (alive) {
