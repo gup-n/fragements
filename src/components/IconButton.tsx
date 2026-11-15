@@ -6,7 +6,7 @@ import React, { useState } from 'react';
 import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View, type AccessibilityState } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 export type IoniconName = ComponentProps<typeof Ionicons>['name'];
 
@@ -15,7 +15,7 @@ interface Props {
   onPress: () => void;
   size?: number;
   color?: string;
-  tone?: 'none' | 'soft' | 'accent';
+  tone?: 'none' | 'soft' | 'accent' | 'primary';
   /** 图形底的直径，不会缩小实际触控槽。保留旧调用兼容。 */
   diameter?: number;
   badge?: number;
@@ -27,9 +27,10 @@ interface Props {
   accessibilityState?: AccessibilityState;
 }
 
-function toneBg(c: Palette, tone: 'none' | 'soft' | 'accent') {
+function toneBg(c: Palette, tone: 'none' | 'soft' | 'accent' | 'primary') {
   if (tone === 'soft') return c.hairSoft;
   if (tone === 'accent') return c.accentBg;
+  if (tone === 'primary') return c.accent;
   return 'transparent';
 }
 
@@ -49,7 +50,8 @@ export function IconButton({
 }: Props) {
   const { c, styles, metrics } = useThemedStyles(makeStyles);
   const [focused, setFocused] = useState(false);
-  const ink = disabled ? c.text3 : color ?? (tone === 'accent' ? c.accentText : c.text2);
+  const foreground = disabled ? c.text3 : color ?? (tone === 'primary' ? c.onAccent : tone === 'accent' ? c.accentText : c.text2);
+  const labelColor = disabled ? c.text3 : tone === 'primary' ? c.accentText : foreground;
   const count = badge && badge > 0 ? (badge > 99 ? '99+' : String(badge)) : '';
   return (
     <Pressable
@@ -76,7 +78,7 @@ export function IconButton({
           {
             width: diameter,
             height: diameter,
-            borderRadius: Math.min(diameter / 2, metrics.cardRadius + 8),
+            borderRadius: Math.min(diameter / 2, metrics.buttonRadius + 2),
             backgroundColor: toneBg(c, tone),
             borderColor: tone === 'none' ? 'transparent' : disabled ? c.hair : c.accentHair,
           },
@@ -84,14 +86,14 @@ export function IconButton({
         ]}
         pointerEvents="none"
       >
-        <Ionicons name={name} size={size} color={ink} accessible={false} />
+        <Ionicons name={name} size={size} color={foreground} accessible={false} />
         {count ? (
           <View style={styles.badge}>
             <Text style={styles.badgeText}>{count}</Text>
           </View>
         ) : null}
       </View>
-      {label ? <Text style={[styles.label, { color: ink }]}>{label}</Text> : null}
+      {label ? <Text style={[styles.label, { color: labelColor }]}>{label}</Text> : null}
     </Pressable>
   );
 }
@@ -104,12 +106,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderWidth: metrics.strokeWidth,
     borderColor: 'transparent',
   },
-  withLabel: { paddingVertical: 4, gap: 3 },
-  face: { alignItems: 'center', justifyContent: 'center', borderWidth: metrics.strokeWidth },
+  withLabel: { paddingVertical: SPACE.xs, gap: SPACE.xxs },
+  face: { alignItems: 'center', justifyContent: 'center', borderWidth: surfaceStroke(metrics) },
   pressed: { backgroundColor: c.hairSoft, borderColor: c.focus },
   focused: { borderColor: c.focus },
   selected: { borderColor: c.focus, borderWidth: 2 },
-  label: { fontSize: 12, lineHeight: 17, fontWeight: '500', textAlign: 'center' },
+  label: { ...TYPE.label, textAlign: 'center' },
   badge: {
     position: 'absolute', top: -3, right: -4,
     minWidth: 18, minHeight: 18, borderRadius: 9, paddingHorizontal: 3,

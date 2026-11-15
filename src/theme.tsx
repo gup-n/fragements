@@ -12,6 +12,7 @@ import {
 } from './util/appearance';
 
 export * from './util/appearance';
+export { SPACE, TYPE, surfaceStroke, navigationLayout } from './util/uiTokens';
 
 /** Legacy geometry for untouched callers; new components use the dynamic metrics. */
 export const R = { card: 14, btn: 10, pill: 999 } as const;

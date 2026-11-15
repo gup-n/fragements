@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   label: string;
@@ -36,14 +36,14 @@ export function ChoiceChip({ label, selected, onPress, disabled = false, role = 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   base: {
     minHeight: metrics.controlHeight, minWidth: metrics.controlHeight,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-    paddingHorizontal: 13, paddingVertical: 9,
-    borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    backgroundColor: c.card,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.hairSoft,
   },
-  selected: { borderColor: c.focus, backgroundColor: c.accentBg },
+  selected: { borderColor: c.focus, borderWidth: metrics.strokeWidth, backgroundColor: c.accentBg },
   focused: { borderColor: c.focus, borderWidth: 2 },
-  label: { fontSize: 13, lineHeight: 20, color: c.text2, flexShrink: 1 },
+  label: { ...TYPE.label, color: c.text2, flexShrink: 1 },
   selectedText: { color: c.accentText, fontWeight: '600' },
   disabledText: { color: c.text3 },
 });
