@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.20.7 已打 tag 并提交 GitHub Actions 构建。** 构建完成后从 [Releases](https://github.com/gup-n/fragements/releases) 下载 raw APK asset（不要用需登录的 Actions artifact）。上一版 [v0.20.6（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.6/fragments-v0.20.6.apk) 仍可回退。真机界面、覆盖安装和数据恢复仍未实测。
+**v0.20.7 已由 GitHub Actions 构建并发布。** [直接下载APK（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.7/fragments-v0.20.7.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.20.7)。SHA-256 `d95f1e48cef003d0f0ee7f6576cdb6954032d90573d52f4396a05a8c4418d042`，包名与签名和上一版相同。上一版 [v0.20.6（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.6/fragments-v0.20.6.apk) 仍可回退。真机界面、覆盖安装和数据恢复仍未实测。
 
 | 项 | 值 |
 |---|---|
@@ -119,7 +119,7 @@ Git恢复分支只恢复代码，不恢复手机数据；设置切回默认风�
 
 ## 5. 安装、开发与发布
 
-已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.20.7正在CI构建，包名和签名与v0.20.6相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
+已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.20.7已公开，包名和签名与v0.20.6相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
 
 技术栈为 React Native 0.88、Expo SDK 58、React 19.3、TypeScript 6、SQLite/FTS5与中文bigram；PDF.js、SheetJS、fflate承担本地阅读相关工作。路由由[App](<App.tsx>)的state管理，没有Expo Router、后端或新增导航库。
 
