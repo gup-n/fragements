@@ -1,6 +1,6 @@
 {
   "name": "fragments",
-  "version": "0.20.7",
+  "version": "0.20.8",
   "main": "index.ts",
   "dependencies": {
     "@expo/metro-runtime": "~58.0.14",

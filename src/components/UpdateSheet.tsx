@@ -158,8 +158,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
       // 通知会停在切走那一刻的数字，回到应用后立刻接上
       if (now - notifyAtRef.current > 1000) {
         notifyAtRef.current = now;
-        const headingRef = useHeadingFocus(`更新-${phase}`);
-  const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
+        const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
         const size = `${formatBytes(p.written)}${p.total > 0 ? ` / ${formatBytes(p.total)}` : ''}`;
         notifyProgress(release.version, size, pct);
       }

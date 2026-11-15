@@ -10,7 +10,8 @@ export const TYPE = {
   display: { fontSize: 28, lineHeight: 40, fontWeight: '700' },
   heading: { fontSize: 22, lineHeight: 30, fontWeight: '700' },
   title: { fontSize: 18, lineHeight: 26, fontWeight: '600' },
-  body: { fontSize: 15, lineHeight: 24, fontWeight: '400' },
+  // 正文 16/26：DeepSeek 的正文比常见的 14/15 大一号，长句读起来不挤
+  body: { fontSize: 16, lineHeight: 26, fontWeight: '400' },
   reading: { fontSize: 17, lineHeight: 30, fontWeight: '400' },
   label: { fontSize: 13, lineHeight: 20, fontWeight: '600' },
   meta: { fontSize: 12, lineHeight: 18, fontWeight: '400' },

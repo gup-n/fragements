@@ -1314,19 +1314,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: 14, marginBottom: 6, marginLeft: 4 },
   /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
   groupHint: { ...TYPE.meta, color: c.text3, marginTop: 6, marginLeft: 4, marginRight: 4 },
+  /** 表单区不套卡片：白底 + 字段间的浅分隔线，和 DeepSeek 的设置页一样干净 */
   card: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics),
-    borderColor: c.hair,
     padding: 14,
   },
   /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
   cardTight: {
-    backgroundColor: c.card,
+    backgroundColor: c.hairSoft,
     borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics),
-    borderColor: c.hair,
     overflow: 'hidden',
   },
 

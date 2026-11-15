@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.20.7 / versionCode 58 |
+| 版本 | v0.20.8 / versionCode 59 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.20.7 已由[CI 43681009337](https://github.com/gup-n/fragements/actions/runs/43681009337)构建并发布（26,217,170 字节），下载链接匿名可通；上一版 v0.20.6（[CI 43677692760](https://github.com/gup-n/fragements/actions/runs/43677692760)）可回退；两者真机均未验 |
+| 发布状态 | v0.20.8 已打 tag 并提交 CI，构建/Release 结果见 Actions；上一版 v0.20.7（[CI 43681009337](https://github.com/gup-n/fragements/actions/runs/43681009337)）可回退；两者真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
@@ -24,17 +24,38 @@
 
 ## 2. 当前进度与未覆盖项
 
-用户本轮基于 v0.20.6 的界面又提了 10 条（去绿、删冗余字、缩小控件与间距、四入口换位置、墨水柔化与毛玻璃）。v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；本轮不改 Repo/AI/organize、数据库结构和原生接收逻辑，只新增一个原生依赖 `expo-blur`。
+### v0.20.8：修更新 bug + 转向 DeepSeek 设计语言
 
-- **主色**：默认浅/深两套的 `accent` 由墨绿改靛蓝（`#2F4C7D` / `#9CB4E4`），`tealBg/tealText` 一并转蓝灰。四套色表的对比度断言（正文 7:1 / 控件 3:1 / 实心按钮 4.5:1 / 墨水必须中性灰）全部重跑。
-- **导航**：底栏四 tab（碎片/文档/回顾/问），设置回首页右上角。`ReviewScreen`/`DocsScreen`/`AskScreen` 新增 `embedded`，tab 内不画返回箭头、问页不画关闭叉。切 tab 前走 `flushBeforeLeave` 落盘会话并暂停整理。`test:ui` 里原来钉「首页四个带字图标顺序」的断言改写为「底栏四项顺序 + 48dp 槽 + 首页只剩设置」。
-- **密度**：页头 72→56；首页/设置/文档/回顾/问的页面内边距 20→16、分区与行距各收一档；搜索框 48→44、缩略图 62→52、空状态图标 64→52、工具按钮 78→52 宽。**所有 48dp 触控槽和发布按钮 84 宽未动**。
-- **删字**：首页「你的日常记录」、设置根层「按你的习惯来」+ 一句说明、四行菜单下的 `description` 全部移除，当前值仍在。
-- **墨水几何**：`cardRadius` 4→8、`buttonRadius` 4→8、`strokeWidth` 1.25→1、`hair` #767676→#8A8A8A、`INK_LIGHT.card` 给 #FBFBFB 以便靠底色分层。新增 `ThemeMetrics.outline`（墨 1 / 默认 0），`surfaceStroke` 改用它判断，不再从 `cardRadius <= 4` 反推。
-- **毛玻璃**：`src/components/GlassBackdrop.tsx` + `expo-blur`；墨水风格下输入卡、底栏、长文底栏透明化并叠 dimezis 真模糊 + 纸色遮罩（面板 72% / 底栏 86%）。默认主题不渲染该层。
-- `test:ui` 从 20 项增至 21 项；`assert_ui.cjs` 增加 `glassable` 与 `./GlassBackdrop` 桩，否则它无法加载底栏样式。
+**先修 bug**：`UpdateSheet.tsx` 的下载进度回调里调了 `useHeadingFocus`（`useCallback` 内部），
+第一次进度回调就抛 `Invalid hook call`，界面显示「更新失败」。已删掉那一行（组件体第 253 行本来就有一份正确的），
+并全仓扫过 `^\s{4,}.*= use[A-Z]`，其余三处 `useHeadingFocus` 都在组件体顶层。**这类错误 tsc 与断言都不报。**
 
-本轮无截图、无真机视觉验收，毛玻璃强度、底栏在窄屏与最大字号下的表现都只有装包才能确认。
+**再改视觉**：用户要求「像 DeepSeek 一样简约」，换的是分层方式而不是色号。
+
+- **色板**：`page` 纯白 `#FFFFFF`；主色统一 `#3F5EE8`（深色 `#8FA6FF`）；`hairSoft #F4F5F7` 承担所有「浅灰块」，
+  `hair #ECEDF1` 只做必要分隔线；`teal` 从绿转灰蓝并只表示「已归档」。
+- **几何**：`cardRadius` 16→20、`buttonRadius` 12→14；首页与问页输入卡单独 28。
+- **字体**：`TYPE.body` 15/24 → 16/26（断言 `input.fontSize === TYPE.body.fontSize` 自动跟随）。
+- **去边框**：`composerCard`、Ask `inputRow`、`qBubble`、设置 `card`/`cardTight` 的 `borderWidth` 全部撤掉，
+  改由 `hairSoft` 底色分层；设置菜单卡片从「白底细框」变成浅灰块。
+- **圆形发送键**：首页与问页都是 48×48 圆形箭头，不带「发布」二字；`accessibilityLabel` 保留可读名字。
+  **`test:ui` 那条断言从「宽 ≥ 84 的横条」改成「宽高相等 + 直径 ≥ 48」——换形状不换底线**。
+- **问页胶囊**：只写「深度思考 / 联网」，状态靠淡蓝底 + 蓝字加粗 + 实心图标（`bulb`/`globe` vs outline）三信号。
+- **空屏**：「今天记点什么？」+ 浅蓝圆底图标，替代原来的两行产品说明。
+
+未覆盖：真机观感、强光下白底是否刺眼、圆形键手感、胶囊在最大字号下的换行、墨水毛玻璃强度 —— 都只有装包能验。
+
+### v0.20.7（同一分支上一版）
+
+用户基于 v0.20.6 提了 10 条（去绿、删冗余字、缩小控件与间距、四入口换位置、墨水柔化与毛玻璃）。
+v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；v0.20.7 不改 Repo/AI/organize、数据库结构和原生接收逻辑，新增原生依赖 `expo-blur`。
+
+- **导航**：底栏四 tab（碎片/文档/回顾/问），设置回首页右上角。`ReviewScreen`/`DocsScreen`/`AskScreen` 新增 `embedded`，tab 内不画返回箭头、问页不画关闭叉。切 tab 前走 `flushBeforeLeave` 落盘会话并暂停整理。
+- **密度**：页头 72→56；页面内边距 20→16；搜索框 48→44、缩略图 62→52、空状态图标 64→52、工具按钮 78→52 宽。
+- **删字**：首页「你的日常记录」、设置根层「按你的习惯来」+ 一句说明、四行菜单下的 `description` 全部移除。
+- **墨水几何**：`cardRadius` 4→8、`strokeWidth` 1.25→1、`hair` #767676→#8A8A8A。新增 `ThemeMetrics.outline`（墨 1 / 默认 0），`surfaceStroke` 改用它判断，不再从 `cardRadius <= 4` 反推。
+- **毛玻璃**：`src/components/GlassBackdrop.tsx` + `expo-blur`；墨水风格下输入卡、底栏、长文底栏透明化并叠 dimezis 真模糊 + 纸色遮罩（面板 72% / 底栏 86%）。默认风格不渲染该层。
+- `test:ui` 从 20 项增至 21 项；`assert_ui.cjs` 需要 `glassable` 与 `./GlassBackdrop` 桩，否则无法加载底栏样式。
 
 ### 保留的先前实现
 
@@ -107,14 +128,14 @@
 | `App.tsx` [打开](<App.tsx>) | 667 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1878 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2131 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1885 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2135 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 261 | 待办/小结两类回顾，没有标签tab，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 989 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1536 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1533 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 92 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
-| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 244 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
-| `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 42 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
+| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 254 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
+| `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 43 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
 | `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 
@@ -218,7 +239,7 @@
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 745 | 月总结单篇/缺口队列、原稿对照和确认保存 |
 | `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 450 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 223 | 全屏覆盖编辑、子项和到期日 |
-| `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 525 | 更新提示/下载/安装/错误状态 |
+| `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 524 | 更新提示/下载/安装/错误状态 |
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 209 | 文字导入预览、范围/日期警告与确认 |
 | `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 238 | 引用快照、真实来源位置，不回库猜原文 |
 | `src/components/SwipeRow.tsx` [打开](<src/components/SwipeRow.tsx>) | 302 | 固定方向的时间轴手势，保留纵滚/长按和减少动效 |

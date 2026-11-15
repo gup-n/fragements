@@ -53,80 +53,89 @@ export interface ThemeMetrics {
   outline: number;
 }
 
+/**
+ * 默认浅色：DeepSeek 的白。
+ *
+ * 三处和「纸感」不同的地方，都是刻意的：
+ *
+ * 1. **纯白底**（`#FFFFFF`），不再带暖调。纸张的米黄在长列表里会显脏，
+ *    而 DeepSeek 那种白让文字成为页面上唯一有重量的东西。
+ * 2. **分层靠浅灰底，不靠边框**。`hairSoft` 是输入卡、胶囊、悬停态的共用底色，
+ *    `hair` 只留给真正必要的分隔线，而且浅到几乎看不见。
+ * 3. **单一蓝色主调**（`#3F5EE8`）。状态语义（完成 / 到期 / 危险）仍用独立颜色，
+ *    但「可以点」这件事全用同一个蓝，不再有第二套强调色分散注意力。
+ */
 export const LIGHT: Palette = {
-  page: '#FAFAF8',
+  page: '#FFFFFF',
   card: '#FFFFFF',
-  text: '#1D1E22',
-  text2: '#565A61',
-  text3: '#6A6E76',
-  hair: '#E0E0DC',
-  hairSoft: '#F1F1EE',
-  /*
-   * 主色是靛蓝，不是绿。绿色在整页铺开时（胶囊、徽标、按钮底）会读成「状态色」，
-   * 而这套界面里绝大多数着重号只是「这里可以点」，不需要携带语义 ——
-   * 蓝灰读起来是中性着重，才不会和「已完成」那种真状态抢意思。
-   */
-  accent: '#2F4C7D',
-  accentBg: '#E8EDF6',
-  accentText: '#274168',
-  purpleBg: '#EEEDFA',
-  purpleText: '#443B80',
-  // 「已完成」原先是浅青绿。主色转蓝之后留着它，整页就还是绿的，所以一起转蓝灰。
-  tealBg: '#E6EBF4',
-  tealText: '#2A3F5E',
-  amberBg: '#F4E8CD',
-  amberText: '#64420B',
-  coralBg: '#F7E9E2',
+  text: '#16181D',
+  text2: '#5A6070',
+  // 辅助文字仍要过 4.5:1，所以比 DeepSeek 的视觉灰再深一档
+  text3: '#6B7280',
+  hair: '#ECEDF1',
+  hairSoft: '#F4F5F7',
+  accent: '#3F5EE8',
+  accentBg: '#EDF1FE',
+  accentText: '#3255D8',
+  purpleBg: '#EFEEFC',
+  purpleText: '#4A3E96',
+  // 「已完成」不用绿色、也不跟主色同蓝：灰蓝，读起来是「已归档」而不是「成功」
+  tealBg: '#EBEEF2',
+  tealText: '#556070',
+  amberBg: '#FBF1DA',
+  amberText: '#6B4A0E',
+  coralBg: '#FBEDE7',
   coralText: '#7A3824',
-  danger: '#A32D2D',
-  dangerBg: '#F9E8E8',
-  accentHair: '#C3CCDC',
+  danger: '#C0392B',
+  dangerBg: '#FCECEA',
+  accentHair: '#C9D3FA',
   scrim: 'rgba(0,0,0,0.40)',
-  shell: '#ECECE8',
-  shellBorder: '#D2D3CE',
+  shell: '#F4F5F7',
+  shellBorder: '#E5E7EB',
   onAccent: '#FFFFFF',
   onDanger: '#FFFFFF',
   mediaBackground: '#101010',
   mediaForeground: '#FFFFFF',
   mediaScrim: 'rgba(0,0,0,0.70)',
   controlThumb: '#FFFFFF',
-  selection: '#DCE3EF',
-  focus: '#2F4C7D',
+  selection: '#DCE4FF',
+  focus: '#3F5EE8',
 };
 
 export const DARK: Palette = {
-  page: '#111113',
-  card: '#1C1D20',
-  text: '#F1F1F2',
-  text2: '#BFC2C8',
-  text3: '#A2A6AE',
-  hair: '#464A52',
-  hairSoft: '#282A2E',
-  accent: '#9CB4E4',
-  accentBg: '#1B2436',
-  accentText: '#C4D4EE',
-  purpleBg: '#2A2741',
-  purpleText: '#CBC5F4',
-  tealBg: '#1B2334',
-  tealText: '#A9BFDF',
-  amberBg: '#3C301C',
-  amberText: '#F4D08F',
-  coralBg: '#3B2820',
+  // 深色也跟着走中性灰 + 同一个蓝：不像纯黑那么硬，也不会把蓝色衬得发紫
+  page: '#1A1A1A',
+  card: '#242424',
+  text: '#F2F3F5',
+  text2: '#B6B9C0',
+  text3: '#8E9298',
+  hair: '#333438',
+  hairSoft: '#26272A',
+  accent: '#8FA6FF',
+  accentBg: '#232B45',
+  accentText: '#B7C6FF',
+  purpleBg: '#2A2745',
+  purpleText: '#CFC8FA',
+  tealBg: '#262A31',
+  tealText: '#B3BCC9',
+  amberBg: '#3A2F1C',
+  amberText: '#F4D79B',
+  coralBg: '#3A2922',
   coralText: '#F1B8A1',
-  danger: '#F1A0A0',
-  dangerBg: '#3E2424',
-  accentHair: '#42506A',
+  danger: '#F08A80',
+  dangerBg: '#3B2422',
+  accentHair: '#3C4A7A',
   scrim: 'rgba(0,0,0,0.72)',
-  shell: '#09090B',
-  shellBorder: '#464A52',
-  onAccent: '#101B2C',
-  onDanger: '#291313',
+  shell: '#141414',
+  shellBorder: '#333438',
+  onAccent: '#0F1533',
+  onDanger: '#2A1210',
   mediaBackground: '#101010',
   mediaForeground: '#FFFFFF',
   mediaScrim: 'rgba(0,0,0,0.76)',
-  controlThumb: '#F0F0EC',
-  selection: '#39445A',
-  focus: '#C4D4EE',
+  controlThumb: '#F2F3F5',
+  selection: '#2E3A63',
+  focus: '#B7C6FF',
 };
 
 /** Grayscale UI only. Original media are not filtered or inverted. */
@@ -203,8 +212,9 @@ export const INK_DARK: Palette = {
 };
 
 export const DEFAULT_METRICS: ThemeMetrics = {
-  cardRadius: 16,
-  buttonRadius: 12,
+  // 20/14：DeepSeek 那套圆角的量级。方一点会显旧，再圆就成药丸了
+  cardRadius: 20,
+  buttonRadius: 14,
   strokeWidth: 1,
   controlHeight: 48,
   pagePadding: 16,

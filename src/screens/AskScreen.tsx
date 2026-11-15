@@ -1617,20 +1617,25 @@ export function AskScreen({
             />
             <View style={styles.inputTools}>
               <View style={styles.toggleRow}>
-                <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityLabel="思考模式" accessibilityState={{ checked: thinkingOn }}>
-                  <Ionicons name="bulb-outline" size={16} color={thinkingOn ? c.accentText : c.text2} accessible={false} />
-                  <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>思考 · {thinkingOn ? '开' : '关'}</Text>
+                {/*
+                  DeepSeek 的写法：胶囊上只写功能名，状态交给底色、字重和图标实心度。
+                  原来写「思考 · 开」等于把开关状态又用文字说一遍，胶囊因此宽了一圈。
+                  三个信号（淡蓝底 / 蓝字加粗 / 实心灯泡）同时给，不只靠颜色。
+                */}
+                <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityLabel="深度思考" accessibilityState={{ checked: thinkingOn }}>
+                  <Ionicons name={thinkingOn ? 'bulb' : 'bulb-outline'} size={15} color={thinkingOn ? c.accentText : c.text2} accessible={false} />
+                  <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
                 </Pressable>
                 {docMode ? (
                   // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
                   <View style={[styles.toggle, styles.toggleOff]} accessible accessibilityLabel="文档模式不联网" accessibilityState={{ disabled: true }}>
-                    <Ionicons name="cloud-offline-outline" size={16} color={c.text2} accessible={false} />
+                    <Ionicons name="cloud-offline-outline" size={15} color={c.text2} accessible={false} />
                     <Text style={styles.toggleText}>不联网</Text>
                   </View>
                 ) : (
                   <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb} accessibilityRole="switch" accessibilityLabel="联网检索" accessibilityState={{ checked: webOn }}>
-                    <Ionicons name="globe-outline" size={16} color={webOn ? c.accentText : c.text2} accessible={false} />
-                    <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网 · {webOn ? '开' : '关'}</Text>
+                    <Ionicons name={webOn ? 'globe' : 'globe-outline'} size={15} color={webOn ? c.accentText : c.text2} accessible={false} />
+                    <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网</Text>
                   </Pressable>
                 )}
                 {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
@@ -2010,9 +2015,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: SPACE.md, marginBottom: SPACE.sm },
   qBubble: {
     maxWidth: '85%', backgroundColor: c.accentBg,
-    borderRadius: metrics.cardRadius, borderBottomRightRadius: metrics.buttonRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
-    paddingHorizontal: SPACE.sm, paddingVertical: 8,
+    borderRadius: 20, borderBottomRightRadius: 6,
+    paddingHorizontal: 14, paddingVertical: 10,
   },
   qText: { ...TYPE.body, color: c.accentText },
   // Assistant answers remain open text, not a notification card.
@@ -2056,10 +2060,10 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.accent, backgroundColor: c.hairSoft,
   },
   contextText: { ...TYPE.meta, flex: 1, color: c.text2 },
+  /** 和首页输入卡同一套：浅灰底、28 圆角、无边框 */
   inputRow: {
-    marginHorizontal: metrics.pagePadding, padding: SPACE.sm, gap: SPACE.xs,
-    backgroundColor: c.card, borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    marginHorizontal: metrics.pagePadding, padding: 14, gap: 10,
+    backgroundColor: c.hairSoft, borderRadius: 28,
   },
   input: {
     ...TYPE.body, color: c.text,
@@ -2069,22 +2073,22 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   inputTools: { flexDirection: 'row', alignItems: 'flex-end', gap: SPACE.xs },
   toggleRow: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  /** DeepSeek 那种胶囊：浅灰底、无边框；选中换成淡蓝底 + 蓝字 + 实心图标 */
   toggle: {
-    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
-    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
-    backgroundColor: c.hairSoft, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xs,
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 5,
+    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 14,
   },
-  toggleOn: { backgroundColor: c.accentBg, borderWidth: metrics.strokeWidth, borderColor: c.accent },
+  toggleOn: { backgroundColor: c.accentBg },
   toggleText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
-  toggleTextOn: { color: c.accentText },
-  toggleOff: { backgroundColor: c.hairSoft },
+  toggleTextOn: { color: c.accentText, fontWeight: '600' },
+  toggleOff: { backgroundColor: c.hairSoft, opacity: 0.55 },
   busyHint: { ...TYPE.meta, color: c.text2 },
   send: {
     width: metrics.controlHeight, height: metrics.controlHeight,
-    borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.hairSoft, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderRadius: 999, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.hairSoft,
   },
-  sendOn: { backgroundColor: c.accent, borderColor: c.accent },
+  sendOn: { backgroundColor: c.accent },
   scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
   historyPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
   historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },

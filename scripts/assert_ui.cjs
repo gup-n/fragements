@@ -187,12 +187,18 @@ test('首页只留设置入口，四个主入口已下沉到底栏', () => {
   assert.ok(settings.get('onPress').includes('onOpenSettings'));
   assert.equal(settings.get('disabled'), '{composerBusy}');
 });
-test('书写卡有完整输入和可见发布文字，不额外挤小点击槽', () => {
+test('书写卡有完整输入和 48dp 圆形发送键，不额外挤小点击槽', () => {
   const style = stylesOf('src/screens/TimelineScreen.tsx');
   assert.equal(style.input.fontSize, TYPE.body.fontSize);
   assert.ok(style.input.minHeight >= 48);
-  assert.ok(style.send.minWidth >= 84 && style.send.minHeight >= 48);
-  assert.equal(style.sendLabel.fontSize, TYPE.label.fontSize);
+  /*
+   * 发送键在 v0.20.8 改成 DeepSeek 那种圆形箭头，原来那条「>= 84 宽的横条」不再成立。
+   * 换掉的是形状不是底线：宽高必须相等（否则不是圆），直径不少于 48（触控下限），
+   * 而且它自己就是触控槽，不能靠外层 padding 凑出来。
+   */
+  assert.equal(style.send.width, style.send.height);
+  assert.ok(style.send.width >= 48);
+  assert.ok(style.send.borderRadius >= style.send.width / 2);
   assert.ok(style.toolBtn.minHeight >= 48);
 });
 

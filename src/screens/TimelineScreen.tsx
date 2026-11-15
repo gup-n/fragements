@@ -924,12 +924,15 @@ export function TimelineScreen({
               </Text>
             </View>
           ) : (
+            /*
+             * 空状态只说一句话。原来两行说明（「不用管分类」「攒够了去问里整理」）
+             * 都是在解释产品，而人此刻只想记点什么 —— DeepSeek 的空屏也只有一句问候。
+             */
             <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="create-outline" size={26} color={c.text3} />
+              <View style={styles.emptyMark}>
+                <Ionicons name="sparkles" size={22} color={c.accent} />
               </View>
-              <Text style={styles.emptyTitle}>还没有碎片</Text>
-              <Text style={styles.emptyBody}>想到什么就写一句，攒够了让它整理。</Text>
+              <Text style={styles.emptyGreet}>今天记点什么？</Text>
             </View>
           )
         ) : (
@@ -1360,11 +1363,11 @@ export function TimelineScreen({
               <Pressable
                 onPress={submit}
                 disabled={!canSend}
-                style={[[styles.send, canSend && styles.sendActive], styles.touchTarget]}
+                style={[styles.send, canSend && styles.sendActive]}
                 accessibilityRole="button" accessibilityLabel={sending ? "正在保存" : "发布这条碎片"} accessibilityState={{ disabled: !canSend, busy: sending }}
               >
-                {sending ? <ActivityIndicator size="small" color={c.onAccent} /> : <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />}
-                <Text style={[styles.sendLabel, { color: canSend ? c.onAccent : c.text3 }]}>{sending ? '保存中' : '发布'}</Text>
+                {/* DeepSeek 的发送就是一个圆形箭头，不带文字。可读的名字交给 accessibilityLabel */}
+                {sending ? <ActivityIndicator size="small" color={c.onAccent} /> : <Ionicons name="arrow-up" size={20} color={canSend ? c.onAccent : c.text2} />}
               </Pressable>
             </View>
           </View>
@@ -1537,7 +1540,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   headerLeft: { flex: 1, minWidth: 0 },
   /** 只留一个字标级标题：「碎片」+ 今日条数。上面那行小字已删（用户 2026-11-15 要求）。 */
-  brand: { fontSize: 24, lineHeight: 32, fontWeight: '700', color: c.text, letterSpacing: 1 },
+  brand: { fontSize: 20, lineHeight: 26, fontWeight: '700', color: c.text, letterSpacing: 0.5 },
   brandSub: { ...TYPE.caption, color: c.text3 },
   todaySummary: { alignItems: 'flex-end', paddingLeft: SPACE.md },
   todayNumber: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: c.accentText, fontVariant: ['tabular-nums'] },
@@ -1567,8 +1570,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     gap: 6,
     minHeight: 44,
     backgroundColor: c.hairSoft,
-    borderRadius: metrics.buttonRadius + 2,
-    paddingHorizontal: 11,
+    borderRadius: R.pill,
+    paddingHorizontal: 16,
   },
   searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
   searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
@@ -1721,6 +1724,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   emptyTitle: { ...TYPE.body, color: c.text2, fontWeight: '600' },
   emptyBody: { ...TYPE.meta, color: c.text3, textAlign: 'center', marginTop: 6 },
+  /** 空屏只剩一个标记和一句话：浅蓝圆底 + 问候，和 DeepSeek 的空屏同一个语气 */
+  emptyMark: {
+    width: 52, height: 52, borderRadius: 26,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.accentBg, marginBottom: 16,
+  },
+  emptyGreet: { fontSize: 20, lineHeight: 28, fontWeight: '600', color: c.text },
 
   composerWrap: {
     paddingHorizontal: SPACE.md,
@@ -1761,23 +1771,21 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   /** 长文页那一行要和底栏对齐 */
   pickRowFull: { paddingHorizontal: 18 },
   /**
-   * 输入区：上方文字、下方工具行。
+   * 输入区：DeepSeek 的那种浅灰大圆角块。
    *
-   * 圆角与卡片同档，边线走 hair 而不是 accentHair —— 一圈有色的边会让
-   * 「这里能写字」变成「这里是个被框住的表单」，而输入区本来就靠位置和底色说明了。
+   * **不用边框**。一圈 1px 的线会把输入区读成「表单里的一格」，而这里其实是个
+   * 随处可写的框 —— 浅灰底 + 28 的圆角已经足够说明它和白色页面的区别。
    */
   composerCard: {
-    backgroundColor: glassable(metrics, c.card),
-    borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics),
-    borderColor: c.hair,
-    paddingHorizontal: 10,
-    paddingTop: 10,
-    paddingBottom: 6,
+    backgroundColor: glassable(metrics, c.hairSoft),
+    borderRadius: 28,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 10,
     overflow: 'hidden',
   },
   composerBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 4,
+    flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 2,
   },
   toolBtn: {
     minWidth: 52, minHeight: metrics.controlHeight, flexDirection: 'row',
@@ -1802,13 +1810,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   toolBadgeText: { ...TYPE.caption, color: c.onAccent },
   input: { ...TYPE.body, color: c.text, minHeight: 48, maxHeight: 132, paddingTop: 2, paddingBottom: 6, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  /** 圆形发送键：48×48 正好是触控下限，所以不用再套 touchTarget */
   send: {
-    minWidth: 84, minHeight: metrics.controlHeight, flexDirection: 'row',
-    gap: 4, paddingHorizontal: 10,
-    borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
+    width: 48, height: 48, borderRadius: 24,
+    alignItems: 'center', justifyContent: 'center',
     backgroundColor: c.hairSoft,
   },
-  sendLabel: { ...TYPE.label, flexShrink: 1 },
   sendActive: { backgroundColor: c.accent },
 
   fullHeader: {
