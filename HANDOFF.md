@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.20.5 / versionCode 56 |
+| 版本 | v0.20.6 / versionCode 57 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | 本次UI修订未发布；沿用v0.20.5版本号，旧tag/安装包不包含新界面 |
+| 发布状态 | 用户已授权v0.20.6由新tag触发GitHub Actions，构建/公开APK下载待核验；真机未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
