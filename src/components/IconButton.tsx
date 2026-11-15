@@ -1,6 +1,7 @@
 /**
  * 统一图标按钮：视觉图形与触控槽分离，旧 diameter 只控制图形底。
- * 触控槽至少 48dp；主导航可带短标签，不依赖颜色或长按才能知道用途。
+ * 默认触控槽至少 48dp；列表行里的次要动作可以用 `compact`（36 槽 + hitSlop 补到 48），
+ * 主导航可带短标签，不依赖颜色或长按才能知道用途。
  */
 import React, { useState } from 'react';
 import type { ComponentProps } from 'react';
@@ -9,6 +10,14 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 export type IoniconName = ComponentProps<typeof Ionicons>['name'];
+
+/**
+ * 紧凑型的两个数：36 是看得见的槽，6 是四周补出来的 hitSlop。
+ * 36 + 6×2 = 48，正好是触控下限 —— 这两个数改一个另一个就得跟着改，
+ * 所以单独放常量，别散在样式里。
+ */
+const COMPACT_SLOT = 36;
+const COMPACT_SLOP = 6;
 
 interface Props {
   name: IoniconName;
@@ -25,6 +34,15 @@ interface Props {
   tone?: 'none' | 'soft' | 'accent';
   /** 图形底的直径，不会缩小实际触控槽。保留旧调用兼容。 */
   diameter?: number;
+  /**
+   * 紧凑型：视觉槽 36，靠 hitSlop 把**触控区**补回 48。
+   *
+   * 加它是为了列表行里的「展开步骤 / 加子项」。那些按钮原来各占一个 48 的槽，
+   * 一行待办因此被撑到 96 高 —— 用户 2026-11-15 的原话是「一个待办占用的空间非常大」。
+   * 直接把槽改成 36 会让手指点不准，所以缩的是**看得见的**那张脸，
+   * 摸得到的范围仍然是 48。页头、底栏这类主入口不要用它。
+   */
+  compact?: boolean;
   badge?: number;
   disabled?: boolean;
   /** 图形下方的可见短标签，例如「文档」「问」。 */
@@ -47,6 +65,7 @@ export function IconButton({
   color,
   tone = 'none',
   diameter = 36,
+  compact = false,
   badge,
   disabled = false,
   label,
@@ -74,9 +93,15 @@ export function IconButton({
       accessibilityHint={accessibilityHint}
       accessibilityState={{ ...accessibilityState, disabled }}
       accessibilityValue={count ? { text: `${count} 条` } : undefined}
+      {...(compact
+        ? { hitSlop: { top: COMPACT_SLOP, bottom: COMPACT_SLOP, left: COMPACT_SLOP, right: COMPACT_SLOP } }
+        : null)}
       style={({ pressed }) => [
         styles.base,
-        { minWidth: Math.max(metrics.controlHeight, diameter), minHeight: metrics.controlHeight },
+        {
+          minWidth: Math.max(compact ? COMPACT_SLOT : metrics.controlHeight, diameter),
+          minHeight: compact ? COMPACT_SLOT : metrics.controlHeight,
+        },
         label && styles.withLabel,
         pressed && !disabled && styles.pressed,
         focused && styles.focused,

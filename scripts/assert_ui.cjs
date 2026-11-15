@@ -183,8 +183,7 @@ test('底栏五项顺序固定、问居中、设置在最后，选中不靠颜�
   }
 });
 
-test('首页不再放任何导航入口，全部下沉到底栏', () => {
-  const source = parseSource('src/screens/TimelineScreen.tsx');
+test('首页不再放任何导航入口，全部下沉到底栏', () => {  const source = parseSource('src/screens/TimelineScreen.tsx');
   const buttons = [];
   const visit = (node) => {
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'IconButton') {
@@ -216,6 +215,86 @@ test('书写卡有完整输入和 48dp 圆形发送键，不额外挤小点击�
   assert.ok(style.send.width >= 48);
   assert.ok(style.send.borderRadius >= style.send.width / 2);
   assert.ok(style.toolBtn.minHeight >= 48);
+});
+
+/*
+ * ------------------------------------------------------------------
+ * 2026-11-15「间距」那一轮的四条底线
+ *
+ * 用户的原话逐条对应：碎片长了「展开全文和下一个隔得很开」、文档页
+ * 「字还是太大，导致一个文件的框较大」、问页要把开关挪到框外并让框自己长高、
+ * 回顾里「待办之间隔得非常开 / 子待办没有字号区分 / 一个待办占得太多」。
+ *
+ * 这些都不是「某个值不好看」，而是**一个不该占位的元素占了整块位置**。
+ * 所以断言钉的是结构关系（谁比谁小、谁不再独占一行），不是具体像素：
+ * 以后再把某个数调回来，这里会直接响。
+ * ------------------------------------------------------------------
+ */
+test('长碎片的「展开全文」不再撑出一整行空白', () => {
+  const timeline = stylesOf('src/screens/TimelineScreen.tsx');
+  // 48 高的按钮 + 14 的底距 = 下一条前面空出 60 多；现在看得见的是 26
+  assert.ok(timeline.expandBtn.minHeight <= 28, `展开按钮还有 ${timeline.expandBtn.minHeight} 高`);
+  assert.ok(!timeline.expandBtn.minWidth || timeline.expandBtn.minWidth < 48, '展开按钮不该再占 48 宽');
+  assert.ok(timeline.rowBody.paddingBottom <= 10, `行底距还有 ${timeline.rowBody.paddingBottom}`);
+  // 收的是空白，不是可点范围：源码里必须给 hitSlop
+  assert.ok(parseSource('src/screens/TimelineScreen.tsx').getText().includes('hitSlop={EXPAND_SLOP}'),
+    '展开全文必须有 hitSlop 把触控区补回 48');
+});
+
+test('文档卡等级更低：标题不再是正文号，操作按钮不再独占一行', () => {
+  const docs = stylesOf('src/screens/DocsScreen.tsx');
+  assert.ok(docs.name.fontSize < TYPE.body.fontSize, `文档标题还有 ${docs.name.fontSize} 号`);
+  assert.ok(docs.excerpt.fontSize <= TYPE.meta.fontSize, '摘要应走 meta（12/18）');
+  assert.equal(docs.excerpt.numberOfLines, undefined);
+  assert.ok(docs.pill.minHeight < 48, `「本地准备」还有 ${docs.pill.minHeight} 高`);
+  assert.ok(docs.cardMain.paddingVertical <= 10);
+  assert.ok(docs.sep.height <= 8, '卡片间距要跟着卡片一起收');
+});
+
+test('问页：开关在输入框外面、框自己长高但有上限', () => {
+  const ask = stylesOf('src/screens/AskScreen.tsx');
+  assert.ok(ask.toggle.minHeight < 40, `开关还有 ${ask.toggle.minHeight} 高`);
+  assert.ok(ask.input.minHeight <= 36, `输入框还从 ${ask.input.minHeight} 起`);
+  assert.ok(ask.input.maxHeight > ask.input.minHeight && ask.input.maxHeight <= TYPE.body.lineHeight * 6,
+    '输入框必须能长高，而且有上限');
+  assert.equal(ask.inputRow.flexDirection, 'row', '输入框和发送键同一行');
+  assert.equal(ask.inputTools, undefined, '原来「输入框 + 工具行」的竖排结构必须删掉');
+  /*
+   * 位置关系用源码顺序钉：开关行必须出现在 TextInput 之前。
+   * 只看样式断不出来「它到底在框里还是框外」——这正是这次改的东西。
+   */
+  const source = parseSource('src/screens/AskScreen.tsx').getText();
+  const toggles = source.indexOf('styles.toggleRow');
+  const input = source.indexOf('style={styles.input}');
+  assert.ok(toggles > 0 && input > 0, '找不到开关行或输入框');
+  assert.ok(toggles < input, '开关行必须在输入框之前（框上面），不能回到框里');
+});
+
+test('待办行是紧凑清单：子项字号更小，勾选框和图标不再各占 48', () => {
+  const todo = stylesOf('src/components/TodoPanel.tsx');
+  assert.ok(todo.textChild.fontSize < todo.text.fontSize, '子待办必须比父项小一号');
+  assert.ok(todo.text.fontSize <= TYPE.compact.fontSize);
+  assert.ok(todo.checkHit.height <= 30, `勾选框还有 ${todo.checkHit.height} 高`);
+  assert.ok(todo.row.paddingVertical <= 6, `行内上下还有 ${todo.row.paddingVertical}`);
+  assert.equal(todo.rowTools.flexDirection, 'row', '图标和正文同一行，不另起一行');
+  assert.ok(!todo.main.minHeight || todo.main.minHeight <= 30, '正文区不该再撑 40 高');
+});
+
+test('图标按钮的紧凑态：36 的槽 + hitSlop 补到 48', () => {
+  const loader = componentLoader(appearance.LIGHT, appearance.DEFAULT_METRICS);
+  const { IconButton } = loader.load('src/components/IconButton.tsx');
+  const compact = IconButton({ name: 'add', compact: true, onPress: () => {} });
+  const style = plain(compact.props.style({ pressed: false })).filter(Boolean);
+  const box = style.find((s) => s.minHeight !== undefined);
+  assert.equal(box.minWidth, 36);
+  assert.equal(box.minHeight, 36);
+  const slop = compact.props.hitSlop;
+  assert.ok(slop && box.minWidth + slop.left + slop.right >= 48, '紧凑态的可点范围必须仍是 48');
+  // 不带 compact 的主入口保持原样，不能被顺手改小
+  const normal = IconButton({ name: 'add', onPress: () => {} });
+  assert.equal(plain(normal.props.style({ pressed: false })).filter(Boolean)
+    .find((s) => s.minHeight !== undefined).minHeight, 48);
+  assert.ok(!Object.hasOwn(normal.props, 'hitSlop'));
 });
 
 suite.run();

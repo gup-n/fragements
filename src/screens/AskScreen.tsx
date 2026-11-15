@@ -114,6 +114,14 @@ interface ErrInfo {
 const THINK_KEY = 'qa.thinking';
 const WEB_KEY = 'qa.web';
 
+/**
+ * 「深度思考 / 联网」两个胶囊的触控补偿。
+ *
+ * 胶囊高度从 48 压到 34（用户 2026-11-15：「再缩小一点」），
+ * 但它是这一页最高频的两个开关，点不准比看着大更糟。四周补 7 回到 48。
+ */
+const TOGGLE_SLOP = { top: 7, bottom: 7, left: 4, right: 4 };
+
 
 
 
@@ -457,6 +465,15 @@ export function AskScreen({
   const scrollRef = useRef<ScrollViewInstance>(null);
   const streamRef = useRef({ lastFlush: 0 });
   const keyboardHeight = useKeyboardHeight();
+  /**
+   * 底部书写区实测高度，给提示条定位用。
+   *
+   * 原来这里写死 `keyboardHeight + 140` —— 输入区一改版（开关挪到框外、
+   * 框随字数长高）这个数就不对了，提示条会压在输入框上或者飘在半空。
+   * 量一次比猜一次可靠：`onLayout` 拿到的就是它实际占的高度，
+   * 而且键盘高度已经作为 padding 加在里面，不用再叠加。
+   */
+  const [footerHeight, setFooterHeight] = useState(120);
 
   /** PanResponder 只建一次，必须通过 ref 读最新的 busy/覆盖层状态 */
   const busyRef = useRef(busy);
@@ -1574,7 +1591,10 @@ export function AskScreen({
           ) : null}
         </ScrollView>
 
-        <View style={[styles.footer, keyboardHeight > 0 && { paddingBottom: 8 }]}>
+        <View
+          style={[styles.footer, { paddingBottom: SPACE.xs + keyboardHeight }]}
+          onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        >
           {context ? (
             <View style={styles.contextBar}>
               <Ionicons name="link-outline" size={13} color={c.accentText} />
@@ -1592,7 +1612,56 @@ export function AskScreen({
             </View>
           ) : null}
 
+          {/*
+            两个开关在**输入框上面**（用户 2026-11-15 要求）。
+            放在框里时，它们和发送键挤在同一行，框本身永远是一行字的高度；
+            挪出来之后框变成「写多少长多少」，开关也不再和发送键抢位置。
+            尺寸按「读得出、点得准」压到 34：正文才是这一页的主角。
+          */}
+          <View style={styles.toggleRow}>
+            {/*
+              DeepSeek 的写法：胶囊上只写功能名，状态交给底色、字重和图标实心度。
+              原来写「思考 · 开」等于把开关状态又用文字说一遍，胶囊因此宽了一圈。
+              三个信号（淡蓝底 / 蓝字加粗 / 实心灯泡）同时给，不只靠颜色。
+            */}
+            <Pressable
+              style={[styles.toggle, thinkingOn && styles.toggleOn]}
+              onPress={toggleThinking}
+              hitSlop={TOGGLE_SLOP}
+              accessibilityRole="switch"
+              accessibilityLabel="深度思考"
+              accessibilityState={{ checked: thinkingOn }}
+            >
+              <Ionicons name={thinkingOn ? 'bulb' : 'bulb-outline'} size={13} color={thinkingOn ? c.accentText : c.text2} accessible={false} />
+              <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
+            </Pressable>
+            {docMode ? (
+              // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
+              <View style={styles.toggleOff} accessible accessibilityLabel="文档模式不联网" accessibilityState={{ disabled: true }}>
+                <Ionicons name="cloud-offline-outline" size={13} color={c.text2} accessible={false} />
+                <Text style={styles.toggleText}>不联网</Text>
+              </View>
+            ) : (
+              <Pressable
+                style={[styles.toggle, webOn && styles.toggleOn]}
+                onPress={toggleWeb}
+                hitSlop={TOGGLE_SLOP}
+                accessibilityRole="switch"
+                accessibilityLabel="联网检索"
+                accessibilityState={{ checked: webOn }}
+              >
+                <Ionicons name={webOn ? 'globe' : 'globe-outline'} size={13} color={webOn ? c.accentText : c.text2} accessible={false} />
+                <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网</Text>
+              </Pressable>
+            )}
+            {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
+          </View>
+
           <View style={styles.inputRow}>
+            {/*
+              输入框跟着字数长高，上限 5 行（maxHeight）。**不设固定高度** ——
+              设了就不会长；有了上限，写到第五行以后框内滚动，不会把整页顶走。
+            */}
             <TextInput
               value={input}
               onChangeText={setInput}
@@ -1606,45 +1675,18 @@ export function AskScreen({
               editable={!busy}
               accessibilityLabel={draft ? '改稿要求' : '问题或整理要求'}
             />
-            <View style={styles.inputTools}>
-              <View style={styles.toggleRow}>
-                {/*
-                  DeepSeek 的写法：胶囊上只写功能名，状态交给底色、字重和图标实心度。
-                  原来写「思考 · 开」等于把开关状态又用文字说一遍，胶囊因此宽了一圈。
-                  三个信号（淡蓝底 / 蓝字加粗 / 实心灯泡）同时给，不只靠颜色。
-                */}
-                <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityLabel="深度思考" accessibilityState={{ checked: thinkingOn }}>
-                  <Ionicons name={thinkingOn ? 'bulb' : 'bulb-outline'} size={15} color={thinkingOn ? c.accentText : c.text2} accessible={false} />
-                  <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>深度思考</Text>
-                </Pressable>
-                {docMode ? (
-                  // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
-                  <View style={[styles.toggle, styles.toggleOff]} accessible accessibilityLabel="文档模式不联网" accessibilityState={{ disabled: true }}>
-                    <Ionicons name="cloud-offline-outline" size={15} color={c.text2} accessible={false} />
-                    <Text style={styles.toggleText}>不联网</Text>
-                  </View>
-                ) : (
-                  <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb} accessibilityRole="switch" accessibilityLabel="联网检索" accessibilityState={{ checked: webOn }}>
-                    <Ionicons name={webOn ? 'globe' : 'globe-outline'} size={15} color={webOn ? c.accentText : c.text2} accessible={false} />
-                    <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网</Text>
-                  </Pressable>
-                )}
-                {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
-              </View>
-              <Pressable
-                onPress={() => void send()}
-                // 范围有问题时按钮直接不可用：原因就写在上面的红字里
-                disabled={!canSend}
-                style={[styles.send, canSend && styles.sendOn]}
-                accessibilityRole="button"
-                accessibilityLabel={draft ? '发送改稿要求' : '发送问题'}
-                accessibilityState={{ disabled: !canSend, busy: busy || draftBusy || savingDraft }}
-              >
-                <Ionicons name="arrow-up" size={20} color={canSend ? c.onAccent : c.text3} accessible={false} />
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={() => void send()}
+              // 范围有问题时按钮直接不可用：原因就写在上面的红字里
+              disabled={!canSend}
+              style={[styles.send, canSend && styles.sendOn]}
+              accessibilityRole="button"
+              accessibilityLabel={draft ? '发送改稿要求' : '发送问题'}
+              accessibilityState={{ disabled: !canSend, busy: busy || draftBusy || savingDraft }}
+            >
+              <Ionicons name="arrow-up" size={20} color={canSend ? c.onAccent : c.text3} accessible={false} />
+            </Pressable>
           </View>
-          <View style={{ height: keyboardHeight }} />
         </View>
 
       </Animated.View>
@@ -1935,10 +1977,10 @@ export function AskScreen({
       ) : null}
       {cite ? <CitationSheet cite={cite} onClose={() => setCite(null)} /> : null}
       {/*
-        提示条要落在输入区上方。140 是「输入框 + 开关行 + 内边距」的实测高度，
-        再加键盘高度 —— 原来给的是 110，键盘一弹就压在输入框顶边上。
+        提示条落在书写区上沿。位置来自实测高度，不再是一个估算的数字 ——
+        「输入框 + 开关行 + 内边距」改一次版，估算值就会骗人。
       */}
-      <Toast text={toast} bottom={keyboardHeight + 140} />
+      <Toast text={toast} bottom={footerHeight + 8} />
     </View>
   );
 }
@@ -2053,7 +2095,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   webNote: { ...TYPE.meta, color: c.text2, marginTop: SPACE.sm, paddingLeft: SPACE.sm, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
   footer: {
     borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
-    backgroundColor: c.page, paddingTop: SPACE.xs, paddingBottom: SPACE.xs,
+    backgroundColor: c.page, paddingTop: SPACE.xs,
   },
   contextBar: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
@@ -2067,29 +2109,49 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    *
    * 圆角是 `cardRadius + 8`，不是写死的 28 —— 写死的话墨水主题（cardRadius 8）
    * 也会得到一个 28 的胶囊，和它方正的卡片摆在一起像个异物。
+   *
+   * 横排：左边文本区（跟着字数长），右边发送键贴底。竖排的话发送键会另起一行，
+   * 单行输入时那一行纯属白占 —— 而这一页最常见的输入就是一句话。
    */
   inputRow: {
-    marginHorizontal: metrics.pagePadding, padding: SPACE.sm, gap: SPACE.xs,
+    marginHorizontal: metrics.pagePadding,
+    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs, gap: SPACE.xs,
+    flexDirection: 'row', alignItems: 'flex-end',
     backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius + 8,
   },
-  /** 文本区 44 高（原先是 64，用户 2026-11-15 说太高）；按钮仍是 48 */
+  /**
+   * 文本区：一行 34 起，随字数长高到 5 行封顶。
+   *
+   * **不能设固定 height**（设了就不长），也不能不给 maxHeight（写长了会把
+   * 整页顶走、上面的对话全被挤出去）。44 是原来的一行高度，
+   * 用户 2026-11-15 说「再缩小一点」，于是压到 34 —— 一行 26 加 8 的内边距。
+   */
   input: {
-    ...TYPE.body, color: c.text,
-    minHeight: 44, maxHeight: TYPE.body.lineHeight * 5,
-    paddingTop: 2, paddingBottom: 2,
+    ...TYPE.body, color: c.text, flex: 1, minWidth: 0,
+    minHeight: 34, maxHeight: TYPE.body.lineHeight * 5,
+    paddingTop: 3, paddingBottom: 3,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
-  inputTools: { flexDirection: 'row', alignItems: 'flex-end', gap: SPACE.xs },
-  toggleRow: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  /**
+   * 开关行在输入框**外面**，和页左右对齐。
+   * 放在框里时它和发送键挤一行，框永远只有一行高；挪出来之后各归各位。
+   */
+  toggleRow: {
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center',
+    gap: 6, marginHorizontal: metrics.pagePadding, marginBottom: 6,
+  },
   /** DeepSeek 那种胶囊：浅灰底、无边框；选中换成淡蓝底 + 蓝字 + 实心图标 */
   toggle: {
-    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 5,
-    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 14,
+    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10,
   },
   toggleOn: { backgroundColor: c.accentBg },
-  toggleText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  toggleText: { ...TYPE.meta, color: c.text2, flexShrink: 1 },
   toggleTextOn: { color: c.accentText, fontWeight: '600' },
-  toggleOff: { backgroundColor: c.hairSoft, opacity: 0.55 },
+  toggleOff: {
+    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10, opacity: 0.55,
+  },
   busyHint: { ...TYPE.meta, color: c.text2 },
   send: {
     width: metrics.controlHeight, height: metrics.controlHeight,

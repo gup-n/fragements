@@ -52,6 +52,7 @@ const tscArgs = [
   'src/util/todoTree.ts',
   'src/util/digest.ts',
   'src/util/mdBuild.ts',
+  'src/util/calendar.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -79,6 +80,7 @@ try {
 const todoTree = require(path.join(outDir, 'util', 'todoTree.js'));
 const digest = require(path.join(outDir, 'util', 'digest.js'));
 const mdBuild = require(path.join(outDir, 'util', 'mdBuild.js'));
+const calendar = require(path.join(outDir, 'util', 'calendar.js'));
 
 // ---------------------------------------------------------------------------
 // 构造数据
@@ -325,6 +327,48 @@ check('按时间倒序，最多给 limit 条', () => {
   eq(items.length, 2, '只给两条');
   eq(items[0].period, '2026-09', '最近的在最前');
   eq(items[1].period, '2026-08', '然后是 8 月');
+});
+
+// ---------------------------------------------------------------------------
+// 5. 日历网格（回顾页 v0.22 新增）
+// ---------------------------------------------------------------------------
+check('日历固定 42 格，第一格是周一，本月天数不多不少', () => {
+  for (const [y, m, days] of [[2026, 11, 30], [2026, 2, 28], [2028, 2, 29], [2026, 8, 31]]) {
+    const cells = calendar.monthCells(y, m);
+    eq(cells.length, 42, `${y}-${m} 的格子数`);
+    eq(cells.filter((c) => c.inMonth).length, days, `${y}-${m} 的本月天数`);
+    // 第 1、8、15… 格必须是周一，否则表头那排「一二三四五六日」是错的
+    for (let i = 0; i < 42; i += 7) {
+      const d = new Date(calendar.keyToTs(cells[i].key));
+      eq(d.getDay(), 1, `${y}-${m} 第 ${i / 7 + 1} 行第一格应是周一`);
+    }
+  }
+});
+
+check('日历把上下月补齐的日子也带上，且 key 连续递增', () => {
+  const cells = calendar.monthCells(2026, 11);
+  eq(cells[0].key < '2026-11-01', true, '第一格应属于上个月');
+  eq(cells[41].key > '2026-11-30', true, '最后一格应属于下个月');
+  for (let i = 1; i < cells.length; i++) {
+    const prev = calendar.keyToTs(cells[i - 1].key);
+    const now = calendar.keyToTs(cells[i].key);
+    eq(now - prev, 86400000, `第 ${i} 格与前一格应正好差一天`);
+  }
+  // 补的那几天不能算进本月，否则「本月记了几天」会多算
+  eq(cells.filter((c) => c.inMonth).every((c) => c.month === 11), true, 'inMonth 必须都是 11 月');
+});
+
+check('翻月跨年交给 Date 算，不手写 12→1', () => {
+  eq(JSON.stringify(calendar.shiftMonth({ year: 2026, month: 12 }, 1)), JSON.stringify({ year: 2027, month: 1 }));
+  eq(JSON.stringify(calendar.shiftMonth({ year: 2026, month: 1 }, -1)), JSON.stringify({ year: 2025, month: 12 }));
+  eq(JSON.stringify(calendar.shiftMonth({ year: 2026, month: 3 }, -3)), JSON.stringify({ year: 2025, month: 12 }));
+});
+
+check('keyToTs 按本地时区解析，不经过 UTC', () => {
+  // 用 new Date('2026-11-15') 会按 UTC 解析，东八区会退到 14 日 08:00 之前
+  eq(calendar.keyToTs('2026-11-15'), new Date(2026, 10, 15).getTime(), '本地零点');
+  eq(calendar.WEEKDAY_HEADS.length, 7, '表头七天');
+  eq(calendar.WEEKDAY_HEADS[0], '一', '一周从周一开始');
 });
 
 // ---------------------------------------------------------------------------

@@ -1,30 +1,37 @@
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 /**
- * 回顾页：待办 / 小结。
+ * 回顾页：待办 / 日历 / 小结。
  *
- * v0.15 的两处改动都在这一页上：
+ * 三件事各占一个 tab：
  *
- * 1. **小结只剩月**（用户 2026-11-10 要求删掉日、周）。原来的粒度筛选
- *    （全部 / 日 / 周 / 月）随之删掉 —— 只剩一种时，筛选器只是让人多点一下。
- * 2. **待办支持两层子项**，列表与勾选级联搬到 `TodoPanel`，编辑层是 `TodoEditor`。
- *    这一页只负责取数、切 tab、以及把两件事的通知接上。
+ * 1. **待办**（v0.15 起支持两层子项）。列表与勾选级联在 `TodoPanel`，编辑层是 `TodoEditor`。
+ * 2. **日历**（v0.22）：月视图 + 某一天的明细。参照 jotsy 的月历 ——
+ *    格子只回答「这天有没有东西」，点开再看那天到底写了什么、哪几件到期。
+ *    「回顾」这个名字本来就该先给一张时间地图，而不是一上来就是一列待办。
+ * 3. **小结**：只剩月总结（v0.15 删掉了日/周）。
  *
  * 数据仍然一次取齐（待办 + 小结 + 已合并），因为三个 tab 都靠 `reload()`
  * 保持一致；分开取会让「刚勾完的待办在另一个 tab 里还是旧状态」。
+ * 碎片由上层传进来（`fragments`）—— 日历要看「哪天记了东西」，
+ * 这一页原来不持有碎片，是这一版唯一新增的数据依赖。
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Note, Todo } from '../types';
+import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
-import { dayKey, periodLabel } from '../util/date';
+import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
+import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type MonthRef } from '../util/calendar';
+import { stripImageTokens } from '../util/inlineImages';
+import { shortPreview } from '../util/text';
 import { NoteBody } from '../components/NoteBody';
 import { NoteViewer } from '../components/NoteViewer';
 import { SummarySheet } from '../components/SummarySheet';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { ChoiceChip } from '../components/ChoiceChip';
+import { IconButton } from '../components/IconButton';
 import { TodoEditor } from '../components/TodoEditor';
 import { TodoPanel } from '../components/TodoPanel';
 
@@ -37,9 +44,11 @@ interface Props {
   onClose?: () => void;
   /** 数据变了（新存了一条总结、改动了待办），通知上层刷新时间轴 */
   onChanged?: () => void | Promise<void>;
+  /** 全部碎片。日历用它标出「哪天记过东西」，也是点开某天后的明细来源 */
+  fragments?: Fragment[];
 }
 
-type Tab = 'todo' | 'note';
+type Tab = 'todo' | 'calendar' | 'note';
 
 /** 编辑层的目标。`todo` 为 null 表示新建，`parentId` 表示加到哪条下面 */
 interface EditorTarget {
@@ -47,7 +56,26 @@ interface EditorTarget {
   parentId: number | null;
 }
 
-export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
+/**
+ * 日历里「这一天有什么」。三个点各表一件事，都只算事实不算程度：
+ * 有记录 / 有未完成的到期 / 有小结。
+ */
+interface DayMarks {
+  frags: number;
+  todos: number;
+  notes: number;
+}
+
+function marksText(m: DayMarks): string {
+  const bits = [
+    m.frags ? `${m.frags} 条记录` : '',
+    m.todos ? `${m.todos} 件到期` : '',
+    m.notes ? `${m.notes} 篇小结` : '',
+  ].filter(Boolean);
+  return bits.length ? bits.join(' · ') : '这天没有内容';
+}
+
+export function ReviewScreen({ embedded = false, onClose, onChanged, fragments = [] }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -106,7 +134,8 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
 
       <View style={styles.tabs}>
         {([
-          ['todo', `待办${pending.length ? ` ${pending.length}` : ''}`],
+          ['todo', '待办'],
+          ['calendar', '日历'],
           ['note', '小结'],
         ] as [Tab, string][]).map(([key, label]) => (
           <View key={key} style={styles.tabSlot}>
@@ -130,6 +159,18 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
           merged={merged}
           onReload={reload}
           onOpenEditor={(todo, parentId) => setEditor({ todo, parentId })}
+        />
+      ) : tab === 'calendar' ? (
+        <CalendarTab
+          todos={todos}
+          notes={notes}
+          fragments={fragments}
+          onToggle={async (todo) => {
+            await repo.toggleTodo(todo.id, !todo.done);
+            await reload();
+            await onChanged?.();
+          }}
+          onOpenEditor={(todo) => setEditor({ todo, parentId: null })}
         />
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
@@ -178,7 +219,7 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
                         {note.bodyMd.replace(/\s/g, '').length} 字
                       </Text>
                     </View>
-                    <NoteBody text={note.bodyMd} numberOfLines={4} style={styles.noteBody} />
+                    <NoteBody text={note.bodyMd} numberOfLines={3} style={styles.noteBody} />
                     <View style={styles.noteOpenRow}>
                       <Text style={styles.noteToggle}>点击查看全文</Text>
                       <Ionicons name="chevron-forward" size={12} color={c.accent} />
@@ -227,14 +268,239 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
   );
 }
 
+/**
+ * 日历 tab。
+ *
+ * 参考 jotsy：**月视图只做索引，明细放在下面**。格子里不放文字摘要 ——
+ * 一个月 42 格里塞摘要，谁都看不清；但「这天有没有东西」必须一眼可见，
+ * 所以用一排小点表示（记录 / 到期 / 小结各一种），点开某天才展开。
+ *
+ * 不做的两件事，写在这里免得下次又想起来：
+ * - 年视图热力图：那是另一种读法（看一年），和「查某天」不是同一个动作；
+ * - 农历 / 节假日：要一张每年都要维护的表，而这里记的是自己的事，不是日历软件。
+ */
+function CalendarTab({
+  todos,
+  notes,
+  fragments,
+  onToggle,
+  onOpenEditor,
+}: {
+  todos: Todo[];
+  notes: Note[];
+  fragments: Fragment[];
+  onToggle: (todo: Todo) => Promise<void>;
+  onOpenEditor: (todo: Todo) => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const todayKey = dayKey(Date.now());
+  const [view, setView] = useState<MonthRef>(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() + 1 };
+  });
+  /** 选中的那一天。默认今天 —— 进日历第一眼应该看到「现在」 */
+  const [picked, setPicked] = useState(todayKey);
+
+  const cells = useMemo(() => monthCells(view.year, view.month), [view.year, view.month]);
+
+  /**
+   * 每一天有什么。三份数据摊成一张表，格子渲染时只查一次 ——
+   * 42 个格子各筛一遍 500 条碎片，滚起来会掉帧。
+   */
+  const byDay = useMemo(() => {
+    const map = new Map<string, DayMarks>();
+    const bump = (key: string, field: keyof DayMarks) => {
+      const row = map.get(key) ?? { frags: 0, todos: 0, notes: 0 };
+      row[field] += 1;
+      map.set(key, row);
+    };
+    for (const f of fragments) bump(dayKey(f.createdAt), 'frags');
+    // 已完成的不再标红：日历是「还要做什么」，不是「做过什么」
+    for (const t of todos) if (t.dueAt && !t.done && t.mergedInto === null) bump(t.dueAt, 'todos');
+    for (const n of notes) bump(dayKey(periodAnchor(n.period) ?? n.createdAt), 'notes');
+    return map;
+  }, [fragments, todos, notes]);
+
+  /** 本月合计：记录条数、记了几天、还有几件到期。日历下面那一行 */
+  const monthStat = useMemo(() => {
+    const prefix = `${view.year}-${String(view.month).padStart(2, '0')}`;
+    let frags = 0;
+    let days = 0;
+    let due = 0;
+    for (const [key, row] of byDay) {
+      if (!key.startsWith(prefix)) continue;
+      frags += row.frags;
+      if (row.frags > 0) days += 1;
+      due += row.todos;
+    }
+    return { frags, days, due };
+  }, [byDay, view.year, view.month]);
+
+  const nowView = useMemo(() => {
+    const d = new Date();
+    return d.getFullYear() === view.year && d.getMonth() + 1 === view.month;
+  }, [view.year, view.month]);
+
+  const dayTs = keyToTs(picked);
+  const dayTodo = useMemo(() => todos.filter((t) => t.dueAt === picked && t.mergedInto === null), [todos, picked]);
+  const dayFrag = useMemo(() => fragments.filter((f) => dayKey(f.createdAt) === picked), [fragments, picked]);
+  const dayNote = useMemo(
+    () => notes.filter((n) => dayKey(periodAnchor(n.period) ?? n.createdAt) === picked),
+    [notes, picked],
+  );
+
+  function pickCell(cell: (typeof cells)[number]) {
+    setPicked(cell.key);
+    // 点到相邻月份补齐的那几天就跟着翻月，否则选中的日子不在视野里
+    if (!cell.inMonth) setView({ year: cell.year, month: cell.month });
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.calContent}>
+      <View style={styles.calHead}>
+        <Text style={styles.calTitle}>{monthTitle(view)}</Text>
+        <View style={styles.calNav}>
+          {nowView ? null : (
+            <Pressable
+              onPress={() => {
+                const d = new Date();
+                setView({ year: d.getFullYear(), month: d.getMonth() + 1 });
+                setPicked(todayKey);
+              }}
+              style={styles.calToday}
+              hitSlop={CHECK_SLOP}
+              accessibilityRole="button"
+              accessibilityLabel="回到今天"
+            >
+              <Text style={styles.calTodayText}>今天</Text>
+            </Pressable>
+          )}
+          <IconButton compact name="chevron-back" size={18} onPress={() => setView(shiftMonth(view, -1))} accessibilityLabel="上一月" />
+          <IconButton compact name="chevron-forward" size={18} onPress={() => setView(shiftMonth(view, 1))} accessibilityLabel="下一月" />
+        </View>
+      </View>
+
+      <View style={styles.calWeek}>
+        {WEEKDAY_HEADS.map((w) => (
+          <Text key={w} style={styles.weekHead}>{w}</Text>
+        ))}
+      </View>
+
+      <View style={styles.calGrid}>
+        {cells.map((cell) => {
+          const marks = byDay.get(cell.key);
+          const on = picked === cell.key;
+          const isToday = todayKey === cell.key;
+          return (
+            <Pressable
+              key={cell.key}
+              style={styles.cellWrap}
+              onPress={() => pickCell(cell)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: on }}
+              accessibilityLabel={`${cell.month} 月 ${cell.day} 日${marks ? '，' + marksText(marks) : ''}`}
+            >
+              <View style={[styles.cell, on && styles.cellOn, isToday && !on && styles.cellToday]}>
+                <Text
+                  style={[
+                    styles.cellDay,
+                    !cell.inMonth && styles.cellDayOut,
+                    on && styles.cellDayOn,
+                  ]}
+                >
+                  {cell.day}
+                </Text>
+                <View style={styles.cellDots}>
+                  {marks?.frags ? <View style={[styles.dot, { backgroundColor: on ? c.onAccent : c.text3 }]} /> : null}
+                  {marks?.todos ? <View style={[styles.dot, { backgroundColor: on ? c.onAccent : c.accent }]} /> : null}
+                  {marks?.notes ? <View style={[styles.dot, { backgroundColor: on ? c.onAccent : c.amberText }]} /> : null}
+                </View>
+              </View>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      <Text style={styles.calStat}>
+        {monthStat.frags > 0
+          ? `本月 ${monthStat.frags} 条记录 · 记了 ${monthStat.days} 天${monthStat.due ? ` · ${monthStat.due} 件到期` : ''}`
+          : `本月还没有记录${monthStat.due ? ` · ${monthStat.due} 件到期` : ''}`}
+      </Text>
+
+      <View style={styles.dayPanel}>
+        <View style={styles.dayHead}>
+          <Text style={styles.dayTitle}>{daySubLabel(dayTs)}</Text>
+          <Text style={styles.dayCount}>{marksText({ frags: dayFrag.length, todos: dayTodo.length, notes: dayNote.length })}</Text>
+        </View>
+
+        {dayTodo.map((todo) => (
+          <View key={todo.id} style={styles.dayRow}>
+            <Pressable
+              onPress={() => void onToggle(todo)}
+              style={styles.dayCheck}
+              hitSlop={CHECK_SLOP}
+              accessibilityRole="checkbox"
+              accessibilityLabel={`完成状态：${todo.text}`}
+              accessibilityState={{ checked: todo.done }}
+            >
+              <Ionicons
+                name={todo.done ? 'checkmark-circle' : 'ellipse-outline'}
+                size={19}
+                color={todo.done ? c.accent : c.text2}
+              />
+            </Pressable>
+            <Pressable style={styles.dayMain} onPress={() => onOpenEditor(todo)} accessibilityRole="button" accessibilityLabel={`编辑待办：${todo.text}`}>
+              <Text style={[styles.dayText, todo.done && styles.dayTextDone]} numberOfLines={2}>{todo.text}</Text>
+            </Pressable>
+          </View>
+        ))}
+
+        {dayNote.map((note) => (
+          <Text key={`n${note.id}`} style={styles.dayQuote} numberOfLines={2}>
+            {periodLabel(note.period)}小结 · {note.bodyMd.replace(/[#*>\-\n]+/g, ' ').trim().slice(0, 60)}
+          </Text>
+        ))}
+
+        {dayFrag.length ? (
+          <View style={styles.dayFrags}>
+            {dayFrag.slice(0, 3).map((f) => {
+              const text = stripImageTokens(f.content).replace(/\s+/g, ' ').trim();
+              return (
+                <Text key={`f${f.id}`} style={styles.dayQuote} numberOfLines={2}>
+                  {text ? shortPreview(text, 70) : `[${f.images.length} 张图]`}
+                </Text>
+              );
+            })}
+            {dayFrag.length > 3 ? (
+              <Text style={styles.dayMore}>还有 {dayFrag.length - 3} 条，去时间轴看</Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {dayTodo.length === 0 && dayFrag.length === 0 && dayNote.length === 0 ? (
+          <Text style={styles.dayEmpty}>这天没有记录，也没有到期的待办。</Text>
+        ) : null}
+      </View>
+    </ScrollView>
+  );
+}
+
+const CHECK_SLOP = { top: 9, bottom: 9, left: 4, right: 4 };
+
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   normalContent: { flex: 1 },
   loadError: { ...TYPE.compact, color: c.danger, padding: SPACE.lg, textAlign: 'center' },
   root: { flex: 1, backgroundColor: c.page },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.md },
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.sm },
-  tabSlot: { flex: 1, minWidth: 120 },
+  /**
+   * 三个 tab 平分一行。
+   *
+   * minWidth 从 120 降到 88：三个 tab × 120 在 360dp 的屏上放不下（328 可用），
+   * flexWrap 会把「小结」折到第二行 —— 一行 chip 变成两行，页头下面白掉一截。
+   */
+  tabs: { flexDirection: 'row', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.sm },
+  tabSlot: { flex: 1, minWidth: 88 },
   content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
   /** 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 说明 14 */
   empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
@@ -245,24 +511,68 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   genBtn: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accentBg, marginBottom: SPACE.lg,
+    backgroundColor: c.accentBg, marginBottom: SPACE.md,
   },
   genCopy: { flex: 1, minWidth: 0, gap: 1 },
   genText: { ...TYPE.body, fontWeight: '600', color: c.accentText },
   genHint: { ...TYPE.meta, color: c.accentText },
-  noteGroupHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xxs, marginBottom: SPACE.xs },
+  noteGroupHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: 6 },
   noteGroupTitle: { ...TYPE.label, color: c.text2 },
   noteGroupCount: { ...TYPE.meta, color: c.text2 },
   /** 小结卡：白底浮在浅灰页上就够分层，不描边 */
   noteCard: {
     backgroundColor: c.card, borderRadius: metrics.cardRadius,
-    padding: SPACE.md, marginBottom: SPACE.sm,
+    padding: SPACE.md, marginBottom: SPACE.xs,
   },
-  noteTitle: { ...TYPE.title, color: c.text, marginBottom: SPACE.xxs },
-  noteHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.xs },
+  noteTitle: { ...TYPE.title, color: c.text, marginBottom: 2 },
+  noteHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: 6 },
   noteKind: { ...TYPE.meta, color: c.text2 },
   noteChars: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
-  noteBody: { ...TYPE.body, color: c.text },
-  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.sm },
+  noteBody: { ...TYPE.compact, color: c.text },
+  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.xs },
   noteToggle: { ...TYPE.label, color: c.accentText },
+
+  /* ---- 日历 ---- */
+  calContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
+  calHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingTop: SPACE.xxs, paddingBottom: SPACE.xs },
+  calTitle: { ...TYPE.title, flex: 1, minWidth: 0, color: c.text },
+  calNav: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  calToday: { minHeight: 32, paddingHorizontal: SPACE.xs, justifyContent: 'center', borderRadius: metrics.buttonRadius },
+  calTodayText: { ...TYPE.label, color: c.accentText },
+  calWeek: { flexDirection: 'row', paddingBottom: 2 },
+  weekHead: { ...TYPE.caption, flexBasis: '14.2857%', color: c.text3, textAlign: 'center' },
+  /** 6 行 × 44：固定 42 格，翻月时高度不跳 */
+  calGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  cellWrap: { flexBasis: '14.2857%', height: 44, alignItems: 'center', justifyContent: 'center' },
+  cell: {
+    width: 38, height: 38, borderRadius: metrics.buttonRadius,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  /** 选中：实心主色 + 反白字。别只换个字色 —— 42 格里那点色差看不出来 */
+  cellOn: { backgroundColor: c.accent },
+  /** 今天：一圈主色细边。它和「选中」是两件事，可以同时成立（选中优先，实心更明显） */
+  cellToday: { borderWidth: metrics.strokeWidth, borderColor: c.accentHair, backgroundColor: c.hairSoft },
+  cellDay: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
+  cellDayOut: { color: c.text3, opacity: 0.45 },
+  cellDayOn: { color: c.onAccent, fontWeight: '700' },
+  cellDots: { flexDirection: 'row', gap: 2, height: 4, marginTop: 1 },
+  dot: { width: 4, height: 4, borderRadius: 2 },
+  calStat: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xs, marginBottom: SPACE.sm },
+  dayPanel: {
+    backgroundColor: c.card, borderRadius: metrics.cardRadius,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, gap: 2,
+  },
+  dayHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.xxs },
+  dayTitle: { ...TYPE.label, color: c.text },
+  dayCount: { ...TYPE.meta, flex: 1, minWidth: 0, color: c.text3 },
+  dayRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 4, paddingVertical: 2 },
+  /** 19 的图标 + 9 的 hitSlop = 37 的触控区，配合整行 44 的可点高度够用 */
+  dayCheck: { width: 26, height: 26, marginTop: -3, alignItems: 'center', justifyContent: 'center' },
+  dayMain: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  dayText: { ...TYPE.compact, color: c.text },
+  dayTextDone: { color: c.text2, textDecorationLine: 'line-through' },
+  dayQuote: { ...TYPE.meta, color: c.text2, paddingVertical: 3 },
+  dayFrags: { marginTop: 2 },
+  dayMore: { ...TYPE.meta, color: c.accentText, paddingVertical: 3 },
+  dayEmpty: { ...TYPE.meta, color: c.text3, paddingVertical: 6 },
 });

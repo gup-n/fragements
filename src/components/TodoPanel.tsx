@@ -36,6 +36,15 @@ function dueLabel(dueAt: string | null): { text: string; overdue: boolean } | nu
   return { text: dueAt.slice(5).replace('-', '/'), overdue: dueAt < dayKey(Date.now()) };
 }
 
+/**
+ * 勾选框四周补出来的触控区。
+ *
+ * 看得见的勾选框是 28（列表密度要的就是这个数），上下补 10 ——
+ * 一行 33 高，补完就是 48 高，手指点得准。左右只补 4：
+ * 再往外就压到正文上了，点开头几个字会变成勾选。
+ */
+const CHECK_SLOP = { top: 10, bottom: 10, left: 4, right: 4 };
+
 export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const keyboardHeight = useKeyboardHeight();
@@ -159,51 +168,81 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
     await onReload();
   }
 
-  /** 一行待办。父项与子项只差缩进和「加子项」按钮 */
+  /**
+   * 一行待办。
+   *
+   * 2026-11-15 重排：[勾选框][正文 + 一行小字][两个紧凑图标] 挤在**同一行**里。
+   * 原来正文独占一整行、图标另起一行，而图标按钮各占 48 高 ——
+   * 一条待办因此在列表里长到 96 以上，三条就占满一屏。用户的原话是
+   * 「代办和待办之间隔得非常开」「一个待办占用的空间非常大」。
+   *
+   * 交付物没变：进度、到期、展开步骤、加子项都还在，只是不再各占一行。
+   */
   function renderRow(node: TodoNode, depth: number) {
     const { todo, children } = node;
     const due = dueLabel(todo.dueAt);
     const progress = openChildCount(node);
     const selected = picked.has(todo.id);
     const folded = collapsed.has(todo.id);
+    /*
+     * 进度和到期合成一行小字。原来它们是两行（各带 marginTop），
+     * 一条带子项的待办因此比同级高出将近一行 —— 而这两条信息都很短，
+     * 「3/5 步 · 到期 11/20」一行读得完。
+     */
+    const meta = [
+      progress.total > 0 ? `${progress.total - progress.open}/${progress.total} 步` : '',
+      due ? `${due.overdue && !todo.done ? '已逾期 ' : '到期 '}${due.text}` : '',
+    ].filter(Boolean).join(' · ');
+    const overdue = !!due && due.overdue && !todo.done;
     return (
       <View key={todo.id}>
         <View style={[styles.row, depth > 0 && styles.rowChild]}>
-          {selecting && depth > 0 ? <View style={styles.checkHit} /> : (
+          {selecting && depth > 0 ? <View style={styles.checkGap} /> : (
             <Pressable
               onPress={() => selecting ? pick(todo.id) : void toggle(todo)}
-              style={[styles.checkHit, styles.touchTarget]}
+              style={styles.checkHit}
+              hitSlop={CHECK_SLOP}
               accessibilityRole="checkbox"
               accessibilityLabel={`${selecting ? '合并选择' : '完成状态'}：${todo.text}`}
               accessibilityState={{ checked: selecting ? selected : todo.done }}
             >
-              <Ionicons name={(selecting ? selected : todo.done) ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={(selecting ? selected : todo.done) ? c.accent : c.text2} />
+              <Ionicons
+                name={(selecting ? selected : todo.done) ? 'checkmark-circle' : 'ellipse-outline'}
+                size={depth > 0 ? 18 : 20}
+                color={(selecting ? selected : todo.done) ? c.accent : c.text2}
+              />
             </Pressable>
           )}
-          <View style={styles.rowContent}>
-            <Pressable
-              style={[styles.main, styles.touchTarget]}
-              onPress={() => selecting ? pick(todo.id) : onOpenEditor(todo, null)}
-              disabled={selecting && depth > 0}
-              accessibilityRole="button"
-              accessibilityLabel={`${selecting ? '选择' : '编辑待办'}：${todo.text}`}
-              accessibilityState={{ disabled: selecting && depth > 0 }}
+          <Pressable
+            style={styles.main}
+            onPress={() => selecting ? pick(todo.id) : onOpenEditor(todo, null)}
+            disabled={selecting && depth > 0}
+            accessibilityRole="button"
+            accessibilityLabel={`${selecting ? '选择' : '编辑待办'}：${todo.text}`}
+            accessibilityState={{ disabled: selecting && depth > 0 }}
+          >
+            <Text
+              style={[styles.text, depth > 0 && styles.textChild, todo.done && styles.doneText]}
+              numberOfLines={3}
             >
-              <Text style={[styles.text, todo.done && styles.doneText]}>{todo.text}</Text>
-              {progress.total > 0 ? <Text style={styles.progress}>{progress.total - progress.open} / {progress.total} 个步骤</Text> : null}
-              {due ? <Text style={[styles.due, due.overdue && !todo.done && styles.dueOverdue]}>{due.overdue && !todo.done ? '已逾期 · ' : '到期 · '}{due.text}</Text> : null}
-            </Pressable>
-            {!selecting && (progress.total > 0 || (depth === 0 && !todo.done)) ? (
-              <View style={styles.rowTools}>
-                {progress.total > 0 ? (
-                  <IconButton name={folded ? 'chevron-down' : 'chevron-up'} label={folded ? '展开' : '收起'} size={18} onPress={() => toggleCollapse(todo.id)} accessibilityLabel={`${folded ? '展开' : '收起'}步骤：${todo.text}`} accessibilityState={{ expanded: !folded }} />
-                ) : null}
-                {depth === 0 && !todo.done ? (
-                  <IconButton name="add" label="子项" size={20} onPress={() => onOpenEditor(null, todo.id)} accessibilityLabel={`添加子项：${todo.text}`} />
-                ) : null}
-              </View>
+              {todo.text}
+            </Text>
+            {meta ? (
+              <Text style={[styles.sub, overdue && styles.dueOverdue]} numberOfLines={1}>
+                {meta}
+              </Text>
             ) : null}
-          </View>
+          </Pressable>
+          {!selecting && (progress.total > 0 || (depth === 0 && !todo.done)) ? (
+            <View style={styles.rowTools}>
+              {progress.total > 0 ? (
+                <IconButton compact name={folded ? 'chevron-down' : 'chevron-up'} size={17} onPress={() => toggleCollapse(todo.id)} accessibilityLabel={`${folded ? '展开' : '收起'}步骤：${todo.text}`} accessibilityState={{ expanded: !folded }} />
+              ) : null}
+              {depth === 0 && !todo.done ? (
+                <IconButton compact name="add" size={18} onPress={() => onOpenEditor(null, todo.id)} accessibilityLabel={`添加子项：${todo.text}`} />
+              ) : null}
+            </View>
+          ) : null}
         </View>
         {!folded ? children.map((child) => renderRow({ todo: child, children: [] }, depth + 1)) : null}
       </View>
@@ -399,25 +438,39 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
   emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
-  groupTitle: { ...TYPE.label, color: c.text2, marginBottom: SPACE.xs },
+  groupTitle: { ...TYPE.label, color: c.text2, marginBottom: 6 },
   /** 分组：白卡浮在浅灰页上，不描边；行间靠 0.5 的分隔线 */
   group: { backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden' },
+  /**
+   * 一行待办。
+   *
+   * paddingVertical 6 而不是 8：行与行之间本来就有 0.5 的分隔线和勾选框的
+   * hitSlop，再给 8+8 就是「一句话后面空出半行」。6+6 读起来是一张紧凑的清单。
+   */
   row: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xs,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 4, paddingHorizontal: SPACE.xs, paddingVertical: 6,
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   /** 子项只有缩进与细分隔，不再单独套一张卡。 */
   rowChild: { paddingLeft: SPACE.md, backgroundColor: c.hairSoft },
   rowLast: { borderBottomWidth: 0 },
-  checkHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: metrics.controlHeight, alignItems: 'center', justifyContent: 'center' },
-  rowContent: { flex: 1, minWidth: 0 },
-  main: { minWidth: 0, minHeight: 40, justifyContent: 'center', paddingVertical: 2 },
-  rowTools: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, marginTop: 2 },
+  /** 28 的勾选框 + 10 的 hitSlop = 48 的触控区。别再给它套 touchTarget，那会把它撑回 48 的实心槽 */
+  checkHit: { width: 28, height: 28, marginTop: -2, alignItems: 'center', justifyContent: 'center' },
+  /** 选择模式下子项不显示勾选框，留同样宽的空位，父项和子项的正文才对齐 */
+  checkGap: { width: 28 },
+  main: { flex: 1, minWidth: 0, justifyContent: 'center', paddingVertical: 1 },
+  /** 图标挤在同一行右侧，不再另起一行 —— 另起一行时它们各占 48，行高直接翻倍 */
+  rowTools: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: -4 },
   /** 待办是列表，compact 比正文更紧凑；一行能多看见一条就是收益 */
   text: { ...TYPE.compact, color: c.text },
+  /**
+   * 子项小一号。原来父项和子项都是 14/21，唯一的区别只有左边的缩进和一层淡底，
+   * 用户 2026-11-15 报「子待办的字体大小也没有区分」—— 层级必须写在字号上。
+   */
+  textChild: { ...TYPE.meta, color: c.text2 },
   doneText: { color: c.text2, textDecorationLine: 'line-through' },
-  progress: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, fontVariant: ['tabular-nums'] },
-  due: { ...TYPE.label, color: c.text2, marginTop: 2 },
+  /** 进度 / 到期合成的一行小字 */
+  sub: { ...TYPE.caption, color: c.text2, marginTop: 1, fontVariant: ['tabular-nums'] },
   dueOverdue: { color: c.danger },
   hint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.sm, marginBottom: SPACE.xxs },
   allDone: { alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.md },

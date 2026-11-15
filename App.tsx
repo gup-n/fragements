@@ -575,7 +575,7 @@ function Shell({ booted }: { booted: boolean }) {
                 />
               )}
               {route === 'review' && (
-                <ReviewScreen embedded onChanged={reload} />
+                <ReviewScreen embedded fragments={fragments} onChanged={reload} />
               )}
               {route === 'docs' && (
                 <DocsScreen

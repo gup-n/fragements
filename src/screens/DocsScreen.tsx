@@ -73,6 +73,14 @@ interface Props {
 
 const isWeb = Platform.OS === 'web';
 
+/**
+ * 文档卡里「本地准备 / 云解析」那枚小按钮的触控补偿。
+ *
+ * 它原来是个 48 高的实心块，单独占掉卡片最底下一行 —— 一页文档列表因此
+ * 每条都长得像两行标题。现在看得见的是 34，四周补 7 才是 48。
+ */
+const PILL_SLOP = { top: 7, bottom: 7, left: 4, right: 4 };
+
 export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [docs, setDocs] = useState<DocumentMeta[] | null>(null);
@@ -671,7 +679,7 @@ function DocRow({
 
           {/* 标题后先说明内容，再展示格式、时间和处理状态。 */}
           {doc.origin === 'knowledge' && doc.excerpt ? (
-            <Text style={styles.excerpt} numberOfLines={3}>
+            <Text style={styles.excerpt} numberOfLines={2}>
               {doc.excerpt}
             </Text>
           ) : null}
@@ -688,7 +696,7 @@ function DocRow({
           </View>
 
           <View style={styles.statusRow}>
-            <Ionicons name={icon.name} size={16} color={icon.color} />
+            <Ionicons name={icon.name} size={14} color={icon.color} />
             <Text
               style={[
                 styles.status,
@@ -742,6 +750,7 @@ function DocRow({
           <Pressable
             style={({ pressed }) => [styles.pill, pressed && { opacity: 0.7 }]}
             onPress={action.run}
+            hitSlop={PILL_SLOP}
             accessibilityRole="button"
             accessibilityLabel={`${action.label} ${doc.name}`}
           >
@@ -901,8 +910,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   list: { flex: 1 },
   listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
   listContentWithBar: { paddingBottom: SPACE.lg },
-  /** 卡片间距 10 → 12：原来比页面别处的 8/16 都不挨着，看着像随手填的 */
-  sep: { height: SPACE.sm },
+  /** 卡片间距 12 → 8：卡片本身已经变矮，间距再给 12 就又是一片空白 */
+  sep: { height: SPACE.xs },
   loading: { paddingTop: SPACE.xl, alignItems: 'center' },
   uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.xs },
   /** 主操作按钮：48 是触控下限。原来写 44，比同一页所有按钮都矮一截 */
@@ -947,28 +956,36 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   cardSelected: { borderWidth: metrics.strokeWidth, borderColor: c.accentHair, backgroundColor: c.accentBg },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
-  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: SPACE.sm },
+  /** 卡片正文的内边距 14/12 → 10/10：卡片一共五行，上下各 12 就是白送 24 的高度 */
+  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: 10 },
   side: { paddingRight: SPACE.xxs, paddingTop: SPACE.xxs },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  /** 文档标题走 body + 600（16/26）：18 的卡片标题在这张卡里会把摘要挤没 */
-  name: { flex: 1, minWidth: 0, ...TYPE.body, fontWeight: '600', color: c.text },
-  excerpt: { ...TYPE.compact, color: c.text2, marginTop: SPACE.xxs },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xs },
-  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, paddingVertical: 1 },
-  extText: { ...TYPE.meta, color: c.text2, fontWeight: '600' },
+  /**
+   * 文档标题 16 → 14。
+   *
+   * 用户 2026-11-15：「文档页面，字还是太大，导致一个文件的框较大」。
+   * 标题是这行里唯一被读的字，但它比正文还大就变成了「每条都像一张卡」。
+   * 14/21 + 600 已经能和下面的小字拉开层级，不需要再加字号。
+   */
+  name: { flex: 1, minWidth: 0, ...TYPE.compact, fontWeight: '600', color: c.text },
+  /** 摘要降到 meta（12/18）、只留两行：它是「这篇讲什么」的提示，不是正文 */
+  excerpt: { ...TYPE.meta, color: c.text2, marginTop: 2 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 5, paddingVertical: 0 },
+  extText: { ...TYPE.caption, color: c.text2, fontWeight: '600' },
   meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: SPACE.xs },
-  status: { flex: 1, ...TYPE.label, color: c.text2 },
+  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 3 },
+  status: { flex: 1, ...TYPE.meta, color: c.text2 },
   statusParsing: { color: c.accentText },
   statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
-  errorText: { marginTop: SPACE.xs, ...TYPE.compact, color: c.danger },
-  warnText: { marginTop: SPACE.xs, ...TYPE.compact, color: c.amberText },
+  errorText: { marginTop: 4, ...TYPE.meta, color: c.danger },
+  warnText: { marginTop: 4, ...TYPE.meta, color: c.amberText },
   /** 操作行的左边界要和标题对齐（cardMain 的 paddingLeft 是 pagePadding 系） */
-  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: 8 },
   pill: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
-    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
+    minHeight: 34, minWidth: 34, paddingHorizontal: 10, paddingVertical: 4,
     backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
   },
   pillText: { ...TYPE.label, color: c.text },

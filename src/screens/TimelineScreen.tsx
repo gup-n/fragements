@@ -97,6 +97,15 @@ function previewOfItem(item: TimelineItem): string {
 let autoFocusedOnce = false;
 
 /**
+ * 「展开全文」四周补出来的触控区。
+ *
+ * 这一行看得见只有 26（一行 13 号字），上下各补一点才是好按的高度。
+ * 补得**不对称**：上面只给 2，因为再往上就是正文最后一行 ——
+ * 给多了会把「点正文打开详情」的那一块抢走；下面给 12，那里本来就是行间空白。
+ */
+const EXPAND_SLOP = { top: 2, bottom: 12, left: 8, right: 8 };
+
+/**
  * 时间轴上总结条目的类型标签。
  *
  * 四种都留着：v0.15 之后只会出现 `monthly`，但旧设备上可能还有没被迁移
@@ -1095,7 +1104,8 @@ export function TimelineScreen({
                           {long ? (
                             <Pressable
                               onPress={() => toggleExpand(fragment.id)}
-                              style={[styles.expandBtn, styles.touchTarget]}
+                              hitSlop={EXPAND_SLOP}
+                              style={styles.expandBtn}
                             >
                               <Text style={styles.expandText}>
                                 {open ? '收起' : `展开全文 · ${fragment.content.length} 字`}
@@ -1607,7 +1617,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     marginTop: 7,
   },
   dotMuted: { backgroundColor: c.hair },
-  rowBody: { flex: 1, paddingBottom: 14, paddingLeft: 2 },
+  rowBody: { flex: 1, paddingBottom: 10, paddingLeft: 2 },
   /** 配图区：一排缩略图 + 下面一行状态 */
   imageBlock: { marginTop: 8, gap: 6 },
   thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
@@ -1636,9 +1646,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   imageNoteErr: { color: c.danger },
 
   content: { ...TYPE.body, color: c.text },
-  expandBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, marginTop: 6, alignSelf: 'flex-start' },
+  /**
+   * 「展开全文」原来是个 48 高的按钮，下面还压着 rowBody 的 14 底距 ——
+   * 一条长碎片和它下一条之间因此空出 60 多 px，读起来像换了一页。
+   *
+   * 现在看得见的高度是 26（一行字 + 2 的上下留白），触控区靠 hitSlop 补到 48。
+   * 收的是空白，不是可点范围。
+   */
+  expandBtn: { minHeight: 26, marginTop: 2, paddingVertical: 2, alignSelf: 'flex-start' },
   expandText: { ...TYPE.label, color: c.accent },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 6 },
   project: { ...TYPE.meta, color: c.text3, maxWidth: 120 },
   mergedTag: { ...TYPE.meta, color: c.text3 },
 

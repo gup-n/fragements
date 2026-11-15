@@ -1,6 +1,6 @@
 # 项目交接：当前开发分支
 
-最后整理：2026-11-15。本文记录当前工作树与接手入口，**不是发布说明**。先读[当前UI修订记录](<docs/plans/2026-11-15-ui-polish.md>)和[SPEC最新节](<SPEC.md>)；此前[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
+最后整理：2026-11-15。本文记录当前工作树与接手入口，**不是发布说明**。先读[本轮间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)和[SPEC最新节](<SPEC.md>)；此前的[当前UI修订](<docs/plans/2026-11-15-ui-polish.md>)、[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
 
 ## 1. 三十秒速览
 
@@ -10,19 +10,36 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.21.1 / versionCode 62 |
+| 版本 | v0.22.0 / versionCode 63 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.21.1 已由[CI 43718349933](https://github.com/gup-n/fragements/actions/runs/43718349933)构建并发布（26,212,094 字节，`draft=false`，下载 HTTP 200 匿名可通）。上一版 v0.21.0（[CI 43717633121](https://github.com/gup-n/fragements/actions/runs/43717633121)，26,212,086 字节）可回退；两者只差三层灰阶的校准。真机均未验 |
+| 发布状态 | 源码 v0.22.0 尚未构建。上一版 v0.21.1 已由[CI 43718349933](https://github.com/gup-n/fragements/actions/runs/43718349933)构建并发布（26,212,094 字节，`draft=false`，下载 HTTP 200 匿名可通）；v0.21.0（[CI 43717633121](https://github.com/gup-n/fragements/actions/runs/43717633121)）可回退。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
 | AI | 配置的OpenAI兼容服务；官方支持模型使用 `deepseek-flash` / `deepseek-v4-pro` |
 
-**不要恢复旧入口：** 没有独立整理页、知识卡实体或标签管理/筛选。回顾只有待办和小结；现行小结生成只有月。旧tags、旧类型、旧表或兼容解析仍保留，不表示有对应UI。
+**不要恢复旧入口：** 没有独立整理页、知识卡实体或标签管理/筛选。回顾分待办 / 日历 / 小结三个 tab；现行小结生成只有月。旧tags、旧类型、旧表或兼容解析仍保留，不表示有对应UI。
 
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.22.0：间距返工 + 回顾日历
+
+用户四条抱怨，根因是同一个：**某个元素占了一整块位置，而它不该占**。详见
+[间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)，要点：
+
+- **「展开全文」和下一个隔得很开**：那是个 48 高的按钮 + 14 的行底距。现在 26 高 + hitSlop。
+- **文档卡太高**：五行竖排 + 48 的操作按钮。标题 14/21、摘要两行、操作按钮 34 + hitSlop。
+- **问页开关在框里**：开关和发送键挤一行，框永远一行高。开关移到框外，框 34 起、5 行封顶。
+- **待办一行 96 高**：正文一行、图标另起一行，而 `IconButton` 最小槽 48。
+  现在图标回到同一行（新增 `IconButton compact`：36 槽 + hitSlop 补 48），勾选框 28，子项 12/18。
+- **回顾新增「日历」tab**：`src/util/calendar.ts` 的 42 格月历（周一开头）+ 点阵 +
+  月度小结 + 当天明细（可就地勾待办）。参考 jotsy，采纳与不采纳的理由都写在计划文档里。
+- **问页提示条位置改成实测**（`onLayout`），去掉了 `keyboardHeight + 140` 这个估算值。
+
+**没验**：没有设备，日历在 320dp + 200% 字号下的换行、待办长文本换行对齐、
+问页输入框在真实输入法下的自动长高，都只有断言和编译校验。
 
 ### v0.21.0：一次 UI 复查（没有新需求）
 
@@ -171,10 +188,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `App.tsx` [打开](<App.tsx>) | 661 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1892 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2143 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 268 | 待办/小结两类回顾，没有标签tab，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1008 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1909 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2205 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 577 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1025 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
@@ -268,7 +285,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `src/components/TabBar.tsx` [打开](<src/components/TabBar.tsx>) | 118 | 底栏四项（碎片/文档/回顾/问），flex:1 四等分且每槽≥48dp；选中用实心图标+加粗+短线头，不只靠颜色 |
 | `src/components/GlassBackdrop.tsx` [打开](<src/components/GlassBackdrop.tsx>) | 70 | 墨水风格专属毛玻璃垫层：dimezis 真模糊 + 纸色遮罩保证正文可读；`glassable()` 决定卡片是否让出实底 |
-| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 146 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
+| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 171 | 默认48dp槽；compact为36槽+hitSlop补48；短label、选中/禁用/焦点语义，diameter只管视觉底 |
 | `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 52 | 共享页头（56高）、返回/右侧动作及标题聚焦 |
 | `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 23 | 减少动效时静态忙碌图形，不改变业务进度 |
 | `src/components/ChoiceChip.tsx` [打开](<src/components/ChoiceChip.tsx>) | 67 | 带文字/状态的共享选项控件 |
@@ -280,7 +297,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 607 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
 | `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 747 | 月总结单篇/缺口队列、原稿对照和确认保存 |
-| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 465 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
+| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 518 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 229 | 全屏覆盖编辑、子项和到期日 |
 | `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 529 | 更新提示/下载/安装/错误状态 |
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 216 | 文字导入预览、范围/日期警告与确认 |
@@ -305,6 +322,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/mdBlocks.ts` [打开](<src/util/mdBlocks.ts>) | 488 | Markdown、表格、代码、引用与图片块解析 |
 | `src/util/text.ts` [打开](<src/util/text.ts>) | 32 | 文本规范化、包含判断与截取 |
 | `src/util/date.ts` [打开](<src/util/date.ts>) | 188 | 日/月等历史日期键、标签与月末锚点 |
+| `src/util/calendar.ts` [打开](<src/util/calendar.ts>) | 82 | 回顾日历的纯日期网格：固定42格、周一开头、翻月跨年、本地时区解析 |
 | `src/util/digest.ts` [打开](<src/util/digest.ts>) | 106 | 月总结缺口与历史小结分组，组内不重排 |
 | `src/util/todoTree.ts` [打开](<src/util/todoTree.ts>) | 125 | 父子树、唯一完成级联计划与展开 |
 | `src/util/qaScope.ts` [打开](<src/util/qaScope.ts>) | 70 | 记录/文档范围规范化、身份与比较 |
