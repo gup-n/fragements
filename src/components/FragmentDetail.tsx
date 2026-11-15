@@ -95,7 +95,7 @@ export function FragmentDetail({
   onAddImages,
   onRemoveImage,
 }: Props) {
-  const { c, styles, metrics } = useThemedStyles(makeStyles);
+  const { c, styles } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
   const window = useWindowDimensions();
   /**

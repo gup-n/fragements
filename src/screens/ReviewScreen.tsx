@@ -22,7 +22,7 @@ import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
-import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
+import { NOTE_GROUP_LABEL, groupNotes, missingDigests } from '../util/digest';
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
 import { shortPreview } from '../util/text';
@@ -124,6 +124,18 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
   const editorParent =
     editor?.parentId != null ? todos.find((t) => t.id === editor.parentId) : null;
 
+  /*
+   * 有碎片、但那个月还没写小结的月份数。
+   *
+   * 判据直接用 `util/digest.missingDigests`（月小结面板里的「待补」也是它），
+   * 不在这里重写一遍「哪些月算缺」—— 重写就会和面板里的数字对不上。
+   * 本月的碎片不算缺口：月份还没过完，写出来是半截。
+   */
+  const missingMonths = useMemo(
+    () => missingDigests(fragments, notes, 1).total,
+    [fragments, notes],
+  );
+
   return (
     <View style={styles.root}><View style={styles.normalContent} importantForAccessibility={viewerIndex !== null || sheetOpen || editor !== null ? "no-hide-descendants" : "auto"}>
       <ScreenHeader
@@ -182,7 +194,14 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
             <Ionicons name="sparkles-outline" size={20} color={c.accentText} />
             <View style={styles.genCopy}>
               <Text style={styles.genText}>写月总结</Text>
-              <Text style={styles.genHint}>一个月一篇</Text>
+              {/*
+                「一个月一篇」是恒定的事实，说一次就够了；这里换成会变的状态：
+                有几个月的碎片还没被总结过。「记了不少但没总结」这件事，
+                不主动说，用户不会自己发现 —— 小结面板里的待补清单要点进去才看得到。
+              */}
+              <Text style={styles.genHint}>
+                {missingMonths > 0 ? `${missingMonths} 个月还没写` : '一个月一篇'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={c.accentText} />
           </Pressable>
@@ -300,6 +319,14 @@ function CalendarTab({
   });
   /** 选中的那一天。默认今天 —— 进日历第一眼应该看到「现在」 */
   const [picked, setPicked] = useState(todayKey);
+  /**
+   * 当天记录是否已展开。
+   *
+   * 默认只列三条：一天记十几条时，明细区会把下面的内容全推走。
+   * v0.22.0 那行写的是「还有 N 条，去时间轴看」—— 一句话指了个去不了的地方，
+   * 等于没有功能。现在点它就地展开，不再跨页。
+   */
+  const [allFrags, setAllFrags] = useState(false);
 
   const cells = useMemo(() => monthCells(view.year, view.month), [view.year, view.month]);
 
@@ -351,6 +378,7 @@ function CalendarTab({
 
   function pickCell(cell: (typeof cells)[number]) {
     setPicked(cell.key);
+    setAllFrags(false);
     // 点到相邻月份补齐的那几天就跟着翻月，否则选中的日子不在视野里
     if (!cell.inMonth) setView({ year: cell.year, month: cell.month });
   }
@@ -463,7 +491,7 @@ function CalendarTab({
 
         {dayFrag.length ? (
           <View style={styles.dayFrags}>
-            {dayFrag.slice(0, 3).map((f) => {
+            {(allFrags ? dayFrag.slice(0, DAY_FRAG_LIMIT) : dayFrag.slice(0, DAY_FRAG_PREVIEW)).map((f) => {
               const text = stripImageTokens(f.content).replace(/\s+/g, ' ').trim();
               return (
                 <Text key={`f${f.id}`} style={styles.dayQuote} numberOfLines={2}>
@@ -471,8 +499,26 @@ function CalendarTab({
                 </Text>
               );
             })}
-            {dayFrag.length > 3 ? (
-              <Text style={styles.dayMore}>还有 {dayFrag.length - 3} 条，去时间轴看</Text>
+            {dayFrag.length > DAY_FRAG_PREVIEW ? (
+              <Pressable
+                onPress={() => setAllFrags((v) => !v)}
+                style={styles.dayMoreWrap}
+                hitSlop={CHECK_SLOP}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: allFrags }}
+                accessibilityLabel={allFrags ? '收起这天的记录' : `展开这天的其余 ${dayFrag.length - DAY_FRAG_PREVIEW} 条记录`}
+              >
+                <Text style={styles.dayMore}>
+                  {allFrags
+                    ? '收起'
+                    : `展开其余 ${dayFrag.length - DAY_FRAG_PREVIEW} 条`}
+                </Text>
+              </Pressable>
+            ) : null}
+            {allFrags && dayFrag.length > DAY_FRAG_LIMIT ? (
+              <Text style={styles.dayEmpty}>
+                只列最近 {DAY_FRAG_LIMIT} 条，更早的请在时间轴里看。
+              </Text>
             ) : null}
           </View>
         ) : null}
@@ -486,6 +532,9 @@ function CalendarTab({
 }
 
 const CHECK_SLOP = { top: 9, bottom: 9, left: 4, right: 4 };
+/** 当天明细默认列几条，以及展开后最多列几条（再多就该去时间轴看了，但它得能点） */
+const DAY_FRAG_PREVIEW = 3;
+const DAY_FRAG_LIMIT = 30;
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
@@ -573,6 +622,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dayTextDone: { color: c.text2, textDecorationLine: 'line-through' },
   dayQuote: { ...TYPE.meta, color: c.text2, paddingVertical: 3 },
   dayFrags: { marginTop: 2 },
+  /** 「展开其余 N 条」得能点：整行给 28 的可见高度，上下由 hitSlop 补 */
+  dayMoreWrap: { minHeight: 28, justifyContent: 'center', alignSelf: 'flex-start' },
   dayMore: { ...TYPE.meta, color: c.accentText, paddingVertical: 3 },
   dayEmpty: { ...TYPE.meta, color: c.text3, paddingVertical: 6 },
 });

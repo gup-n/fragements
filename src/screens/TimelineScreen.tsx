@@ -17,6 +17,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, Note, PendingFragmentImage } from '../types';
 import { R, SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
 import { GlassBackdrop, glassable } from '../components/GlassBackdrop';
@@ -1583,7 +1584,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: R.pill,
     paddingHorizontal: 16,
   },
-  searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...WEB_INPUT_RESET },
   searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
 
   listContent: { paddingBottom: 8 },
@@ -1832,7 +1833,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    * 这是单/双行的书写密度，不是触控目标 —— 整张卡片都能点进输入框，
    * 真正需要 48 的是下面那排按钮，它们的 controlHeight 没动。
    */
-  input: { ...TYPE.body, color: c.text, minHeight: 38, maxHeight: 120, paddingTop: 2, paddingBottom: 4, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  input: { ...TYPE.body, color: c.text, minHeight: 38, maxHeight: 120, paddingTop: 2, paddingBottom: 4, paddingRight: 6, ...WEB_INPUT_RESET },
   /** 圆形发送键：48×48 正好是触控下限，所以不用再套 touchTarget */
   send: {
     width: 48, height: 48, borderRadius: 24,
@@ -1851,7 +1852,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderBottomColor: c.hair,
   },
   fullTitle: { ...TYPE.title, color: c.text },
-  fullInput: { ...TYPE.reading, flex: 1, color: c.text, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.md, textAlignVertical: 'top', ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  fullInput: { ...TYPE.reading, flex: 1, color: c.text, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.md, textAlignVertical: 'top', ...WEB_INPUT_RESET },
   fullCount: { ...TYPE.meta, flex: 1, color: c.text3 },
   /** 长文底栏：字数在左、插图在右，贴着键盘上沿 */
   fullBar: {

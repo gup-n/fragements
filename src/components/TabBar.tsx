@@ -19,7 +19,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { IoniconName } from './IconButton';
 import { GlassBackdrop, glassable } from './GlassBackdrop';
 
@@ -59,7 +59,7 @@ interface Props {
 }
 
 export function TabBar({ current, onChange, disabled = false }: Props) {
-  const { c, styles, metrics } = useThemedStyles(makeStyles);
+  const { c, styles } = useThemedStyles(makeStyles);
   return (
     <View style={styles.bar} accessibilityRole="tablist">
       {/* 墨水风格下底栏是透的：滚到一半的碎片从底下透出来，但被压得看不清 */}

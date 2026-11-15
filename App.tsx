@@ -122,7 +122,7 @@ export default function App() {
 }
 
 function Shell({ booted }: { booted: boolean }) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { styles } = useThemedStyles(makeStyles);
   const { dark } = useTheme();
   const [ready, setReady] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');

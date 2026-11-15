@@ -192,8 +192,17 @@ export interface RequestOptions {
   effort?: ReasoningEffort;
 }
 
-function endpoint(baseUrl: string) {
-  return `${baseUrl.replace(/\/+$/, '')}/chat/completions`;
+/**
+ * 拼接口地址。**对话 / 读网页 / 联网搜索三处共用这一份。**
+ *
+ * 原来各写一份 `baseUrl.replace(/\/+$/, '') + '/xxx'`：三处一模一样，
+ * 但只要有一处忘了收尾斜杠，就会拼出 `//tools/search` —— 服务端返回 404，
+ * 界面上却显示「没搜到」，看起来像没联网（v0.19.1 踩过同类问题）。
+ *
+ * 入参只给路径，不给完整 URL：这样「末尾斜杠」这条规则只有一处能改错。
+ */
+export function apiUrl(baseUrl: string, path: string): string {
+  return `${baseUrl.replace(/\/+$/, '')}${path}`;
 }
 
 /** 从 ```json 围栏里、或从一大段文字里抠出 JSON 对象 */
@@ -401,7 +410,7 @@ async function postChatStream(
   try {
     let res: Response;
     try {
-      res = await expoFetch(endpoint(config.baseUrl), {
+      res = await expoFetch(apiUrl(config.baseUrl, '/chat/completions'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -453,7 +462,7 @@ async function postChatOnce(config: AiConfig, body: Record<string, unknown>): Pr
   guard.arm('connect', CONNECT_TIMEOUT_MS);
 
   try {
-    const res = await expoFetch(endpoint(config.baseUrl), {
+    const res = await expoFetch(apiUrl(config.baseUrl, '/chat/completions'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

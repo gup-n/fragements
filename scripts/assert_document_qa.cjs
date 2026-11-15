@@ -22,6 +22,7 @@ const OUT = path.join(ROOT, '.tmp-assert-qa');
 const MODULES = [
   'src/types.ts',
   'src/util/date.ts',
+  'src/util/text.ts',
   'src/util/mdBlocks.ts',
   'src/util/inlineImages.ts',
   'src/util/tokenize.ts',

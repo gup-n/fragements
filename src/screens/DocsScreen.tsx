@@ -29,6 +29,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocumentMeta } from '../types';
 import { MAX_ASK_DOCUMENTS } from '../types';
 import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
@@ -949,7 +950,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   /** 聚焦是「持续可见」的状态，用淡主色描边；不用墨水主题的 focus（纯黑） */
   searchFocused: { borderColor: c.accentHair },
-  searchInput: { flex: 1, minWidth: 0, minHeight: 44, ...TYPE.body, color: c.text, paddingVertical: SPACE.xxs, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  searchInput: { flex: 1, minWidth: 0, minHeight: 44, ...TYPE.body, color: c.text, paddingVertical: SPACE.xxs, ...WEB_INPUT_RESET },
   /** 卡片：白底浮在浅灰页上就够分层了，不描边 */
   card: { backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden' },
   /** 选中：淡蓝底 + 一圈极浅的主色边。原来 2px 纯黑（墨水 focus），是「黑框」的第三个来源 */

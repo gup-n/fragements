@@ -1,3 +1,4 @@
+import { visualLen } from './text';
 /**
  * 轻量 Markdown 分块解析。
  *
@@ -101,29 +102,6 @@ const MAX_COLS = 8;
 /* ------------------------------------------------------------------ */
 /* 行内                                                                */
 /* ------------------------------------------------------------------ */
-
-/** 中日韩与全角标点按两个字符宽算，用于估列宽 */
-function visualLen(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0) ?? 0;
-    const wide =
-      (c >= 0x1100 && c <= 0x115f) ||
-      (c >= 0x2e80 && c <= 0x303e) ||
-      (c >= 0x3041 && c <= 0x33ff) ||
-      (c >= 0x3400 && c <= 0x4dbf) ||
-      (c >= 0x4e00 && c <= 0x9fff) ||
-      (c >= 0xa000 && c <= 0xa4cf) ||
-      (c >= 0xac00 && c <= 0xd7a3) ||
-      (c >= 0xf900 && c <= 0xfaff) ||
-      (c >= 0xfe30 && c <= 0xfe6f) ||
-      (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0xffe0 && c <= 0xffe6) ||
-      (c >= 0x1f300 && c <= 0x1faff);
-    n += wide ? 2 : 1;
-  }
-  return n;
-}
 
 /** 代码或加粗，一次扫完。两者互斥：先剥代码再找加粗会把 `` `**a**` `` 的星号当加粗 */
 const INLINE_RE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)/;

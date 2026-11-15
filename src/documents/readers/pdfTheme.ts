@@ -5,7 +5,7 @@
  */
 import type { Palette, ThemeMetrics } from '../../theme';
 import type { PdfTheme } from './pdfProtocol';
-import { withAlpha } from './color';
+import { withAlpha } from '../../util/color';
 
 /** 原件例外：PDF.js 未指定纸色的页面仍按白纸呈现，不随界面反相。 */
 const PDF_PAPER = '#FFFFFF';

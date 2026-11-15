@@ -35,6 +35,7 @@ import type { Document } from '../../types';
 import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { findHits } from '../../util/highlight';
+import { visualLen } from '../../util/text';
 import {
   listSheetRows,
   readWorkbook,
@@ -55,25 +56,6 @@ const VIEW_ROWS = 1200;
 const VIEW_COLS = 60;
 /** 列窗口两侧多画几列，横向滑动时不会先看到一块空白 */
 const COL_OVERSCAN = 240;
-
-/** 中日韩按两格宽估列宽，否则中文列会挤成一条 */
-function visualLen(s: string): number {
-  let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0) ?? 0;
-    n +=
-      (c >= 0x1100 && c <= 0x115f) ||
-      (c >= 0x2e80 && c <= 0xa4cf) ||
-      (c >= 0xac00 && c <= 0xd7a3) ||
-      (c >= 0xf900 && c <= 0xfaff) ||
-      (c >= 0xfe30 && c <= 0xfe6f) ||
-      (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0xffe0 && c <= 0xffe6)
-        ? 2
-        : 1;
-  }
-  return n;
-}
 
 function columnWidths(sheet: SheetTable, rows: SheetRow[]): number[] {
   const widths = new Array<number>(Math.min(sheet.cols, VIEW_COLS)).fill(64);

@@ -25,7 +25,6 @@ import {
   Animated,
   Linking,
   PanResponder,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -48,6 +47,7 @@ import type {
   QaTurn,
 } from '../types';
 import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useOrganize, type StartDraftOptions } from '../organize/useOrganize';
 import { hasUnsavedWorkspace, remainingIds } from '../organize/workspace';
@@ -2130,7 +2130,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     ...TYPE.body, color: c.text, flex: 1, minWidth: 0,
     minHeight: 34, maxHeight: TYPE.body.lineHeight * 5,
     paddingTop: 3, paddingBottom: 3,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
+    ...WEB_INPUT_RESET,
   },
   /**
    * 开关行在输入框**外面**，和页左右对齐。

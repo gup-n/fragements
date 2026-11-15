@@ -13,7 +13,7 @@
  */
 import { fetch as expoFetch } from 'expo/fetch';
 import type { AiConfig, WebHit } from '../types';
-import { AiError } from './chat';
+import { AiError, apiUrl } from './chat';
 
 /** 官方限制 query 1–128 字符，超了直接 400 */
 const MAX_QUERY = 128;
@@ -35,10 +35,6 @@ const TIMEOUT_MS = 25_000;
 /** 408 / 429 / 5xx 可以重试，其余 4xx 重试多少次都一样 */
 const RETRYABLE = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
-
-function endpoint(baseUrl: string) {
-  return `${baseUrl.replace(/\/+$/, '')}/tools/search`;
-}
 
 function delay(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -112,7 +108,7 @@ async function callOnce(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await expoFetch(endpoint(config.baseUrl), {
+    const res = await expoFetch(apiUrl(config.baseUrl, '/tools/search'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

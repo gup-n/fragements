@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import type { Repo, OrganizeSessionPatch } from './types';
+import type { Repo } from './types';
 import { parseTags } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
@@ -15,12 +15,10 @@ import type {
   FragmentSource,
   FragmentStatus,
   Note,
-  OrganizePlan,
   OrganizeScope,
   OrganizeSession,
   QaScope,
   QaTurn,
-  TagStat,
   Todo,
 } from '../types';
 import { normalizePlan } from '../util/organizePlan';

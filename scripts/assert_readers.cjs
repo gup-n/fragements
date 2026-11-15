@@ -70,7 +70,7 @@ const tscArgs = [
   'src/documents/readers/sheetWindow.ts',
   'src/documents/readers/workbookCache.ts',
   'src/documents/readers/textBlocks.ts',
-  'src/documents/readers/color.ts',
+  'src/util/color.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -101,7 +101,7 @@ const excel = require(path.join(outDir, 'documents', 'readers', 'excelWorkbook.j
 const sheetWindow = require(path.join(outDir, 'documents', 'readers', 'sheetWindow.js'));
 const wbCache = require(path.join(outDir, 'documents', 'readers', 'workbookCache.js'));
 const textBlocks = require(path.join(outDir, 'documents', 'readers', 'textBlocks.js'));
-const color = require(path.join(outDir, 'documents', 'readers', 'color.js'));
+const color = require(path.join(outDir, 'util', 'color.js'));
 const formats = require(path.join(outDir, 'documents', 'formats.js'));
 const XLSX = require('xlsx');
 const { zipSync, unzipSync, strToU8, strFromU8 } = require('fflate');

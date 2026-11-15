@@ -31,6 +31,7 @@ import { dayKey, formatTime, monthStart, weekStart } from '../util/date';
 import { fragmentText } from '../util/fragmentText';
 import { flattenTodos } from '../util/todoTree';
 import { tokenizeText } from '../util/tokenize';
+import { shortPreview } from '../util/text';
 import { normalizeQaScope } from '../util/qaScope';
 import { citedKeys } from '../util/qaNote';
 import { repo } from '../db/repo';
@@ -269,11 +270,6 @@ export async function retrieveLocal(
   return { fragments, notes, todos, scanned, range };
 }
 
-function clip(text: string, max: number) {
-  const s = text.replace(/\s+/g, ' ').trim();
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
 /** 把装填好的资料拼成一段可读的上下文 */
 export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): string {
   const out: string[] = [];
@@ -284,7 +280,7 @@ export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): str
     for (const f of r.fragments) {
       const project = f.project ? ` · ${f.project}` : '';
       out.push(`[F${f.id}] ${dayKey(f.createdAt)} ${formatTime(f.createdAt)}${project}`);
-      out.push(clip(fragmentText(f), PER_FRAGMENT_CHARS));
+      out.push(shortPreview(fragmentText(f), PER_FRAGMENT_CHARS));
       out.push('');
     }
   } else {
@@ -296,7 +292,7 @@ export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): str
     out.push('（引用写 [N编号]。小结是你自己过去写过的总结，细节以碎片原文为准）');
     for (const n of r.notes) {
       out.push(`[N${n.id}] ${dayKey(n.createdAt)} ${n.type === 'daily' ? '日' : n.type === 'weekly' ? '周' : '月'}小结`);
-      out.push(clip(n.bodyMd, PER_NOTE_CHARS));
+      out.push(shortPreview(n.bodyMd, PER_NOTE_CHARS));
       out.push('');
     }
   }
@@ -324,7 +320,7 @@ export function buildMaterials(r: Retrieval, web: WebHit[], useWeb = false): str
        * 整页给 6000 字、搜索摘要给 800 —— 两者体量差一个数量级。
        * 整页被砍成 800 等于白读，而摘要占 6000 字的位置又纯属浪费。
        */
-      out.push(clip(h.summary, h.kind === 'page' ? 6_000 : 800));
+      out.push(shortPreview(h.summary, h.kind === 'page' ? 6_000 : 800));
       out.push('');
     }
   } else {

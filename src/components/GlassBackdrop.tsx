@@ -21,6 +21,7 @@ import React from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useTheme } from '../theme';
+import { withAlpha } from '../util/color';
 
 interface Props {
   /** 和它垫着的那块同圆角。直角区域传 0 */
@@ -33,15 +34,7 @@ interface Props {
   style?: StyleProp<ViewStyle>;
 }
 
-/** #RRGGBB → rgba()。调色板里都是六位十六进制，这里不为别的格式做兜底 */
-function withAlpha(hex: string, alpha: number): string {
-  const raw = hex.replace('#', '');
-  if (raw.length !== 6) return hex;
-  const r = parseInt(raw.slice(0, 2), 16);
-  const g = parseInt(raw.slice(2, 4), 16);
-  const b = parseInt(raw.slice(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
+/** 纱的半透明色由 `util/color.withAlpha` 算 —— 这里原来自己写了一份，只认六位十六进制 */
 
 export function GlassBackdrop({ radius, tone = 'panel', style }: Props) {
   const { style: themeStyle, dark, c } = useTheme();

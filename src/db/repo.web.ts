@@ -10,11 +10,9 @@ import type {
   FragmentSource,
   FragmentStatus,
   Note,
-  OrganizePlan,
   OrganizeScope,
   OrganizeSession,
   QaScope,
-  TagStat,
   Todo,
 } from '../types';
 import { emptyPlan, normalizePlan } from '../util/organizePlan';

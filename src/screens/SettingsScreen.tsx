@@ -28,8 +28,8 @@ import {
   useThemedStyles,
   type Palette,
   type ThemeMetrics,
-  type ThemeMode,
 } from '../theme';
+import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { repo } from '../db/repo';
 import { loadAiConfig, saveAiConfig } from '../ai/config';
 import { AiError, testConnection } from '../ai/chat';
@@ -1345,7 +1345,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   fieldHint: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
   hintOk: { ...TYPE.meta, color: c.accentText, marginTop: SPACE.xxs },
   hintErr: { ...TYPE.meta, color: c.danger, marginTop: SPACE.xxs },
-  input: { ...TYPE.body, minHeight: metrics.controlHeight, color: c.text, paddingVertical: 2, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  input: { ...TYPE.body, minHeight: metrics.controlHeight, color: c.text, paddingVertical: 2, ...WEB_INPUT_RESET },
   keyRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   keyInput: { flex: 1 },
 

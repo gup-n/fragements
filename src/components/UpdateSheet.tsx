@@ -38,7 +38,7 @@ import {
 } from '../update/download';
 import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
-import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { versionLabel } from '../util/semver';
 
 type Phase = 'prompt' | 'downloading' | 'ready' | 'error';

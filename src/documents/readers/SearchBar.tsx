@@ -1,9 +1,10 @@
 /** 阅读器查找：确定性字面匹配，99+ 明示上限，不把索引中说成零命中。 */
 import React, { useState } from 'react';
-import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { IconButton } from '../../components/IconButton';
+import { WEB_INPUT_RESET } from '../../util/platformStyle';
 
 interface Props {
   value: string;
@@ -109,7 +110,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   input: {
     flex: 1, minWidth: 0, minHeight: metrics.controlHeight, ...TYPE.body, color: c.text,
     paddingVertical: SPACE.xs, paddingHorizontal: 0,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as unknown as undefined } : {}),
+    ...WEB_INPUT_RESET,
   },
   hitRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xs },
   hitInfo: { flex: 1, minWidth: 0, gap: SPACE.xxs },

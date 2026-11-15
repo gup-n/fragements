@@ -13,7 +13,7 @@
  */
 import { fetch as expoFetch } from 'expo/fetch';
 import type { AiConfig } from '../types';
-import { AiError } from './chat';
+import { AiError, apiUrl } from './chat';
 
 /** 单页正文保留多少字。一页 Markdown 常有一两万字，全给模型只会挤掉别的东西 */
 const PAGE_KEEP = 12_000;
@@ -29,10 +29,6 @@ export interface FetchedPage {
   content: string;
   /** 原文总长度，用来在提示里如实说「这是节选」 */
   totalChars: number;
-}
-
-function endpoint(baseUrl: string) {
-  return `${baseUrl.replace(/\/+$/, '')}/tools/fetch`;
 }
 
 function mapStatus(status: number, detail: string, url: string): AiError {
@@ -73,7 +69,7 @@ export async function fetchPage(config: AiConfig, url: string): Promise<FetchedP
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await expoFetch(endpoint(config.baseUrl), {
+    const res = await expoFetch(apiUrl(config.baseUrl, '/tools/fetch'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

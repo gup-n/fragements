@@ -21,6 +21,11 @@ function stylesOf(file, c = appearance.LIGHT, metrics = appearance.DEFAULT_METRI
   const { makeStyles } = loader.extract(file, ['makeStyles'], {
     StyleSheet: { create: (styles) => styles }, Platform: { OS: 'android' },
     SPACE, TYPE, surfaceStroke, R: { pill: 999 },
+    /*
+     * Web 输入的 outline 复位常量。原生平台下它是空对象，所以这里给 `{}`：
+     * 断言跑的是「安卓样式表」，web 那一支不该有任何属性混进来。
+     */
+    WEB_INPUT_RESET: {},
     // 与 src/components/GlassBackdrop.tsx 的 glassable 同一条判据
     glassable: (metrics, solid) => (metrics.outline > 0 ? 'transparent' : solid),
   });
@@ -295,6 +300,54 @@ test('图标按钮的紧凑态：36 的槽 + hitSlop 补到 48', () => {
   assert.equal(plain(normal.props.style({ pressed: false })).filter(Boolean)
     .find((s) => s.minHeight !== undefined).minHeight, 48);
   assert.ok(!Object.hasOwn(normal.props, 'hitSlop'));
+});
+
+/*
+ * 同一件事只许有一份实现。
+ *
+ * 这四条都是 v0.22.1 清理出来的重复：三处 `endpoint()`、两份 `withAlpha`
+ * （其中一份遇到三位十六进制会退化成不透明色）、两份 `visualLen`
+ * （emoji 在表格里算 2、在表格阅读器里算 1）、五处 `outlineStyle: 'none' as any`。
+ * 钉住它们，是为了下次有人「顺手再写一份」的时候能立刻响。
+ */
+test('拼接地址 / 透明度 / 显示宽度 / web 输入复位都只有一份实现', () => {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of require('node:fs').readdirSync(dir, { withFileTypes: true })) {
+      const p = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(entry.name)) files.push(p);
+    }
+  };
+  walk('src');
+  files.push('App.tsx');
+  const text = new Map(files.map((f) => [f, require('node:fs').readFileSync(f, 'utf8')]));
+  const holders = (needle) => [...text].filter(([, src]) => src.includes(needle)).map(([f]) => f);
+
+  assert.deepEqual(holders("outlineStyle: 'none'"), ['src/util/platformStyle.ts'],
+    'web 的 outline 复位只许定义在 platformStyle.ts，别处写 ...WEB_INPUT_RESET');
+  assert.deepEqual(holders('function withAlpha'), ['src/util/color.ts'], 'withAlpha 只许一份');
+  assert.deepEqual(holders('function visualLen'), ['src/util/text.ts'], 'visualLen 只许一份');
+  assert.deepEqual(holders('function apiUrl'), ['src/ai/chat.ts'], '拼接口地址只许一份');
+  // 三个调用点各自还在用（对话 / 读网页 / 搜索）
+  for (const f of ['src/ai/chat.ts', 'src/ai/fetchPage.ts', 'src/ai/search.ts']) {
+    assert.ok(text.get(f).includes('apiUrl('), `${f} 应该走 apiUrl()`);
+  }
+});
+
+/*
+ * 回顾页的两处「别留死路」：
+ * - 日历当天记录超过三条时，那一行必须能点（v0.22.0 写的是「去时间轴看」，但去不了）；
+ * - 小结入口要说出「几个月还没写」，判据必须来自 `util/digest`，不能另写一套。
+ */
+test('日历的「展开其余」能点开，小结入口说出待补月份', () => {
+  const source = parseSource('src/screens/ReviewScreen.tsx').getText();
+  assert.ok(source.includes('setAllFrags((v) => !v)'), '「展开其余 N 条」必须是可点的按钮');
+  assert.ok(source.includes('dayFrag.slice(0, DAY_FRAG_LIMIT)'), '展开后要真的多列几条');
+  // 旧文案是「还有 N 条，去时间轴看」—— 说完不给入口，等于没有功能
+  assert.ok(!/[\u8fd8\u6709]\s*\{dayFrag\.length/.test(source), '不能再写一句话指一个点不到的地方');
+  assert.ok(source.includes('missingDigests(fragments, notes'), '待补月份要用 util/digest 的判据');
+  assert.ok(source.includes('个月还没写'), '小结入口要说出待补月份数');
 });
 
 suite.run();
