@@ -2062,13 +2062,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   contextText: { ...TYPE.meta, flex: 1, color: c.text2 },
   /** 和首页输入卡同一套：浅灰底、28 圆角、无边框 */
   inputRow: {
-    marginHorizontal: metrics.pagePadding, padding: 14, gap: 10,
+    marginHorizontal: metrics.pagePadding, padding: 12, gap: 8,
     backgroundColor: c.hairSoft, borderRadius: 28,
   },
+  /** 文本区 44 高（原先是 64，用户 2026-11-15 说太高）；按钮仍是 48 */
   input: {
     ...TYPE.body, color: c.text,
-    minHeight: metrics.controlHeight + SPACE.md, maxHeight: TYPE.body.lineHeight * 5,
-    paddingTop: SPACE.xxs, paddingBottom: SPACE.xxs,
+    minHeight: 44, maxHeight: TYPE.body.lineHeight * 5,
+    paddingTop: 2, paddingBottom: 2,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
   inputTools: { flexDirection: 'row', alignItems: 'flex-end', gap: SPACE.xs },

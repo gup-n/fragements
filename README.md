@@ -6,14 +6,14 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.20.8 已由 GitHub Actions 构建并发布。** [直接下载APK（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.8/fragments-v0.20.8.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.20.8)。SHA-256 `8204b280992b9308d561bd8d308d2ae132b18bcf884d79bca081d8fb43da4c53`，包名与签名和上一版相同。上一版 [v0.20.7（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.7/fragments-v0.20.7.apk) 仍可回退。真机界面、覆盖安装和数据恢复仍未实测。
+**v0.20.9 已打 tag 并提交 GitHub Actions 构建。** 完成后从 [Releases](https://github.com/gup-n/fragements/releases) 下载 raw APK asset（不要用需登录的 Actions artifact）。上一版 [v0.20.8（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.8/fragments-v0.20.8.apk) 仍可回退。真机界面、覆盖安装和数据恢复仍未实测。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.20.8（versionCode 59） |
-| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.20.8 的 tag 都从该分支提交构建，master 未合并 |
+| 当前版本 | v0.20.9（versionCode 60） |
+| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.20.9 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |
 | 数据 | 本地 SQLite 与 App 私有文件；数据库已有 v1–v16 迁移 |
@@ -44,10 +44,21 @@
 - **已完成待办沿用“只保留最近5条”的既有清理规则**，不是永久归档。
 - 设置仍是配置、外观、数据、关于四个模块及对应子页，不为同一个子页重复造入口。
 
-## 2. 当前 UI 修订（v0.20.8）
+## 2. 当前 UI 修订（v0.20.9）
 
-v0.20.7 先把主色从绿换成靛蓝并把入口下沉到底栏；v0.20.8 再按用户要求整体转向 **DeepSeek 的设计语言** ——
-换的不是色号，是分层方式。
+v0.20.7 把主色从绿换成靛蓝并把入口下沉到底栏；v0.20.8 整体转向 **DeepSeek 的设计语言**；
+v0.20.9 按实机反馈再收一档。
+
+**v0.20.9 的六条**
+
+- **底栏五项**：碎片 / 文档 / **问** / 回顾 / **设置**。问居中、设置最右；设置成为平级页面，首页不再有齿轮。
+- **输入框降高**：首页文本区 48→38、问页 64→44。降的是书写密度，按钮仍是 48。
+- **文档区缩小**：卡片内边距 20→12、标题 16、摘要 14/20；删掉「添加只保存原件，不上传，也不会自动解析。」。
+- **待办紧凑**：行内边距 12→8、文字 15/22，一行能多看见一条。
+- **墨水重做**：边线从 `#767676` 降到 `#E4E4E4`（结构交给页面与卡片的底色差）；点击控件不再闪黑框。
+- **删解释文字**：设置里「只填这一项就能用…」「立即生效…」「它是一条划不掉的常驻通知…」等一并去掉。
+
+**v0.20.8 打下的底子**（换的不是色号，是分层方式）
 
 - **纯白底 + 单一蓝**：`#FFFFFF` 页面底，主色统一 `#3F5EE8`。状态语义只剩 amber（到期）、coral（危险）、灰蓝（已完成）。
 - **分层靠浅灰底，不靠边框**：`hairSoft #F4F5F7` 是输入卡、胶囊、设置菜单块的共用底色；`hair #ECEDF1` 只留给必要分隔线。所有卡片描边撤掉。
@@ -126,7 +137,7 @@ Git恢复分支只恢复代码，不恢复手机数据；设置切回默认风�
 
 ## 5. 安装、开发与发布
 
-已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.20.8已公开，包名和签名与v0.20.7相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
+已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.20.9正在CI构建，包名和签名与v0.20.8相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
 
 技术栈为 React Native 0.88、Expo SDK 58、React 19.3、TypeScript 6、SQLite/FTS5与中文bigram；PDF.js、SheetJS、fflate承担本地阅读相关工作。路由由[App](<App.tsx>)的state管理，没有Expo Router、后端或新增导航库。
 

@@ -22,7 +22,7 @@ import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMe
 import type { IoniconName } from './IconButton';
 import { GlassBackdrop, glassable } from './GlassBackdrop';
 
-export type MainTab = 'timeline' | 'docs' | 'review' | 'ask';
+export type MainTab = 'timeline' | 'docs' | 'ask' | 'review' | 'settings';
 
 interface Item {
   key: MainTab;
@@ -33,11 +33,18 @@ interface Item {
   accessibilityLabel: string;
 }
 
+/**
+ * 五项，按用户 2026-11-15 的要求排：「问」居中（最高频的 AI 入口放在拇指正中），
+ * 「设置」在最右（和系统里其它 App 的「我的/设置」同位）。
+ *
+ * 320dp 的窄屏上每项还有 64dp，超过 48dp 的触控下限；再塞第六项就要掉到 53dp 了。
+ */
 const ITEMS: Item[] = [
   { key: 'timeline', label: '碎片', icon: 'layers-outline', iconOn: 'layers', accessibilityLabel: '碎片：时间轴' },
   { key: 'docs', label: '文档', icon: 'documents-outline', iconOn: 'documents', accessibilityLabel: '文档：上传并阅读' },
-  { key: 'review', label: '回顾', icon: 'checkmark-circle-outline', iconOn: 'checkmark-circle', accessibilityLabel: '回顾：待办与小结' },
   { key: 'ask', label: '问', icon: 'chatbubble-ellipses-outline', iconOn: 'chatbubble-ellipses', accessibilityLabel: '问：查记录或让它整理' },
+  { key: 'review', label: '回顾', icon: 'checkmark-circle-outline', iconOn: 'checkmark-circle', accessibilityLabel: '回顾：待办与小结' },
+  { key: 'settings', label: '设置', icon: 'settings-outline', iconOn: 'settings', accessibilityLabel: '设置：模型、外观与数据' },
 ];
 
 interface Props {

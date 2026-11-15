@@ -36,8 +36,8 @@ type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
 const isWeb = Platform.OS === 'web';
 
-/** 底栏上的四个平级页面。设置不在这里：它是低频入口，留在首页右上角 */
-const TABS: Route[] = ['timeline', 'docs', 'review', 'ask'];
+/** 底栏上的五个平级页面。设置也是其中之一（v0.20.9 起，用户要求放到最右） */
+const TABS: Route[] = ['timeline', 'docs', 'ask', 'review', 'settings'];
 const isTab = (route: Route): route is MainTab => TABS.includes(route);
 
 /** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
@@ -121,14 +121,6 @@ function Shell({ booted }: { booted: boolean }) {
   const { dark } = useTheme();
   const [ready, setReady] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');
-  /**
-   * 从哪个页面进的设置页。
-   *
-   * 原来是「一律回时间轴」：整理页在缺 API Key 时会给一个「去设置里填」的入口，
-   * 点进去填完，回来人已经站在时间轴上了，之前那一屏全白点。
-   * 现在记住来路，关掉设置就回原地。
-   */
-  const [settingsFrom, setSettingsFrom] = useState<Route>('timeline');
   /**
    * 输入框草稿放在 App 里，不放在 TimelineScreen 里。
    *
@@ -320,11 +312,11 @@ function Shell({ booted }: { booted: boolean }) {
         askCloseRef.current?.();
         return true;
       }
-      if (route === 'settings') {
-        // 设置页回到它来时的那个页面，不要一律弹回时间轴
-        setRoute(settingsFrom);
-        return true;
-      }
+      /*
+       * 设置进了底栏之后不再有「来路」这回事：它是平级的一页，返回就是回时间轴。
+       * 设置页自己的子页（配置/外观/数据/关于）由它内部的 BackHandler 先接一层，
+       * 那一层在根层返回 false，才落到这里。
+       */
       if (route !== 'timeline') {
         setRoute('timeline');
         return true;
@@ -332,7 +324,7 @@ function Shell({ booted }: { booted: boolean }) {
       return false;
     });
     return () => sub.remove();
-  }, [route, settingsFrom]);
+  }, [route]);
 
   /**
    * 用户**明确点了**「让它读一遍」才走这里。
@@ -563,10 +555,6 @@ function Shell({ booted }: { booted: boolean }) {
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}
-                  onOpenSettings={() => {
-                    setSettingsFrom('timeline');
-                    setRoute('settings');
-                  }}
                   onOpenAsk={(fragmentId) => {
                     setAskContextId(fragmentId ?? null);
                     setRoute('ask');
@@ -576,8 +564,8 @@ function Shell({ booted }: { booted: boolean }) {
               )}
               {route === 'settings' && (
                 <SettingsScreen
+                  embedded
                   fragments={fragments}
-                  onClose={() => setRoute(settingsFrom)}
                   onChanged={reload}
                 />
               )}

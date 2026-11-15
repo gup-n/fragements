@@ -108,7 +108,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   withLabel: { paddingVertical: SPACE.xs, gap: SPACE.xxs },
   face: { alignItems: 'center', justifyContent: 'center', borderWidth: surfaceStroke(metrics) },
-  pressed: { backgroundColor: c.hairSoft, borderColor: c.focus },
+  /**
+   * 按下**只换底色**，不描边。
+   *
+   * 原来这里是 `borderColor: c.focus`：墨水风格的 focus 是纯黑，于是每点一下控件
+   * 都会闪出一个黑框（用户 2026-11-15 报「点击控件也会有一个黑框」）。
+   * 按下反馈用底色已经够，描边只留给键盘/读屏焦点那种「需要持续可见」的状态。
+   */
+  pressed: { backgroundColor: c.hairSoft },
   focused: { borderColor: c.focus },
   selected: { borderColor: c.focus, borderWidth: 2 },
   label: { ...TYPE.label, textAlign: 'center' },

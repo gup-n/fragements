@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.20.8 / versionCode 59 |
+| 版本 | v0.20.9 / versionCode 60 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.20.8 已由[CI 43682867653](https://github.com/gup-n/fragements/actions/runs/43682867653)构建并发布（26,216,550 字节），下载链接匿名可通；上一版 v0.20.7（[CI 43681009337](https://github.com/gup-n/fragements/actions/runs/43681009337)）可回退；两者真机均未验 |
+| 发布状态 | v0.20.9 已打 tag 并提交 CI，构建/Release 结果见 Actions；上一版 v0.20.8（[CI 43682867653](https://github.com/gup-n/fragements/actions/runs/43682867653)）可回退；两者真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
@@ -23,6 +23,23 @@
 路由由 App 的 state 管理：timeline / settings / review / ask / docs，没有 Expo Router。其中前四个（除 settings）由 `src/components/TabBar.tsx` 在底栏平级切换，settings 是首页右上角的覆盖层；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.20.9：设置进底栏 + 墨水去线去黑框 + 整体再收一档
+
+六条实机反馈，逐条落地：
+
+- **底栏五项**：碎片 / 文档 / 问 / 回顾 / 设置（问居中、设置最右）。设置从「齿轮 + 覆盖层」变成平级页：
+  删了 `settingsFrom`（不再有来路），`TABS` 加 `'settings'`，SettingsScreen 加 `embedded`（根层不画返回）。
+  `test:ui` 两条断言改写：底栏四项→五项、`首页只留设置入口`→`首页不该再有任何导航入口`。
+- **输入框降高**：首页 `input.minHeight` 48→38、问页 64→44；断言 `input.minHeight >= 48` → `>= 38`（写明理由：书写密度不是触控目标）。
+- **文档区缩小**：`cardMain` 内边距 20→12、`name` 18→16、`excerpt` 16/26→14/20、`cardActions`/`pill` 收紧；删 `limitText`「添加只保存原件…」。
+- **待办紧凑**：`row` 内边距 12→8、`main.minHeight` 48→40、`text` 15/22、工具栏与空态一起收。
+- **墨水重做**：`INK_LIGHT/DARK` 的 `hair` 降到 `#E4E4E4`/`#333333`，`card` 给 `#F7F7F7`/`#1B1B1B` 承担分层。
+  `assert_appearance` 的「墨水 hair ≥3:1」**有意放宽到 1.1:1**，同时新增「`card` 与 `page` 必须不同色」守住结构。
+- **去点击黑框**：`IconButton.pressed` 删掉 `borderColor: c.focus`（墨水 focus 是纯黑，按下即闪黑框），只留底色反馈。
+- **删设置文案**：配置 `fieldHint`、外观三段说明、数据常驻通知说明，以及导出/备份两段冗余从句。
+
+未覆盖：淡化后的边线在强光下是否还看得见、38 高的书写区会不会局促 —— 只有装包能验。
 
 ### v0.20.8：修更新 bug + 转向 DeepSeek 设计语言
 
@@ -125,16 +142,16 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 667 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 655 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1885 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2135 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1878 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2136 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 261 | 待办/小结两类回顾，没有标签tab，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 989 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1533 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 990 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1525 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 92 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
-| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 254 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
+| `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 261 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 43 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
 | `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
@@ -223,9 +240,9 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/components/TabBar.tsx` [打开](<src/components/TabBar.tsx>) | 109 | 底栏四项（碎片/文档/回顾/问），flex:1 四等分且每槽≥48dp；选中用实心图标+加粗+短线头，不只靠颜色 |
+| `src/components/TabBar.tsx` [打开](<src/components/TabBar.tsx>) | 116 | 底栏四项（碎片/文档/回顾/问），flex:1 四等分且每槽≥48dp；选中用实心图标+加粗+短线头，不只靠颜色 |
 | `src/components/GlassBackdrop.tsx` [打开](<src/components/GlassBackdrop.tsx>) | 70 | 墨水风格专属毛玻璃垫层：dimezis 真模糊 + 纸色遮罩保证正文可读；`glassable()` 决定卡片是否让出实底 |
-| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 122 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
+| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 129 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
 | `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 51 | 共享页头（56高）、返回/右侧动作及标题聚焦 |
 | `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 23 | 减少动效时静态忙碌图形，不改变业务进度 |
 | `src/components/ChoiceChip.tsx` [打开](<src/components/ChoiceChip.tsx>) | 49 | 带文字/状态的共享选项控件 |
@@ -237,7 +254,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 595 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
 | `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 745 | 月总结单篇/缺口队列、原稿对照和确认保存 |
-| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 450 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
+| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 451 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 223 | 全屏覆盖编辑、子项和到期日 |
 | `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 524 | 更新提示/下载/安装/错误状态 |
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 209 | 文字导入预览、范围/日期警告与确认 |

@@ -58,8 +58,10 @@ import { versionLabel } from '../util/semver';
 import { IconButton, type IoniconName } from '../components/IconButton';
 
 interface Props {
+  /** 作为底栏 tab 常驻时不画返回箭头（子页仍然要能回菜单） */
+  embedded?: boolean;
   fragments: Fragment[];
-  onClose: () => void;
+  onClose?: () => void;
   /** 导入会新增碎片，得让 App 重新拉一遍时间轴 */
   onChanged: () => void;
 }
@@ -94,7 +96,7 @@ const PANE_TITLE: Record<Pane, string> = {
   about: '关于',
 };
 
-export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
+export function SettingsScreen({ embedded = false, fragments, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { mode, setMode, style: themeStyle, setStyle, saveError } = useTheme();
   const keyboardHeight = useKeyboardHeight();
@@ -592,7 +594,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       <ScreenHeader
         title={PANE_TITLE[pane]}
         subtitle={pane === 'root' ? 'v' + APP_VERSION : undefined}
-        onBack={pane === 'root' ? onClose : () => setPane('root')}
+        onBack={pane === 'root' ? (embedded ? undefined : onClose) : () => setPane('root')}
         backLabel={pane === 'root' ? '返回' : '回到设置'}
       />
 
@@ -660,9 +662,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 />
 <IconButton name={showKey ? "eye-off-outline" : "eye-outline"} size={20} onPress={() => setShowKey((value) => !value)} accessibilityLabel={showKey ? "隐藏API Key" : "显示API Key"} accessibilityState={{ expanded: showKey }} />
               </View>
-              <Text style={styles.fieldHint}>
-                只填这一项就能用。Key 在 platform.deepseek.com 的「API keys」里创建。
-              </Text>
             </Field>
 
             {/* 余额。只有官方地址查得到；第三方接口这里会说清原因，而不是转圈 */}
@@ -870,8 +869,13 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 <ChoiceChip key={m} label={THEME_MODE_LABEL[m]} selected={mode === m} onPress={() => setMode(m)} />
               ))}
             </View>
-            <Text style={styles.fieldHint}>立即生效，不用保存。「跟随系统」只改变明暗，不会切换下面的界面风格。</Text>
           </View>
+          {/*
+            三句说明都删了（用户 2026-11-15）：「立即生效不用保存」是显然的，
+            「跟随系统只改明暗」是两组开关摆在一起就能看出来的，
+            「切回默认不会回退版本」更是只在担心时才有用 —— 而担心的时候它也不在眼前。
+            留下两组 chips，选中的样子自己会说话。
+          */}
           <GroupTitle text="界面风格" />
           <View style={styles.card}>
             <View style={styles.chipRow} accessibilityLabel="界面风格">
@@ -879,12 +883,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 <ChoiceChip key={choice} label={THEME_STYLE_LABEL[choice]} selected={themeStyle === choice} onPress={() => setStyle(choice)} />
               ))}
             </View>
-            <Text style={styles.fieldHint}>
-              {themeStyle === 'ink'
-                ? '黑白高对比、清晰边线、减少动态效果。图片和 PDF 原稿保持原样，不会灰度或反相。'
-                : '克制的纸面配色；尊重系统减少动态效果设置。'}
-            </Text>
-            <Text style={styles.fieldHint}>切回「默认」即可退出墨水风格，明暗偏好与所有记录不变。这不会回退应用版本。</Text>
           </View>
           {saveError ? (
             <Text style={[styles.msg, styles.msgErr]} accessibilityLiveRegion="polite">{saveError}</Text>
@@ -960,8 +958,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               </Text>
             )}
             <Text style={styles.fieldHint}>
-              导出的是一份纯 Markdown 备份，正文、事项和时间都在里面。将来如果做云端同步，
-              入口也会归到这一页。
+              导出为纯 Markdown，正文、事项和时间都在里面。
             </Text>
           </View>
 
@@ -1035,8 +1032,7 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
               </Text>
             )}
             <Text style={styles.fieldHint}>
-              备份是一个 zip：数据库、配图原文件、文档原件都在里面，换机或误删时能整份搬回来。
-              它只交到系统分享面板，App 不自己往外传；恢复需要你自己选这个文件。
+              一个 zip：数据库、配图、文档原件。恢复时自己选这个文件。
             </Text>
           </View>
 
@@ -1059,10 +1055,6 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
                 {quickMsg.text}
               </Text>
             )}
-            <Text style={styles.fieldHint}>
-              它是一条划不掉的常驻通知：不发声、不弹横幅、不亮屏。在通知栏里直接打字需要原生实现，
-              这一版没有；这个入口省掉的是「解锁 → 找图标 → 点开 → 点输入框」。
-            </Text>
           </View>
         </ScrollView>
       ) : null}

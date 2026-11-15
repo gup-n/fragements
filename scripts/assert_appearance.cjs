@@ -146,10 +146,22 @@ for (const name of PALETTE_NAMES) {
       atLeast(c, 'text', bg, 7, name);
       for (const fg of ['focus', 'accent', 'danger']) atLeast(c, fg, bg, 3, name);
     }
-    // 普通模式的分隔线可能只是装饰，不能冒称它们已经满足控件可识别性。
-    // 墨水模式用边线表达控件/选中态，边线本身也要有可辨识对比度。
+    /*
+     * 墨水不再靠线表达结构（v0.20.9 起）。
+     *
+     * 原来这里要求 hair 对 page/card 至少 3:1，理由是「墨水用边线表达控件边界」。
+     * 代价是整页布满 1px 中灰框，读起来像表格 —— 用户 2026-11-15 的原话是
+     * 「边线太清晰，清晰后显得有点难看」。
+     *
+     * 现在边线只是交界处的一道影子，结构交给 card / page 的底色差。
+     * 控件可辨识性由 48dp 触控槽、文字标签和图标保证，不依赖这 1px。
+     * 所以这里改成两条更弱但更准确的约束：
+     *   1) 边线仍然「看得见」（≥1.1:1），不是完全消失；
+     *   2) 既然线淡了，底色就必须真的分得开，否则结构两头落空。
+     */
     if (name.startsWith('INK_')) {
-      for (const bg of ['page', 'card']) atLeast(c, 'hair', bg, 3, name);
+      for (const bg of ['page', 'card']) atLeast(c, 'hair', bg, 1.1, name);
+      assert.notEqual(c.card, c.page, `${name} 的 card 与 page 同色，而边线又已淡化 —— 结构会消失`);
     }
   });
 }

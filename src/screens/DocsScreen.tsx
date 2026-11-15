@@ -437,7 +437,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
               </Pressable>
             )}
 
-            <Text style={styles.limitText}>添加只保存原件，不上传，也不会自动解析。</Text>
+            {/* 「添加只保存原件，不上传，也不会自动解析。」已删（用户 2026-11-15）：
+                按钮下面挂一句解释，等于每次进来都要读一遍已经知道的事 */}
             <Pressable style={styles.supportToggle} onPress={() => setShowSupport((v) => !v)} accessibilityRole="button" accessibilityState={{ expanded: showSupport }}>
               <Text style={styles.supportText}>格式与解析说明</Text>
               <Ionicons name={showSupport ? 'chevron-up' : 'chevron-down'} size={16} color={c.text2} />
@@ -901,10 +902,10 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   listContentWithBar: { paddingBottom: SPACE.lg },
   sep: { height: 10 },
   loading: { paddingTop: SPACE.xl, alignItems: 'center' },
-  uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.md },
+  uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.sm },
   uploadBtn: {
-    minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    minHeight: 44, paddingVertical: 0, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
   },
   uploadText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   limitText: { marginTop: SPACE.sm, ...TYPE.body, color: c.text2 },
@@ -929,26 +930,26 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   cardSelected: { borderColor: c.focus, borderWidth: 2, backgroundColor: c.accentBg },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
-  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: SPACE.lg },
-  side: { paddingRight: SPACE.xxs, paddingTop: SPACE.sm },
+  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: 12 },
+  side: { paddingRight: SPACE.xxs, paddingTop: 6 },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  name: { flex: 1, minWidth: 0, ...TYPE.title, color: c.text },
-  excerpt: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.sm },
-  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs },
+  name: { flex: 1, minWidth: 0, fontSize: 16, lineHeight: 23, fontWeight: '600', color: c.text },
+  excerpt: { fontSize: 14, lineHeight: 20, color: c.text2, marginTop: 6 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, paddingVertical: 2 },
   extText: { ...TYPE.meta, color: c.text2, fontWeight: '600' },
   meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: SPACE.sm },
+  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: 8 },
   status: { flex: 1, ...TYPE.label, color: c.text2 },
   statusParsing: { color: c.accentText },
   statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
   errorText: { marginTop: SPACE.xs, ...TYPE.body, color: c.danger },
   warnText: { marginTop: SPACE.xs, ...TYPE.body, color: c.amberText },
-  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: 10, paddingBottom: 8 },
   pill: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
-    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: 12, paddingVertical: SPACE.xs,
     backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
   },
   pillText: { ...TYPE.label, color: c.text },

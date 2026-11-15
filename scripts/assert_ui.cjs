@@ -63,10 +63,10 @@ test('间距只有明确递增档位，普通与墨水表面边线均存在', ()
 });
 for (const width of [320, 360, 412]) {
   for (const scale of [1, 1.5, 2]) {
-    test(`${width}dp/字体${scale}：底栏四等分仍然够48dp`, () => {
-      // 底栏不再用 navigationLayout 分槽（那份是按内边距算的），改成 flex:1 四等分。
-      // 最窄的 320dp 也要能放下 4×48=192，这里把这条下限钉住。
-      assert.ok(width / 4 >= 48, `${width}dp 四等分只有 ${width / 4}dp`);
+    test(`${width}dp/字体${scale}：底栏五等分仍然够48dp`, () => {
+      // 底栏不再用 navigationLayout 分槽（那份是按内边距算的），改成 flex:1 五等分。
+      // 最窄的 320dp 也要能放下 5×48=240，这里把这条下限钉住。
+      assert.ok(width / 5 >= 48, `${width}dp 五等分只有 ${width / 5}dp`);
       const bar = stylesOf('src/components/TabBar.tsx');
       assert.equal(bar.slot.flex, 1);
       assert.ok(bar.slot.minWidth >= 48);
@@ -140,18 +140,18 @@ test('菜单把长当前值放在可换行文字列，不藏原功能', () => {
   assert.equal(style.menuCopy.flex, 1);
   assert.equal(style.menuCopy.minWidth, 0);
 });
-test('底栏四项顺序固定、各有独立图标和回调，选中不靠颜色单独表达', () => {
+test('底栏五项顺序固定、问居中、设置在最后，选中不靠颜色单独表达', () => {
   const loader = componentLoader(appearance.LIGHT, appearance.DEFAULT_METRICS);
   const { TabBar } = loader.load('src/components/TabBar.tsx');
   const seen = [];
   const bar = TabBar({ current: 'docs', onChange: (tab) => seen.push(tab) });
   assert.equal(bar.props.accessibilityRole, 'tablist');
   const tabs = flatten(bar).filter((node) => node.type === 'Pressable');
-  assert.equal(tabs.length, 4, '底栏必须正好四项');
-  assert.deepEqual(
-    tabs.map((t) => t.props.accessibilityLabel.split('：')[0]),
-    ['碎片', '文档', '回顾', '问'],
-  );
+  assert.equal(tabs.length, 5, '底栏必须正好五项');
+  const labels = tabs.map((t) => t.props.accessibilityLabel.split('：')[0]);
+  // 用户 2026-11-15 指定：问在中间，设置在最右
+  assert.deepEqual(labels, ['碎片', '文档', '问', '回顾', '设置']);
+  assert.equal(labels[Math.floor(labels.length / 2)], '问');
   // 选中态：selected 语义 + 实心图标（不是只换个颜色）
   assert.equal(tabs[1].props.accessibilityState.selected, true);
   assert.equal(tabs[0].props.accessibilityState.selected, false);
@@ -168,7 +168,7 @@ test('底栏四项顺序固定、各有独立图标和回调，选中不靠颜�
   }
 });
 
-test('首页只留设置入口，四个主入口已下沉到底栏', () => {
+test('首页不再放任何导航入口，全部下沉到底栏', () => {
   const source = parseSource('src/screens/TimelineScreen.tsx');
   const buttons = [];
   const visit = (node) => {
@@ -178,19 +178,20 @@ test('首页只留设置入口，四个主入口已下沉到底栏', () => {
     ts.forEachChild(node, visit);
   };
   visit(source);
-  // 原来那排「文档 / 回顾 / 设置 / 问」带文字图标必须一个不留 ——
-  // 留着就会和底栏出现两个同样的入口
-  const labelled = buttons.filter((b) => b.has('label'));
-  assert.deepEqual(labelled.map((b) => b.get('label')), [], '首页不应再有带标签的导航图标');
-  const settings = buttons.find((b) => b.get('accessibilityLabel') === '"设置"');
-  assert.ok(settings, '首页右上角必须还有设置入口');
-  assert.ok(settings.get('onPress').includes('onOpenSettings'));
-  assert.equal(settings.get('disabled'), '{composerBusy}');
+  // 带文字标签的导航图标一个都不该有
+  assert.deepEqual(buttons.filter((b) => b.has('label')).map((b) => b.get('label')), []);
+  // 设置进了底栏（v0.20.9），页头那个齿轮也必须删掉，否则同一个入口出现两次
+  assert.equal(buttons.find((b) => b.get('accessibilityLabel') === '"设置"'), undefined, '首页不该再留设置齿轮');
 });
 test('书写卡有完整输入和 48dp 圆形发送键，不额外挤小点击槽', () => {
   const style = stylesOf('src/screens/TimelineScreen.tsx');
   assert.equal(style.input.fontSize, TYPE.body.fontSize);
-  assert.ok(style.input.minHeight >= 48);
+  /*
+   * 文本区不再要求 48 高（用户 2026-11-15 说太高）。
+   * 这里钉的是「还得是个能顺手下笔的框」：至少 38，且字体走 TYPE.body。
+   * 触控底线由下面那条圆形发送键来守。
+   */
+  assert.ok(style.input.minHeight >= 38);
   /*
    * 发送键在 v0.20.8 改成 DeepSeek 那种圆形箭头，原来那条「>= 84 宽的横条」不再成立。
    * 换掉的是形状不是底线：宽高必须相等（否则不是圆），直径不少于 48（触控下限），

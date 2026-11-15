@@ -133,8 +133,6 @@ interface Props {
   onEdit: (id: number, text: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
   onDeleteNote: (id: number) => Promise<void>;
-  onOpenSettings: () => void;
-  /** 带上碎片 id 时，「问」页会把这它作为上下文 */
   onOpenAsk: (fragmentId?: number) => void;
   /**
    * 通知栏「记一条」点进来的计数器。
@@ -170,7 +168,6 @@ export function TimelineScreen({
   onEdit,
   onDelete,
   onDeleteNote,
-  onOpenSettings,
   onOpenAsk,
   focusSignal,
   imageBusy,
@@ -854,15 +851,6 @@ export function TimelineScreen({
           <Text style={styles.todayNumber}>{todayCount}</Text>
           <Text style={styles.brandSub}>今天</Text>
         </View>
-        {/*
-          设置留在页头：文档 / 回顾 / 问 都下沉到底栏了，设置是低频配置项，
-          进底栏会把四个 tab 各挤窄一截（用户 2026-11-15 要求参考其余软件的做法）。
-        */}
-        <IconButton
-          name="settings-outline" size={19} tone="none"
-          onPress={() => navigate(onOpenSettings)} disabled={composerBusy}
-          accessibilityLabel="设置"
-        />
       </View>
 
       <View style={styles.searchWrap}>
@@ -1780,8 +1768,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: glassable(metrics, c.hairSoft),
     borderRadius: 28,
     paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 10,
+    paddingTop: 10,
+    paddingBottom: 8,
     overflow: 'hidden',
   },
   composerBar: {
@@ -1809,7 +1797,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.accent,
   },
   toolBadgeText: { ...TYPE.caption, color: c.onAccent },
-  input: { ...TYPE.body, color: c.text, minHeight: 48, maxHeight: 132, paddingTop: 2, paddingBottom: 6, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  /**
+   * 文本区 38 高（用户 2026-11-15：看起来太高）。
+   * 这是单/双行的书写密度，不是触控目标 —— 整张卡片都能点进输入框，
+   * 真正需要 48 的是下面那排按钮，它们的 controlHeight 没动。
+   */
+  input: { ...TYPE.body, color: c.text, minHeight: 38, maxHeight: 120, paddingTop: 2, paddingBottom: 4, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
   /** 圆形发送键：48×48 正好是触控下限，所以不用再套 touchTarget */
   send: {
     width: 48, height: 48, borderRadius: 24,
