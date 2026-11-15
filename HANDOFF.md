@@ -190,7 +190,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1909 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2205 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 577 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 578 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1025 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
