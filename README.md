@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.23.1 已推 tag，正在构建**（构建完成后这里补下载链接与校验值）。上一版 [v0.23.0](https://github.com/gup-n/fragements/releases/download/v0.23.0/fragments-v0.23.0.apk) 可回退（26,203,618 字节，SHA-256 `fcac4e06f0644d36bcf78b31055497b8758276e50be427803532b2ecf231b3bb`）；这一版让微信分享进来的文件直接进文档库。真机分享链路仍未实测。
+**v0.23.1 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.23.1/fragments-v0.23.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.23.1)。26,206,138 字节，SHA-256 `96d9d3a4238243f9ceba33b740756492da850f9a6e21ee9d2ac3a7b08c00a21a`，下载链接匿名可通（跟随重定向后 HTTP 200、Content-Length 与资产一致），并且从 APK 的 AndroidManifest 里核到了新增的 docx/xlsx/pptx MIME。上一版 [v0.23.0](https://github.com/gup-n/fragements/releases/download/v0.23.0/fragments-v0.23.0.apk) 可回退（26,203,618 字节）。这一版让分享进来的文件直接进文档库。**真机分享链路仍未实测**。
 
 | 项 | 值 |
 |---|---|
