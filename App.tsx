@@ -21,6 +21,8 @@ import { SettingsScreen } from './src/screens/SettingsScreen';
 import { ReviewScreen } from './src/screens/ReviewScreen';
 import { AskScreen } from './src/screens/AskScreen';
 import { DocsScreen } from './src/screens/DocsScreen';
+import { TabBar, type MainTab } from './src/components/TabBar';
+import { useKeyboardHeight } from './src/util/keyboard';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
@@ -33,6 +35,10 @@ import { takeIncomingShare } from './src/shareInbox';
 type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 
 const isWeb = Platform.OS === 'web';
+
+/** 底栏上的四个平级页面。设置不在这里：它是低频入口，留在首页右上角 */
+const TABS: Route[] = ['timeline', 'docs', 'review', 'ask'];
+const isTab = (route: Route): route is MainTab => TABS.includes(route);
 
 /** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
 const K_THEME = 'ui_theme';
@@ -159,6 +165,19 @@ function Shell({ booted }: { booted: boolean }) {
   const registerAskClose = useCallback((fn: (() => void) | null) => {
     askCloseRef.current = fn;
   }, []);
+  /**
+   * 「问」页切到别的 tab 之前的收尾。
+   *
+   * 和关闭按钮不是一回事：关闭是「这一页我不要了」，切 tab 是「先放着，回来接着看」。
+   * 但两者都要先把会话落盘、把整理暂停 —— 页面一卸载，没落盘的轮次就没了。
+   * 返回 false 表示现在不能走（正在写库），这时不切页。
+   */
+  const askLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const registerAskLeave = useCallback((fn: (() => Promise<boolean>) | null) => {
+    askLeaveRef.current = fn;
+  }, []);
+  /** 键盘抬起时底栏要让位：它占的那 52dp 正好是输入法的位置 */
+  const keyboardHeight = useKeyboardHeight();
   const [fragments, setFragments] = useState<Fragment[]>([]);
   /** 周期总结，时间轴按 period 把它们插回对应日期 */
   const [notes, setNotes] = useState<Note[]>([]);
@@ -270,6 +289,20 @@ function Shell({ booted }: { booted: boolean }) {
       }
     })();
   }, [booted, reload]);
+
+  /**
+   * 底栏切换。
+   *
+   * 从「问」离开时先让它收尾（落盘会话、暂停整理）—— 页面一卸载这些就没了。
+   * 收尾是异步的，所以这里等它的结果再决定切不切；其余页面直接切。
+   */
+  const switchTab = useCallback((next: MainTab) => {
+    if (route === 'ask' && askLeaveRef.current) {
+      void askLeaveRef.current().then((ok) => { if (ok) setRoute(next); });
+      return;
+    }
+    setRoute(next);
+  }, [route]);
 
   /**
    * 安卓返回键：在任何子页面都先回主界面，只有已经在主界面时才退出 App。
@@ -538,8 +571,6 @@ function Shell({ booted }: { booted: boolean }) {
                     setAskContextId(fragmentId ?? null);
                     setRoute('ask');
                   }}
-                  onOpenReview={() => setRoute('review')}
-                  onOpenDocs={() => setRoute('docs')}
                   focusSignal={quickTap}
                 />
               )}
@@ -551,11 +582,11 @@ function Shell({ booted }: { booted: boolean }) {
                 />
               )}
               {route === 'review' && (
-                <ReviewScreen onClose={() => setRoute('timeline')} onChanged={reload} />
+                <ReviewScreen embedded onChanged={reload} />
               )}
               {route === 'docs' && (
                 <DocsScreen
-                  onClose={() => setRoute('timeline')}
+                  embedded
                   onAsk={(documentIds) => {
                     // 文档问和碎片问是两条入口，进来时清掉另一条，别让上一个范围残留
                     setAskContextId(null);
@@ -566,6 +597,7 @@ function Shell({ booted }: { booted: boolean }) {
               )}
               {route === 'ask' && (
                 <AskScreen
+                  embedded
                   onClose={() => {
                     setRoute('timeline');
                     setAskContextId(null);
@@ -573,6 +605,7 @@ function Shell({ booted }: { booted: boolean }) {
                   }}
                   onSaved={reload}
                   registerClose={registerAskClose}
+                  registerLeave={registerAskLeave}
                   // 文档范围是会话契约：进来就锁死，页面里不许再改（改就得开新会话）
                   initialScope={askDocIds ? { kind: 'documents', documentIds: askDocIds } : undefined}
                   contextFragment={
@@ -582,6 +615,13 @@ function Shell({ booted }: { booted: boolean }) {
                   }
                 />
               )}
+              {/*
+                底栏：四个平级页面之间切换。设置页不显示（它是覆盖层，且有返回），
+                键盘抬起时也不显示 —— 它那 52dp 正好是输入法要占的地方。
+              */}
+              {route !== 'settings' && keyboardHeight === 0 && isTab(route) ? (
+                <TabBar current={route} onChange={switchTab} />
+              ) : null}
               {/*
                 更新弹窗放在所有页面之后：它是覆盖层，要盖在 route 内容之上。
                 放在 SafeAreaView 里面而不是外面，是为了让卡片居中时不被状态栏顶偏。

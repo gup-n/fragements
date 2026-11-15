@@ -75,6 +75,11 @@ import { CitationSheet } from '../components/CitationSheet';
 import { Toast } from '../components/Toast';
 
 interface Props {
+  /**
+   * 作为底栏 tab 常驻（v0.20.6）。此时不画「关闭」按钮 ——
+   * 底栏就是出口，再放一个叉会让人以为这个 tab 能关掉。
+   */
+  embedded?: boolean;
   onClose: () => void;
   /** 存了纪要 / 整理了会话之后，通知上层刷新时间轴 */
   onSaved: () => void | Promise<void>;
@@ -83,6 +88,13 @@ interface Props {
    * 天然抢不过），所以这里必须是 App 主动转发，而不是自己再挂一个监听。
    */
   registerClose: (fn: (() => void) | null) => void;
+  /**
+   * 切到别的 tab 之前的收尾（落盘会话、暂停整理），返回 false = 现在不能走。
+   *
+   * 和 registerClose 分开：关闭是「这页不要了」，切 tab 是「先放着」。
+   * 共用一套收尾，但切 tab 不该顺带把覆盖层也关掉。
+   */
+  registerLeave?: (fn: (() => Promise<boolean>) | null) => void;
   /** 从时间轴右滑进来时带上的那条碎片 */
   contextFragment?: Fragment | null;
   /**
@@ -301,9 +313,11 @@ function TurnAnswer({
 }
 
 export function AskScreen({
+  embedded = false,
   onClose,
   onSaved,
   registerClose,
+  registerLeave,
   contextFragment,
   initialScope,
 }: Props) {
@@ -657,6 +671,20 @@ export function AskScreen({
    * 关闭：按层逐级退。先关引用面板，再关操作层/历史，最后退页面。
    * 会话已经每轮自动存过，这里不再问「要不要留纪要」。
    */
+  /**
+   * 离开这一页之前必须做完的事：暂停整理、把没落盘的会话写下去。
+   *
+   * 返回 false 表示现在不能走（正在写库/整理被锁）。
+   * 关闭按钮和「切到别的 tab」共用这一份 —— 两条路都会卸载页面，
+   * 少做一次就会丢掉这一轮问答，或者让整理在后台半途消失。
+   */
+  const flushBeforeLeave = useCallback(async () => {
+    if (organize.isLocked()) { showToast('先暂停整理，或等待写入完成'); return false; }
+    if (!(await organize.suspend())) return false;
+    if (dirtyRef.current) void persistSession(turnsRef.current);
+    return true;
+  }, [organize, showToast, persistSession]);
+
   const attemptClose = useCallback(() => {
     if (organize.isLocked()) { showToast('先暂停整理，或等待写入完成'); return; }
     if (discardConfirm) { setDiscardConfirm(false); return; }
@@ -670,17 +698,22 @@ export function AskScreen({
     if (historyOpen) { setHistoryOpen(false); return; }
     if (busy) return;
     void (async () => {
-      if (!(await organize.suspend())) return;
-      if (dirtyRef.current) void persistSession(turnsRef.current);
+      if (!(await flushBeforeLeave())) return;
       onClose();
     })();
   }, [organize, showToast, discardConfirm, draftDoc, openDocId, summaryOpen, cite, sessionDocs,
-      deleteSession, actionSession, historyOpen, busy, persistSession, onClose]);
+      deleteSession, actionSession, historyOpen, busy, flushBeforeLeave, onClose]);
 
   useEffect(() => {
     registerClose(attemptClose);
     return () => registerClose(null);
   }, [attemptClose, registerClose]);
+
+  useEffect(() => {
+    if (!registerLeave) return;
+    registerLeave(flushBeforeLeave);
+    return () => registerLeave(null);
+  }, [flushBeforeLeave, registerLeave]);
 
   const { width: screenW } = useWindowDimensions();
   const widthRef = useRef(screenW);
@@ -1294,14 +1327,17 @@ export function AskScreen({
                 disabled={busy || draftBusy || savingDraft}
                 accessibilityLabel="新建会话"
               />
-              <IconButton
-                name="close"
-                size={20}
-                tone="soft"
-                onPress={attemptClose}
-                disabled={busy || draftBusy || savingDraft}
-                accessibilityLabel="保留草稿并关闭"
-              />
+              {/* 底栏版没有「关闭」：出口是底栏，再放一个叉等于让人以为能关掉这个 tab */}
+              {embedded ? null : (
+                <IconButton
+                  name="close"
+                  size={20}
+                  tone="soft"
+                  onPress={attemptClose}
+                  disabled={busy || draftBusy || savingDraft}
+                  accessibilityLabel="保留草稿并关闭"
+                />
+              )}
             </View>
           }
         />
@@ -1934,25 +1970,25 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
   },
   newHintText: { ...TYPE.label, color: c.onAccent },
-  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.xl },
-  contentEmpty: { flexGrow: 1, paddingTop: SPACE.xl, paddingBottom: SPACE.xl },
-  empty: { alignItems: 'flex-start', gap: SPACE.sm },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.lg },
+  contentEmpty: { flexGrow: 1, paddingTop: SPACE.lg, paddingBottom: SPACE.lg },
+  empty: { alignItems: 'flex-start', gap: 10 },
   emptyIcon: {
     width: metrics.controlHeight, height: metrics.controlHeight,
     backgroundColor: c.accentBg, borderRadius: metrics.cardRadius,
     borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
     alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.xxs,
   },
-  emptyTitle: { ...TYPE.heading, color: c.text },
+  emptyTitle: { ...TYPE.title, color: c.text },
   emptyBody: { ...TYPE.body, color: c.text2 },
   hints: {
-    alignSelf: 'stretch', marginTop: SPACE.md,
+    alignSelf: 'stretch', marginTop: SPACE.sm,
     backgroundColor: c.card, borderRadius: metrics.cardRadius,
     borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden',
   },
   hint: {
-    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
-    padding: SPACE.md,
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: SPACE.md, paddingVertical: 10,
   },
   hintDivider: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   hintBody: { flex: 1, minWidth: 0, gap: SPACE.xxs },
@@ -1961,7 +1997,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   scopeBar: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs,
-    marginHorizontal: metrics.pagePadding, marginTop: SPACE.sm, paddingBottom: SPACE.sm,
+    marginHorizontal: metrics.pagePadding, marginTop: SPACE.xxs, paddingBottom: SPACE.xs,
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   scopeText: { ...TYPE.meta, flex: 1, minWidth: 0, color: c.text2 },
@@ -1971,16 +2007,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, overflow: 'hidden',
   },
   scopeWarn: { ...TYPE.label, fontWeight: '400', color: c.danger, marginHorizontal: metrics.pagePadding, marginTop: SPACE.xs },
-  qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: SPACE.xl, marginBottom: SPACE.md },
+  qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: SPACE.md, marginBottom: SPACE.sm },
   qBubble: {
     maxWidth: '85%', backgroundColor: c.accentBg,
     borderRadius: metrics.cardRadius, borderBottomRightRadius: metrics.buttonRadius,
     borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+    paddingHorizontal: SPACE.sm, paddingVertical: 8,
   },
   qText: { ...TYPE.body, color: c.accentText },
   // Assistant answers remain open text, not a notification card.
-  aRow: { marginBottom: SPACE.md, gap: SPACE.xs },
+  aRow: { marginBottom: SPACE.sm, gap: SPACE.xs },
   aText: { ...TYPE.body, color: c.text },
   covText: {
     ...TYPE.meta, color: c.text2, marginTop: SPACE.xs,

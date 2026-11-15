@@ -10,16 +10,16 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, Note, PendingFragmentImage } from '../types';
-import { R, SPACE, TYPE, navigationLayout, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { R, SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
+import { GlassBackdrop, glassable } from '../components/GlassBackdrop';
 import { FragmentDetail } from '../components/FragmentDetail';
 import { SwipeRow } from '../components/SwipeRow';
 import { Toast } from '../components/Toast';
@@ -136,9 +136,6 @@ interface Props {
   onOpenSettings: () => void;
   /** 带上碎片 id 时，「问」页会把这它作为上下文 */
   onOpenAsk: (fragmentId?: number) => void;
-  onOpenReview: () => void;
-  /** 文档库（v0.10.0）。入口在页头「问」的左边 */
-  onOpenDocs: () => void;
   /**
    * 通知栏「记一条」点进来的计数器。
    *
@@ -175,8 +172,6 @@ export function TimelineScreen({
   onDeleteNote,
   onOpenSettings,
   onOpenAsk,
-  onOpenReview,
-  onOpenDocs,
   focusSignal,
   imageBusy,
   imageFail,
@@ -184,10 +179,8 @@ export function TimelineScreen({
   onAddImages,
   onRemoveImage,
 }: Props) {
-  const { c, styles } = useThemedStyles(makeStyles);
+  const { c, styles, metrics } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
-  const { width, fontScale } = useWindowDimensions();
-  const navLayout = navigationLayout(width, fontScale);
   const [sending, setSending] = useState(false);
   const [picking, setPicking] = useState(false);
   const sendingRef = useRef(false);
@@ -855,35 +848,21 @@ export function TimelineScreen({
       <View style={styles.pageContent} importantForAccessibility={fullEdit || deleteTarget || (detail && detailItems.length > 0) ? 'no-hide-descendants' : 'auto'}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          {keyboardHeight === 0 ? <Text style={styles.eyebrow}>你的日常记录</Text> : null}
           <Text style={styles.brand} numberOfLines={1} accessibilityRole="header">碎片</Text>
         </View>
         <View style={styles.todaySummary} accessible accessibilityLabel={`今天已记 ${todayCount} 条`}>
           <Text style={styles.todayNumber}>{todayCount}</Text>
-          <Text style={styles.brandSub}>今日记录</Text>
+          <Text style={styles.brandSub}>今天</Text>
         </View>
-      </View>
-      <View style={[styles.headerActions, { gap: navLayout.gap, paddingHorizontal: navLayout.horizontalPadding }]}>
-        <View style={styles.navSlot}>
-          <IconButton name="documents-outline" size={21} tone="soft" diameter={36}
-            onPress={() => navigate(onOpenDocs)} disabled={composerBusy} label="文档"
-            accessibilityLabel="文档：上传并阅读文档" />
-        </View>
-        <View style={styles.navSlot}>
-          <IconButton name="checkmark-circle-outline" size={21} tone="soft" diameter={36}
-            onPress={() => navigate(onOpenReview)} disabled={composerBusy} label="回顾"
-            accessibilityLabel="回顾待办与小结" />
-        </View>
-        <View style={styles.navSlot}>
-          <IconButton name="settings-outline" size={21} tone="soft" diameter={36}
-            onPress={() => navigate(onOpenSettings)} disabled={composerBusy} label="设置"
-            accessibilityLabel="设置" />
-        </View>
-        <View style={styles.navSlot}>
-          <IconButton name="chatbubble-ellipses-outline" size={23} tone="primary" diameter={40}
-            onPress={() => navigate(() => onOpenAsk())} disabled={composerBusy} label="问"
-            accessibilityLabel="问：查自己的记录，或者让它整理" />
-        </View>
+        {/*
+          设置留在页头：文档 / 回顾 / 问 都下沉到底栏了，设置是低频配置项，
+          进底栏会把四个 tab 各挤窄一截（用户 2026-11-15 要求参考其余软件的做法）。
+        */}
+        <IconButton
+          name="settings-outline" size={19} tone="none"
+          onPress={() => navigate(onOpenSettings)} disabled={composerBusy}
+          accessibilityLabel="设置"
+        />
       </View>
 
       <View style={styles.searchWrap}>
@@ -941,7 +920,7 @@ export function TimelineScreen({
               </View>
               <Text style={styles.emptyTitle}>没有匹配的碎片</Text>
               <Text style={styles.emptyBody}>
-                {filter ? '换个事项看看，或者点上面的胶囊清掉筛选' : '换个词试试，记的时候不用斟酌措辞'}
+                {filter ? '换个事项，或点上面的胶囊清掉' : '换个词试试'}
               </Text>
             </View>
           ) : (
@@ -950,9 +929,7 @@ export function TimelineScreen({
                 <Ionicons name="create-outline" size={26} color={c.text3} />
               </View>
               <Text style={styles.emptyTitle}>还没有碎片</Text>
-              <Text style={styles.emptyBody}>
-                想到什么就在下面写一句，{'\n'}不用管分类。攒够了去「问」里说一句整理，它会提炼成知识文档。
-              </Text>
+              <Text style={styles.emptyBody}>想到什么就写一句，攒够了让它整理。</Text>
             </View>
           )
         ) : (
@@ -1293,6 +1270,8 @@ export function TimelineScreen({
             原来四个按钮挤在同一行里，长句子写两行就被压得只剩半行宽。
           */}
           <View style={styles.composerCard}>
+            {/* 墨水风格下这张卡是透明的，靠毛玻璃把下方滚过的时间轴透出来 */}
+            <GlassBackdrop radius={metrics.cardRadius} />
             {composerNotice ? <Text style={[styles.composerNotice, composerNotice.kind === 'err' && styles.imageNoteErr]} accessibilityLiveRegion="polite">{composerNotice.text}</Text> : null}
             {composerBusy ? <Text style={styles.composerNotice} accessibilityLiveRegion="polite">{sending ? '正在保存，暂时不能切换页面…' : '正在选择图片…'}</Text> : null}
             <TextInput
@@ -1356,7 +1335,7 @@ export function TimelineScreen({
                 style={[styles.toolBtn, styles.touchTarget]}
                 accessibilityRole="button" accessibilityLabel="展开成整页写" disabled={composerBusy} accessibilityState={{ disabled: composerBusy }}
               >
-                <Ionicons name="expand-outline" size={18} color={c.text2} />
+                <Ionicons name="expand-outline" size={16} color={c.text2} />
                 <Text style={styles.toolLabel}>展开</Text>
               </Pressable>
 
@@ -1369,7 +1348,7 @@ export function TimelineScreen({
                 style={[[styles.toolBtn, imageMenu && styles.toolBtnOn], styles.touchTarget]}
                 accessibilityLabel="加图片"
               >
-                <Ionicons name="image-outline" size={18} color={c.text2} />
+                <Ionicons name="image-outline" size={16} color={c.text2} />
                 <Text style={styles.toolLabel}>图片</Text>
                 {pending.length ? (
                   <View style={styles.toolBadge}>
@@ -1384,7 +1363,7 @@ export function TimelineScreen({
                 style={[[styles.send, canSend && styles.sendActive], styles.touchTarget]}
                 accessibilityRole="button" accessibilityLabel={sending ? "正在保存" : "发布这条碎片"} accessibilityState={{ disabled: !canSend, busy: sending }}
               >
-                {sending ? <ActivityIndicator size="small" color={c.onAccent} /> : <Ionicons name="arrow-up" size={18} color={canSend ? c.onAccent : c.text3} />}
+                {sending ? <ActivityIndicator size="small" color={c.onAccent} /> : <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />}
                 <Text style={[styles.sendLabel, { color: canSend ? c.onAccent : c.text3 }]}>{sending ? '保存中' : '发布'}</Text>
               </Pressable>
             </View>
@@ -1515,6 +1494,7 @@ export function TimelineScreen({
           {imageMenu ? imagePickerRow(true) : null}
 
           <View style={styles.fullBar}>
+            <GlassBackdrop radius={0} tone="bar" />
             {composerNotice ? <Text style={[styles.composerNotice, composerNotice.kind === 'err' && styles.imageNoteErr]} accessibilityLiveRegion="polite">{composerNotice.text}</Text> : null}
             <Text style={styles.fullCount}>
               {draft.length} 字
@@ -1553,25 +1533,22 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   flex: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xs,
+    gap: SPACE.md, paddingHorizontal: SPACE.md, paddingTop: 6, paddingBottom: 2,
   },
   headerLeft: { flex: 1, minWidth: 0 },
-  eyebrow: { ...TYPE.meta, color: c.text2, marginBottom: SPACE.xxs },
-  brand: { ...TYPE.display, color: c.text, letterSpacing: 1 },
-  brandSub: { ...TYPE.meta, color: c.text2 },
+  /** 只留一个字标级标题：「碎片」+ 今日条数。上面那行小字已删（用户 2026-11-15 要求）。 */
+  brand: { fontSize: 24, lineHeight: 32, fontWeight: '700', color: c.text, letterSpacing: 1 },
+  brandSub: { ...TYPE.caption, color: c.text3 },
   todaySummary: { alignItems: 'flex-end', paddingLeft: SPACE.md },
-  todayNumber: { ...TYPE.heading, color: c.accentText, fontVariant: ['tabular-nums'] },
-  headerActions: { flexDirection: 'row', alignItems: 'stretch', paddingBottom: SPACE.xs },
-  navSlot: { flex: 1, minWidth: 48, alignItems: 'stretch' },
+  todayNumber: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: c.accentText, fontVariant: ['tabular-nums'] },
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
     paddingHorizontal: SPACE.md,
-    paddingTop: SPACE.xxs,
-    paddingBottom: SPACE.sm,
+    paddingBottom: SPACE.xs,
     borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
-  filterRow: { flexDirection: 'row', marginTop: 8 },
+  filterRow: { flexDirection: 'row', marginTop: 6 },
   filterChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
@@ -1583,39 +1560,40 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.accentBg,
   },
   filterText: { ...TYPE.label, color: c.accentText, maxWidth: 220 },
+  /** 44 是视觉高度；搜索框是整行可点的输入控件，点哪都进，不需要 48 的方框感 */
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    minHeight: 48,
+    gap: 6,
+    minHeight: 44,
     backgroundColor: c.hairSoft,
     borderRadius: metrics.buttonRadius + 2,
-    paddingHorizontal: 12,
+    paddingHorizontal: 11,
   },
   searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
-  searchStat: { ...TYPE.meta, color: c.text3, marginTop: 7, paddingLeft: 2 },
+  searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
 
   listContent: { paddingBottom: 8 },
   // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
   sectionHeader: {
-    paddingHorizontal: 20,
-    paddingTop: 15,
-    paddingBottom: 9,
+    paddingHorizontal: SPACE.md,
+    paddingTop: 10,
+    paddingBottom: 6,
     backgroundColor: c.page,
   },
   sectionHeaderPressed: { backgroundColor: c.hairSoft },
   /** 展开的月里拆出来的天：往左缩一点、小一号，视觉上挂在月头下面 */
-  sectionHeaderNested: { paddingLeft: 32, paddingTop: 11, paddingBottom: 6 },
+  sectionHeaderNested: { paddingLeft: 28, paddingTop: 8, paddingBottom: 4 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   sectionTitle: { ...TYPE.label, color: c.text, letterSpacing: 0.3 },
   sectionTitleNested: { ...TYPE.label, color: c.text2 },
   sectionSubNested: { color: c.text3 },
   sectionSub: { ...TYPE.meta, flex: 1, color: c.text3, fontVariant: ['tabular-nums'] },
-  sectionPreview: { ...TYPE.meta, color: c.text3, marginTop: 5 },
+  sectionPreview: { ...TYPE.meta, color: c.text3, marginTop: 3 },
 
-  row: { flexDirection: 'row', paddingHorizontal: 20 },
+  row: { flexDirection: 'row', paddingHorizontal: SPACE.md },
   rowPressed: { backgroundColor: c.hairSoft },
-  time: { ...TYPE.meta, width: 44, color: c.text3, paddingTop: 3, fontVariant: ['tabular-nums'] },
+  time: { ...TYPE.meta, width: 40, color: c.text3, paddingTop: 3, fontVariant: ['tabular-nums'] },
   rail: { width: 16, alignItems: 'center' },
   railLine: { position: 'absolute', top: 17, bottom: -8, width: 1, backgroundColor: c.hair },
   dot: {
@@ -1626,7 +1604,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     marginTop: 7,
   },
   dotMuted: { backgroundColor: c.hair },
-  rowBody: { flex: 1, paddingBottom: 18, paddingLeft: 2 },
+  rowBody: { flex: 1, paddingBottom: 14, paddingLeft: 2 },
   /** 配图区：一排缩略图 + 下面一行状态 */
   imageBlock: { marginTop: 8, gap: 6 },
   thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
@@ -1731,30 +1709,30 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   noteDeleteHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingVertical: 2 },
   noteDelete: { ...TYPE.meta, color: c.danger },
 
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 48 },
   emptyIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: c.hairSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 18,
+    marginBottom: 14,
   },
-  emptyTitle: { ...TYPE.title, color: c.text2 },
-  emptyBody: { ...TYPE.body, color: c.text3, textAlign: 'center', marginTop: 10 },
+  emptyTitle: { ...TYPE.body, color: c.text2, fontWeight: '600' },
+  emptyBody: { ...TYPE.meta, color: c.text3, textAlign: 'center', marginTop: 6 },
 
   composerWrap: {
     paddingHorizontal: SPACE.md,
-    paddingTop: SPACE.sm,
-    paddingBottom: SPACE.xs,
+    paddingTop: 6,
+    paddingBottom: SPACE.xxs,
     backgroundColor: c.page,
   },
   /** 待发送的图：横排缩略图，每张右上角一个叉 */
-  pendingStrip: { marginTop: 8 },
-  pendingStripContent: { gap: 8, paddingRight: 4 },
-  pendingItem: { width: 58, height: 58 },
-  pendingThumb: { width: 58, height: 58, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
+  pendingStrip: { marginTop: 6 },
+  pendingStripContent: { gap: 6, paddingRight: 4 },
+  pendingItem: { width: 52, height: 52 },
+  pendingThumb: { width: 52, height: 52, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
   pendingRemove: {
     position: 'absolute', top: -5, right: -5,
     width: 48, height: 48, padding: 5,
@@ -1785,27 +1763,28 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   /**
    * 输入区：上方文字、下方工具行。
    *
-   * 圆角比卡片大一点，是为了让「这是一个可以写东西的框」一眼看出来 ——
-   * 时间轴上的碎片也是圆角卡片，两者贴得太近时只有尺寸差能区分。
+   * 圆角与卡片同档，边线走 hair 而不是 accentHair —— 一圈有色的边会让
+   * 「这里能写字」变成「这里是个被框住的表单」，而输入区本来就靠位置和底色说明了。
    */
   composerCard: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius + 4,
+    backgroundColor: glassable(metrics, c.card),
+    borderRadius: metrics.cardRadius,
     borderWidth: surfaceStroke(metrics),
-    borderColor: c.accentHair,
-    paddingHorizontal: SPACE.sm,
-    paddingTop: SPACE.sm,
-    paddingBottom: SPACE.xs,
+    borderColor: c.hair,
+    paddingHorizontal: 10,
+    paddingTop: 10,
+    paddingBottom: 6,
+    overflow: 'hidden',
   },
   composerBar: {
-    flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.xs,
+    flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 4,
   },
   toolBtn: {
-    minWidth: 64, minHeight: metrics.controlHeight, flexDirection: 'row',
-    gap: SPACE.xxs, paddingHorizontal: SPACE.xs,
+    minWidth: 52, minHeight: metrics.controlHeight, flexDirection: 'row',
+    gap: 4, paddingHorizontal: 6,
     borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
   },
-  toolLabel: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  toolLabel: { ...TYPE.meta, color: c.text2, flexShrink: 1 },
   /** 菜单展开使用明确底色，不将未选中的操作都套一层卡片。 */
   toolBtnOn: { backgroundColor: c.accentBg },
   /** 已选图张数。压在图标右上角，不额外占位置 */
@@ -1825,7 +1804,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   input: { ...TYPE.body, color: c.text, minHeight: 48, maxHeight: 132, paddingTop: 2, paddingBottom: 6, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
   send: {
     minWidth: 84, minHeight: metrics.controlHeight, flexDirection: 'row',
-    gap: SPACE.xxs, paddingHorizontal: SPACE.sm,
+    gap: 4, paddingHorizontal: 10,
     borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
     backgroundColor: c.hairSoft,
   },
@@ -1854,6 +1833,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingBottom: 12,
     borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
+    backgroundColor: glassable(metrics, c.page),
+    overflow: 'hidden',
   },
   fullThumbs: { flexGrow: 0 },
   fullThumbsContent: { gap: 8, paddingHorizontal: 18, paddingTop: 8 },

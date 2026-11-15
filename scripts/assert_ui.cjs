@@ -21,6 +21,8 @@ function stylesOf(file, c = appearance.LIGHT, metrics = appearance.DEFAULT_METRI
   const { makeStyles } = loader.extract(file, ['makeStyles'], {
     StyleSheet: { create: (styles) => styles }, Platform: { OS: 'android' },
     SPACE, TYPE, surfaceStroke, navigationLayout, R: { card: 14, btn: 10, pill: 999 },
+    // 与 src/components/GlassBackdrop.tsx 的 glassable 同一条判据
+    glassable: (metrics, solid) => (metrics.outline > 0 ? 'transparent' : solid),
   });
   return plain(makeStyles(c, metrics));
 }
@@ -36,6 +38,11 @@ function componentLoader(c, metrics) {
     '@expo/vector-icons/Ionicons': 'Icon',
     '../theme': theme,
     './useHeadingFocus': { useHeadingFocus: () => ({ current: null }) },
+    // 毛玻璃是真的原生模块，这里只验「底栏有没有给它留位置」，不验模糊本身
+    './GlassBackdrop': {
+      GlassBackdrop: 'Glass',
+      glassable: (metrics, solid) => (metrics.outline > 0 ? 'transparent' : solid),
+    },
   } });
 }
 
@@ -56,16 +63,17 @@ test('间距只有明确递增档位，普通与墨水表面边线均存在', ()
 });
 for (const width of [320, 360, 412]) {
   for (const scale of [1, 1.5, 2]) {
-    test(`${width}dp/字体${scale}：四个导航槽至少48dp且不与标题争宽`, () => {
-      const layout = navigationLayout(width, scale);
-      const slot = (width - layout.horizontalPadding * 2 - layout.gap * 3) / 4;
-      assert.ok(slot >= 48, `槽宽仅${slot}`);
-      assert.equal(layout.minimumSlot, 48);
-      assert.equal(layout.compact, width < 360 || scale > 1.3);
-      const styles = stylesOf('src/screens/TimelineScreen.tsx');
-      assert.equal(styles.navSlot.flex, 1);
-      assert.ok(styles.navSlot.minWidth >= 48);
-      assert.equal(styles.headerLeft.minWidth, 0);
+    test(`${width}dp/字体${scale}：底栏四等分仍然够48dp`, () => {
+      // 底栏不再用 navigationLayout 分槽（那份是按内边距算的），改成 flex:1 四等分。
+      // 最窄的 320dp 也要能放下 4×48=192，这里把这条下限钉住。
+      assert.ok(width / 4 >= 48, `${width}dp 四等分只有 ${width / 4}dp`);
+      const bar = stylesOf('src/components/TabBar.tsx');
+      assert.equal(bar.slot.flex, 1);
+      assert.ok(bar.slot.minWidth >= 48);
+      assert.ok(bar.slot.minHeight >= 48);
+      // 首页标题列仍然允许被挤压，而不是把按钮推行
+      const timeline = stylesOf('src/screens/TimelineScreen.tsx');
+      assert.equal(timeline.headerLeft.minWidth, 0);
     });
   }
 }
@@ -132,24 +140,52 @@ test('菜单把长当前值放在可换行文字列，不藏原功能', () => {
   assert.equal(style.menuCopy.flex, 1);
   assert.equal(style.menuCopy.minWidth, 0);
 });
-test('首页分行导航保留原顺序、锁和所有回调', () => {
+test('底栏四项顺序固定、各有独立图标和回调，选中不靠颜色单独表达', () => {
+  const loader = componentLoader(appearance.LIGHT, appearance.DEFAULT_METRICS);
+  const { TabBar } = loader.load('src/components/TabBar.tsx');
+  const seen = [];
+  const bar = TabBar({ current: 'docs', onChange: (tab) => seen.push(tab) });
+  assert.equal(bar.props.accessibilityRole, 'tablist');
+  const tabs = flatten(bar).filter((node) => node.type === 'Pressable');
+  assert.equal(tabs.length, 4, '底栏必须正好四项');
+  assert.deepEqual(
+    tabs.map((t) => t.props.accessibilityLabel.split('：')[0]),
+    ['碎片', '文档', '回顾', '问'],
+  );
+  // 选中态：selected 语义 + 实心图标（不是只换个颜色）
+  assert.equal(tabs[1].props.accessibilityState.selected, true);
+  assert.equal(tabs[0].props.accessibilityState.selected, false);
+  assert.equal(flatten(tabs[1]).find((n) => n.type === 'Icon').props.name, 'documents');
+  assert.equal(flatten(tabs[0]).find((n) => n.type === 'Icon').props.name, 'layers-outline');
+  // 点当前页不重复触发；点别的页把 tab 交回去
+  tabs[1].props.onPress();
+  tabs[0].props.onPress();
+  assert.deepEqual(seen, ['timeline']);
+  // 每个 tab 都有 48dp 槽
+  for (const tab of tabs) {
+    const style = plain(tab.props.style({ pressed: false })).filter(Boolean);
+    assert.ok(style.some((s) => s.minHeight >= 48 && s.minWidth >= 48));
+  }
+});
+
+test('首页只留设置入口，四个主入口已下沉到底栏', () => {
   const source = parseSource('src/screens/TimelineScreen.tsx');
-  const nav = [];
+  const buttons = [];
   const visit = (node) => {
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'IconButton') {
-      const attrs = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map((p) => [p.name.getText(source), p.initializer?.getText(source)]));
-      const label = attrs.get('label');
-      if (['"文档"', '"回顾"', '"设置"', '"问"'].includes(label)) nav.push(attrs);
+      buttons.push(new Map(node.attributes.properties.filter(ts.isJsxAttribute).map((p) => [p.name.getText(source), p.initializer?.getText(source)])));
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  assert.deepEqual(nav.map((n) => n.get('label')), ['"文档"', '"回顾"', '"设置"', '"问"']);
-  for (const entry of nav) assert.equal(entry.get('disabled'), '{composerBusy}');
-  assert.ok(nav[0].get('onPress').includes('onOpenDocs'));
-  assert.ok(nav[1].get('onPress').includes('onOpenReview'));
-  assert.ok(nav[2].get('onPress').includes('onOpenSettings'));
-  assert.ok(nav[3].get('onPress').includes('onOpenAsk'));
+  // 原来那排「文档 / 回顾 / 设置 / 问」带文字图标必须一个不留 ——
+  // 留着就会和底栏出现两个同样的入口
+  const labelled = buttons.filter((b) => b.has('label'));
+  assert.deepEqual(labelled.map((b) => b.get('label')), [], '首页不应再有带标签的导航图标');
+  const settings = buttons.find((b) => b.get('accessibilityLabel') === '"设置"');
+  assert.ok(settings, '首页右上角必须还有设置入口');
+  assert.ok(settings.get('onPress').includes('onOpenSettings'));
+  assert.equal(settings.get('disabled'), '{composerBusy}');
 });
 test('书写卡有完整输入和可见发布文字，不额外挤小点击槽', () => {
   const style = stylesOf('src/screens/TimelineScreen.tsx');

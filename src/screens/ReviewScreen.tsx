@@ -29,7 +29,12 @@ import { TodoEditor } from '../components/TodoEditor';
 import { TodoPanel } from '../components/TodoPanel';
 
 interface Props {
-  onClose: () => void;
+  /**
+   * 作为底栏 tab 常驻（v0.20.6）。此时不画返回箭头 ——
+   * 平级的四个页面互相之间没有「上一页」，顶部留一个返回会让人以为退得出去。
+   */
+  embedded?: boolean;
+  onClose?: () => void;
   /** 数据变了（新存了一条总结、改动了待办），通知上层刷新时间轴 */
   onChanged?: () => void | Promise<void>;
 }
@@ -42,7 +47,7 @@ interface EditorTarget {
   parentId: number | null;
 }
 
-export function ReviewScreen({ onClose, onChanged }: Props) {
+export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -96,7 +101,7 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
       <ScreenHeader
         title="回顾"
         subtitle={loading ? '正在读取…' : loadError ? '暂时无法读取' : pending.length > 0 ? `${pending.length} 件事没做完` : '手头的事都做完了'}
-        onBack={onClose}
+        onBack={embedded ? undefined : onClose}
       />
 
       <View style={styles.tabs}>
@@ -225,11 +230,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   loadError: { ...TYPE.body, color: c.danger, padding: SPACE.lg, textAlign: 'center' },
   root: { flex: 1, backgroundColor: c.page },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.md },
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.lg },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: 10, paddingBottom: SPACE.sm },
   tabSlot: { flex: 1, minWidth: 120 },
-  content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
-  empty: { alignItems: 'center', paddingTop: SPACE.xxl, gap: SPACE.sm },
-  emptyTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
+  empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
+  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
   emptyBody: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
   genBtn: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,

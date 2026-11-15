@@ -178,7 +178,7 @@ test('几何契约有真实48dp控件槽，墨水边线更明确而非缩小触�
   const a = appearance();
   for (const name of ['DEFAULT_METRICS', 'INK_METRICS']) {
     const metrics = a[name];
-    assert.deepEqual(Object.keys(metrics).sort(), ['cardRadius', 'buttonRadius', 'strokeWidth', 'controlHeight', 'pagePadding'].sort());
+    assert.deepEqual(Object.keys(metrics).sort(), ['cardRadius', 'buttonRadius', 'strokeWidth', 'controlHeight', 'pagePadding', 'outline'].sort());
     for (const value of Object.values(metrics)) assert.ok(Number.isFinite(value) && value >= 0);
     assert.ok(metrics.controlHeight >= 48);
     assert.ok(metrics.strokeWidth >= 1);

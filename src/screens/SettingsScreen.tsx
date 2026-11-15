@@ -599,29 +599,25 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       {/* ---------------- 模块菜单（根层） ---------------- */}
       {pane === 'root' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.settingsIntro}>
-            <Text style={styles.introTitle}>按你的习惯来</Text>
-            <Text style={styles.introBody}>模型、外观和本地数据，分开管理。</Text>
-          </View>
+          {/*
+            不再写「按你的习惯来 / 模型、外观和本地数据，分开管理。」——
+            四行标题本身就是这四个模块，上面再解释一遍等于重复标题（用户 2026-11-15 要求删）。
+          */}
           <View style={styles.menuStack}>
             <View style={styles.cardTight}>
               <MenuRow icon="options-outline" label="接口与模型" value={aiValue}
-                description="模型服务 · 思考强度 · 文档解析"
                 onPress={() => setPane('config')} last />
             </View>
             <View style={styles.cardTight}>
               <MenuRow icon="contrast-outline" label="外观" value={`${THEME_MODE_LABEL[mode]} · ${THEME_STYLE_LABEL[themeStyle]}`}
-                description="明暗与风格独立，切换立即生效"
                 onPress={() => setPane('appearance')} last />
             </View>
             <View style={styles.cardTight}>
               <MenuRow icon="file-tray-full-outline" label="数据与备份" value={dataValue}
-                description="完整备份与恢复 · 文字迁出 · 搜索索引"
                 onPress={() => setPane('data')} last />
             </View>
             <View style={styles.cardTight}>
               <MenuRow icon="information-circle-outline" label="关于碎片" value={'v' + APP_VERSION}
-                description="版本更新 · 仓库 · 下载地址"
                 onPress={() => setPane('about')} last />
             </View>
           </View>
@@ -1260,7 +1256,7 @@ function MenuRow({
       accessibilityLabel={[label, value, description].filter(Boolean).join('，')}
     >
       <View style={styles.menuIcon}>
-        <Ionicons name={icon} size={21} color={tone === 'warn' ? c.danger : c.accentText} accessible={false} />
+        <Ionicons name={icon} size={18} color={tone === 'warn' ? c.danger : c.accentText} accessible={false} />
       </View>
       <View style={styles.menuCopy}>
         <Text style={styles.menuLabel}>{label}</Text>
@@ -1307,26 +1303,23 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   normalContent: { flex: 1 },
   root: { flex: 1, backgroundColor: c.page },
 
-  content: { paddingHorizontal: SPACE.md, paddingTop: SPACE.xs, paddingBottom: SPACE.xxl },
-  settingsIntro: { paddingTop: SPACE.sm, paddingBottom: SPACE.xl, gap: SPACE.xs },
-  introTitle: { ...TYPE.heading, color: c.text },
-  introBody: { ...TYPE.body, color: c.text2 },
-  menuStack: { gap: SPACE.sm },
+  content: { paddingHorizontal: SPACE.md, paddingTop: SPACE.xxs, paddingBottom: SPACE.xl },
+  menuStack: { gap: SPACE.xs },
   menuIcon: {
-    width: 40, height: 40, borderRadius: metrics.buttonRadius,
+    width: 34, height: 34, borderRadius: metrics.buttonRadius,
     alignItems: 'center', justifyContent: 'center', backgroundColor: c.accentBg,
   },
-  menuCopy: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  menuCopy: { flex: 1, minWidth: 0, gap: 2 },
   menuDescription: { ...TYPE.meta, color: c.text2 },
-  groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: 20, marginBottom: 8, marginLeft: 4 },
+  groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: 14, marginBottom: 6, marginLeft: 4 },
   /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
-  groupHint: { ...TYPE.meta, color: c.text3, marginTop: 8, marginLeft: 4, marginRight: 4 },
+  groupHint: { ...TYPE.meta, color: c.text3, marginTop: 6, marginLeft: 4, marginRight: 4 },
   card: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
     borderWidth: surfaceStroke(metrics),
     borderColor: c.hair,
-    padding: SPACE.md,
+    padding: 14,
   },
   /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
   cardTight: {
@@ -1341,21 +1334,21 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
   menuRowLast: { borderBottomWidth: 0 },
   rowPressed: { backgroundColor: c.hairSoft },
-  menuLabel: { ...TYPE.title, color: c.text },
-  menuValue: { ...TYPE.label, color: c.text2 },
+  menuLabel: { fontSize: 16, lineHeight: 24, fontWeight: '600', color: c.text },
+  menuValue: { ...TYPE.meta, color: c.text2 },
   menuValueWarn: { color: c.danger },
   menuValueLink: { color: c.accentText, fontWeight: '600' },
 
   field: {
-    paddingVertical: 10,
+    paddingVertical: 8,
     borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },

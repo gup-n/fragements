@@ -61,7 +61,9 @@ import { IconButton } from '../components/IconButton';
 import { Toast } from '../components/Toast';
 
 interface Props {
-  onClose: () => void;
+  /** 作为底栏 tab 常驻时不画返回箭头（多选态仍然要「取消」，那是页内状态） */
+  embedded?: boolean;
+  onClose?: () => void;
   /**
    * 进入问答。范围怎么转成 `QaScope` 由上层决定，这一页只交 id。
    * 文档模式会话锁定这几份文档，不会混入笔记和其它文档。
@@ -71,7 +73,7 @@ interface Props {
 
 const isWeb = Platform.OS === 'web';
 
-export function DocsScreen({ onClose, onAsk }: Props) {
+export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [docs, setDocs] = useState<DocumentMeta[] | null>(null);
   /** 检索词。空 = 看全部；非空时列表来自 `searchDocuments`，不是本地筛 */
@@ -365,7 +367,7 @@ export function DocsScreen({ onClose, onAsk }: Props) {
       <ScreenHeader
         title={selectMode ? '选择要问的文档' : '文档'}
         subtitle={docs ? (selectMode ? `已选 ${selectedCount} / ${MAX_ASK_DOCUMENTS}` : `${docs.length} 篇`) : undefined}
-        onBack={selectMode ? exitSelect : onClose}
+        onBack={selectMode ? exitSelect : embedded ? undefined : onClose}
         right={
           docs && docs.length > 0 && !isWeb ? (
             <IconButton
@@ -895,11 +897,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
   main: { flex: 1 },
   list: { flex: 1 },
-  listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
-  listContentWithBar: { paddingBottom: SPACE.xxl },
-  sep: { height: SPACE.md },
-  loading: { paddingTop: SPACE.xxl, alignItems: 'center' },
-  uploadBlock: { paddingTop: SPACE.xs, paddingBottom: SPACE.xl },
+  listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
+  listContentWithBar: { paddingBottom: SPACE.lg },
+  sep: { height: 10 },
+  loading: { paddingTop: SPACE.xl, alignItems: 'center' },
+  uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.md },
   uploadBtn: {
     minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
