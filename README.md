@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.21.1 已由 GitHub Actions 构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.21.1/fragments-v0.21.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.21.1)。26,212,094 字节，SHA-256 `6b3c40607ce1ec9583f3f88cf82906183d0b29caeedfb826f73c97ee7bc7e737`，`draft=false`，下载链接匿名可通（HTTP 200）。上一版 [v0.21.0](https://github.com/gup-n/fragements/releases/download/v0.21.0/fragments-v0.21.0.apk) 可回退（26,212,086 字节）；两者只差三层灰阶的校准。真机界面、覆盖安装和数据恢复仍未实测。
+**v0.22.0 已由 GitHub Actions 构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.22.0/fragments-v0.22.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.22.0)。26,222,930 字节，SHA-256 `18b9903591ad5baf3ccfe8426df852ecacc1647a63cf434f24fdbc36961abadf`，`draft=false`，下载链接匿名可通（跟随重定向后 HTTP 200、Content-Length 与资产一致）。上一版 [v0.21.1](https://github.com/gup-n/fragements/releases/download/v0.21.1/fragments-v0.21.1.apk) 可回退（26,212,094 字节）；这一版重排了间距并在回顾里加了日历。真机界面与覆盖安装仍未实测。
 
 | 项 | 值 |
 |---|---|
