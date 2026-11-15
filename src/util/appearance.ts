@@ -61,17 +61,18 @@ export interface ThemeMetrics {
  * 都白叠白，只剩一圈 0.5px 的 `hair` —— 在手机屏上等于不存在。
  * 页面看上去就是一堆没有边界的文字。
  *
- * 现在改成三层，每层差 6~9 个色阶：
+ * 现在改成三层，**每两层的对比度都在 1.1:1 以上**（这是「能不能看出边界」的下限，
+ * iOS 的 grouped list 也在 1.08~1.14 这个量级）：
  *
- * | 层 | 值 | 用在哪 |
- * |---|---|---|
- * | `card` | `#FFFFFF` | 卡片、弹层、底栏这类「浮在页面上」的块 |
- * | `page` | `#F4F5F9` | 页面底色 |
- * | `hairSoft` | `#EAECF2` | 输入框、胶囊、悬停态这类「凹陷」的块 |
+ * | 层 | 值 | 对 page 的对比 | 用在哪 |
+ * |---|---|---|---|
+ * | `card` | `#FFFFFF` | 1.09 | 卡片、弹层、底栏这类「浮起来」的块 |
+ * | `page` | `#F4F5F9` | — | 页面底色 |
+ * | `hairSoft` | `#E6E9F1` | 1.10 | 输入框、胶囊、悬停态这类「凹下去」的块 |
+ * | `hair` | `#DDE0E8` | 1.18 | 只做分隔线（0.5px，密度低，所以可以比块深一点） |
  *
- * 这样才真的能去掉边框 —— 不是靠「浅灰块代替线」，而是靠**底色差**，
- * 而且卡片和输入块分别落在页面色的两侧（更亮 / 更暗），
- * 一眼就能分出「这是一块卡片」和「这是一个输入框」。
+ * 卡片和输入块分别落在页面色的两侧（更亮 / 更暗），一眼能分出
+ * 「这是一块卡片」和「这是一个输入框」。
  *
  * 页底不再是纯白之后，`text3` 跟着加深一档：`#6B7280` 落在 `#F4F5F9` 上
  * 只有 4.2:1，过不了辅助文字的 4.5 线。
@@ -83,8 +84,10 @@ export const LIGHT: Palette = {
   text2: '#5A6070',
   // 背景退了一档灰，辅助文字就得补回对比度（5.1:1）
   text3: '#626878',
-  hair: '#E2E5EC',
-  hairSoft: '#EAECF2',
+  /** 分隔线：比输入块再深一档，细线才不会糊进块里 */
+  hair: '#DDE0E8',
+  /** 凹块：输入框、胶囊、悬停态。比 page 深 1.10，比 hair 浅 */
+  hairSoft: '#E6E9F1',
   accent: '#3F5EE8',
   accentBg: '#E7EDFE',
   accentText: '#2F4FCB',
@@ -101,8 +104,9 @@ export const LIGHT: Palette = {
   dangerBg: '#FCECEA',
   accentHair: '#C9D3FA',
   scrim: 'rgba(0,0,0,0.40)',
-  shell: '#F4F5F7',
-  shellBorder: '#E5E7EB',
+  /** 桌面预览的外壳：比页面再深一档，页面才像「装在壳里」 */
+  shell: '#EBEDF3',
+  shellBorder: '#DDE0E8',
   onAccent: '#FFFFFF',
   onDanger: '#FFFFFF',
   mediaBackground: '#101010',
@@ -138,8 +142,8 @@ export const DARK: Palette = {
   dangerBg: '#3B2422',
   accentHair: '#3C4A7A',
   scrim: 'rgba(0,0,0,0.72)',
-  shell: '#141414',
-  shellBorder: '#333438',
+  shell: '#111215',
+  shellBorder: '#34373D',
   onAccent: '#0F1533',
   onDanger: '#2A1210',
   mediaBackground: '#101010',
