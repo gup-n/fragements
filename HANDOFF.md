@@ -12,7 +12,7 @@
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.21.1 / versionCode 62 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.21.1 已打 tag 并提交 CI，结果见 Actions。上一版 v0.21.0（[CI 43717633121](https://github.com/gup-n/fragements/actions/runs/43717633121)，26,212,086 字节，`draft=false`）可回退；两者只差三层灰阶的校准。真机均未验 |
+| 发布状态 | v0.21.1 已由[CI 43718349933](https://github.com/gup-n/fragements/actions/runs/43718349933)构建并发布（26,212,094 字节，`draft=false`，下载 HTTP 200 匿名可通）。上一版 v0.21.0（[CI 43717633121](https://github.com/gup-n/fragements/actions/runs/43717633121)，26,212,086 字节）可回退；两者只差三层灰阶的校准。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
