@@ -35,7 +35,7 @@ import { loadAiConfig } from '../ai/config';
 import { repo } from '../db/repo';
 import { missingDigests, type MissingDigest } from '../util/digest';
 import { periodLabel, periodRange, recentMonths } from '../util/date';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ReasoningStream } from './ReasoningStream';
 import { ReasoningTrace } from './ReasoningTrace';
@@ -356,9 +356,7 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
               {queueTag} · 跑完这一篇会先进预览，确认了才写库
             </Text>
           ) : null}
-          <Text style={styles.hint}>
-            总结只会写进时间轴，不会改动任何碎片。生成完可以先看一遍，再决定存不存。
-          </Text>
+          {/* 这段原来还跟着一句「总结只写进时间轴，不会改动任何碎片」—— 和选择页那句完全重复 */}
         </ScrollView>
       ) : phase === 'preview' && draft ? (
         <>
@@ -496,7 +494,7 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
                   })}
                 </View>
                 <Text style={styles.backlogNote}>
-                  勾选后依次生成，每篇仍然单独预览、单独确认。中途关掉不会丢已经存下的。
+                  勾选后依次生成，每篇仍然单独确认。
                 </Text>
               </>
             ) : (
@@ -570,107 +568,112 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
   );
 }
 
+/**
+ * 样式全部走共享 token。
+ *
+ * 这份文件曾经是唯一的例外：字号写死 11 / 12 / 12.5 / 13 / 14 / 15，
+ * 边框宽度用 `metrics.strokeWidth`（默认主题下是 surfaceStroke 的两倍粗），
+ * 内边距写死 16 / 18 / 20。结果是同一屏里 12.5 和 13 混排、卡片描边比别处深一倍。
+ * `12.5` 还会在部分安卓机器上被取整成 12 或 13，行高跟着错位。
+ */
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
 
-  content: { paddingHorizontal: 16, paddingBottom: 24 },
+  content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xl },
 
-  hint: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 6 },
-  queueHint: { fontSize: 12, color: c.accentText, marginTop: 12 },
-  sectionLabel: { fontSize: 12, color: c.text3 },
-  noneNote: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 20 },
+  hint: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
+  queueHint: { ...TYPE.meta, color: c.accentText, marginTop: SPACE.sm },
+  sectionLabel: { ...TYPE.meta, color: c.text3 },
+  noneNote: { ...TYPE.meta, color: c.text3, marginTop: SPACE.lg },
 
   backlogHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 20,
-    marginBottom: 8,
+    marginTop: SPACE.lg,
+    marginBottom: SPACE.xs,
   },
-  clearText: { fontSize: 12, color: c.accent },
+  clearText: { ...TYPE.meta, color: c.accent },
+  /** 缺口清单：白卡浮在浅灰页上就够分层，不描边 */
   backlogBox: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
     overflow: 'hidden',
   },
   backlogRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    borderBottomWidth: metrics.strokeWidth,
+    gap: SPACE.xs,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: SPACE.xs,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
   backlogRowLast: { borderBottomWidth: 0 },
-  backlogLabel: { flex: 1, fontSize: 13, color: c.text },
-  backlogCount: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
-  backlogNote: { fontSize: 12, color: c.text3, lineHeight: 18, marginTop: 8 },
+  backlogLabel: { flex: 1, ...TYPE.label, fontWeight: '400', color: c.text },
+  backlogCount: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
+  backlogNote: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xs },
 
-  chipRow: { gap: 8, paddingRight: 16, paddingTop: 8 },
+  chipRow: { gap: SPACE.xs, paddingRight: metrics.pagePadding, paddingTop: SPACE.xs },
+  /** 月份胶囊：浅灰底、无边框，和设置页的选项同一套 */
   chip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    paddingHorizontal: SPACE.sm,
+    justifyContent: 'center',
     borderRadius: R.pill,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+    backgroundColor: c.hairSoft,
   },
-  chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
-  chipText: { fontSize: 12, color: c.text2, fontVariant: ['tabular-nums'] },
-  chipTextOn: { color: c.accentText, fontWeight: '500' },
+  chipOn: { backgroundColor: c.accentBg },
+  chipText: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
+  chipTextOn: { color: c.accentText, fontWeight: '600' },
 
   countCard: {
-    marginTop: 18,
-    padding: 14,
+    marginTop: SPACE.md,
+    padding: SPACE.sm,
     borderRadius: metrics.cardRadius,
     backgroundColor: c.card,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
     alignItems: 'center',
   },
-  countText: { fontSize: 13, color: c.text2 },
-  countNum: { fontSize: 15, color: c.text, fontWeight: '600' },
-  countEmpty: { fontSize: 13, color: c.text3 },
-  countWarn: { fontSize: 12, color: c.text3, marginTop: 8, textAlign: 'center', lineHeight: 17 },
+  countText: { ...TYPE.label, fontWeight: '400', color: c.text2 },
+  countNum: { ...TYPE.body, color: c.text, fontWeight: '600' },
+  countEmpty: { ...TYPE.label, fontWeight: '400', color: c.text3 },
+  countWarn: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs, textAlign: 'center' },
 
   replaceRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingTop: 10,
+    gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding,
+    paddingTop: SPACE.xs,
   },
+  /** 复选框：4 的圆角才读成「方框」，原来 16×16 配 8 的圆角是圆形 */
   checkBox: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 1,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.text3,
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
-  replaceText: { fontSize: 12, color: c.text2 },
+  replaceText: { ...TYPE.meta, color: c.text2 },
 
-  error: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 14 },
+  error: { ...TYPE.meta, color: c.danger, marginTop: SPACE.sm },
 
   previewMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 10,
+    marginBottom: SPACE.xs,
   },
-  previewMeta: { fontSize: 12, color: c.text3 },
+  previewMeta: { ...TYPE.meta, color: c.text3 },
   queueBadge: {
-    fontSize: 11,
+    ...TYPE.caption,
     color: c.accentText,
     backgroundColor: c.accentBg,
     paddingHorizontal: 7,
-    paddingVertical: 2,
+    paddingVertical: 1,
     borderRadius: R.pill,
     overflow: 'hidden',
   },
@@ -678,47 +681,47 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   previewCard: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    padding: 16,
-    marginTop: 4,
+    padding: SPACE.md,
+    marginTop: SPACE.xxs,
   },
-  previewLabel: { fontSize: 12, color: c.text3, marginBottom: 10 },
-  previewBody: { fontSize: 14, lineHeight: 24 },
+  previewLabel: { ...TYPE.meta, color: c.text3, marginBottom: SPACE.xs },
+  previewBody: { ...TYPE.compact },
 
   compareHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 8,
+    marginBottom: SPACE.xs,
   },
-  compareHint: { fontSize: 12, color: c.text3 },
-  compareDelta: { fontSize: 12, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  deltaDown: { color: c.tealText },
+  compareHint: { ...TYPE.meta, color: c.text3 },
+  compareDelta: { ...TYPE.meta, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  /** 少了字用中性灰（不是「坏消息」），多了字用琥珀（值得看一眼） */
+  deltaDown: { color: c.text2 },
   deltaUp: { color: c.amberText },
 
-  compareRow: { flexDirection: 'row', gap: 8, alignItems: 'flex-start' },
+  compareRow: { flexDirection: 'row', gap: SPACE.xs, alignItems: 'flex-start' },
+  /** 双栏对照靠底色分左右：旧=浅灰、新=白，不画边框 */
   compareCol: {
     flex: 1,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    padding: 10,
+    padding: SPACE.xs,
   },
-  compareColOld: { backgroundColor: c.hairSoft, borderColor: c.hair },
-  compareColNew: { backgroundColor: c.card, borderColor: c.accentBg },
-  compareLabelOld: { fontSize: 11, color: c.text3, marginBottom: 8 },
-  compareLabelNew: { fontSize: 11, color: c.accentText, fontWeight: '600', marginBottom: 8 },
-  compareBody: { fontSize: 12.5, lineHeight: 20 },
+  compareColOld: { backgroundColor: c.hairSoft },
+  compareColNew: { backgroundColor: c.card },
+  compareLabelOld: { ...TYPE.caption, fontWeight: '400', color: c.text3, marginBottom: SPACE.xs },
+  compareLabelNew: { ...TYPE.caption, color: c.accentText, marginBottom: SPACE.xs },
+  /** 双栏并排，只能给 meta。原来 12.5 是半个像素的字号，安卓上会取整 */
+  compareBody: { ...TYPE.meta },
 
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 18,
-    borderTopWidth: metrics.strokeWidth,
+    gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding,
+    paddingTop: SPACE.xs,
+    paddingBottom: SPACE.md,
+    borderTopWidth: surfaceStroke(metrics),
     borderTopColor: c.hair,
     backgroundColor: c.page,
   },
@@ -726,20 +729,19 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
+    paddingHorizontal: SPACE.lg,
+    paddingVertical: SPACE.xs,
     minWidth: 132,
     alignItems: 'center',
   },
-  primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
+  primaryText: { ...TYPE.label, color: c.onAccent },
   ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+    paddingHorizontal: SPACE.md,
+    backgroundColor: c.hairSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  ghostText: { fontSize: 14, color: c.text2 },
+  ghostText: { ...TYPE.label, fontWeight: '400', color: c.text2 },
   btnDisabled: { opacity: 0.4 },
 });

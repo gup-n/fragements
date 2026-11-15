@@ -168,7 +168,7 @@ export function KnowledgeDraftCard({
           <Ionicons name={allowTodos ? 'checkbox-outline' : 'square-outline'} size={22} color={allowTodos ? c.accent : c.text2} accessible={false} />
           <Text style={styles.permissionText}>待办写入 · {allowTodos ? '开启' : '关闭'}</Text>
         </Pressable>
-        <Text style={styles.note}>只写你选择的条目；原始碎片不删除。离开页面会保留这份草稿，不会自动继续请求。</Text>
+        <Text style={styles.note}>只写你选择的条目；原始碎片不删除。</Text>
       </View>
       <View style={styles.row}>
         <Pressable style={styles.outline} onPress={onDiscard} disabled={locked} accessibilityRole="button"><Text style={styles.buttonText}>放弃草稿</Text></Pressable>
@@ -185,18 +185,23 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   heading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
   title: { ...TYPE.title, flex: 1, minWidth: 140, color: c.text },
   meta: { ...TYPE.meta, color: c.text2 },
-  secondary: { ...TYPE.body, color: c.text2 },
+  /** 摘要/说明用 compact：这些是「看一眼」的字，不该和正文抢字号 */
+  secondary: { ...TYPE.compact, color: c.text2 },
   note: { ...TYPE.label, fontWeight: '400', color: c.text2 },
   steps: { gap: SPACE.xs, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair, paddingLeft: SPACE.sm },
   step: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs },
   stepText: { ...TYPE.label, fontWeight: '400', flex: 1, color: c.text2 },
   textButton: { minHeight: metrics.controlHeight, justifyContent: 'center', alignSelf: 'flex-start' },
+  /**
+   * 每一篇产出：白卡浮在浅灰页上就够分层，不描边。
+   * v0.20.4 去掉外框之后这里成了「白卡上的一圈 hair」，反而更脏。
+   */
   document: {
     backgroundColor: c.card,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     borderRadius: metrics.cardRadius, padding: SPACE.md, gap: SPACE.sm,
   },
-  documentSelected: { borderColor: c.accentHair },
+  /** 选中：换底色（不换描边，否则切换时高度会跳） */
+  documentSelected: { backgroundColor: c.accentBg },
   docHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs },
   docTitleHit: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', gap: SPACE.xxs },
   docTitle: { ...TYPE.title, color: c.text },
@@ -207,15 +212,15 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     minHeight: metrics.controlHeight, minWidth: 72, flexGrow: 1,
     paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
     justifyContent: 'center', alignItems: 'center', borderRadius: metrics.buttonRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft,
+    backgroundColor: c.hairSoft,
   },
-  writeButton: { backgroundColor: c.accentBg, borderColor: c.accentHair },
+  writeButton: { backgroundColor: c.accentBg },
   buttonText: { ...TYPE.label, color: c.text, textAlign: 'center' },
   writeButtonText: { ...TYPE.label, color: c.accentText, textAlign: 'center' },
   outline: {
     minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md,
-    justifyContent: 'center', alignItems: 'center', borderWidth: surfaceStroke(metrics), borderColor: c.hair,
-    borderRadius: metrics.buttonRadius,
+    justifyContent: 'center', alignItems: 'center',
+    borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
   },
   primary: {
     flex: 1, minWidth: 160, minHeight: metrics.controlHeight,
@@ -225,7 +230,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   primaryText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
   permissions: {
     gap: SPACE.xs, backgroundColor: c.hairSoft,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     borderRadius: metrics.cardRadius, padding: SPACE.md,
   },
   permissionHeading: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },

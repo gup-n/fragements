@@ -1389,14 +1389,14 @@ export function AskScreen({
           {!hasContent && !pendingQ && !draft && !organize.recovery ? (
             <View style={styles.empty}>
               <View style={styles.emptyIcon}>
-                <Ionicons name="chatbubble-ellipses-outline" size={26} color={c.accentText} accessible={false} />
+                <Ionicons name="chatbubble-ellipses-outline" size={24} color={c.accentText} accessible={false} />
               </View>
               <Text style={styles.emptyTitle} accessibilityRole="header">{docMode ? '围绕这些文档提问' : '从碎片里找答案'}</Text>
-              <Text style={styles.emptyBody}>
-                {docMode
-                  ? '只在你选的文档里找依据。回答中的引用可以打开，查看当时的原文与位置。'
-                  : '问一句，找回记录里的线索。也可以整理成文档或待办，先审阅，再决定写入。'}
-              </Text>
+              {/*
+                这里原来还有一段两行的产品说明（「只在你选的文档里找依据。回答中的引用
+                可以打开……」）。标题已经说了这件事，下面三行入口也说清了能做什么 ——
+                第三层解释就是每次进来都要重读一遍废话（用户 2026-11-15 反复要求删）。
+              */}
 
               {!docMode ? (
                 <View style={styles.hints}>
@@ -1408,12 +1408,9 @@ export function AskScreen({
                     accessibilityLabel="整理碎片"
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="sparkles-outline" size={20} color={c.accentText} accessible={false} />
-                    <View style={styles.hintBody}>
-                      <Text style={styles.hintTitle}>整理碎片</Text>
-                      <Text style={styles.hintText}>保留做法、结论和参数，按主题成文</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
+                    <Ionicons name="sparkles-outline" size={19} color={c.accentText} accessible={false} />
+                    <Text style={styles.hintTitle}>整理碎片</Text>
+                    <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
 
                   <Pressable
@@ -1424,12 +1421,9 @@ export function AskScreen({
                     accessibilityLabel="整理待办"
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="checkbox-outline" size={20} color={c.accentText} accessible={false} />
-                    <View style={styles.hintBody}>
-                      <Text style={styles.hintTitle}>整理待办</Text>
-                      <Text style={styles.hintText}>提炼事项与步骤，已有的不重复</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
+                    <Ionicons name="checkbox-outline" size={19} color={c.accentText} accessible={false} />
+                    <Text style={styles.hintTitle}>整理待办</Text>
+                    <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
 
                   <Pressable
@@ -1440,12 +1434,9 @@ export function AskScreen({
                     accessibilityLabel="写月小结"
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="calendar-outline" size={20} color={c.accentText} accessible={false} />
-                    <View style={styles.hintBody}>
-                      <Text style={styles.hintTitle}>写月小结</Text>
-                      <Text style={styles.hintText}>按日期回看一个月，梳理重要进展</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
+                    <Ionicons name="calendar-outline" size={19} color={c.accentText} accessible={false} />
+                    <Text style={styles.hintTitle}>写月小结</Text>
+                    <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
                 </View>
               ) : null}
@@ -1697,9 +1688,11 @@ export function AskScreen({
             <ScrollView contentContainerStyle={styles.historyContent}>
               {history.groups.length === 0 && history.archived.length === 0 ? (
                 <View style={styles.historyEmpty}>
-                  <Ionicons name="time-outline" size={28} color={c.text3} />
+                  <View style={styles.emptyIcon}>
+                    <Ionicons name="time-outline" size={22} color={c.text3} />
+                  </View>
                   <Text style={styles.emptyTitle}>还没有历史会话</Text>
-                  <Text style={styles.emptyBody}>问过的问题会自动留在这里，下次回来接着聊。</Text>
+                  <Text style={styles.emptyBody}>问过的问题会自动留在这里。</Text>
                 </View>
               ) : null}
 
@@ -1941,7 +1934,11 @@ export function AskScreen({
         </View>
       ) : null}
       {cite ? <CitationSheet cite={cite} onClose={() => setCite(null)} /> : null}
-      <Toast text={toast} bottom={keyboardHeight + 110} />
+      {/*
+        提示条要落在输入区上方。140 是「输入框 + 开关行 + 内边距」的实测高度，
+        再加键盘高度 —— 原来给的是 110，键盘一弹就压在输入框顶边上。
+      */}
+      <Toast text={toast} bottom={keyboardHeight + 140} />
     </View>
   );
 }
@@ -1949,13 +1946,13 @@ export function AskScreen({
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
   flex: { flex: 1 },
+  /** 恢复卡：靠 accentBg 底表态，不再套一圈有色描边 */
   recovery: {
     padding: SPACE.md, gap: SPACE.sm,
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
-    borderRadius: metrics.cardRadius, backgroundColor: c.card, marginBottom: SPACE.lg,
+    borderRadius: metrics.cardRadius, backgroundColor: c.accentBg, marginBottom: SPACE.lg,
   },
   recoveryTitle: { ...TYPE.title, color: c.text },
-  recoveryText: { ...TYPE.label, fontWeight: '400', color: c.text2 },
+  recoveryText: { ...TYPE.compact, color: c.text2 },
   recoveryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
   recoveryPrimary: { backgroundColor: c.accent, borderRadius: metrics.buttonRadius },
   recoveryPrimaryText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
@@ -1966,39 +1963,42 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   pauseButton: {
     minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
     padding: SPACE.sm, backgroundColor: c.hairSoft, marginBottom: SPACE.md,
-    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderRadius: metrics.buttonRadius,
   },
   pauseText: { ...TYPE.label, color: c.text, flex: 1 },
   newHint: {
-    position: 'absolute', top: 80, alignSelf: 'center', zIndex: 30,
+    // 页头 56 加范围条约 30 —— 落在范围条下方，不压住它
+    position: 'absolute', top: 96, alignSelf: 'center', zIndex: 30,
     backgroundColor: c.accent, borderRadius: metrics.buttonRadius,
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
   },
   newHintText: { ...TYPE.label, color: c.onAccent },
   content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.lg },
   contentEmpty: { flexGrow: 1, paddingTop: SPACE.lg, paddingBottom: SPACE.lg },
-  empty: { alignItems: 'flex-start', gap: 10 },
+  /*
+   * 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 可选说明 14。
+   * 原来是「48 的圆角方块 + 淡蓝底 + 淡蓝描边」，和首页那个 52 的圆、
+   * 文档页那个裸图标各写一套 —— 同一个 App 里空屏长得像三个产品。
+   */
+  empty: { alignItems: 'center', gap: SPACE.sm, paddingTop: SPACE.md },
   emptyIcon: {
-    width: metrics.controlHeight, height: metrics.controlHeight,
-    backgroundColor: c.accentBg, borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
-    alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.xxs,
+    width: 48, height: 48, borderRadius: 24,
+    backgroundColor: c.hairSoft,
+    alignItems: 'center', justifyContent: 'center',
   },
-  emptyTitle: { ...TYPE.title, color: c.text },
-  emptyBody: { ...TYPE.body, color: c.text2 },
+  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
+  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center' },
+  /** 空态里的三个入口：一块浅灰底，行间用分隔线，不再各自套边框 */
   hints: {
     alignSelf: 'stretch', marginTop: SPACE.sm,
-    backgroundColor: c.card, borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden',
+    backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden',
   },
   hint: {
-    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10,
-    paddingHorizontal: SPACE.md, paddingVertical: 10,
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
   },
   hintDivider: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
-  hintBody: { flex: 1, minWidth: 0, gap: SPACE.xxs },
-  hintTitle: { ...TYPE.body, color: c.text, fontWeight: '600' },
-  hintText: { ...TYPE.meta, color: c.text2 },
+  hintTitle: { ...TYPE.body, flex: 1, minWidth: 0, color: c.text, fontWeight: '600' },
   headerRight: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   scopeBar: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs,
@@ -2006,17 +2006,19 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   scopeText: { ...TYPE.meta, flex: 1, minWidth: 0, color: c.text2 },
+  /** 范围标签：浅灰底 + 圆角就够，不再套一圈 hair 描边（那圈线在灰底上等于噪音） */
   scopeTag: {
     ...TYPE.meta, color: c.text2, backgroundColor: c.hairSoft,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius,
+    borderRadius: metrics.buttonRadius,
     paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, overflow: 'hidden',
   },
   scopeWarn: { ...TYPE.label, fontWeight: '400', color: c.danger, marginHorizontal: metrics.pagePadding, marginTop: SPACE.xs },
   qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: SPACE.md, marginBottom: SPACE.sm },
+  /** 用户气泡：圆角只收右下角一格，和 DeepSeek 的提问气泡同一个取向 */
   qBubble: {
     maxWidth: '85%', backgroundColor: c.accentBg,
-    borderRadius: 20, borderBottomRightRadius: 6,
-    paddingHorizontal: 14, paddingVertical: 10,
+    borderRadius: metrics.cardRadius, borderBottomRightRadius: SPACE.xxs,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
   },
   qText: { ...TYPE.body, color: c.accentText },
   // Assistant answers remain open text, not a notification card.
@@ -2060,10 +2062,15 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.accent, backgroundColor: c.hairSoft,
   },
   contextText: { ...TYPE.meta, flex: 1, color: c.text2 },
-  /** 和首页输入卡同一套：浅灰底、28 圆角、无边框 */
+  /**
+   * 和首页输入卡同一套：浅灰底、无边框。
+   *
+   * 圆角是 `cardRadius + 8`，不是写死的 28 —— 写死的话墨水主题（cardRadius 8）
+   * 也会得到一个 28 的胶囊，和它方正的卡片摆在一起像个异物。
+   */
   inputRow: {
-    marginHorizontal: metrics.pagePadding, padding: 12, gap: 8,
-    backgroundColor: c.hairSoft, borderRadius: 28,
+    marginHorizontal: metrics.pagePadding, padding: SPACE.sm, gap: SPACE.xs,
+    backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius + 8,
   },
   /** 文本区 44 高（原先是 64，用户 2026-11-15 说太高）；按钮仍是 48 */
   input: {
@@ -2094,7 +2101,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   historyPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
   historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
   historyLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, paddingTop: SPACE.xxl },
-  historyEmpty: { alignItems: 'flex-start', gap: SPACE.sm, paddingTop: SPACE.xxl },
+  historyEmpty: { alignItems: 'center', gap: SPACE.sm, paddingTop: SPACE.xxl },
   histGroupTitle: { ...TYPE.label, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.xs },
   histRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs,
@@ -2106,16 +2113,17 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   histTop: { alignItems: 'flex-start' },
   histTitle: { ...TYPE.title, color: c.text },
   histStatus: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xxs },
-  histBadgeHit: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.sm, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  histBadgeHit: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.sm, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius },
   histBadge: { ...TYPE.label, color: c.accentText },
   histArchived: { ...TYPE.meta, color: c.text2 },
   histScope: { ...TYPE.meta, color: c.text2 },
   histMeta: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, fontVariant: ['tabular-nums'] },
   histPreview: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
   sheetOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end', backgroundColor: c.scrim },
+  /** 底部面板：白底 + 上圆角就够分层了，上沿那条线是多余的 */
   sheet: {
     backgroundColor: c.card, borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
-    maxHeight: '88%', flexGrow: 0, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair,
+    maxHeight: '88%', flexGrow: 0,
   },
   sheetBody: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.lg, paddingBottom: SPACE.xl },
   sheetTitle: { ...TYPE.title, color: c.text },
@@ -2125,12 +2133,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   sheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: SPACE.sm, alignItems: 'center', marginTop: SPACE.xs },
   sheetCancelText: { ...TYPE.label, color: c.text2 },
   dialogOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: SPACE.lg, backgroundColor: c.scrim },
-  dialog: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, padding: SPACE.lg, gap: SPACE.sm },
+  dialog: { backgroundColor: c.card, borderRadius: metrics.cardRadius, padding: SPACE.lg, gap: SPACE.sm },
   dialogTitle: { ...TYPE.title, color: c.text },
   dialogBody: { ...TYPE.body, color: c.text2 },
   dialogActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.xs, marginTop: SPACE.xs },
   danger: { ...TYPE.label, color: c.danger },
   muted: { ...TYPE.label, color: c.text2 },
   summaryPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
-  ghostBtnText: { ...TYPE.label, color: c.text, textAlign: 'center' },
 });

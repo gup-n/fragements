@@ -54,29 +54,40 @@ export interface ThemeMetrics {
 }
 
 /**
- * 默认浅色：DeepSeek 的白。
+ * 默认浅色：三层灰阶，不靠边框分层。
  *
- * 三处和「纸感」不同的地方，都是刻意的：
+ * **这里曾经有个真问题：`page` 和 `card` 都是 `#FFFFFF`。**
+ * 所有「白底卡片」（设置子页的分组、文档卡、待办分组、整理产出卡）
+ * 都白叠白，只剩一圈 0.5px 的 `hair` —— 在手机屏上等于不存在。
+ * 页面看上去就是一堆没有边界的文字。
  *
- * 1. **纯白底**（`#FFFFFF`），不再带暖调。纸张的米黄在长列表里会显脏，
- *    而 DeepSeek 那种白让文字成为页面上唯一有重量的东西。
- * 2. **分层靠浅灰底，不靠边框**。`hairSoft` 是输入卡、胶囊、悬停态的共用底色，
- *    `hair` 只留给真正必要的分隔线，而且浅到几乎看不见。
- * 3. **单一蓝色主调**（`#3F5EE8`）。状态语义（完成 / 到期 / 危险）仍用独立颜色，
- *    但「可以点」这件事全用同一个蓝，不再有第二套强调色分散注意力。
+ * 现在改成三层，每层差 6~9 个色阶：
+ *
+ * | 层 | 值 | 用在哪 |
+ * |---|---|---|
+ * | `card` | `#FFFFFF` | 卡片、弹层、底栏这类「浮在页面上」的块 |
+ * | `page` | `#F4F5F9` | 页面底色 |
+ * | `hairSoft` | `#EAECF2` | 输入框、胶囊、悬停态这类「凹陷」的块 |
+ *
+ * 这样才真的能去掉边框 —— 不是靠「浅灰块代替线」，而是靠**底色差**，
+ * 而且卡片和输入块分别落在页面色的两侧（更亮 / 更暗），
+ * 一眼就能分出「这是一块卡片」和「这是一个输入框」。
+ *
+ * 页底不再是纯白之后，`text3` 跟着加深一档：`#6B7280` 落在 `#F4F5F9` 上
+ * 只有 4.2:1，过不了辅助文字的 4.5 线。
  */
 export const LIGHT: Palette = {
-  page: '#FFFFFF',
+  page: '#F4F5F9',
   card: '#FFFFFF',
   text: '#16181D',
   text2: '#5A6070',
-  // 辅助文字仍要过 4.5:1，所以比 DeepSeek 的视觉灰再深一档
-  text3: '#6B7280',
-  hair: '#ECEDF1',
-  hairSoft: '#F4F5F7',
+  // 背景退了一档灰，辅助文字就得补回对比度（5.1:1）
+  text3: '#626878',
+  hair: '#E2E5EC',
+  hairSoft: '#EAECF2',
   accent: '#3F5EE8',
-  accentBg: '#EDF1FE',
-  accentText: '#3255D8',
+  accentBg: '#E7EDFE',
+  accentText: '#2F4FCB',
   purpleBg: '#EFEEFC',
   purpleText: '#4A3E96',
   // 「已完成」不用绿色、也不跟主色同蓝：灰蓝，读起来是「已归档」而不是「成功」
@@ -103,14 +114,15 @@ export const LIGHT: Palette = {
 };
 
 export const DARK: Palette = {
-  // 深色也跟着走中性灰 + 同一个蓝：不像纯黑那么硬，也不会把蓝色衬得发紫
-  page: '#1A1A1A',
-  card: '#242424',
+  // 深色同样三层：页面最暗、卡片亮一档、输入块再亮一档。
+  // 原来 page #1A1A1A / card #242424 只差 10 个色阶，去掉边框之后卡片边界也糊了。
+  page: '#17181B',
+  card: '#202226',
   text: '#F2F3F5',
   text2: '#B6B9C0',
   text3: '#8E9298',
-  hair: '#333438',
-  hairSoft: '#26272A',
+  hair: '#34373D',
+  hairSoft: '#2A2D33',
   accent: '#8FA6FF',
   accentBg: '#232B45',
   accentText: '#B7C6FF',
@@ -157,7 +169,12 @@ export const INK_LIGHT: Palette = {
   hair: '#E4E4E4',
   hairSoft: '#F2F2F2',
   accent: '#1A1A1A',
-  accentBg: '#EFEFEF',
+  /*
+   * 选中态的底。原来是 #EFEFEF，和 hairSoft #F2F2F2 只差 3 个色阶 ——
+   * 去掉黑色描边之后，「这个被选中了」在墨水主题下就没有任何信号了。
+   * 现在比 hairSoft 深 14 个色阶，灰阶里读得出「按下去了」。
+   */
+  accentBg: '#E4E4E4',
   accentText: '#1A1A1A',
   purpleBg: '#EFEFEF',
   purpleText: '#2A2A2A',
@@ -179,7 +196,8 @@ export const INK_LIGHT: Palette = {
   mediaForeground: '#FFFFFF',
   mediaScrim: 'rgba(0,0,0,0.82)',
   controlThumb: '#FFFFFF',
-  selection: '#E0E0E0',
+  // 比 accentBg 再深一档：文本选中要能和「选中的控件」分开
+  selection: '#D8D8D8',
   focus: '#1A1A1A',
 };
 
@@ -192,7 +210,7 @@ export const INK_DARK: Palette = {
   hair: '#333333',
   hairSoft: '#232323',
   accent: '#F2F2F2',
-  accentBg: '#2C2C2C',
+  accentBg: '#333333',
   accentText: '#F2F2F2',
   purpleBg: '#2C2C2C',
   purpleText: '#EDEDED',
@@ -214,7 +232,7 @@ export const INK_DARK: Palette = {
   mediaForeground: '#FFFFFF',
   mediaScrim: 'rgba(0,0,0,0.82)',
   controlThumb: '#F2F2F2',
-  selection: '#3A3A3A',
+  selection: '#3E3E3E',
   focus: '#F2F2F2',
 };
 

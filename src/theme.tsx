@@ -12,10 +12,15 @@ import {
 } from './util/appearance';
 
 export * from './util/appearance';
-export { SPACE, TYPE, surfaceStroke, navigationLayout } from './util/uiTokens';
+export { SPACE, TYPE, surfaceStroke } from './util/uiTokens';
 
-/** Legacy geometry for untouched callers; new components use the dynamic metrics. */
-export const R = { card: 14, btn: 10, pill: 999 } as const;
+/**
+ * 唯一的遗留半径：`R.pill` 只表示「胶囊」。
+ *
+ * `R.card` / `R.btn` 早就没人用了 —— 圆角一律走 `metrics.cardRadius` /
+ * `metrics.buttonRadius`，留着它们只会让人以为还有第二种圆角来源。
+ */
+export const R = { pill: 999 } as const;
 
 interface ThemeValue {
   mode: ThemeMode;

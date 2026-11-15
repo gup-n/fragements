@@ -38,7 +38,7 @@ import {
 } from '../update/download';
 import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { versionLabel } from '../util/semver';
 
 type Phase = 'prompt' | 'downloading' | 'ready' | 'error';
@@ -402,6 +402,13 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   );
 }
 
+/**
+ * 全部走共享 token。
+ *
+ * 这份文件原来每个字号都是就地写的，其中 `15.5` 和 `12.5` 是半个像素的字号 ——
+ * 安卓上会被取整，行高跟着错位；边框则一律用 `metrics.strokeWidth`，
+ * 比页面别处（surfaceStroke）粗一倍。
+ */
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   overlay: {
@@ -412,7 +419,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     left: 0,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 24, paddingVertical: 16,
+    paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
   },
   backdrop: {
     position: 'absolute',
@@ -422,59 +429,58 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     left: 0,
     backgroundColor: c.scrim,
   },
-  cardContent: { padding: 18 },
+  cardContent: { padding: SPACE.lg },
+  /** 弹层：白卡 + 大圆角，底下是 scrim，边界已经很清楚，不描边 */
   card: { flexGrow: 0, maxHeight: '100%',
     width: '100%',
     maxWidth: 420,
     backgroundColor: c.card,
-    borderRadius: metrics.cardRadius + 4,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    borderRadius: metrics.cardRadius,
   },
 
-  head: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  head: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs },
   iconWrap: {
     width: 32,
     height: 32,
-    borderRadius: 10,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accentBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  headText: { flex: 1 },
-  title: { fontSize: 15.5, color: c.text, fontWeight: '600' },
-  sub: { fontSize: 12, color: c.text3, marginTop: 4, lineHeight: 17 },
+  headText: { flex: 1, minWidth: 0 },
+  title: { ...TYPE.body, fontWeight: '600', color: c.text },
+  sub: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
 
-  notesBox: { marginTop: 14, alignItems: 'flex-start' },
-  notesBrief: { fontSize: 12, color: c.text2, lineHeight: 19 },
+  notesBox: { marginTop: SPACE.sm, alignItems: 'flex-start' },
+  notesBrief: { ...TYPE.meta, color: c.text2 },
+  /** 链接/次要动作：浅灰底、无边框 */
   linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
+    gap: SPACE.xxs,
     marginTop: 2,
-    paddingVertical: 7,
-    paddingHorizontal: 12,
+    paddingHorizontal: SPACE.sm,
     borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    backgroundColor: c.hairSoft,
   },
-  linkText: { fontSize: 12.5, color: c.accentText },
-  linkErr: { fontSize: 12, color: c.danger, marginTop: 6 },
+  linkText: { ...TYPE.meta, color: c.accentText },
+  linkErr: { ...TYPE.meta, color: c.danger, marginTop: SPACE.xxs },
 
-  skipRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 },
+  skipRow: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.sm },
+  /** 复选框：4 的圆角才读成「方框」，原来 16×16 配 8 的圆角是圆形 */
   checkBox: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    borderWidth: 1,
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    borderWidth: metrics.strokeWidth,
     borderColor: c.text3,
     alignItems: 'center',
     justifyContent: 'center',
   },
   checkBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
-  skipText: { fontSize: 12, color: c.text2 },
+  skipText: { ...TYPE.meta, color: c.text2 },
 
-  progressBox: { marginTop: 16 },
+  progressBox: { marginTop: SPACE.md },
   bar: {
     height: 8,
     borderRadius: 4,
@@ -483,9 +489,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   barFill: { height: '100%', borderRadius: 4, backgroundColor: c.accent },
   progressText: {
-    fontSize: 12,
+    ...TYPE.meta,
     color: c.text3,
-    marginTop: 8,
+    marginTop: SPACE.xs,
     textAlign: 'right',
     fontVariant: ['tabular-nums'],
   },
@@ -493,32 +499,31 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   errBox: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    marginTop: 14,
-    padding: 11,
+    gap: SPACE.xs,
+    marginTop: SPACE.sm,
+    padding: SPACE.xs,
     borderRadius: metrics.buttonRadius,
-    backgroundColor: c.hairSoft,
+    backgroundColor: c.dangerBg,
   },
-  errText: { flex: 1, fontSize: 12, color: c.danger, lineHeight: 18 },
+  errText: { flex: 1, ...TYPE.meta, color: c.danger },
 
-  footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 18 },
+  footer: { flexDirection: 'row', justifyContent: 'flex-end', gap: SPACE.xs, marginTop: SPACE.md },
   primaryBtn: { minHeight: metrics.controlHeight,
     backgroundColor: c.accent,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 20,
-    paddingVertical: 11,
+    paddingHorizontal: SPACE.lg,
     minWidth: 104,
     alignItems: 'center',
+    justifyContent: 'center',
   },
-  primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
+  primaryText: { ...TYPE.label, color: c.onAccent },
   ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+    paddingHorizontal: SPACE.md,
+    backgroundColor: c.hairSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  ghostText: { fontSize: 14, color: c.text2 },
+  ghostText: { ...TYPE.label, fontWeight: '400', color: c.text2 },
   btnDisabled: { opacity: 0.5 },
 });

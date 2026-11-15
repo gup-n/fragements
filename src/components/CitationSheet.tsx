@@ -194,17 +194,17 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
   panel: {
     backgroundColor: c.card, borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
-    maxHeight: '86%', borderTopWidth: metrics.strokeWidth, borderColor: c.hair, paddingBottom: SPACE.md,
+    maxHeight: '86%', borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, paddingBottom: SPACE.md,
   },
   head: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm,
     paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.md,
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
+  /** 图标底：淡蓝块，不描边 */
   iconWrap: {
     width: 40, height: 40, borderRadius: metrics.buttonRadius,
     backgroundColor: c.accentBg, alignItems: 'center', justifyContent: 'center',
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
   },
   headText: { flex: 1, minWidth: 0, gap: SPACE.xxs },
   kind: { ...TYPE.meta, color: c.text2 },
@@ -219,12 +219,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
   url: { ...TYPE.meta, color: c.text2 },
+  /** 打开原件/网页：淡蓝块，不描边 */
   openBtn: {
     minWidth: 96, minHeight: metrics.controlHeight, alignSelf: 'flex-start',
     justifyContent: 'center', alignItems: 'center',
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    paddingHorizontal: SPACE.md,
     borderRadius: metrics.buttonRadius, backgroundColor: c.accentBg,
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
   },
   openText: { ...TYPE.label, color: c.accentText, textAlign: 'center' },
   pressed: { opacity: 0.7 },

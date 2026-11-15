@@ -28,7 +28,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocumentMeta } from '../types';
 import { MAX_ASK_DOCUMENTS } from '../types';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
@@ -58,7 +58,7 @@ import { dayLabel, formatTime } from '../util/date';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { CloudConfirmSheet, DocViewer } from '../components/DocViewer';
 import { IconButton } from '../components/IconButton';
-import { Toast } from '../components/Toast';
+import { Toast, TAB_BAR_HEIGHT } from '../components/Toast';
 
 interface Props {
   /** 作为底栏 tab 常驻时不画返回箭头（多选态仍然要「取消」，那是页内状态） */
@@ -384,7 +384,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
 
       {/* 检索框常驻在标题下面：文档一多，翻列表找不到东西 */}
       <View style={[styles.searchBar, searchFocused && styles.searchFocused]}>
-        <Ionicons name="search" size={18} color={c.text3} />
+        <Ionicons name="search" size={16} color={c.text3} />
         <TextInput
           value={query}
           onChangeText={setQuery}
@@ -462,26 +462,28 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             </View>
           ) : query.trim() && (searching || searchError) ? (
             <View style={styles.empty}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="search-outline" size={22} color={c.text3} />
+              </View>
               <Text style={styles.emptyTitle}>{searching ? '正在搜索…' : '搜索未完成'}</Text>
-              <Text style={styles.emptyHint}>{searching ? '正在查找标题、摘要和已准备的正文' : searchError}</Text>
+              <Text style={styles.emptyHint}>{searching ? '标题、摘要和已准备的正文' : searchError}</Text>
             </View>
           ) : query.trim() && !searching ? (
             <View style={styles.empty}>
-              <Ionicons name="search-outline" size={30} color={c.text3} />
+              <View style={styles.emptyIcon}>
+                <Ionicons name="search-outline" size={22} color={c.text3} />
+              </View>
               <Text style={styles.emptyTitle}>没有找到「{query.trim()}」</Text>
-              <Text style={styles.emptyHint}>
-                搜的是标题、摘要和正文。正文还没准备的文档只有一个文件名，
-                准备过之后就能搜到里面的内容。
-              </Text>
+              {/* 原来这里两行在解释「搜什么、为什么搜不到」，压成一句 */}
+              <Text style={styles.emptyHint}>正文还没准备的文档只有文件名能搜</Text>
             </View>
           ) : (
             <View style={styles.empty}>
-              <Ionicons name="documents-outline" size={32} color={c.text3} />
+              <View style={styles.emptyIcon}>
+                <Ionicons name="documents-outline" size={22} color={c.text3} />
+              </View>
               <Text style={styles.emptyTitle}>先把文件存进来</Text>
-              <Text style={styles.emptyHint}>
-                原文件会复制进 App 私有目录，随时能打开。需要读或问的时候再决定：
-                本机提取，还是确认后上传到 mineru.net。
-              </Text>
+              <Text style={styles.emptyHint}>原文件留在本机；要读或要问时再决定本地提取还是上传</Text>
             </View>
           )
         }
@@ -504,8 +506,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
           <View style={styles.selectInfo}>
             <Text style={styles.selectCount}>已选 {selectedCount} 份</Text>
             <Text style={styles.selectHint}>只问这几份，不混入笔记和其它文档</Text>
-          </View>
-          <Pressable
+          </View>          <Pressable
             style={({ pressed }) => [
               styles.askBtn,
               !selectedCount && styles.askBtnOff,
@@ -585,7 +586,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
         />
       ) : null}
 
-      <Toast text={covered ? null : toast} bottom={selectMode ? 96 : 24} />
+      {/* 有底栏时要抬到底栏之上，否则「已删除」这种反馈会被底栏盖住 */}
+      <Toast text={covered ? null : toast} bottom={selectMode ? 96 : TAB_BAR_HEIGHT + 8} />
     </View>
   );
 }
@@ -793,7 +795,7 @@ function AskBlockedSheet({
         </View>
 
         <Text style={styles.sheetHint}>
-          这些不能放进这次问答的范围。可以先在本机准备（不上传），也可以从选择里移除。
+          这些不能进这次问答的范围。可以先在本机准备，也可以从选择里移除。
         </Text>
 
         <View style={styles.blockList}>
@@ -871,8 +873,7 @@ function DeleteConfirm({
           {doc.name}
         </Text>
         <Text style={styles.sheetHint}>
-          会删掉 App 里的原文件副本和已准备的正文。手机里原来那个文件不受影响。
-          正在跑的任务会先停掉。
+          会删掉 App 里的原件副本和已准备的正文；手机里原来那个文件不受影响。
         </Text>
 
         <View style={styles.sheetActions}>
@@ -900,74 +901,91 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   list: { flex: 1 },
   listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
   listContentWithBar: { paddingBottom: SPACE.lg },
-  sep: { height: 10 },
+  /** 卡片间距 10 → 12：原来比页面别处的 8/16 都不挨着，看着像随手填的 */
+  sep: { height: SPACE.sm },
   loading: { paddingTop: SPACE.xl, alignItems: 'center' },
-  uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.sm },
+  uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.xs },
+  /** 主操作按钮：48 是触控下限。原来写 44，比同一页所有按钮都矮一截 */
   uploadBtn: {
-    minHeight: 44, paddingVertical: 0, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
   },
   uploadText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
-  limitText: { marginTop: SPACE.sm, ...TYPE.body, color: c.text2 },
+  limitText: { marginTop: SPACE.sm, ...TYPE.compact, color: c.text2 },
   supportToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs },
   supportText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
-  notice: { marginTop: SPACE.sm, ...TYPE.body },
+  notice: { marginTop: SPACE.sm, ...TYPE.compact },
   noticeOk: { color: c.tealText },
   noticeErr: { color: c.danger },
   webNote: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, padding: SPACE.md },
-  webText: { flex: 1, ...TYPE.body, color: c.text2 },
+  webText: { flex: 1, ...TYPE.compact, color: c.text2 },
+  /** 空态：48 圆 + 浅灰底，全项目同一套规格 */
   empty: { alignItems: 'center', paddingTop: SPACE.xl, paddingHorizontal: SPACE.sm, gap: SPACE.sm },
-  emptyTitle: { ...TYPE.heading, color: c.text, textAlign: 'center', maxWidth: 360 },
-  emptyHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
+  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center', maxWidth: 360 },
+  emptyHint: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  /**
+   * 检索框和首页用同一套：浅灰胶囊、无边框。
+   *
+   * 原来这里是「白底 + hair 描边 + 8 圆角」，同一份「搜索」在两个页面
+   * 长得完全不一样 —— 首页是胶囊，文档页是表单格。
+   */
   searchBar: {
-    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight,
-    marginHorizontal: metrics.pagePadding, marginTop: SPACE.sm, marginBottom: SPACE.xs, paddingLeft: SPACE.md, paddingRight: SPACE.xxs,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius, backgroundColor: c.card,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: 44,
+    marginHorizontal: metrics.pagePadding, marginTop: SPACE.xs, marginBottom: SPACE.xs,
+    paddingLeft: SPACE.md, paddingRight: SPACE.xxs,
+    borderRadius: R.pill, backgroundColor: c.hairSoft,
+    // 边框常驻占位（透明），聚焦时只换色 —— 否则聚焦那一刻高度会跳 2px
+    borderWidth: metrics.strokeWidth, borderColor: 'transparent',
   },
-  searchFocused: { borderColor: c.focus, borderWidth: metrics.strokeWidth },
-  searchInput: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, ...TYPE.body, color: c.text, paddingVertical: SPACE.xs },
-  card: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden' },
-  cardSelected: { borderColor: c.focus, borderWidth: 2, backgroundColor: c.accentBg },
+  /** 聚焦是「持续可见」的状态，用淡主色描边；不用墨水主题的 focus（纯黑） */
+  searchFocused: { borderColor: c.accentHair },
+  searchInput: { flex: 1, minWidth: 0, minHeight: 44, ...TYPE.body, color: c.text, paddingVertical: SPACE.xxs, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  /** 卡片：白底浮在浅灰页上就够分层了，不描边 */
+  card: { backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden' },
+  /** 选中：淡蓝底 + 一圈极浅的主色边。原来 2px 纯黑（墨水 focus），是「黑框」的第三个来源 */
+  cardSelected: { borderWidth: metrics.strokeWidth, borderColor: c.accentHair, backgroundColor: c.accentBg },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
-  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: 12 },
-  side: { paddingRight: SPACE.xxs, paddingTop: 6 },
+  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: SPACE.sm },
+  side: { paddingRight: SPACE.xxs, paddingTop: SPACE.xxs },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
-  name: { flex: 1, minWidth: 0, fontSize: 16, lineHeight: 23, fontWeight: '600', color: c.text },
-  excerpt: { fontSize: 14, lineHeight: 20, color: c.text2, marginTop: 6 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, paddingVertical: 2 },
+  /** 文档标题走 body + 600（16/26）：18 的卡片标题在这张卡里会把摘要挤没 */
+  name: { flex: 1, minWidth: 0, ...TYPE.body, fontWeight: '600', color: c.text },
+  excerpt: { ...TYPE.compact, color: c.text2, marginTop: SPACE.xxs },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xs },
+  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, paddingVertical: 1 },
   extText: { ...TYPE.meta, color: c.text2, fontWeight: '600' },
   meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: 8 },
+  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: SPACE.xs },
   status: { flex: 1, ...TYPE.label, color: c.text2 },
   statusParsing: { color: c.accentText },
   statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
-  errorText: { marginTop: SPACE.xs, ...TYPE.body, color: c.danger },
-  warnText: { marginTop: SPACE.xs, ...TYPE.body, color: c.amberText },
-  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: 10, paddingBottom: 8 },
+  errorText: { marginTop: SPACE.xs, ...TYPE.compact, color: c.danger },
+  warnText: { marginTop: SPACE.xs, ...TYPE.compact, color: c.amberText },
+  /** 操作行的左边界要和标题对齐（cardMain 的 paddingLeft 是 pagePadding 系） */
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs },
   pill: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: 12, paddingVertical: SPACE.xs,
-    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
   },
   pillText: { ...TYPE.label, color: c.text },
   selectBar: {
     flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.sm,
-    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm, backgroundColor: c.page,
-    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, backgroundColor: c.page,
   },
   selectInfo: { flex: 1, minWidth: 140 },
   selectCount: { ...TYPE.body, color: c.text, fontWeight: '600' },
-  selectHint: { marginTop: SPACE.xxs, ...TYPE.meta, color: c.text2 },
-  askBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.accent },
+  selectHint: { marginTop: 1, ...TYPE.meta, color: c.text2 },
+  askBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, borderRadius: metrics.buttonRadius, backgroundColor: c.accent },
   askBtnOff: { backgroundColor: c.hairSoft },
   askText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   askTextOff: { color: c.text3 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: metrics.pagePadding },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
-  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius },
   sheetContent: { padding: SPACE.lg },
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm },
   sheetIcon: { width: 32, height: 32, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
@@ -975,13 +993,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   sheetIconWarn: { backgroundColor: c.amberBg },
   sheetTitle: { ...TYPE.heading, color: c.text, flex: 1 },
   fileName: { marginTop: SPACE.md, ...TYPE.title, color: c.text },
-  sheetHint: { marginTop: SPACE.md, ...TYPE.body, color: c.text2 },
-  blockList: { marginTop: SPACE.md, gap: SPACE.sm },
-  blockRow: { gap: SPACE.xxs, paddingBottom: SPACE.sm, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  sheetHint: { marginTop: SPACE.sm, ...TYPE.compact, color: c.text2 },
+  blockList: { marginTop: SPACE.sm, gap: SPACE.xs },
+  blockRow: { gap: SPACE.xxs, paddingBottom: SPACE.xs, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   blockName: { ...TYPE.body, color: c.text, fontWeight: '600' },
   blockReason: { ...TYPE.label, color: c.text2 },
-  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginTop: SPACE.xl },
-  cancelBtn: { flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center' },
+  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginTop: SPACE.lg },
+  cancelBtn: { flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
   cancelText: { ...TYPE.body, color: c.text2, textAlign: 'center' },
   startBtn: { flexGrow: 1.4, flexBasis: 100, minWidth: 100, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' },
   startText: { ...TYPE.body, fontWeight: '600', color: c.onAccent, textAlign: 'center' },

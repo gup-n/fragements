@@ -12,12 +12,21 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+
+/**
+ * 底栏占的高度。**有底栏的页面必须用它算提示位置。**
+ *
+ * `bottom` 的默认值 24 只适合「页面底部就是屏幕底部」的场景。底栏一出现，
+ * 那 52dp 就把提示条整个盖住了 —— 用户点了个按钮，什么都没看到，
+ * 看起来像没生效。v0.20.9 的时间轴和文档页都踩了这个（当时给的是 24）。
+ */
+export const TAB_BAR_HEIGHT = 56;
 
 interface Props {
   /** 为空就不画。清空由调用方的定时器负责 */
   text: string | null;
-  /** 距内容区底部的距离。有底部工具栏的页面要往上抬一点 */
+  /** 距内容区底部的距离。有底部工具栏或底栏的页面要往上抬 */
   bottom?: number;
 }
 
@@ -39,18 +48,19 @@ export function Toast({ text, bottom = 24 }: Props) {
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   wrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
   /**
-   * 反色药丸：底色用 `text`、字用 `page`。
+   * 反色药丸：底色用 `text`、字用 `card`（也就是反过来的那一层）。
    *
    * 不用写死的黑底白字 —— 深色模式下页面本来就近黑，黑药丸会糊进背景里，
    * 用户完全看不出提示出现过。跟着调色板反着来，两套主题都清晰。
+   *
+   * 不描边：反色本身已经是最高对比，外面再套一圈 0.5 的纸色只会显脏。
    */
   pill: {
     maxWidth: '90%',
     backgroundColor: c.text,
     borderRadius: metrics.buttonRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.page,
     paddingHorizontal: SPACE.md,
     paddingVertical: SPACE.sm,
   },
-  text: { ...TYPE.label, fontWeight: '500', color: c.page, textAlign: 'center' },
+  text: { ...TYPE.label, fontWeight: '500', color: c.card, textAlign: 'center' },
 });

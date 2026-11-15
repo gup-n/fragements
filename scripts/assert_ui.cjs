@@ -7,7 +7,7 @@ const { test } = suite;
 const pure = createLoader();
 const tokens = pure.load('src/util/uiTokens.ts');
 const appearance = pure.load('src/util/appearance.ts');
-const { SPACE, TYPE, surfaceStroke, navigationLayout } = tokens;
+const { SPACE, TYPE, surfaceStroke } = tokens;
 const jsx = (type, props) => ({ type, props: props || {} });
 const react = { useState: (value) => [value, () => {}], useEffect: () => {}, useRef: (value) => ({ current: value }) };
 
@@ -20,7 +20,7 @@ function stylesOf(file, c = appearance.LIGHT, metrics = appearance.DEFAULT_METRI
   const loader = createLoader();
   const { makeStyles } = loader.extract(file, ['makeStyles'], {
     StyleSheet: { create: (styles) => styles }, Platform: { OS: 'android' },
-    SPACE, TYPE, surfaceStroke, navigationLayout, R: { card: 14, btn: 10, pill: 999 },
+    SPACE, TYPE, surfaceStroke, R: { pill: 999 },
     // 与 src/components/GlassBackdrop.tsx 的 glassable 同一条判据
     glassable: (metrics, solid) => (metrics.outline > 0 ? 'transparent' : solid),
   });
@@ -47,7 +47,7 @@ function componentLoader(c, metrics) {
 }
 
 test('语义字号/行高完整且层级清楚，不关闭系统字体缩放', () => {
-  assert.deepEqual(Object.keys(TYPE).sort(), ['display', 'heading', 'title', 'body', 'reading', 'label', 'meta', 'caption'].sort());
+  assert.deepEqual(Object.keys(TYPE).sort(), ['display', 'heading', 'title', 'subtitle', 'body', 'reading', 'compact', 'label', 'meta', 'caption'].sort());
   for (const style of Object.values(TYPE)) {
     assert.ok(style.fontSize > 0 && style.lineHeight >= style.fontSize * 1.35);
     assert.ok(['400', '500', '600', '700'].includes(style.fontWeight));
@@ -55,6 +55,14 @@ test('语义字号/行高完整且层级清楚，不关闭系统字体缩放', (
   }
   assert.ok(TYPE.display.fontSize > TYPE.heading.fontSize && TYPE.heading.fontSize > TYPE.title.fontSize);
   assert.ok(TYPE.reading.fontSize >= TYPE.body.fontSize && TYPE.body.fontSize > TYPE.meta.fontSize);
+  /*
+   * 新增的两个角色必须真的落在「之间」，否则加它们就没有意义：
+   * subtitle 要压在正文之上、卡片标题之下；compact 要在正文与辅助文字之间。
+   */
+  assert.ok(TYPE.title.fontSize > TYPE.subtitle.fontSize && TYPE.subtitle.fontSize > TYPE.body.fontSize,
+    'subtitle 必须夹在 title 与 body 之间');
+  assert.ok(TYPE.body.fontSize > TYPE.compact.fontSize && TYPE.compact.fontSize > TYPE.label.fontSize,
+    'compact 必须夹在 body 与 label 之间');
 });
 test('间距只有明确递增档位，普通与墨水表面边线均存在', () => {
   assert.deepEqual(Object.values(SPACE), [4, 8, 12, 16, 20, 24, 32]);
@@ -78,21 +86,28 @@ for (const width of [320, 360, 412]) {
   }
 }
 for (const palette of ['LIGHT', 'DARK', 'INK_LIGHT', 'INK_DARK']) {
-  test(`${palette}：主图标反色和下方标签分离，48dp槽不缩小`, () => {
+  test(`${palette}：图标与下方标签同色，48dp槽不缩小`, () => {
     const c = appearance[palette];
     const metrics = palette.startsWith('INK_') ? appearance.INK_METRICS : appearance.DEFAULT_METRICS;
     const loader = componentLoader(c, metrics);
     const { IconButton } = loader.load('src/components/IconButton.tsx');
     const action = () => {};
-    const button = IconButton({ name: 'chatbubble-ellipses-outline', label: '问', tone: 'primary', diameter: 40, onPress: action });
+    /*
+     * 这里原来钉的是 `tone: 'primary'`（实心主色底 + 反白图标 + accentText 标签）。
+     * 那个 tone 没有任何调用方，而且标签色算错了：实心蓝底上用浅蓝写字，对比度不够。
+     * 现在删掉 primary，改成钉新的契约 —— 强调态用 accent（淡蓝底），
+     * 而且**图标和标签必须同色**：分开取色正是原来那个 bug 的来源。
+     */
+    const button = IconButton({ name: 'chatbubble-ellipses-outline', label: '问', tone: 'accent', diameter: 40, onPress: action });
     assert.equal(button.props.onPress, action);
     assert.equal(button.props.accessibilityRole, 'button');
     const styles = plain(button.props.style({ pressed: false })).filter(Boolean);
     assert.ok(styles.some((style) => style.minWidth >= 48 && style.minHeight >= 48));
     const all = flatten(button);
-    assert.equal(all.find((node) => node.type === 'Icon').props.color, c.onAccent);
+    const icon = all.find((node) => node.type === 'Icon').props.color;
+    assert.equal(icon, c.accentText);
     const label = all.find((node) => node.type === 'Text' && node.props.children === '问');
-    assert.equal(label.props.style[1].color, c.accentText);
+    assert.equal(label.props.style[1].color, icon, '标签必须和图标同色，不能各自取色');
     assert.ok(!Object.hasOwn(button.props, 'hitSlop'));
   });
 }

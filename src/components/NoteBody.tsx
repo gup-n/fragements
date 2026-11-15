@@ -566,22 +566,34 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   hit: { backgroundColor: c.amberBg, borderRadius: 2 },
   hitCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
   code: { ...TYPE.body, fontFamily: MONO },
-  codeReading: { ...TYPE.body, fontFamily: MONO },
-  /** 引用仍是原有的编号与点击契约，不把作者的字面引用吞掉。 */
+  /*
+   * 下面三个 *Reading 变体原来全部写成了 `TYPE.body` —— 名字说「阅读态」，
+   * 值却是正文尺寸，于是详情页里标题 22、正文 17、代码块和表格单元格 16，
+   * 一段带表格的长文里字号会来回跳。现在真的跟着 reading 走。
+   */
+  codeReading: { ...TYPE.reading, fontFamily: MONO },
+  /**
+   * 引用小标。
+   *
+   * 原来还叠了一条 `textDecorationLine: 'underline'` —— 淡蓝底 + 主色字 + 下划线
+   * 三重强调，一段回答里有五六个引用时，整段文字看起来像满是链接的网页。
+   * 底色和颜色已经说明「这里能点」，下划线去掉。
+   */
   cite: {
     ...TYPE.label, color: c.accentText, backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
-    paddingHorizontal: SPACE.xxs, marginHorizontal: 1, textDecorationLine: 'underline',
+    paddingHorizontal: SPACE.xxs, marginHorizontal: 1,
   },
   hr: { height: surfaceStroke(metrics), backgroundColor: c.hair, marginVertical: SPACE.lg },
+  /** 代码块靠底色区分，不描边（浅灰块在浅灰页上已经是另一种材质） */
   codeBox: {
-    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, marginVertical: SPACE.sm,
   },
   codeText: { ...TYPE.body, fontFamily: MONO, color: c.text },
-  codeTextReading: { ...TYPE.body, fontFamily: MONO, color: c.text },
+  codeTextReading: { ...TYPE.reading, fontFamily: MONO, color: c.text },
   table: { marginVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius, overflow: 'hidden' },
   tr: { flexDirection: 'row', alignItems: 'stretch' },
-  trHead: { backgroundColor: c.hairSoft, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  trHead: { backgroundColor: c.hairSoft, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   tableNote: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, marginBottom: SPACE.sm, paddingHorizontal: SPACE.xxs },
   trDivider: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   imageBox: { marginVertical: SPACE.sm },
@@ -590,6 +602,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   tdDense: { paddingHorizontal: SPACE.xxs },
   tdDivider: { borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
   tdText: { ...TYPE.body, color: c.text },
-  tdTextReading: { ...TYPE.body, color: c.text },
+  tdTextReading: { ...TYPE.reading, color: c.text },
   thText: { fontWeight: '600', color: c.text },
 });

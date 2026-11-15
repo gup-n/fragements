@@ -6,14 +6,14 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.20.9 已由 GitHub Actions 构建并发布。** [下载APK（约26.2MB）](https://github.com/gup-n/fragements/releases/download/v0.20.9/fragments-v0.20.9.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.20.9)。Release 资产已确认存在（26,214,938 字节，SHA-256 `6647d319ac73398c38198354d6a5d9678657ef6ec98df7226a7436630a3b9c37`，`draft=false`）；**发布当时本机代理连 `release-assets.githubusercontent.com` 报 502，所以没有实测下载**，手机端能否下通未验证。上一版 [v0.20.8](https://github.com/gup-n/fragements/releases/download/v0.20.8/fragments-v0.20.8.apk) 可回退。真机界面、覆盖安装和数据恢复仍未实测。
+**v0.21.0 已打 tag 并提交 GitHub Actions 构建。** 构建完成后从 [Releases](https://github.com/gup-n/fragements/releases) 下载 raw APK asset（不要用需登录的 Actions artifact）。上一版 [v0.20.9](https://github.com/gup-n/fragements/releases/download/v0.20.9/fragments-v0.20.9.apk) 可回退（26,214,938 字节，SHA-256 `6647d319ac73398c38198354d6a5d9678657ef6ec98df7226a7436630a3b9c37`；那一版发布时本机代理连 `release-assets` 报 502，下载未经实测）。真机界面、覆盖安装和数据恢复仍未实测。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.20.9（versionCode 60） |
-| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.20.9 的 tag 都从该分支提交构建，master 未合并 |
+| 当前版本 | v0.21.0（versionCode 61） |
+| 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.0 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |
 | 数据 | 本地 SQLite 与 App 私有文件；数据库已有 v1–v16 迁移 |
@@ -44,10 +44,25 @@
 - **已完成待办沿用“只保留最近5条”的既有清理规则**，不是永久归档。
 - 设置仍是配置、外观、数据、关于四个模块及对应子页，不为同一个子页重复造入口。
 
-## 2. 当前 UI 修订（v0.20.9）
+## 2. 当前 UI 修订（v0.21.0）
 
 v0.20.7 把主色从绿换成靛蓝并把入口下沉到底栏；v0.20.8 整体转向 **DeepSeek 的设计语言**；
-v0.20.9 按实机反馈再收一档。
+v0.20.9 按实机反馈再收一档；v0.21.0 是一次**复查**——没有新需求，只把界面代码逐个读过去扣细节。
+
+**v0.21.0 修掉的（按严重程度）**
+
+- **浅色不再是白叠白**。以前 `page` 和 `card` 都是 `#FFFFFF`，所有白卡片只剩一圈看不见的 0.5px。
+  现在三层：卡片 `#FFFFFF` / 页面 `#F4F5F9` / 输入块 `#EAECF2`。`assert_appearance` 的
+  `card !== page` 断言从「只查墨水」扩到四套色表。
+- **设置页进去后底栏不再消失**。渲染条件里还写着 `route !== 'settings'`，和「设置是底栏第五项」自相矛盾；
+  现在 `type Route = MainTab`，只有一处定义。
+- **按下不再闪黑框**。`ChoiceChip`（设置页所有选项）、文档多选卡、阅读器选项/标签、待办「合并」按钮
+  原来都用 2px 纯黑（墨水 focus）表示按下或选中。现在按下只换底色，选中靠底色 + 实心图标 + 字重。
+- **字号与线宽收进 token**。`SummarySheet`、`UpdateSheet`、`ImportSheet` 三份文件整份没走 token
+  （含 `12.5`、`15.5` 这种半像素字号）；`NoteBody` 三个「阅读态」变体全写成了正文尺寸。
+  `TYPE` 补了 `subtitle`（17/24）与 `compact`（14/21）。
+- **空状态统一成一个规格**：48 圆 + 浅灰底 + 标题 18 + 说明 14。只有首页「还没有碎片」用主色底。
+- **Toast 不再被底栏盖住**：`Toast` 导出 `TAB_BAR_HEIGHT`，有底栏的页面用它算偏移。
 
 **v0.20.9 的六条**
 
@@ -60,14 +75,14 @@ v0.20.9 按实机反馈再收一档。
 
 **v0.20.8 打下的底子**（换的不是色号，是分层方式）
 
-- **纯白底 + 单一蓝**：`#FFFFFF` 页面底，主色统一 `#3F5EE8`。状态语义只剩 amber（到期）、coral（危险）、灰蓝（已完成）。
-- **分层靠浅灰底，不靠边框**：`hairSoft #F4F5F7` 是输入卡、胶囊、设置菜单块的共用底色；`hair #ECEDF1` 只留给必要分隔线。所有卡片描边撤掉。
-- **大圆角**：卡片 20、按钮 14、首页与问页输入卡 28。
+- **单一蓝**：主色统一 `#3F5EE8`。状态语义只剩 amber（到期）、coral（危险）、灰蓝（已完成）。
+- **分层靠底色，不靠边框**：卡片、输入块、胶囊全部无描边；`hair` 只留给必要的分隔线。
+- **大圆角**：卡片 20、按钮 14、首页与问页输入卡 28（墨水主题按 `cardRadius + 8` 跟着缩）。
 - **正文 16/26**，比常见的 14/15 大一号。
 - **圆形发送键**：48×48 圆形箭头，不带「发布」二字，可读名字交给 `accessibilityLabel`。
 - **问页开关是胶囊**：只写「深度思考 / 联网」，状态用淡蓝底 + 蓝字加粗 + 实心图标三个信号同时表达。
-- **空屏一句话**：「今天记点什么？」，配浅蓝圆底图标。
-- **主入口在底栏**：碎片 / 文档 / 回顾 / 问 平级；设置是首页右上角齿轮。tab 内不画返回箭头，键盘抬起时底栏让位。
+- **空屏一句话**：「今天记点什么？」，配主色圆底图标。
+- **主入口在底栏**：碎片 / 文档 / 问 / 回顾 / 设置 平级；tab 内不画返回箭头，键盘抬起时底栏让位。
 - **墨水（第二风格）保留**：纯中性灰、圆角 8、边线由 `ThemeMetrics.outline` 决定；输入卡与底栏走毛玻璃。
 
 同期修掉一个功能性 bug：「检查更新」在下载进度回调里调了 hook，一点就抛 `Invalid hook call` 并显示「更新失败」。
@@ -137,7 +152,7 @@ Git恢复分支只恢复代码，不恢复手机数据；设置切回默认风�
 
 ## 5. 安装、开发与发布
 
-已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.20.9已发布，包名和签名与v0.20.8相同（发布时本机代理连下载域名报502，未实测下载）；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
+已发布安装包以[GitHub Releases](https://github.com/gup-n/fragements/releases)中的raw APK asset为准，不是需登录下载的Actions artifact压缩包。当前v0.21.0正在CI构建，包名和签名与v0.20.9相同；先做完整备份，再按Android提示覆盖安装，不要卸载旧版。
 
 技术栈为 React Native 0.88、Expo SDK 58、React 19.3、TypeScript 6、SQLite/FTS5与中文bigram；PDF.js、SheetJS、fflate承担本地阅读相关工作。路由由[App](<App.tsx>)的state管理，没有Expo Router、后端或新增导航库。
 

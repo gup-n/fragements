@@ -823,9 +823,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
 <ChoiceChip key={e} label={EFFORT_LABEL[e]} selected={effort === e} onPress={() => setEffort(e)} />
                   ))}
                 </View>
-                <Text style={styles.fieldHint}>
-                  改完记得在上面点「保存」，否则下次打开还是旧设置。
-                </Text>
+                {/* 「改完记得点保存」已删：保存按钮就在同一张卡的上方 */}
               </Field>
             )}
           </View>
@@ -957,9 +955,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
                 {ioMsg.text}
               </Text>
             )}
-            <Text style={styles.fieldHint}>
-              导出为纯 Markdown，正文、事项和时间都在里面。
-            </Text>
+            <Text style={styles.fieldHint}>正文、事项和时间都在里面。</Text>
           </View>
 
           <GroupTitle text="完整备份" />
@@ -1032,7 +1028,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
               </Text>
             )}
             <Text style={styles.fieldHint}>
-              一个 zip：数据库、配图、文档原件。恢复时自己选这个文件。
+              一个 zip：数据库、配图、文档原件。
             </Text>
           </View>
 
@@ -1047,7 +1043,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
                 onPress={() => void handleToggleQuick()}
               />
               <Text style={styles.toggleHint}>
-                通知栏常驻一条「记一条」，点一下回到时间轴、光标已经在输入框里
+                通知栏常驻一条「记一条」，点一下直接落到输入框
               </Text>
             </View>
             {quickMsg && (
@@ -1226,14 +1222,16 @@ function GroupTitle({ text }: { text: string }) {
  *
  * 右侧那句值是这个模块的意义所在：不点进去也能知道当前配置是什么、
  * 数据有多少条、索引正不正常。
+ *
+ * 曾经还有一行 `description`（「模型服务 · 思考强度 · 文档解析」这种），
+ * 四行菜单各挂一句 —— 那是在用标签解释标签，用户 2026-11-15 要求删。
  */
 function MenuRow({
-  icon, label, value, description, onPress, last, tone = 'normal', busy,
+  icon, label, value, onPress, last, tone = 'normal', busy,
 }: {
   icon: IoniconName;
   label: string;
   value?: string;
-  description?: string;
   onPress: () => void;
   last?: boolean;
   tone?: 'normal' | 'warn' | 'link';
@@ -1245,7 +1243,7 @@ function MenuRow({
       style={({ pressed }) => [styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed, styles.touchTarget]}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={[label, value, description].filter(Boolean).join('，')}
+      accessibilityLabel={[label, value].filter(Boolean).join('，')}
     >
       <View style={styles.menuIcon}>
         <Ionicons name={icon} size={18} color={tone === 'warn' ? c.danger : c.accentText} accessible={false} />
@@ -1255,7 +1253,6 @@ function MenuRow({
         {busy ? <ActivityIndicator size="small" color={c.text3} /> : value ? (
           <Text style={[styles.menuValue, tone === 'warn' && styles.menuValueWarn, tone === 'link' && styles.menuValueLink]} numberOfLines={2}>{value}</Text>
         ) : null}
-        {description ? <Text style={styles.menuDescription}>{description}</Text> : null}
       </View>
       <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
     </Pressable>
@@ -1295,26 +1292,28 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   normalContent: { flex: 1 },
   root: { flex: 1, backgroundColor: c.page },
 
-  content: { paddingHorizontal: SPACE.md, paddingTop: SPACE.xxs, paddingBottom: SPACE.xl },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xxs, paddingBottom: SPACE.xl },
   menuStack: { gap: SPACE.xs },
   menuIcon: {
-    width: 34, height: 34, borderRadius: metrics.buttonRadius,
+    width: 32, height: 32, borderRadius: metrics.buttonRadius,
     alignItems: 'center', justifyContent: 'center', backgroundColor: c.accentBg,
   },
-  menuCopy: { flex: 1, minWidth: 0, gap: 2 },
-  menuDescription: { ...TYPE.meta, color: c.text2 },
-  groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: 14, marginBottom: 6, marginLeft: 4 },
-  /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
-  groupHint: { ...TYPE.meta, color: c.text3, marginTop: 6, marginLeft: 4, marginRight: 4 },
-  /** 表单区不套卡片：白底 + 字段间的浅分隔线，和 DeepSeek 的设置页一样干净 */
+  menuCopy: { flex: 1, minWidth: 0, gap: 1 },
+  groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: SPACE.md, marginBottom: SPACE.xs, marginLeft: SPACE.xxs },
+  /**
+   * 表单卡：白底浮在浅灰页上就够分层了（v0.21 起 page 不再是纯白），不描边。
+   *
+   * 这里曾经是 `c.card` + 无边框，而 page 也是纯白 —— 于是整个设置子页
+   * 就是一片没有边界的文字，分组之间只靠 14 的内边距分开。
+   */
   card: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    padding: 14,
+    padding: SPACE.sm,
   },
   /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
   cardTight: {
-    backgroundColor: c.hairSoft,
+    backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
     overflow: 'hidden',
   },
@@ -1323,64 +1322,65 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   menuRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: metrics.strokeWidth,
+    gap: SPACE.xs,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: SPACE.xs,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
   menuRowLast: { borderBottomWidth: 0 },
   rowPressed: { backgroundColor: c.hairSoft },
-  menuLabel: { fontSize: 16, lineHeight: 24, fontWeight: '600', color: c.text },
+  /** 和正文同字号、只加粗一档：菜单行的标题不该比设置项本身更响 */
+  menuLabel: { ...TYPE.body, fontWeight: '600', color: c.text },
   menuValue: { ...TYPE.meta, color: c.text2 },
   menuValueWarn: { color: c.danger },
   menuValueLink: { color: c.accentText, fontWeight: '600' },
 
   field: {
-    paddingVertical: 8,
-    borderBottomWidth: metrics.strokeWidth,
+    paddingVertical: SPACE.xs,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
-  fieldLabel: { ...TYPE.label, color: c.text3, marginBottom: 5 },
-  fieldHint: { ...TYPE.meta, color: c.text3, marginTop: 4 },
-  hintOk: { ...TYPE.meta, color: c.accentText, marginTop: 4 },
-  hintErr: { ...TYPE.meta, color: c.danger, marginTop: 4 },
+  fieldLabel: { ...TYPE.label, color: c.text3, marginBottom: SPACE.xxs },
+  fieldHint: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
+  hintOk: { ...TYPE.meta, color: c.accentText, marginTop: SPACE.xxs },
+  hintErr: { ...TYPE.meta, color: c.danger, marginTop: SPACE.xxs },
   input: { ...TYPE.body, minHeight: metrics.controlHeight, color: c.text, paddingVertical: 2, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
-  keyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  keyRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   keyInput: { flex: 1 },
 
-  btnRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  btnRow: { flexDirection: 'row', gap: SPACE.xs, marginTop: SPACE.sm },
+  /** 次要按钮：浅灰底、无边框。带边框的次要按钮在灰页上会读成「两个白框」 */
   ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 10,
+    justifyContent: 'center',
+    paddingVertical: SPACE.xs,
     borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    backgroundColor: c.hairSoft,
   },
   ghostBtnWide: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 11,
+    gap: SPACE.xs,
+    paddingVertical: SPACE.xs,
     borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    marginTop: 14,
+    backgroundColor: c.hairSoft,
+    marginTop: SPACE.sm,
   },
   ghostBtnText: { ...TYPE.label, color: c.text },
   solidBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 10,
+    paddingVertical: SPACE.xs,
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent,
   },
   solidBtnText: { ...TYPE.label, color: c.onAccent },
 
-  msg: { ...TYPE.body, marginTop: 12 },
+  msg: { ...TYPE.compact, marginTop: SPACE.sm },
   msgOk: { color: c.tealText },
   msgErr: { color: c.danger },
 
@@ -1389,124 +1389,102 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    * 「按下去就回不来」的动作，它不该长得和别的按钮一样。
    */
   warnBox: {
-    marginTop: 12,
-    padding: 12,
+    marginTop: SPACE.sm,
+    padding: SPACE.sm,
     borderRadius: metrics.cardRadius,
     backgroundColor: c.dangerBg,
-    gap: 6,
+    gap: SPACE.xxs,
   },
   warnTitle: { ...TYPE.label, color: c.danger },
   warnLine: { ...TYPE.meta, color: c.text2 },
-  warnActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  warnActions: { flexDirection: 'row', gap: SPACE.xs, marginTop: SPACE.xxs },
+  /** 这两个按钮原来写死 44 高，低于 48 的触控下限，和同一页其它按钮对不齐 */
   warnGhost: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 44,
+    minHeight: metrics.controlHeight,
     borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    backgroundColor: c.card,
   },
   warnSolid: {
     flex: 1.4,
     alignItems: 'center',
     justifyContent: 'center',
-    minHeight: 44,
+    minHeight: metrics.controlHeight,
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.danger,
   },
   warnSolidText: { ...TYPE.label, color: c.onDanger },
 
-  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   toggleHint: { ...TYPE.meta, flex: 1, color: c.text3 },
-  toggle: {
-    width: 38,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: c.hair,
-    padding: 2,
-    flexDirection: 'row',
-    justifyContent: 'flex-start',
-  },
-  toggleOn: { backgroundColor: c.accent, justifyContent: 'flex-end' },
-  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: c.controlThumb },
 
   /* ---- 配置：官方区块 ---- */
-  officialHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
+  officialHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginBottom: 2 },
   officialTitle: { ...TYPE.label, color: c.text },
-  officialTag: { ...TYPE.caption, color: c.accentText, backgroundColor: c.accentBg, borderRadius: R.pill, paddingHorizontal: 7, overflow: 'hidden' },
+  officialTag: { ...TYPE.caption, color: c.accentText, backgroundColor: c.accentBg, borderRadius: R.pill, paddingHorizontal: 7, paddingVertical: 1, overflow: 'hidden' },
   balanceRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+    gap: SPACE.xs,
+    marginTop: SPACE.xs,
+    paddingHorizontal: SPACE.xs,
+    paddingVertical: SPACE.xs,
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
   balanceText: { ...TYPE.meta, flex: 1, color: c.text2 },
-  linkRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
+  linkRow: { flexDirection: 'row', gap: SPACE.xs, marginTop: SPACE.xs, flexWrap: 'wrap' },
   linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: SPACE.xxs,
     paddingHorizontal: 10,
-    paddingVertical: 5,
     borderRadius: R.pill,
     backgroundColor: c.accentBg,
   },
   linkText: { ...TYPE.label, color: c.accentText },
-  modelField: { marginTop: 12, gap: 6 },
+  modelField: { marginTop: SPACE.sm, gap: SPACE.xxs },
 
   /* ---- 配置：第三方折叠 ---- */
   customToggle: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    marginTop: 16,
-    paddingTop: 12,
-    borderTopWidth: metrics.strokeWidth,
+    gap: SPACE.xxs,
+    marginTop: SPACE.sm,
+    paddingTop: SPACE.sm,
+    borderTopWidth: surfaceStroke(metrics),
     borderTopColor: c.hair,
   },
   customToggleText: { ...TYPE.label, color: c.text3 },
-  customBox: { marginTop: 4 },
+  customBox: { marginTop: SPACE.xxs, paddingTop: SPACE.xxs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
 
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    borderRadius: R.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-  },
-  chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
-  chipText: { ...TYPE.label, color: c.text2 },
-  chipTextOn: { color: c.accentText },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
 
-  statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
+  statRow: { flexDirection: 'row', gap: SPACE.xs, marginBottom: SPACE.xxs },
   stat: {
     flex: 1,
     backgroundColor: c.hairSoft,
     borderRadius: metrics.buttonRadius,
-    paddingVertical: 12,
+    paddingVertical: SPACE.sm,
     alignItems: 'center',
   },
   statNum: { ...TYPE.heading, color: c.text },
-  statLabel: { ...TYPE.meta, color: c.text3, marginTop: 3 },
+  statLabel: { ...TYPE.meta, color: c.text3, marginTop: 2 },
 
   indexBox: {
-    marginTop: 4,
+    marginTop: SPACE.xxs,
     backgroundColor: c.hairSoft,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 11,
-    paddingVertical: 10,
+    paddingHorizontal: SPACE.xs,
+    paddingVertical: SPACE.xs,
   },
-  indexHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  indexHead: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   indexTitle: { ...TYPE.label, flex: 1 },
-  indexHint: { ...TYPE.meta, color: c.text3, marginTop: 4 },
+  indexHint: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
 
-  updateValue: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
+  updateValue: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, flexShrink: 1 },
   updateState: { ...TYPE.meta, color: c.text3, maxWidth: 210 },
   updateStateNew: { color: c.accentText, fontWeight: '600' },
   updateStateErr: { color: c.danger },
@@ -1515,11 +1493,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderBottomWidth: metrics.strokeWidth,
+    gap: SPACE.xs,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: SPACE.xs,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
   aboutKey: { ...TYPE.label, color: c.text2 },
-  aboutVal: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
+  aboutVal: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'], flexShrink: 1, textAlign: 'right' },
 });

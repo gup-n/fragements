@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Note, Todo } from '../types';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
@@ -148,9 +148,12 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
 
           {notes.length === 0 ? (
             <View style={styles.empty}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="sparkles-outline" size={22} color={c.text3} />
+              </View>
               <Text style={styles.emptyTitle}>还没有总结</Text>
               <Text style={styles.emptyBody}>
-                点上面的「写月总结」，AI 会把一个月记下的内容归纳成小结，存进时间轴对应的时间点。
+                点上面的「写月总结」，AI 会把一个月记下的内容归纳成小结，存进时间轴。
               </Text>
             </View>
           ) : (
@@ -227,35 +230,39 @@ export function ReviewScreen({ embedded = false, onClose, onChanged }: Props) {
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   normalContent: { flex: 1 },
-  loadError: { ...TYPE.body, color: c.danger, padding: SPACE.lg, textAlign: 'center' },
+  loadError: { ...TYPE.compact, color: c.danger, padding: SPACE.lg, textAlign: 'center' },
   root: { flex: 1, backgroundColor: c.page },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.md },
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: 10, paddingBottom: SPACE.sm },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.sm },
   tabSlot: { flex: 1, minWidth: 120 },
   content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
+  /** 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 说明 14 */
   empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
+  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  /** 写月总结入口：淡蓝块，不描边 —— 一圈 accentHair 在淡蓝底上等于没有边界 */
   genBtn: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.md, borderRadius: metrics.buttonRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair, backgroundColor: c.accentBg, marginBottom: SPACE.xl,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accentBg, marginBottom: SPACE.lg,
   },
-  genCopy: { flex: 1, minWidth: 0, gap: SPACE.xxs },
-  genText: { ...TYPE.title, color: c.accentText },
+  genCopy: { flex: 1, minWidth: 0, gap: 1 },
+  genText: { ...TYPE.body, fontWeight: '600', color: c.accentText },
   genHint: { ...TYPE.meta, color: c.accentText },
-  noteGroupHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xs, marginBottom: SPACE.sm },
+  noteGroupHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xxs, marginBottom: SPACE.xs },
   noteGroupTitle: { ...TYPE.label, color: c.text2 },
   noteGroupCount: { ...TYPE.meta, color: c.text2 },
+  /** 小结卡：白底浮在浅灰页上就够分层，不描边 */
   noteCard: {
-    backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
-    padding: SPACE.lg, marginBottom: SPACE.md,
+    backgroundColor: c.card, borderRadius: metrics.cardRadius,
+    padding: SPACE.md, marginBottom: SPACE.sm,
   },
   noteTitle: { ...TYPE.title, color: c.text, marginBottom: SPACE.xxs },
-  noteHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.sm },
+  noteHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.xs },
   noteKind: { ...TYPE.meta, color: c.text2 },
   noteChars: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
   noteBody: { ...TYPE.body, color: c.text },
-  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.md },
+  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.sm },
   noteToggle: { ...TYPE.label, color: c.accentText },
 });

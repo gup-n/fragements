@@ -12,7 +12,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   text: string;
@@ -36,7 +36,7 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
       >
         <Ionicons name="bulb-outline" size={18} color={c.text2} accessible={false} />
         <Text style={styles.title}>深度思考</Text>
-        <Text style={styles.meta}>{text.length} 字</Text>
+        {/* 原来这里还有一个「N 字」：思考链多长和答案好坏没有关系，是纯噪音 */}
         <View style={styles.flex} />
         <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={c.text2} accessible={false} />
       </Pressable>
@@ -66,12 +66,10 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingVertical: SPACE.xs,
   },
   title: { ...TYPE.label, color: c.text2, flexShrink: 1 },
-  meta: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
   flex: { flex: 1 },
   body: {
     maxHeight: 280, backgroundColor: c.hairSoft,
     borderRadius: metrics.buttonRadius,
-    borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
   },
   bodyContent: { padding: SPACE.sm },
   text: { ...TYPE.body, color: c.text2 },

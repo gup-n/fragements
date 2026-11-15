@@ -26,19 +26,24 @@ import { useKeyboardHeight } from './src/util/keyboard';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
-import { Toast } from './src/components/Toast';
+import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
 import { takeIncomingShare } from './src/shareInbox';
 
-type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
+/**
+ * 路由就是底栏上的那五个页面，没有第六个。
+ *
+ * 原来这里是独立的字面量联合 + 一张 `TABS` 白名单 + 一个 `isTab` 收窄函数，
+ * 三份东西描述同一件事。设置并进底栏之后它们完全重合，于是就出现了
+ * 「`TABS` 里有 settings、渲染时却写 `route !== 'settings'`」这种自相矛盾 ——
+ * 表现是点进设置后底栏消失，再也切不回去（v0.20.9 的实际 bug）。
+ * 现在直接复用 `MainTab`，只有一处定义，不会再对不上。
+ */
+type Route = MainTab;
 
 const isWeb = Platform.OS === 'web';
-
-/** 底栏上的五个平级页面。设置也是其中之一（v0.20.9 起，用户要求放到最右） */
-const TABS: Route[] = ['timeline', 'docs', 'ask', 'review', 'settings'];
-const isTab = (route: Route): route is MainTab => TABS.includes(route);
 
 /** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
 const K_THEME = 'ui_theme';
@@ -604,10 +609,10 @@ function Shell({ booted }: { booted: boolean }) {
                 />
               )}
               {/*
-                底栏：四个平级页面之间切换。设置页不显示（它是覆盖层，且有返回），
-                键盘抬起时也不显示 —— 它那 52dp 正好是输入法要占的地方。
+                底栏：五个平级页面之间切换。设置也在里面（它不再是覆盖层）。
+                键盘抬起时不显示 —— 它那 50 多 dp 正好是输入法要占的地方。
               */}
-              {route !== 'settings' && keyboardHeight === 0 && isTab(route) ? (
+              {keyboardHeight === 0 ? (
                 <TabBar current={route} onChange={switchTab} />
               ) : null}
               {/*
@@ -623,7 +628,8 @@ function Shell({ booted }: { booted: boolean }) {
                   }}
                 />
               ) : null}
-              <Toast text={writeNotice} />
+              {/* 提示条要浮在底栏之上，否则「已保存」这类反馈会被底栏整个盖住 */}
+              <Toast text={writeNotice} bottom={TAB_BAR_HEIGHT + 8} />
             </SafeAreaView>
           ) : (
             <View style={styles.splash} />

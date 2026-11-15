@@ -127,9 +127,10 @@ export function DraftDocPage({
             textAlignVertical="top"
             editable={!saving && !saved}
           />
-          <Text style={styles.editHint}>
-            表格要写成 Markdown：第一行是表头，第二行是 |---|---|，之后每行一条。
-          </Text>
+          {/*
+            表格写法已删：placeholder 里「表格用 | 列 | 列 |」已经说了这件事，
+            下面再挂一行 Markdown 语法教学，是每次编辑都要重读一遍的噪音。
+          */}
         </View>
       )}
 
@@ -172,31 +173,30 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) =>
   StyleSheet.create({
     page: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
     flex: { flex: 1 },
+    /** 阅读/编辑切换：淡蓝块，不描边 */
     modeBtn: {
       minHeight: metrics.controlHeight, minWidth: metrics.controlHeight,
       justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
-      paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
+      paddingHorizontal: SPACE.sm,
       borderRadius: metrics.buttonRadius, backgroundColor: c.accentBg,
-      borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
     },
     modeText: { ...TYPE.label, color: c.accentText },
     readBody: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xl, paddingBottom: SPACE.xxl },
     documentTitle: { ...TYPE.heading, color: c.text, marginBottom: SPACE.md },
-    summaryWrap: { paddingBottom: SPACE.lg, marginBottom: SPACE.lg, gap: SPACE.xs, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+    summaryWrap: { paddingBottom: SPACE.md, marginBottom: SPACE.md, gap: SPACE.xs, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
     summaryLabel: { ...TYPE.label, color: c.text2 },
     summary: { ...TYPE.body, color: c.text2 },
-    editWrap: { flex: 1, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, gap: SPACE.xs },
-    fieldLabel: { ...TYPE.label, color: c.text2, marginTop: SPACE.xxs },
+    editWrap: { flex: 1, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, gap: SPACE.xxs },
+    fieldLabel: { ...TYPE.label, color: c.text3, marginTop: SPACE.xxs },
+    /** 两个输入框都改浅灰底、无边框，和首页/问页的书写区一致 */
     titleInput: {
       ...TYPE.title, minHeight: metrics.controlHeight, color: c.text,
-      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
-      borderRadius: metrics.buttonRadius, backgroundColor: c.card,
-      borderWidth: metrics.strokeWidth, borderColor: c.hair,
+      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
     },
     bodyInput: {
       ...TYPE.body, flex: 1, minHeight: metrics.controlHeight, color: c.text,
-      padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.card,
-      borderWidth: metrics.strokeWidth, borderColor: c.hair,
+      padding: SPACE.md, borderRadius: metrics.cardRadius + 8, backgroundColor: c.hairSoft,
       fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
     },
     editHint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs },
@@ -208,29 +208,28 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) =>
     footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
     ghost: {
       minHeight: metrics.controlHeight, minWidth: 96, justifyContent: 'center', flex: 1, alignItems: 'center',
-      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
-      borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+      paddingHorizontal: SPACE.sm,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
     },
     ghostText: { ...TYPE.label, color: c.text, flexShrink: 1, textAlign: 'center' },
     solid: {
       minHeight: metrics.controlHeight, minWidth: 144, justifyContent: 'center', flex: 1.6, alignItems: 'center',
-      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md,
+      paddingHorizontal: SPACE.md,
       borderRadius: metrics.buttonRadius, backgroundColor: c.accent,
     },
     solidText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
     doneBox: {
       minHeight: metrics.controlHeight, minWidth: 144, flex: 1.6,
       flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
-      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
+      paddingHorizontal: SPACE.sm,
       borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
-      borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     },
     doneText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
     choice: {
       minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
       padding: SPACE.sm, borderRadius: metrics.buttonRadius,
-      borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+      backgroundColor: c.hairSoft,
     },
-    choiceOn: { backgroundColor: c.accentBg, borderColor: c.accentHair },
+    choiceOn: { backgroundColor: c.accentBg },
     off: { opacity: 0.55 },
   });

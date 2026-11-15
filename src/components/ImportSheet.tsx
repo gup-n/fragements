@@ -2,7 +2,7 @@ import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import React, { useEffect, useRef } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { ImportPreview } from '../db/importMd';
 import { useHeadingFocus } from './useHeadingFocus';
 
@@ -126,6 +126,12 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm, error }: Props
   );
 }
 
+/**
+ * 全部走共享 token。
+ *
+ * 这份文件原来每个字号都是就地写的（13 / 12 / 20 / 14），
+ * 和设置页的同一套「卡片里的小标签」差一到两像素；聚在一屏里就能看出不齐。
+ */
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   overlay: {
@@ -135,7 +141,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     right: 0,
     bottom: 0,
     justifyContent: 'center',
-    paddingHorizontal: 22, paddingVertical: 16,
+    paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
   },
   backdrop: {
     position: 'absolute',
@@ -145,57 +151,58 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     bottom: 0,
     backgroundColor: c.scrim,
   },
-  cardContent: { padding: 18 },
-  card: { flexGrow: 0, maxHeight: '100%', width: '100%', borderWidth: metrics.strokeWidth, borderColor: c.hair,
+  cardContent: { padding: SPACE.lg },
+  /** 卡片：白底 + 大圆角，不描边（弹层底下是 scrim，边界已经很清楚了） */
+  card: { flexGrow: 0, maxHeight: '100%', width: '100%',
     backgroundColor: c.card,
-    borderRadius: metrics.cardRadius + 4,
+    borderRadius: metrics.cardRadius,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  head: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   iconWrap: {
     width: 28,
     height: 28,
-    borderRadius: 8,
+    borderRadius: metrics.buttonRadius,
     backgroundColor: c.accentBg,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  title: { fontSize: 16, fontWeight: '600', color: c.text },
-  file: { marginTop: 12, fontSize: 13, color: c.text, fontWeight: '500' },
-  scope: { marginTop: 3, fontSize: 12, color: c.text3 },
+  title: { ...TYPE.body, fontWeight: '600', color: c.text },
+  file: { marginTop: SPACE.sm, ...TYPE.label, fontWeight: '400', color: c.text },
+  scope: { marginTop: 2, ...TYPE.meta, color: c.text3 },
 
   grid: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 14,
-    paddingVertical: 12,
-    borderTopWidth: metrics.strokeWidth,
-    borderBottomWidth: metrics.strokeWidth,
+    marginTop: SPACE.sm,
+    paddingVertical: SPACE.sm,
+    borderTopWidth: surfaceStroke(metrics),
+    borderBottomWidth: surfaceStroke(metrics),
     borderColor: c.hair,
   },
   cell: { flex: 1, alignItems: 'center' },
-  cellDivider: { width: metrics.strokeWidth, height: 28, backgroundColor: c.hair },
-  cellNum: { fontSize: 20, fontWeight: '600', color: c.accentText },
+  cellDivider: { width: surfaceStroke(metrics), height: 28, backgroundColor: c.hair },
+  cellNum: { ...TYPE.heading, color: c.accentText },
   cellNumMute: { color: c.text3 },
-  cellLabel: { marginTop: 2, fontSize: 12, color: c.text2 },
+  cellLabel: { marginTop: 2, ...TYPE.meta, color: c.text2 },
 
-  dupHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text2 },
+  dupHint: { marginTop: SPACE.xs, ...TYPE.meta, color: c.text2 },
 
-  noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5, marginTop: 8 },
-  noteText: { flex: 1, fontSize: 12, lineHeight: 17, color: c.amberText },
+  noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs, marginTop: SPACE.xs },
+  noteText: { flex: 1, ...TYPE.meta, color: c.amberText },
 
-  emptyHint: { marginTop: 10, fontSize: 12, lineHeight: 18, color: c.text3 },
+  emptyHint: { marginTop: SPACE.xs, ...TYPE.meta, color: c.text3 },
 
-  actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
+  actions: { flexDirection: 'row', gap: SPACE.xs, marginTop: SPACE.md },
+  /** 取消：浅灰底、无边框 */
   cancelBtn: { minWidth: metrics.controlHeight,
     flex: 1,
     minHeight: metrics.controlHeight,
     borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    backgroundColor: c.hairSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  cancelText: { fontSize: 14, color: c.text2 },
+  cancelText: { ...TYPE.body, color: c.text2 },
   okBtn: { minWidth: metrics.controlHeight,
     flex: 1.4,
     minHeight: metrics.controlHeight,
@@ -205,5 +212,5 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     justifyContent: 'center',
   },
   okBtnOff: { backgroundColor: c.hair },
-  okText: { fontSize: 14, fontWeight: '600', color: c.onAccent },
+  okText: { ...TYPE.body, fontWeight: '600', color: c.onAccent },
 });

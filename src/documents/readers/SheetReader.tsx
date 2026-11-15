@@ -642,7 +642,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
     borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.card, justifyContent: 'center',
   },
-  tabOn: { backgroundColor: c.accentBg, borderColor: c.focus, borderWidth: metrics.strokeWidth },
+  /** 选中只换颜色，不换宽度，也不用 `focus`（墨水主题是纯黑，会变成一个黑框） */
+  tabOn: { backgroundColor: c.accentBg, borderColor: c.accentHair },
   tabText: { ...TYPE.body, color: c.text2 },
   tabTextOn: { color: c.accentText, fontWeight: '600' },
   notice: { ...TYPE.body, color: c.amberText, backgroundColor: c.amberBg, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm },

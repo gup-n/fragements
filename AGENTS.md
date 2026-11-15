@@ -91,7 +91,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 
 ### v0.20.7 起的两条硬约束
 
-- **主入口在底栏，不在页头**。timeline/docs/review/ask 由[底栏](<src/components/TabBar.tsx>)四等分平级切换，settings 是首页右上角的覆盖层。给这三页加内容时注意它们会同时出现在「tab 当页」和「覆盖层」两种形态：`embedded` 为真时不画返回箭头。键盘抬起时底栏整条隐藏，所以页面自己的 `keyboardHeight` 占位不要额外加底栏高度。
+- **主入口在底栏，不在页头**。timeline/docs/ask/review/settings 五项由[底栏](<src/components/TabBar.tsx>)平级切换 —— **设置也在里面，它不再是覆盖层**。五个页面都是 tab，没有「覆盖层形态」：`embedded` 为真时不画返回箭头、不画关闭叉，出口就是底栏。键盘抬起时底栏整条隐藏，所以页面自己的 `keyboardHeight` 占位不要额外加底栏高度；反过来，**浮在页面底部的提示条（`Toast`）必须让开 `TAB_BAR_HEIGHT`**，否则会被底栏盖住。
 - **「要不要画边线」看 `metrics.outline`，不要从圆角大小反推**。以前是 `cardRadius <= 4 ? strokeWidth : 0.5`，墨水圆角一调圆（4→8）就静默掉回 0.5，边线全没而 tsc 与断言都不响。`surfaceStroke` 现在读 `outline`；新增风格时必须显式给这个字段。
 - **毛玻璃（[GlassBackdrop](<src/components/GlassBackdrop.tsx>)）只给墨水风格**，且宿主卡片的 `backgroundColor` 必须用 `glassable(metrics, c.card)` 让出实底 —— 不透明底会把模糊盖死，看起来像什么都没做。Android 侧必须 `experimentalBlurMethod="dimezisBlurView"`，默认那套只是半透明白。`assert_ui` 里为它留了桩，改它的导出签名要同步改断言。
 - **缩视觉可以，缩触控不行**。搜索框、缩略图、空状态图标、工具按钮都可以小一档；48dp 槽、发布按钮 84 宽、输入框 48 高是断言钉着的无障碍底线，用户说「缩小」也不放开。

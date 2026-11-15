@@ -592,10 +592,8 @@ export function FragmentDetail({
       {items.length > 1 ? (
         <View style={styles.footer}>
           <IconButton name="chevron-back" onPress={() => jump(-1)} disabled={current === 0} accessibilityLabel="上一条碎片" />
-          <View style={styles.footerInfo}>
-            <Text style={styles.pageCount}>{current + 1} / {items.length}</Text>
-            <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
-          </View>
+          {/* 「左右滑动，或点箭头翻篇」已删：两个箭头和「3 / 12」已经把这件事说完了 */}
+          <Text style={styles.pageCount}>{current + 1} / {items.length}</Text>
           <IconButton name="chevron-forward" onPress={() => jump(1)} disabled={atEnd} accessibilityLabel="下一条碎片" />
         </View>
       ) : null}
@@ -927,7 +925,7 @@ function Page({
             <View style={styles.source}>
               <Ionicons
                 name={fragment.source === 'notif' ? 'notifications-outline' : 'share-outline'}
-                size={12.5}
+                size={13}
                 color={c.text3}
               />
               <Text style={styles.sourceText}>
@@ -981,18 +979,21 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   imageBig: { borderRadius: metrics.cardRadius, backgroundColor: c.hairSoft, alignSelf: 'center' },
   imageIndex: { position: 'absolute', top: SPACE.xs, left: SPACE.xs, minWidth: 24, minHeight: 24, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
   imageIndexText: { ...TYPE.label, color: c.mediaForeground },
-  imageState: { ...TYPE.body, color: c.text2 },
+  /** 图下方的状态行是辅助信息，用 compact；原来是 body（16/26），两行大字把正文压下去 */
+  imageState: { ...TYPE.compact, color: c.text2 },
   imageStateErr: { color: c.danger },
   imageReadButton: { minHeight: metrics.controlHeight, paddingVertical: SPACE.xs, justifyContent: 'center' },
-  addImageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, marginTop: SPACE.xl, marginBottom: SPACE.xs, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft },
+  /** 补图入口：浅灰底就够，不描边 */
+  addImageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, marginTop: SPACE.xl, marginBottom: SPACE.xs, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
   addImageText: { ...TYPE.label, color: c.text2 },
-  imageTextBox: { marginBottom: SPACE.xl, paddingLeft: SPACE.md, borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair },
+  imageTextBox: { marginBottom: SPACE.xl, paddingLeft: SPACE.md, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
   imageTextLabel: { ...TYPE.label, color: c.text2, marginBottom: SPACE.sm },
   imageTextBody: { ...TYPE.reading, color: c.text },
   badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginBottom: SPACE.lg },
-  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.tealBg, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  /** 两个状态胶囊：底色已经是信号，再套 0.5 的框只是让边缘发毛 */
+  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.tealBg, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs },
   doneText: { ...TYPE.label, color: c.tealText },
-  orgBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  orgBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs },
   orgText: { ...TYPE.label, color: c.text2 },
   merged: { ...TYPE.meta, color: c.text2 },
   body: { ...TYPE.reading, color: c.text },
@@ -1001,7 +1002,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   source: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   sourceText: { ...TYPE.meta, color: c.text2 },
   count: { ...TYPE.meta, color: c.text2, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
-  noteCard: { marginTop: SPACE.xxl, paddingTop: SPACE.lg, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
+  noteCard: { marginTop: SPACE.xxl, paddingTop: SPACE.lg, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
   noteHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginBottom: SPACE.md },
   noteKind: { ...TYPE.title, color: c.text },
   notePeriod: { ...TYPE.meta, color: c.text2 },
@@ -1014,33 +1015,33 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   editImagesContent: { gap: SPACE.sm, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm, alignItems: 'center' },
   editImageItem: { width: 96 },
   editImageThumb: { width: 96, height: 72, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
-  editImageRemove: { minHeight: metrics.controlHeight, width: 96, paddingHorizontal: SPACE.xxs, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center', backgroundColor: c.card },
-  editImageRemoveArmed: { backgroundColor: c.danger, borderColor: c.danger },
+  /** 删图按钮：浅灰底，点一次变红底要求确认 —— 变色本身就是反馈，不用再套边框 */
+  editImageRemove: { minHeight: metrics.controlHeight, width: 96, paddingHorizontal: SPACE.xxs, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', backgroundColor: c.hairSoft },
+  editImageRemoveArmed: { backgroundColor: c.danger },
   editImageRemoveText: { ...TYPE.label, color: c.text2 },
   editImageRemoveArmedText: { color: c.onDanger },
-  editImageAdd: { width: 88, minHeight: 120, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft },
+  editImageAdd: { width: 88, minHeight: 120, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft },
   editImageAddText: { ...TYPE.label, color: c.text2 },
   editInput: { flex: 1, ...TYPE.reading, color: c.text, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.md },
   editFoot: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
   deleteButton: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.xs },
-  deleteText: { ...TYPE.body, color: c.danger, fontWeight: '600' },
+  deleteText: { ...TYPE.label, color: c.danger },
   editHint: { flexShrink: 1, ...TYPE.meta, color: c.text2 },
   // 菜单留在布局流里，沿用当前键盘与返回行为。
-  imageSheet: { marginHorizontal: metrics.pagePadding, marginVertical: SPACE.xs, backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, paddingVertical: SPACE.xxs },
+  imageSheet: { marginHorizontal: metrics.pagePadding, marginVertical: SPACE.xs, backgroundColor: c.card, borderRadius: metrics.cardRadius, paddingVertical: SPACE.xxs },
   imageSheetRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
   imageSheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
   imageSheetText: { ...TYPE.body, color: c.text },
   toast: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xs, alignItems: 'center' },
-  toastText: { ...TYPE.body, color: c.text2, backgroundColor: c.card, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  toastText: { ...TYPE.compact, color: c.text2, backgroundColor: c.card, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
   viewer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.mediaBackground },
   viewerPage: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerList: { flex: 1 },
   viewerImage: { width: '100%', height: '100%' },
   viewerBar: { position: 'absolute', top: SPACE.xs, left: SPACE.md, right: SPACE.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   viewerCount: { ...TYPE.label, color: c.mediaForeground, backgroundColor: c.mediaScrim, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, fontVariant: ['tabular-nums'] },
-  viewerClose: { width: metrics.controlHeight, height: metrics.controlHeight, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.mediaForeground, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
+  viewerClose: { width: metrics.controlHeight, height: metrics.controlHeight, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
+  /** 翻页条：箭头加页码，中间不再挂一行操作说明 */
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
-  footerInfo: { flex: 1, minWidth: 0, alignItems: 'center', gap: SPACE.xxs },
   pageCount: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
-  hint: { ...TYPE.meta, color: c.text2, textAlign: 'center' },
 });

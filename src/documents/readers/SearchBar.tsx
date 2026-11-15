@@ -100,7 +100,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius,
     paddingLeft: SPACE.md, paddingRight: SPACE.xxs,
   },
-  boxFocused: { borderColor: c.focus, borderWidth: metrics.strokeWidth },
+  /**
+   * 聚焦只换颜色，不换宽度 —— 墨水主题的 `focus` 是纯黑，拿它描一圈就是黑框；
+   * 而且把 0.5 换成 1 会让整条搜索框在聚焦那一刻跳 1px。
+   */
+  boxFocused: { borderColor: c.accentHair },
   boxDisabled: { backgroundColor: c.hairSoft },
   input: {
     flex: 1, minWidth: 0, minHeight: metrics.controlHeight, ...TYPE.body, color: c.text,

@@ -15,7 +15,14 @@ interface Props {
   onPress: () => void;
   size?: number;
   color?: string;
-  tone?: 'none' | 'soft' | 'accent' | 'primary';
+  /**
+   * `none` 透明、`soft` 浅灰底、`accent` 淡蓝底。
+   *
+   * 曾经还有一个 `primary`（实心主色底）。它没有任何调用方，而且标签色算错了
+   * —— 在实心蓝底上用 `accentText`（浅蓝）写字，对比度不够。
+   * 需要实心按钮的地方都是整块 `<Pressable>`，不是图标按钮，所以直接去掉。
+   */
+  tone?: 'none' | 'soft' | 'accent';
   /** 图形底的直径，不会缩小实际触控槽。保留旧调用兼容。 */
   diameter?: number;
   badge?: number;
@@ -27,10 +34,9 @@ interface Props {
   accessibilityState?: AccessibilityState;
 }
 
-function toneBg(c: Palette, tone: 'none' | 'soft' | 'accent' | 'primary') {
+function toneBg(c: Palette, tone: 'none' | 'soft' | 'accent') {
   if (tone === 'soft') return c.hairSoft;
   if (tone === 'accent') return c.accentBg;
-  if (tone === 'primary') return c.accent;
   return 'transparent';
 }
 
@@ -50,8 +56,12 @@ export function IconButton({
 }: Props) {
   const { c, styles, metrics } = useThemedStyles(makeStyles);
   const [focused, setFocused] = useState(false);
-  const foreground = disabled ? c.text3 : color ?? (tone === 'primary' ? c.onAccent : tone === 'accent' ? c.accentText : c.text2);
-  const labelColor = disabled ? c.text3 : tone === 'primary' ? c.accentText : foreground;
+  const foreground = disabled ? c.text3 : color ?? (tone === 'accent' ? c.accentText : c.text2);
+  /*
+   * 带标签时，标签颜色**跟着图标走**。原来 `tone="primary"` 单独分支到
+   * `accentText`，那个分支随着 primary 一起删掉了。
+   */
+  const labelColor = disabled ? c.text3 : foreground;
   const count = badge && badge > 0 ? (badge > 99 ? '99+' : String(badge)) : '';
   return (
     <Pressable
@@ -117,7 +127,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    */
   pressed: { backgroundColor: c.hairSoft },
   focused: { borderColor: c.focus },
-  selected: { borderColor: c.focus, borderWidth: 2 },
+  /**
+   * 选中：换底色，不套 2px 焦点边。
+   *
+   * 原来这里是 `borderColor: c.focus; borderWidth: 2` —— 墨水主题下 focus 是纯黑，
+   * 选中态就成了一个「一直挂着的黑框」，和按下时的黑框是同一类观感问题。
+   * 现在用 accentBg 表态，靠图标实心度 + 文字标签区分，不靠描边。
+   */
+  selected: { backgroundColor: c.accentBg, borderColor: c.accentHair },
   label: { ...TYPE.label, textAlign: 'center' },
   badge: {
     position: 'absolute', top: -3, right: -4,

@@ -14,7 +14,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { TYPE, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { IoniconName } from './IconButton';
 
 export interface SwipeAction {
@@ -296,7 +296,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     justifyContent: 'center',
     gap: 3,
   },
-  actionLeft: { left: 0 },
-  actionRight: { right: 0 },
-  actionText: { fontSize: 12, fontWeight: '500' },
+  /** 贴边的一侧不带圆角，朝内的一侧跟卡片同档 —— 滑开时露出的是一块圆角条而不是硬方块 */
+  actionLeft: { left: 0, borderTopRightRadius: metrics.buttonRadius, borderBottomRightRadius: metrics.buttonRadius },
+  actionRight: { right: 0, borderTopLeftRadius: metrics.buttonRadius, borderBottomLeftRadius: metrics.buttonRadius },
+  actionText: { ...TYPE.meta, fontWeight: '500' },
 });

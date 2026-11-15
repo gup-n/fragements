@@ -144,7 +144,8 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
           autoCorrect={false}
           maxLength={10}
         />
-        <Text style={styles.fieldHint}>格式为 YYYY-MM-DD，留空不设到期日。</Text>
+        {/* placeholder 里已经有 2026-11-30 的形状，这里只说留空的意思 */}
+        <Text style={styles.fieldHint}>留空不设到期日。</Text>
         <View style={styles.quickRow}>
           {[
             ['今天', dayKey(Date.now())],
@@ -187,22 +188,28 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.xl },
-  parentHint: { ...TYPE.body, color: c.text2, padding: SPACE.md, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, marginBottom: SPACE.xs },
-  label: { ...TYPE.title, color: c.text, marginTop: SPACE.xl, marginBottom: SPACE.sm },
+  parentHint: { ...TYPE.compact, color: c.text2, padding: SPACE.sm, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, marginBottom: SPACE.xs },
+  /** 字段标签是标签，不是标题：原来用 title（18/26 粗体），比输入的字还大 */
+  label: { ...TYPE.label, color: c.text3, marginTop: SPACE.md, marginBottom: SPACE.xs },
+  /**
+   * 输入框：浅灰底、无边框，和首页/问页的书写区同一套。
+   * 高度从 120 收到 88 —— 待办正文上限 200 字，120 的框空着大半。
+   */
   input: {
-    backgroundColor: c.card, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, ...TYPE.reading, color: c.text, minHeight: 120, textAlignVertical: 'top',
+    backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius + 8,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+    ...TYPE.reading, color: c.text, minHeight: 88, textAlignVertical: 'top',
   },
   dateInput: { ...TYPE.body, minHeight: metrics.controlHeight, textAlignVertical: 'center' },
-  fieldHint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xs },
-  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.sm },
+  fieldHint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs },
+  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xs },
   quickChip: {
-    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
-    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft,
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md,
+    borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
     alignItems: 'center', justifyContent: 'center',
   },
   quickText: { ...TYPE.label, color: c.text2 },
-  error: { ...TYPE.body, color: c.danger, marginTop: SPACE.md },
+  error: { ...TYPE.compact, color: c.danger, marginTop: SPACE.sm },
   footer: {
     flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', justifyContent: 'flex-end', gap: SPACE.sm,
     paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.md,
@@ -210,13 +217,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   primaryBtn: {
     flexGrow: 1.4, flexBasis: 110, minHeight: metrics.controlHeight, minWidth: 110, backgroundColor: c.accent,
-    borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, alignItems: 'center', justifyContent: 'center',
+    borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, alignItems: 'center', justifyContent: 'center',
   },
   primaryText: { ...TYPE.body, color: c.onAccent, fontWeight: '600', textAlign: 'center' },
   ghostBtn: {
     flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
-    backgroundColor: c.card, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: SPACE.md, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center',
   },
   ghostText: { ...TYPE.body, color: c.text2 },
   btnDisabled: { opacity: 0.5 },

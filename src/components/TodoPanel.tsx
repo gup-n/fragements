@@ -215,9 +215,12 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
       <ScrollView importantForAccessibility={mergeOpen ? "no-hide-descendants" : "auto"} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {todos.length === 0 ? (
           <View style={styles.empty}>
+            <View style={styles.emptyIcon}>
+              <Ionicons name="checkbox-outline" size={22} color={c.text3} />
+            </View>
             <Text style={styles.emptyTitle}>还没有待办</Text>
             <Text style={styles.emptyBody}>
-              整理时 AI 会把「有明确动作」的碎片挑出来，也可以直接新建一条待办。
+              整理时会挑出「有明确动作」的碎片，也可以直接新建一条。
             </Text>
             <Pressable style={[[styles.toolBtn, { marginTop: SPACE.xs }], styles.touchTarget]} onPress={() => onOpenEditor(null, null)} accessibilityRole="button"><Ionicons name="add" size={18} color={c.accentText} /><Text style={styles.toolText}>新建待办</Text></Pressable>
           </View>
@@ -235,18 +238,18 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
                 style={({ pressed }) => [[
                   styles.toolBtn,
                   selecting && styles.toolBtnOn,
-                  pressed && { backgroundColor: c.hairSoft },
+                  pressed && !selecting && { backgroundColor: c.hairSoft },
                 ], styles.touchTarget]}
                 onPress={() => setSelecting((v) => !v)} accessibilityRole="button" accessibilityState={{ selected: selecting }}
               >
-                <Ionicons name="git-merge-outline" size={15} color={c.accentText} />
-                <Text style={styles.toolText}>{selecting ? '完成' : '合并'}</Text>
+                <Ionicons name="git-merge-outline" size={15} color={selecting ? c.onAccent : c.accentText} />
+                <Text style={[styles.toolText, selecting && styles.toolTextOn]}>{selecting ? '完成' : '合并'}</Text>
               </Pressable>
             </View>
 
             {selecting ? (
               <Text style={styles.selectHint}>
-                勾选要合并的几条（只算顶层），然后写下合并后的那一句。
+                勾选要合并的几条（只算顶层），再写下合并后的那一句。
               </Text>
             ) : null}
 
@@ -259,7 +262,6 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
               <View style={styles.allDone}>
                 <Ionicons name="checkmark-circle-outline" size={28} color={c.text2} />
                 <Text style={styles.allDoneTitle}>手头的事都做完了</Text>
-                <Text style={styles.allDoneHint}>有新的安排，随时记一条。</Text>
               </View>
             )}
 
@@ -374,22 +376,34 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { flex: 1 },
   content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xl },
-  toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: SPACE.sm },
+  toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingBottom: SPACE.xs },
+  /** 工具按钮：淡蓝底、无边框。原来还套一圈 accentHair，在淡蓝底上等于没有边界 */
   toolBtn: {
-    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    paddingHorizontal: 10, paddingVertical: SPACE.xs, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accentBg, borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accentBg,
   },
-  toolBtnOn: { backgroundColor: c.hairSoft, borderWidth: metrics.strokeWidth, borderColor: c.focus },
+  /**
+   * 「完成」= 正处于合并选择模式。
+   *
+   * 原来这个态用 `borderColor: c.focus`（墨水主题是纯黑）表示，而其余样式和
+   * 普通态一样 —— 于是「进入选择模式」唯一的信号就是一圈黑框。
+   * 现在用实心主色底 + 反白字，按钮本身变成一个明确的「退出」动作。
+   */
+  toolBtnOn: { backgroundColor: c.accent },
   toolText: { ...TYPE.label, color: c.accentText },
-  selectHint: { ...TYPE.body, color: c.text2, marginBottom: SPACE.sm },
+  toolTextOn: { color: c.onAccent },
+  selectHint: { ...TYPE.compact, color: c.text2, marginBottom: SPACE.xs },
+  /** 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 说明 14 */
   empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
+  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
-  groupTitle: { ...TYPE.label, color: c.text2, marginBottom: 8 },
-  group: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden' },
+  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  groupTitle: { ...TYPE.label, color: c.text2, marginBottom: SPACE.xs },
+  /** 分组：白卡浮在浅灰页上，不描边；行间靠 0.5 的分隔线 */
+  group: { backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden' },
   row: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: SPACE.xs, paddingVertical: 8,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xs,
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   /** 子项只有缩进与细分隔，不再单独套一张卡。 */
@@ -399,52 +413,52 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   rowContent: { flex: 1, minWidth: 0 },
   main: { minWidth: 0, minHeight: 40, justifyContent: 'center', paddingVertical: 2 },
   rowTools: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 6, marginTop: 2 },
-  /** 待办是列表，15/22 比正文 16/26 更紧凑；一行能多看见一条就是收益 */
-  text: { fontSize: 15, lineHeight: 22, fontWeight: '400', color: c.text },
+  /** 待办是列表，compact 比正文更紧凑；一行能多看见一条就是收益 */
+  text: { ...TYPE.compact, color: c.text },
   doneText: { color: c.text2, textDecorationLine: 'line-through' },
-  progress: { ...TYPE.meta, color: c.text2, marginTop: 4, fontVariant: ['tabular-nums'] },
+  progress: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, fontVariant: ['tabular-nums'] },
   due: { ...TYPE.label, color: c.text2, marginTop: 2 },
   dueOverdue: { color: c.danger },
-  hint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.md, marginBottom: SPACE.xs },
+  hint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.sm, marginBottom: SPACE.xxs },
   allDone: { alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.md },
   allDoneTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  allDoneHint: { ...TYPE.body, color: c.text2, textAlign: 'center' },
   mergedBar: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.md, paddingVertical: SPACE.xs, paddingHorizontal: SPACE.xxs },
   mergedLabel: { flex: 1, ...TYPE.label, color: c.text2 },
-  mergedText: { flex: 1, ...TYPE.body, color: c.text2, paddingVertical: SPACE.xs },
+  mergedText: { flex: 1, ...TYPE.compact, color: c.text2, paddingVertical: SPACE.xs },
   mergedUndo: { ...TYPE.label, color: c.accentText },
-  error: { ...TYPE.body, color: c.danger, marginTop: SPACE.md },
+  error: { ...TYPE.compact, color: c.danger, marginTop: SPACE.sm },
+  /** 选择模式的底条：紧贴底栏，不再自带上边线（底栏自己有一条，叠在一起就是双线） */
   selectBar: {
-    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.sm, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm,
-    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, backgroundColor: c.page,
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.sm, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs,
+    backgroundColor: c.page,
   },
   selectCount: { flex: 1, ...TYPE.body, color: c.text, fontWeight: '600' },
-  mergeBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, backgroundColor: c.accent, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, alignItems: 'center', justifyContent: 'center' },
+  mergeBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, backgroundColor: c.accent, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, alignItems: 'center', justifyContent: 'center' },
   mergeText2: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   sheet: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, justifyContent: 'flex-end' },
   backdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.scrim },
   sheetCard: {
-    flexGrow: 0, flexShrink: 1, maxHeight: '100%', backgroundColor: c.page,
+    flexGrow: 0, flexShrink: 1, maxHeight: '100%', backgroundColor: c.card,
     borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
-    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
   sheetCardContent: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.lg, paddingBottom: SPACE.md },
   sheetTitle: { ...TYPE.heading, color: c.text },
-  sheetHint: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs, marginBottom: SPACE.md },
+  sheetHint: { ...TYPE.compact, color: c.text2, marginTop: SPACE.xxs, marginBottom: SPACE.sm },
+  /** 合并输入框：浅灰底、无边框，和首页/问页的书写区一致 */
   input: {
-    backgroundColor: c.card, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, ...TYPE.reading, color: c.text, minHeight: 120, textAlignVertical: 'top',
+    backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius + 8,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+    ...TYPE.reading, color: c.text, minHeight: 100, textAlignVertical: 'top',
   },
-  sheetFooter: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.sm, marginTop: SPACE.lg },
+  sheetFooter: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.sm, marginTop: SPACE.md },
   primaryBtn: {
     minHeight: metrics.controlHeight, backgroundColor: c.accent, borderRadius: metrics.buttonRadius,
-    paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, minWidth: 100, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: SPACE.xl, minWidth: 100, alignItems: 'center', justifyContent: 'center',
   },
   primaryText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   ghostBtn: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
-    backgroundColor: c.card, alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: SPACE.md, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center',
   },
   ghostText: { ...TYPE.body, color: c.text2 },
   btnDisabled: { opacity: 0.5 },

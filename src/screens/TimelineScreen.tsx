@@ -904,7 +904,7 @@ export function TimelineScreen({
           narrowed ? (
             <View style={styles.empty}>
               <View style={styles.emptyIcon}>
-                <Ionicons name="search-outline" size={26} color={c.text3} />
+                <Ionicons name="search-outline" size={22} color={c.text3} />
               </View>
               <Text style={styles.emptyTitle}>没有匹配的碎片</Text>
               <Text style={styles.emptyBody}>
@@ -915,12 +915,15 @@ export function TimelineScreen({
             /*
              * 空状态只说一句话。原来两行说明（「不用管分类」「攒够了去问里整理」）
              * 都是在解释产品，而人此刻只想记点什么 —— DeepSeek 的空屏也只有一句问候。
+             *
+             * 底色用 accentBg：这是全 App 唯一一个「希望你做点什么」的空屏，
+             * 其它空屏（搜不到、没待办、没文档）都是中性的浅灰。
              */
             <View style={styles.empty}>
-              <View style={styles.emptyMark}>
+              <View style={[styles.emptyIcon, styles.emptyIconAccent]}>
                 <Ionicons name="sparkles" size={22} color={c.accent} />
               </View>
-              <Text style={styles.emptyGreet}>今天记点什么？</Text>
+              <Text style={styles.emptyTitle}>今天记点什么？</Text>
             </View>
           )
         ) : (
@@ -1239,7 +1242,7 @@ export function TimelineScreen({
                         {fragment.source !== 'app' ? (
                           <Ionicons
                             name={fragment.source === 'notif' ? 'notifications-outline' : 'share-outline'}
-                            size={12.5}
+                            size={13}
                             color={c.text3}
                           />
                         ) : null}
@@ -1516,8 +1519,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   pageContent: { flex: 1 },
   dialogAction: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
-  composerNotice: { fontSize: 12, lineHeight: 18, color: c.text2, paddingVertical: 6, flexShrink: 1 },
-  imageMatch: { borderLeftWidth: 2, borderLeftColor: c.focus, paddingLeft: 8, gap: 4 },
+  composerNotice: { ...TYPE.meta, color: c.text2, paddingVertical: 6, flexShrink: 1 },
+  /** 左侧那道竖线是「这是一处正文命中」的标记；用 hair 而不是 focus —— 墨水主题的 focus 是纯黑 */
+  imageMatch: { borderLeftWidth: 2, borderLeftColor: c.hair, paddingLeft: 8, gap: 4 },
   imageMatchLabel: { ...TYPE.label, color: c.text },
   pendingRemoveFace: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
   root: { flex: 1, backgroundColor: c.page },
@@ -1528,10 +1532,18 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   headerLeft: { flex: 1, minWidth: 0 },
   /** 只留一个字标级标题：「碎片」+ 今日条数。上面那行小字已删（用户 2026-11-15 要求）。 */
-  brand: { fontSize: 20, lineHeight: 26, fontWeight: '700', color: c.text, letterSpacing: 0.5 },
+  /*
+   * 字标「碎片」：20/26 + 字距。
+   *
+   * 这是全项目唯一一处字标，没有第二个地方需要这个尺寸，所以不进 TYPE。
+   * 它比卡片标题（18）大一点、比 display（28）小得多 —— 首页要的是
+   * 「一眼知道这是哪」，不是「欢迎页」。
+   */
+  brand: { fontSize: 20, lineHeight: 26, fontWeight: '700', color: c.text, letterSpacing: 1 },
   brandSub: { ...TYPE.caption, color: c.text3 },
-  todaySummary: { alignItems: 'flex-end', paddingLeft: SPACE.md },
-  todayNumber: { fontSize: 20, lineHeight: 24, fontWeight: '700', color: c.accentText, fontVariant: ['tabular-nums'] },
+  todaySummary: { alignItems: 'center', paddingLeft: SPACE.md },
+  /** 今日条数：和字标同字号、行高压紧，读成一枚数字而不是一行字 */
+  todayNumber: { fontSize: 20, lineHeight: 22, fontWeight: '700', color: c.accentText, fontVariant: ['tabular-nums'] },
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
     paddingHorizontal: SPACE.md,
@@ -1600,9 +1612,10 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   imageBlock: { marginTop: 8, gap: 6 },
   thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   thumbWrap: { borderRadius: metrics.buttonRadius, overflow: 'hidden' },
+  /** 列表缩略图 56：能认出「是不是这张」，又不至于一条碎片占掉半屏 */
   imageThumb: {
-    width: 62,
-    height: 62,
+    width: 56,
+    height: 56,
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
@@ -1666,7 +1679,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   hitBadgeText: { ...TYPE.meta, color: c.amberText },
 
   // 周期总结条目
-  noteRow: { flexDirection: 'row', paddingHorizontal: 20 },
+  /** 和碎片行走同一个内边距：原来这里是写死的 20，比碎片行多缩进 4，两列对不齐 */
+  noteRow: { flexDirection: 'row', paddingHorizontal: metrics.pagePadding },
   noteDot: {
     width: 9,
     height: 9,
@@ -1675,15 +1689,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     marginTop: 5,
     transform: [{ rotate: '45deg' }],
   },
+  /** 月总结卡：白底浮在浅灰页上就够分层了，不描边 */
   noteCard: {
     flex: 1,
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    marginBottom: 16,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.sm,
+    marginBottom: SPACE.md,
     marginLeft: 2,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
@@ -1700,25 +1713,22 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   noteDeleteHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingVertical: 2 },
   noteDelete: { ...TYPE.meta, color: c.danger },
 
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 48 },
+  /**
+   * 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 可选说明 14。
+   *
+   * 原来这里有三个不同尺寸的圆（52 的空态、52 的问候标记、44 的搜索图标）
+   * 和三套字号，同一个 App 的空屏长得像三个产品。
+   */
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 48, gap: SPACE.sm },
   emptyIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 48, height: 48, borderRadius: 24,
     backgroundColor: c.hairSoft,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-  },
-  emptyTitle: { ...TYPE.body, color: c.text2, fontWeight: '600' },
-  emptyBody: { ...TYPE.meta, color: c.text3, textAlign: 'center', marginTop: 6 },
-  /** 空屏只剩一个标记和一句话：浅蓝圆底 + 问候，和 DeepSeek 的空屏同一个语气 */
-  emptyMark: {
-    width: 52, height: 52, borderRadius: 26,
     alignItems: 'center', justifyContent: 'center',
-    backgroundColor: c.accentBg, marginBottom: 16,
   },
-  emptyGreet: { fontSize: 20, lineHeight: 28, fontWeight: '600', color: c.text },
+  /** 唯一一个「邀请型」空屏：首页还没有碎片时用主色底 */
+  emptyIconAccent: { backgroundColor: c.accentBg },
+  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
+  emptyBody: { ...TYPE.compact, color: c.text3, textAlign: 'center' },
 
   composerWrap: {
     paddingHorizontal: SPACE.md,
@@ -1756,24 +1766,27 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   pickChipText: { ...TYPE.label, color: c.text },
   pickCancel: { ...TYPE.label, color: c.text3 },
-  /** 长文页那一行要和底栏对齐 */
-  pickRowFull: { paddingHorizontal: 18 },
+  /** 长文页那一行要和正文的左边界对齐（正文用的是 pagePadding） */
+  pickRowFull: { paddingHorizontal: metrics.pagePadding },
   /**
    * 输入区：DeepSeek 的那种浅灰大圆角块。
    *
    * **不用边框**。一圈 1px 的线会把输入区读成「表单里的一格」，而这里其实是个
-   * 随处可写的框 —— 浅灰底 + 28 的圆角已经足够说明它和白色页面的区别。
+   * 随处可写的框 —— 浅灰底 + 大圆角已经足够说明它和页面底色的区别。
+   *
+   * 圆角是 `cardRadius + 8`（默认 28、墨水 16）。写死 28 的话墨水主题也会得到
+   * 一个圆滚滚的胶囊，和它 8 圆角的卡片摆在一起像两种语言。
    */
   composerCard: {
     backgroundColor: glassable(metrics, c.hairSoft),
-    borderRadius: 28,
-    paddingHorizontal: 16,
+    borderRadius: metrics.cardRadius + 8,
+    paddingHorizontal: SPACE.md,
     paddingTop: 10,
     paddingBottom: 8,
     overflow: 'hidden',
   },
   composerBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 2,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: 2,
   },
   toolBtn: {
     minWidth: 52, minHeight: metrics.controlHeight, flexDirection: 'row',
@@ -1815,29 +1828,29 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingBottom: 12,
-    borderBottomWidth: metrics.strokeWidth,
+    paddingHorizontal: metrics.pagePadding,
+    paddingBottom: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
   fullTitle: { ...TYPE.title, color: c.text },
-  fullInput: { ...TYPE.reading, flex: 1, color: c.text, paddingHorizontal: 18, paddingVertical: 16, textAlignVertical: 'top', ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  fullInput: { ...TYPE.reading, flex: 1, color: c.text, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.md, textAlignVertical: 'top', ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
   fullCount: { ...TYPE.meta, flex: 1, color: c.text3 },
   /** 长文底栏：字数在左、插图在右，贴着键盘上沿 */
   fullBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 18,
-    paddingTop: 8,
-    paddingBottom: 12,
-    borderTopWidth: metrics.strokeWidth,
+    gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding,
+    paddingTop: SPACE.xs,
+    paddingBottom: SPACE.sm,
+    borderTopWidth: surfaceStroke(metrics),
     borderTopColor: c.hair,
     backgroundColor: glassable(metrics, c.page),
     overflow: 'hidden',
   },
   fullThumbs: { flexGrow: 0 },
-  fullThumbsContent: { gap: 8, paddingHorizontal: 18, paddingTop: 8 },
+  fullThumbsContent: { gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs },
 
   /** 覆盖整个内容区；安全区由外层 SafeAreaView 负责，这里只管层叠 */
   overlay: {
@@ -1854,7 +1867,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dialogOverlay: {
     backgroundColor: c.scrim,
     justifyContent: 'center',
-    paddingHorizontal: 26,
+    paddingHorizontal: SPACE.xl,
   },
   dialog: {
     backgroundColor: c.card,
@@ -1872,7 +1885,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     gap: 26,
     marginTop: 4,
   },
-  dangerText: { fontSize: 13, color: c.danger, fontWeight: '500' },
-  muted: { fontSize: 13, color: c.text2 },
-  primary: { fontSize: 13, color: c.accent, fontWeight: '500' },
+  /** 对话框里的三个动作：都走 label 角色，原来各自写死 13 */
+  dangerText: { ...TYPE.label, color: c.danger },
+  muted: { ...TYPE.label, color: c.text2 },
+  primary: { ...TYPE.label, color: c.accent },
 });

@@ -1,7 +1,7 @@
 /**
- * 底部标签栏：四个主入口。
+ * 底部标签栏：五个平级主入口。
  *
- * 为什么从「首页一排四个带字图标」改成底栏（用户 2026-11-15 要求「参考其余软件」）：
+ * 为什么从「首页一排带字图标」改成底栏（用户 2026-11-15 要求「参考其余软件」）：
  *
  * 1. **位置**。拇指够不到屏幕上部，而首页那排图标在标题下面 —— 想切页得先把手抬起来。
  *    底栏是单手拇指的自然落点，也是 Android/iOS 上的通用约定。
@@ -10,10 +10,11 @@
  * 3. **返回语义**。原来每个页面都是「全屏页 + 左上返回」，从文档跳问再跳回顾会攒出一栈。
  *    底栏是平级的：四个页面对等，互不嵌套。
  *
- * 设置不进底栏：它是低频的配置入口，四条 tab 已满，再塞第五条会把每个都挤窄。
- * 它回到首页右上角当一个齿轮 —— 这也是主流做法（社交、笔记类基本都把设置放在「我的」或右上角）。
- *
  * 选中态不靠颜色单独表达：实心图标 + 加粗字 + 短线头，三个信号同时给。
+ *
+ * **设置也在底栏里**（v0.20.9，用户要求放到最右）。它一开始留在首页右上角，
+ * 理由是「低频配置项不该和四个高频入口争宽度」；用户试过之后的意见是
+ * 一致地把所有入口放平更省事 —— 那就放平。
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -98,7 +99,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingTop: 3,
     overflow: 'hidden',
   },
-  /** 每个槽至少 48×48：320dp 宽的机器上四等分也有 80dp，够 */
+  /** 每个槽至少 48×48：320dp 宽的机器上五等分也有 64dp，够 */
   slot: {
     flex: 1,
     minWidth: metrics.controlHeight,
@@ -107,6 +108,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     justifyContent: 'center',
     gap: 1,
     paddingTop: 4,
+    paddingBottom: 2,
   },
   slotPressed: { backgroundColor: c.hairSoft },
   label: { ...TYPE.caption },

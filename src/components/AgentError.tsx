@@ -103,9 +103,7 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
               </Text>
             </ScrollView>
           ) : null}
-          <Text style={styles.hint}>
-            上面是服务端或模型的原话。拿着它去搜，比「再试一次」有用。
-          </Text>
+          {/* 「拿着它去搜，比『再试一次』有用」已删：这句是在教育用户，而不是提供信息 */}
         </View>
       ) : null}
     </View>
@@ -114,24 +112,28 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
+  /**
+   * 错误卡：整块 dangerBg 起底 + 左边一道 2dp 的红。
+   *
+   * 左边线是刻意的：一眼能在长对话里认出「这里是坏的」。
+   * 其余三边不描边 —— 原来套了一整圈 hair，只为了收个边，反而让红条显得像装饰。
+   */
   card: {
     backgroundColor: c.dangerBg,
     borderRadius: metrics.cardRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     borderLeftWidth: metrics.strokeWidth * 2, borderLeftColor: c.danger,
     padding: SPACE.md, marginTop: SPACE.md, gap: SPACE.xs,
   },
   head: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
   title: { ...TYPE.label, color: c.danger, flexShrink: 1 },
   code: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
-  message: { ...TYPE.body, color: c.text },
+  message: { ...TYPE.compact, color: c.text },
   actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.sm },
   retry: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
-    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    paddingHorizontal: SPACE.md,
     borderRadius: metrics.buttonRadius,
-    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     backgroundColor: c.card,
   },
   retryText: { ...TYPE.label, color: c.text },
@@ -147,5 +149,4 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   v: { ...TYPE.meta, flex: 1, minWidth: 100, color: c.text },
   rawBox: { maxHeight: 248, backgroundColor: c.card, borderRadius: metrics.buttonRadius, padding: SPACE.sm },
   raw: { ...TYPE.meta, color: c.text2, fontFamily: Platform.OS === 'android' ? 'monospace' : undefined },
-  hint: { ...TYPE.meta, color: c.text2 },
 });
