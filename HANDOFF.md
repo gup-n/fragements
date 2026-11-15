@@ -1,6 +1,6 @@
 # 项目交接：当前开发分支
 
-最后整理：2026-11-14。本文记录当前工作树与接手入口，**不是发布说明**。先读[SPEC最新批准节](<SPEC.md#2026-11-14-已批准可靠性修复与两轴外观>)、[方案A](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)和[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)；操作规则见[项目AGENTS](<AGENTS.md>)，历史原因查[CHANGELOG](<CHANGELOG.md>)。
+最后整理：2026-11-15。本文记录当前工作树与接手入口，**不是发布说明**。先读[当前UI修订记录](<docs/plans/2026-11-15-ui-polish.md>)和[SPEC最新节](<SPEC.md>)；此前[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
 
 ## 1. 三十秒速览
 
@@ -11,9 +11,9 @@
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.20.5 / versionCode 56 |
-| 开发分支 | `feat/ui-refresh-ink-20261114` |
-| 发布状态 | 2026-11-14改版开发中，未发布；版本号仍沿用发布基线 |
-| 基线与代码恢复点 | `master`、`backup/pre-ui-20261114` 均保留 `5befe65` |
+| 开发分支 | `feat/ui-polish-20261115` |
+| 发布状态 | 本次UI修订未发布；沿用v0.20.5版本号，旧tag/安装包不包含新界面 |
+| 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
 | AI | 配置的OpenAI兼容服务；官方支持模型使用 `deepseek-flash` / `deepseek-v4-pro` |
@@ -24,7 +24,15 @@
 
 ## 2. 当前进度与未覆盖项
 
-用户已回复「开始」批准方案A。以下是**本分支代码改动**，仍需Lead最终整合检查和后续设备验收；现有Release安装包不包含本分支新增改版。
+用户本轮要求基于当前被修改的项目再次调整UI。当前基线为v0.20.5/`76d91b0`，其完整备份、快速记录、分享接收和可靠性代码保留；本轮不改App/Repo/AI/organize或原生接收逻辑。
+
+- 已在主页面、聊天/草稿、文档/回顾、详情与阅读内容接入共享`TYPE`字号行高及`SPACE`间距；默认白纸/石墨/青绿，墨水仍纯中性色。标题/导航分行、当前值可换行，去掉普通模式不必要的强边框。
+- 首页四导航等宽、工具与发布有可见文字；聊天保持右气泡/开放助手正文，草稿权限/范围/暂停恢复不隐藏；文档和待办标题、摘要、状态、操作分层，阅读正文17/30。
+- 本轮UI检查与全部现有测试统一由Lead执行，新增`test:ui`；无截图或真机视觉验收，不用测试通过冒称配色观感已确认。
+
+### 保留的先前实现
+
+以下是基线中的实现，不是本轮新开发；现有安装包不包含本轮额外UI修改。
 
 - 主题改为明暗 `ui_theme` 与风格 `ui_style` 两轴；新增默认/墨水四套配色、动态几何、48dp控件、非颜色状态和减少动效策略。没有原生偏好桥或实体墨水屏刷新驱动。
 - 主页面、输入、问答/整理、回顾与阅读器使用共享控件。文档操作可展开收纳；PDF白纸原色不动，高亮/选区用半透明灰墨与轮廓，主题只发消息不重挂WebView。
@@ -35,22 +43,24 @@
 
 ### 验证入口与范围
 
-源码已冻结，2026-11-14 由 Lead 串行实跑下列检查。**这是本机（Node 24.14.1）在开发分支上的结果，不是发布验收。**
+源码冻结后，2026-11-15 由Lead串行实跑全部当前回归（本机Node24.14.1）。以下是本轮结果，不代表视觉或发布验收。
 
 | 入口 | 实跑结果 |
 |---|---|
-| `npm run typecheck` | 通过，0 错误 |
-| `npm run test:md` | 24 项通过 |
-| `npm run test:docs` | 71 项通过（问答 16 + 任务 8 + 阅读器 47） |
-| `npm run test:todos` | 18 项通过 |
-| `npm run test:ask` | 83 项通过 |
-| `npm run test:reliability` | 88 项通过（真实控制流 + 内存桩） |
-| `npm run test:appearance` | 45 项通过（两轴主题 + PDF 协议） |
-| `npm run check:docs` | 通过 |
-| `npm run build:web` | 通过，产物同次删除（不供预览） |
-| `npm run prepare:pdf` + `--check` | 资源已按冻结模板重建且校验最新 |
+| `npm run typecheck` | 通过，0错误 |
+| `npm run test:md` | 24项通过 |
+| `npm run test:docs` | 71项通过（问答16 + 任务8 + 阅读器47） |
+| `npm run test:todos` | 18项通过 |
+| `npm run test:ask` | 83项通过 |
+| `npm run test:reliability` | 88项通过（既有真实控制流+内存桩） |
+| `npm run test:appearance` | 45项通过（含新的默认青绿配色与旧墨水/PDF契约） |
+| `npm run test:backup` | 19项通过（v0.20.5外部新增测试保持） |
+| `npm run test:ui` | 20项通过（真实控件/菜单/样式、320/360/412dp导航预算及回调保留） |
+| `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
+| `npm run build:web` | 通过，4.62 MiB；产物已删除，不供预览 |
+| `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-旧回归 196 项与新增 133 项（88 + 45）合计 **329 项机器检查通过**。另有一次性的 Node 内置内存 SQLite 实验（17 场景、132 条断言）验证了 native Repo 的真实 SQL 语义；它不在 CI 套件内，也不等于 Expo Android 驱动或真机迁移验收。
+当前已有348项回归保持通过，本轮新增20项UI回归，合计368项。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -60,20 +70,20 @@
 
 | 项 | 现状 |
 |---|---|
-| 原生迁移事务与迁移前恢复点（F11） | `repo.native.migrate` 仍逐段 `execSync(MIGRATIONS[i])`，无事务/备份；只做了一版内存 SQL 可行性实验，未改实现 |
-| 统一排版体系 | 无字号/间距 token；`metrics` 只有圆角、边线、控件高度、页面边距；约 369 处 `fontSize` 仍硬编码，正文/标题/辅助字号未成体系 |
-| 应用内图标体系 | 只统一了按钮承载、短标签、48dp 槽与语义状态；图标资源未重绘（仍为 10 月生成的旧图标），也没有系统性替换轮廓/实心规则 |
+| 原生迁移事务与迁移前恢复点（F11） | 仍未专门实现/验收；v0.20.5完整ZIP备份不等于每次迁移前自动恢复点，本轮没有修改迁移 |
+| 统一排版体系 | 本轮新增TYPE/SPACE并接入主页面、聊天/草稿与阅读内容；不是全工程每个字号都已替换，后续局部界面按实际需要继续接入 |
+| 应用内图标体系 | 本轮重新统一图标载体、主次和可见标签；桌面PNG/自适应品牌资源未重绘，不宣称全品牌图标设计完成 |
 | TalkBack 关闭回焦 | 只有开层标题聚焦（`useHeadingFocus`）；关闭覆盖层后回到触发点未实现，仍依赖系统 |
 | 旧业务清理（第一批之外） | `organizePlan` 的旧计划/标签函数、`documents/knowledge.ts` 的旧写入工具、Repo 的 `saveRun`/旧整理会话/`markMerged`/`setFragmentNature`/`countInbox`/`countFragments`/`listFragmentIds` 仍在；目前仅文件内自用或无引用，未动 |
-| 通知栏快速记录、Android 分享接收、完整本地备份 | 方案中已单列为后续，不在本期 |
-| 设备级墨水屏优化、OTA、原生偏好桥、桌面品牌图标 | 明确不做或单列；冷启动仍可能出现颜色差 |
+| 通知栏快速记录、Android 分享接收、完整本地备份 | 已在v0.20.5有实现，本轮保留；测试backup纯判据，不代表真实手机恢复/系统Intent验收 |
+| 设备级墨水屏优化、OTA、原生偏好桥、桌面品牌图标 | 本轮未实现；原生冷启动/系统级刷新与媒体观感仍需专门设计和设备验证 |
 
 ## 3. 接手与执行顺序
 
 1. 读最新批准节、契约、本交接与对应源码，检查分支和未提交差异；不能只看旧版本历史推断现状。
 2. 多Agent先 `list/get/claim`，按write scope开发；共享契约、App/Repo及最终Git/构建归Lead。不因同一工作目录可写就跨scope。
 3. 冻结源码后由Lead串行跑完整检查、生成PDF资源、更新本节结果和行数地图。失败要修真实问题，不通过删断言/删地图避开。
-4. 当前不commit/push/tag/Release，不装依赖、不起服务、不做HTML界面预览、不本地构建APK。正式发布需另获明确授权，APK交CI产出。
+4. 子Agent不做Git操作；Lead可按已获授权范围创建可回退的本地Commit。本轮不push/tag/Release，不装依赖、不起服务、不做HTML界面预览、不本地构建APK；发布须另获明确授权。
 5. 获准设备测试时先确认设备、包来源和版本；每次动作后截图核对。没有设备或无法看图时停止视觉步骤，如实列未验。
 
 依赖/脚本以[package](<package.json>)为准。当前[Android CI](<.github/workflows/android.yml>)使用Node22/JDK21：生成PDF资源 → 类型与各组断言 → 文档检查 → 原生工程/APK。只有版本tag会创建Release并挂raw APK；artifact与Release asset不是一回事。本分支改版尚无新Release。
@@ -82,7 +92,7 @@
 
 ## 4. 主要源码行数地图
 
-**行数采样于2026-11-14当前工作树，仍可能随最后修复变化。** Lead在源码冻结后统一刷新；不删除行数表或改变检查规则。第一列的源码标识保持现有机器可识别格式，后附打开链接。测试脚本的行数是文件长度，**不是用例数量**。
+**行数采样于2026-11-15本轮冻结代码。** 不删除行数表或改变检查规则。第一列保持机器可识别格式，后附打开链接；测试脚本行数是文件长度，不是用例数。
 
 ### 4.1 入口、页面、主题与类型
 
@@ -91,13 +101,14 @@
 | `App.tsx` [打开](<App.tsx>) | 627 | route state、两轴偏好落盘、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1979 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2290 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 280 | 待办/小结两类回顾，没有标签tab |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 988 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1601 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
-| `src/theme.tsx` [打开](<src/theme.tsx>) | 91 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1897 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2095 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 256 | 待办/小结两类回顾，没有标签tab |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 987 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1543 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/theme.tsx` [打开](<src/theme.tsx>) | 92 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 225 | 四套完整色表、两轴规范化、语义色和metrics，纯函数可测试 |
+| `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 35 | 无颜色TYPE/SPACE、装饰边线和窄屏四入口导航预算，主页面与阅读实接入 |
 | `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 
@@ -163,21 +174,21 @@
 | `src/documents/readers/readerAvailability.ts` [打开](<src/documents/readers/readerAvailability.ts>) | 18 | original/snapshot/unavailable纯判据，不依赖能问索引状态 |
 | `src/documents/readers/extract.ts` [打开](<src/documents/readers/extract.ts>) | 164 | 本地提取分派，完整正文/切片/定位 |
 | `src/documents/readers/chunk.ts` [打开](<src/documents/readers/chunk.ts>) | 182 | 按完整文本切片、真实行号和contentFromText |
-| `src/documents/readers/PdfReader.tsx` [打开](<src/documents/readers/PdfReader.tsx>) | 239 | PDF阅读与本地查找命令、文字索引三态、主题消息更新 |
+| `src/documents/readers/PdfReader.tsx` [打开](<src/documents/readers/PdfReader.tsx>) | 230 | PDF阅读与本地查找命令、文字索引三态、主题消息更新 |
 | `src/documents/readers/PdfWebView.tsx` [打开](<src/documents/readers/PdfWebView.tsx>) | 83 | 稳定source、命令桥、本地导航与WebView安全边界 |
 | `src/documents/readers/PdfWebView.web.tsx` [打开](<src/documents/readers/PdfWebView.web.tsx>) | 22 | Web编译占位，非PDF网页产品 |
 | `src/documents/readers/pdfRuntime.tsx` [打开](<src/documents/readers/pdfRuntime.tsx>) | 301 | App根常驻的串行PDF提取队列 |
 | `src/documents/readers/pdfProtocol.ts` [打开](<src/documents/readers/pdfProtocol.ts>) | 94 | RN/WebView消息及纸面主题字段契约 |
 | `src/documents/readers/pdfTheme.ts` [打开](<src/documents/readers/pdfTheme.ts>) | 35 | 白纸专用灰墨/轮廓/选区与动态几何转换 |
 | `src/documents/readers/pdfjs/reader.template.html` [打开](<src/documents/readers/pdfjs/reader.template.html>) | 772 | 产品PDF源模板：本地渲染/查找、CSS变量与低内存页窗口；不是界面预览 |
-| `src/documents/readers/SheetReader.tsx` [打开](<src/documents/readers/SheetReader.tsx>) | 674 | 只读工作表、真实行列定位、当前命中、按视口渲染列 |
+| `src/documents/readers/SheetReader.tsx` [打开](<src/documents/readers/SheetReader.tsx>) | 665 | 只读工作表、真实行列定位、当前命中、按视口渲染列 |
 | `src/documents/readers/excelWorkbook.ts` [打开](<src/documents/readers/excelWorkbook.ts>) | 421 | dense/稀疏有效单元格解析、不按!ref面积遍历 |
 | `src/documents/readers/workbookCache.ts` [打开](<src/documents/readers/workbookCache.ts>) | 39 | 按fileUri+size的单槽内存缓存 |
 | `src/documents/readers/viewCache.ts` [打开](<src/documents/readers/viewCache.ts>) | 128 | 磁盘视图缓存，损坏当缓存未命中 |
 | `src/documents/readers/sheetWindow.ts` [打开](<src/documents/readers/sheetWindow.ts>) | 96 | 列窗口、偏移与占位计算 |
 | `src/documents/readers/TextReader.tsx` [打开](<src/documents/readers/TextReader.tsx>) | 201 | TXT/Markdown/快照的分块虚拟化与字面查找，当前命中非颜色标识 |
 | `src/documents/readers/textBlocks.ts` [打开](<src/documents/readers/textBlocks.ts>) | 92 | 正文分块，保留代码围栏与连续表格 |
-| `src/documents/readers/SearchBar.tsx` [打开](<src/documents/readers/SearchBar.tsx>) | 112 | 48dp查找/清除/前后命中，busy与disabled分开 |
+| `src/documents/readers/SearchBar.tsx` [打开](<src/documents/readers/SearchBar.tsx>) | 116 | 48dp查找/清除/前后命中，busy与disabled分开 |
 | `src/documents/readers/markdownSearch.ts` [打开](<src/documents/readers/markdownSearch.ts>) | 30 | 与NoteBody一致的可见Markdown块命中计数 |
 | `src/documents/readers/fragmentSearch.ts` [打开](<src/documents/readers/fragmentSearch.ts>) | 32 | 详情OCR→正文→事项的真实命中目标与局部序号 |
 
@@ -185,29 +196,29 @@
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 120 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
-| `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 69 | 共享页头、返回/右侧动作及标题聚焦 |
+| `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 122 | 真实48dp槽、可选短label、选中/禁用/焦点语义；diameter只管视觉底 |
+| `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 50 | 共享页头、返回/右侧动作及标题聚焦 |
 | `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 23 | 减少动效时静态忙碌图形，不改变业务进度 |
 | `src/components/ChoiceChip.tsx` [打开](<src/components/ChoiceChip.tsx>) | 49 | 带文字/状态的共享选项控件 |
 | `src/components/useHeadingFocus.ts` [打开](<src/components/useHeadingFocus.ts>) | 20 | 只为屏幕阅读器聚焦新标题，不抢普通键盘 |
-| `src/components/KnowledgeDraft.tsx` [打开](<src/components/KnowledgeDraft.tsx>) | 213 | 全部产出可审阅、稳定key、逐项授权与统一写入计数 |
-| `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 259 | 草稿单篇整页阅读/编辑与批准入口 |
-| `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1042 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
-| `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 426 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
-| `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 598 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
-| `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 108 | 小结整页阅读与列表同序分页 |
+| `src/components/KnowledgeDraft.tsx` [打开](<src/components/KnowledgeDraft.tsx>) | 244 | 全部产出可审阅、稳定key、逐项授权与统一写入计数 |
+| `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 236 | 草稿单篇整页阅读/编辑与批准入口 |
+| `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1046 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
+| `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 431 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
+| `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 595 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
+| `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 745 | 月总结单篇/缺口队列、原稿对照和确认保存 |
-| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 511 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
-| `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 250 | 全屏覆盖编辑、子项和到期日 |
+| `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 450 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
+| `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 223 | 全屏覆盖编辑、子项和到期日 |
 | `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 525 | 更新提示/下载/安装/错误状态 |
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 209 | 文字导入预览、范围/日期警告与确认 |
-| `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 282 | 引用快照、真实来源位置，不回库猜原文 |
+| `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 238 | 引用快照、真实来源位置，不回库猜原文 |
 | `src/components/SwipeRow.tsx` [打开](<src/components/SwipeRow.tsx>) | 302 | 固定方向的时间轴手势，保留纵滚/长按和减少动效 |
-| `src/components/Toast.tsx` [打开](<src/components/Toast.tsx>) | 55 | 就近消息呈现，不自行决定业务成功或计时 |
-| `src/components/ReasoningFold.tsx` [打开](<src/components/ReasoningFold.tsx>) | 84 | 答后仍可打开的思考折叠 |
-| `src/components/ReasoningStream.tsx` [打开](<src/components/ReasoningStream.tsx>) | 93 | 流式思考展示，减少动效与滚动策略 |
-| `src/components/ReasoningTrace.tsx` [打开](<src/components/ReasoningTrace.tsx>) | 70 | 过程轨迹显示 |
-| `src/components/AgentError.tsx` [打开](<src/components/AgentError.tsx>) | 169 | 错误短提示/阶段/原始证据展开，不吞掉失败原因 |
+| `src/components/Toast.tsx` [打开](<src/components/Toast.tsx>) | 56 | 就近消息呈现，不自行决定业务成功或计时 |
+| `src/components/ReasoningFold.tsx` [打开](<src/components/ReasoningFold.tsx>) | 78 | 答后仍可打开的思考折叠 |
+| `src/components/ReasoningStream.tsx` [打开](<src/components/ReasoningStream.tsx>) | 91 | 流式思考展示，减少动效与滚动策略 |
+| `src/components/ReasoningTrace.tsx` [打开](<src/components/ReasoningTrace.tsx>) | 64 | 过程轨迹显示 |
+| `src/components/AgentError.tsx` [打开](<src/components/AgentError.tsx>) | 151 | 错误短提示/阶段/原始证据展开，不吞掉失败原因 |
 
 ### 4.7 共用纯函数
 
@@ -254,6 +265,7 @@
 | `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 776 | 问页意图、草稿与输出兼容 |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1727 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 390 | 两轴外观、真实对比度、PDF与阅读器契约 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 163 | 20项纯内存UI布局/控件回归，含语义字号与窄屏导航，非真机视觉验收 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 264 | 文档机器一致性；不得通过降低覆盖率躲检查 |
 

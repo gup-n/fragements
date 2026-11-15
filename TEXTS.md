@@ -4,6 +4,20 @@
 
 对应版本 v0.20.5。行号会在每次改动后漂，`npm run check:docs` 能查出来——找文案先看段落标题，行号只当提示。
 
+## 2026-11-15 当前UI文案入口
+
+本轮主要修改展示，未改模型提示词。旧页面小节保留了版本演进示例，当前UI以以下源码与语义字段为准，不按旧样例的行号猜位置：
+
+| 展示内容 | 当前入口 |
+|---|---|
+| 首页标题/今日记录、展开/图片/发布 | [TimelineScreen](<src/screens/TimelineScreen.tsx>) 的header、导航、composer工具行 |
+| 设置四模块、长当前值、完整备份入口 | [SettingsScreen](<src/screens/SettingsScreen.tsx>) 的root菜单、MenuRow与data子页 |
+| 聊天空态、范围、思考/联网状态、输入 | [AskScreen](<src/screens/AskScreen.tsx>) 的任务列表、scope与inputTools |
+| 查看全文、逐项选择、写入权限/确认 | [KnowledgeDraft](<src/components/KnowledgeDraft.tsx>) 和 [DraftDocPage](<src/components/DraftDocPage.tsx>) |
+| 提问时引用快照与错误详情 | [CitationSheet](<src/components/CitationSheet.tsx>)、[AgentError](<src/components/AgentError.tsx>) |
+| 文档状态、阅读主次动作与翻页查找 | [DocsScreen](<src/screens/DocsScreen.tsx>)、[DocViewer](<src/components/DocViewer.tsx>)、[SearchBar](<src/documents/readers/SearchBar.tsx>) |
+
+
 **目录**
 
 ```
@@ -479,7 +493,7 @@ v0.12.0 起文档页分三件事：**存原件**、**准备正文**、**问选�
 | 云解析确认卡 | 标题 `上传到 mineru.net 解析？` + `文件名` + `大小 · 扩展名` + `这篇文档会发送到 mineru.net（第三方服务）。原文件仍然保留在手机上。开始之后可以取消，但已经上传的字节撤不回来。` + `选一条通道：`；通道 `轻量接口（免 Token）` / `精准接口（需要 Token）`；按钮 `开始解析` |
 | 删除确认 | `会删掉 App 里的原文件副本和已准备的正文。手机里原来那个文件不受影响。` |
 | 阅读器查找栏 `readers/SearchBar.tsx:41-42` | `正在查找…` / `没有找到` / `第 i / N 处 · 第 n 行`；没有文字时占位符 `这篇没有可查找的文字`（`:72`） |
-| 阅读器查找栏·索引中 `readers/SearchBar.tsx:91` | `正在索引文字…` —— 只表示「还没查」，输入框仍然可打字（`busy`，不是 `disabled`） |
+| 阅读器查找栏·索引中 `readers/SearchBar.tsx:73` | `正在索引文字…`；另提示“正在索引文字，可以先输入查找词”——输入仍可用（busy与无文字的disabled分开） |
 | PDF 阅读器 `readers/PdfReader.tsx:178` | `这份 PDF 没有文字层（扫描件）：可以翻页，但不能查找，也不能用来提问。需要正文请用 MinerU 云解析（会上传原件，需要你确认）。` |
 | 云解析/正文快照顶部 `readers/DocumentReader.tsx:37` | 原件还在：`这里是已提取的正文快照，版式可能失真。查看原样请用「打开原件」。`；原件丢失：`原文件已不在手机上。这里是已保留的正文快照，不代表原版式。` |
 | `docFiles.ts` 错误 | `原文件已不在手机上（可能被系统清理），只能看已解析的正文` / `这台手机上没有能打开这种文件的应用，可以先读已解析的正文` |

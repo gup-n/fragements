@@ -1,8 +1,8 @@
 # 项目 Agent 速查
 
-先读[当前交接](<HANDOFF.md>)、[SPEC 最新批准节](<SPEC.md#2026-11-14-已批准可靠性修复与两轴外观>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)，再读本次任务涉及的源码。历史原因在[CHANGELOG](<CHANGELOG.md>)，不要把旧说明当现行实现。
+先读[当前交接](<HANDOFF.md>)、[SPEC 最新批准节](<SPEC.md>)与[当前 UI 修订](<docs/plans/2026-11-15-ui-polish.md>)，再读本次任务涉及的源码。历史原因在[CHANGELOG](<CHANGELOG.md>)，不要把旧说明当现行实现。
 
-本文件是项目专属规则，不替代[上级工作区规范](<../AGENTS.md>)。2026-11-14 方案 A 已批准，当前在 `feat/ui-refresh-ink-20261114` 开发；仍为 **v0.20.4 / versionCode 55**，新增改版**未发布、未真机验收**。
+本文件是项目专属规则，不替代[上级工作区规范](<../AGENTS.md>)。2026-11-15 按用户要求在 v0.20.5 / versionCode 56（`76d91b0`）上再次修改 UI，新分支 `feat/ui-polish-20261115`；**本次界面修订未发布、未真机验收**。此前的完整备份、快速记录和分享接收实现保留。
 
 ## 1. 固定边界
 
@@ -18,7 +18,7 @@ type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 - 回顾只有待办/小结；现行小结生成只有月。旧字段、旧记录或兼容解析的存在不代表要恢复已下线入口。
 - 工作前检查分支、Git状态和差异，保护已有修改。多人按共享任务 `list → get → claim → complete` 工作；不越write scope，不擅改共享契约。Lead统一整合、全测、生成资源和Git操作。
 - 本轮子Agent不commit/push，不切分支、不装依赖、不启动服务、不本地构建APK、不调用真实AI或外发用户文件。推送、合并主分支、tag/Release和真实数据操作须另获明确授权。
-- `master` 和 `backup/pre-ui-20261114` 保留改版前 `5befe65`。Git恢复的是代码，不是手机数据库、附件或APK降级能力。
+- `master` 和 `backup/pre-ui-20261114` 保留旧版 `5befe65`；本轮 `backup/pre-ui-polish-20261115` 保留 `76d91b0`（含近期备份/快速记录/分享）。旧开发分支和tag不动。Git恢复的是代码，不是手机数据库、附件或APK降级能力。
 
 ## 2. 验证与发布
 
@@ -33,6 +33,8 @@ type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 | `npm run test:ask` | 意图与整理草稿规则 |
 | `npm run test:reliability` | 真实控制流、故障注入、授权与恢复 |
 | `npm run test:appearance` | 两轴主题、对比度与PDF协议 |
+| `npm run test:backup` | 新备份清单与路径等纯判据 |
+| `npm run test:ui` | 语义排版、窄屏导航、控件与原事件保留 |
 | `npm run check:docs` | 版本、文件行数、路径/链接、提示词等 |
 | `npm test` | 以上检查的串行聚合 |
 | `npm run prepare:pdf` | 生成产品PDF阅读器资源，Lead/CI执行 |
@@ -68,7 +70,8 @@ type Route = 'timeline' | 'settings' | 'review' | 'ask' | 'docs';
 [主题Provider](<src/theme.tsx>)是唯一入口，[纯外观模块](<src/util/appearance.ts>)管理四套调色板、规范化与metrics。
 
 - `ui_theme`：light/dark/system；`ui_style`：default/ink。两轴独立，非法旧设置安全回退；最终一次选择获胜。持久化失败要说“本次已应用但未保存”，不能假称永久成功。
-- 颜色来自 `c`；圆角、边线、48dp控件高度和页面间距来自 `metrics`。旧单参数样式工厂兼容，新工厂可接两参数：
+- 颜色来自 `c`；圆角、边线、48dp控件高度来自 `metrics`。字体/行高使用主题入口导出的 `TYPE`，留白使用 `SPACE`；装饰边线用 `surfaceStroke(metrics)`，选中和焦点仍保留明确轮廓。不可关闭系统字体缩放来修窄屏。
+- 旧单参数样式工厂兼容，新工厂可接两参数：
 
 ```ts
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
