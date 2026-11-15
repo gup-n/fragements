@@ -15,13 +15,10 @@ import type {
   FragmentSource,
   FragmentStatus,
   Note,
-  OrganizeScope,
-  OrganizeSession,
   QaScope,
   QaTurn,
   Todo,
 } from '../types';
-import { normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
@@ -170,6 +167,9 @@ const MIGRATIONS: string[] = [
 
   CREATE VIRTUAL TABLE IF NOT EXISTS fragment_fts USING fts5(text, tokenize = 'unicode61');
 
+  -- v0.16 起整理改成一次对话 + 草稿，不再有「多轮计划」这种中间产物；
+  -- 这两张表（organize_sessions / organize_runs）与 plan_json 列都**不再有任何读写**。
+  -- 表留着不删：旧设备的行是历史证据，删表也不会让用户多出一点空间。
   CREATE TABLE IF NOT EXISTS organize_sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     scope           TEXT    NOT NULL,
@@ -513,41 +513,6 @@ function toNote(r: NoteRow): Note {
     bodyMd: r.body_md,
     period: r.period,
     createdAt: r.created_at,
-  };
-}
-
-interface SessionRow {
-  id: number;
-  scope: string;
-  pending_ids: string;
-  cursor: number;
-  plan_json: string;
-  context_summary: string;
-  finished: number;
-  created_at: number;
-  updated_at: number;
-}
-
-function parseIds(raw: unknown): number[] {
-  try {
-    const v = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return Array.isArray(v) ? v.map(Number).filter((n) => Number.isFinite(n)) : [];
-  } catch {
-    return [];
-  }
-}
-
-function toSession(r: SessionRow): OrganizeSession {
-  return {
-    id: r.id,
-    scope: (r.scope as OrganizeScope) ?? 'inbox',
-    pendingIds: parseIds(r.pending_ids),
-    cursor: Number(r.cursor) || 0,
-    plan: normalizePlan(parseJson(r.plan_json, {})),
-    contextSummary: r.context_summary ?? '',
-    finished: r.finished === 1,
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
   };
 }
 
@@ -964,14 +929,6 @@ export const repo: Repo = {
     return attachImages(d, rows.map(toFragment));
   },
 
-  async listFragmentIds(scope) {
-    const where = scope === 'all' ? 'merged_into IS NULL' : "status = 'inbox'";
-    const rows = db().getAllSync<{ id: number }>(
-      `SELECT id FROM fragments WHERE ${where} ORDER BY created_at ASC, id ASC`,
-    );
-    return rows.map((r) => r.id);
-  },
-
   async listFragmentsByIds(ids) {
     const list = Array.from(new Set(ids.map(Number).filter((n) => Number.isFinite(n))));
     if (!list.length) return [];
@@ -994,11 +951,6 @@ export const repo: Repo = {
       if (f) out.push(f);
     }
     return attachImages(db(), out);
-  },
-
-  async countFragments(scope) {
-    const where = scope === 'all' ? 'merged_into IS NULL' : "status = 'inbox'";
-    return countOf(db(), `SELECT COUNT(*) AS n FROM fragments WHERE ${where}`);
   },
 
   async insertFragment(content, source, createdAt, images) {
@@ -1164,35 +1116,6 @@ export const repo: Repo = {
       [JSON.stringify(clean), project, id],
     );
     reindexFragment(d, id);
-  },
-
-  async markMerged(dropIds, keepId) {
-    if (!dropIds.length) return;
-    const placeholders = dropIds.map(() => '?').join(',');
-    db().runSync(
-      `UPDATE fragments SET merged_into = ?, status = ? WHERE id IN (${placeholders})`,
-      [keepId, 'merged', ...dropIds],
-    );
-  },
-
-  async markStatus(ids, status) {
-    if (!ids.length) return;
-    const placeholders = ids.map(() => '?').join(',');
-    // 已被合并的条目不再被普遍状态覆盖
-    db().runSync(
-      `UPDATE fragments SET status = ? WHERE id IN (${placeholders}) AND status <> 'merged'`,
-      [status, ...ids],
-    );
-  },
-
-  async setFragmentNature(ids, nature) {
-    if (!ids.length) return;
-    const placeholders = ids.map(() => '?').join(',');
-    db().runSync(`UPDATE fragments SET nature = ? WHERE id IN (${placeholders})`, [nature, ...ids]);
-  },
-
-  async countInbox() {
-    return countOf(db(), "SELECT COUNT(*) AS n FROM fragments WHERE status = 'inbox'");
   },
 
   async searchFragments(query, limit = 40) {
@@ -1429,70 +1352,6 @@ export const repo: Repo = {
 
   async deleteNote(id) {
     db().runSync('DELETE FROM notes WHERE id = ?', [id]);
-  },
-
-  async saveOrganizeSession(input) {
-    const now = Date.now();
-    const res = db().runSync(
-      `INSERT INTO organize_sessions
-         (scope, pending_ids, cursor, plan_json, context_summary, finished, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        input.scope,
-        JSON.stringify(input.pendingIds),
-        input.cursor,
-        JSON.stringify(input.plan),
-        input.contextSummary,
-        input.finished ? 1 : 0,
-        now,
-        now,
-      ],
-    );
-    return Number(res.lastInsertRowId);
-  },
-
-  async updateOrganizeSession(id, patch) {
-    const sets: string[] = [];
-    const params: (string | number)[] = [];
-    if (patch.cursor !== undefined) {
-      sets.push('cursor = ?');
-      params.push(patch.cursor);
-    }
-    if (patch.plan !== undefined) {
-      sets.push('plan_json = ?');
-      params.push(JSON.stringify(patch.plan));
-    }
-    if (patch.contextSummary !== undefined) {
-      sets.push('context_summary = ?');
-      params.push(patch.contextSummary);
-    }
-    if (patch.finished !== undefined) {
-      sets.push('finished = ?');
-      params.push(patch.finished ? 1 : 0);
-    }
-    if (!sets.length) return;
-    sets.push('updated_at = ?');
-    params.push(Date.now());
-    params.push(id);
-    db().runSync(`UPDATE organize_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
-  },
-
-  async findUnfinishedOrganizeSession() {
-    const row = db().getFirstSync<SessionRow>(
-      'SELECT * FROM organize_sessions WHERE finished = 0 ORDER BY updated_at DESC LIMIT 1',
-    );
-    return row ? toSession(row) : null;
-  },
-
-  async finishOrganizeSession(id) {
-    db().runSync('UPDATE organize_sessions SET finished = 1, updated_at = ? WHERE id = ?', [
-      Date.now(),
-      id,
-    ]);
-  },
-
-  async deleteOrganizeSession(id) {
-    db().runSync('DELETE FROM organize_sessions WHERE id = ?', [id]);
   },
 
   async listAskSessions(includeArchived = false) {
@@ -1805,18 +1664,6 @@ export const repo: Repo = {
       [like, limit],
     );
     return rows.map(toDocumentChunk);
-  },
-
-  async saveRun(input) {
-    const res = db().runSync(
-      'INSERT INTO organize_runs (started_at, fragment_ids, model, result_json, applied) VALUES (?, ?, ?, ?, 0)',
-      [input.startedAt, JSON.stringify(input.fragmentIds), input.model, input.resultJson],
-    );
-    return Number(res.lastInsertRowId);
-  },
-
-  async markRunApplied(id) {
-    db().runSync('UPDATE organize_runs SET applied = 1 WHERE id = ?', [id]);
   },
 
   async getSetting(key) {

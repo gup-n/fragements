@@ -8,6 +8,7 @@ import { UpdateSheet } from './src/components/UpdateSheet';
 import {
   normalizeThemeMode,
   normalizeThemeStyle,
+  SPACE,
   ThemeProvider,
   useTheme,
   useThemedStyles,
@@ -650,7 +651,7 @@ const makeStyles = (c: Palette) => StyleSheet.create({
     maxHeight: 880,
     width: 420,
     maxWidth: '100%',
-    marginVertical: 16,
+    marginVertical: SPACE.md,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: c.shellBorder,

@@ -350,4 +350,89 @@ test('日历的「展开其余」能点开，小结入口说出待补月份', ()
   assert.ok(source.includes('个月还没写'), '小结入口要说出待补月份数');
 });
 
+/*
+ * v0.23：小结入口点进去必须落在**缺口月**上。
+ *
+ * 原来只数了总数就打开面板，而面板默认停在最近一个月 —— 本月通常一条碎片都没有，
+ * 于是「3 个月还没写」点进去是一张「这个月里还没有碎片」。说了却做不到，比不说更糟。
+ */
+test('小结入口把缺口月真的送进面板', () => {
+  const source = parseSource('src/screens/ReviewScreen.tsx').getText();
+  assert.ok(source.includes('setSheetPeriod(backlog.items[0]?.period'), '入口要选中最近的缺口月');
+  assert.ok(source.includes('initialPeriod={sheetPeriod'), '预选月份必须传给面板');
+  // 面板得真接住这个 prop 并把它当初始值，否则传了也没用
+  const sheet = parseSource('src/components/SummarySheet.tsx').getText();
+  assert.ok(sheet.includes('useState(() => initialPeriod ??'), '面板要拿它当初始月份');
+});
+
+/*
+ * v0.23：整理计划这条老路径整条删了（organizePlan.ts + 5 个 session 方法 + 2 个 run 方法）。
+ *
+ * 它从 v0.16 改成「一次对话 + 草稿」之后就没有任何调用方了，
+ * 但文件还在、类型还在、两张表还在建 —— 下一个读代码的人会以为它还活着。
+ * 表留着（旧设备的行是历史证据），代码不许复活。
+ */
+test('整理计划那条死路径不许复活', () => {
+  const fs = require('node:fs');
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(entry.name)) files.push(p);
+    }
+  };
+  walk('src');
+  files.push('App.tsx');
+  const text = new Map(files.map((f) => [f, fs.readFileSync(f, 'utf8')]));
+
+  assert.ok(!fs.existsSync('src/util/organizePlan.ts'), 'organizePlan.ts 已删，别再建回来');
+  const deadNames = /OrganizePlan|OrganizeScope|saveOrganizeSession|updateOrganizeSession|saveRun\b|markRunApplied|markMerged|markStatus|setFragmentNature|countInbox|countFragments|listFragmentIds/;
+  const hits = [...text].filter(([, src]) => deadNames.test(src)).map(([f]) => f);
+  assert.deepEqual(hits, [], '整理计划与标签时代的方法不许有人再引用');
+  // 两张旧表只许出现在建表语句里，不许有读写
+  const writes = [...text].filter(([, src]) => /(INSERT INTO|UPDATE|DELETE FROM|SELECT [^;]*FROM)\s+organize_(sessions|runs)/i.test(src)).map(([f]) => f);
+  assert.deepEqual(writes, [], 'organize_sessions / organize_runs 不再有读写');
+});
+
+/*
+ * v0.23：间距的两种数不许混。
+ *
+ * 结构间距只有七档（`SPACE` 的 4/8/12/16/20/24/32），**必须走 token**；
+ * 2/3/5/6/7/10/14 这几个是「让文字基线对齐」的微调（点阵间距、光学修正），
+ * 直接写数字反而是对的 —— 它们本来就不该出现在布局里。
+ *
+ * 这条断言拦的是「4 写成 4」：数值等于档位却写成裸数字，看起来没差，
+ * 实际是下一次「6 还是 8」的起点。本版清掉了 36 处。
+ */
+test('间距档位必须走 SPACE，微调数字保持裸写', () => {
+  const fs = require('node:fs');
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(p);
+      else if (/\.tsx?$/.test(entry.name)) files.push(p);
+    }
+  };
+  walk('src');
+  files.push('App.tsx');
+  const SCALE = new Set([4, 8, 12, 16, 20, 24, 32]);
+  const bad = [];
+  for (const f of files) {
+    if (f.includes('appearance.ts') || f.includes('uiTokens.ts')) continue;
+    const lines = fs.readFileSync(f, 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('*') || trimmed.startsWith('//') || trimmed.startsWith('/*')) return;
+      const matches = line.matchAll(/\b(?:margin|padding)[A-Za-z]*:\s*(-?\d+)\b|\bgap:\s*(-?\d+)\b/g);
+      for (const m of matches) {
+        const value = Number(m[1] ?? m[2]);
+        if (value > 0 && SCALE.has(value)) bad.push(`${f}:${i + 1} (${value})`);
+      }
+    });
+  }
+  assert.deepEqual(bad, [], '等于档位的裸数字要换成 SPACE.*，否则下次就多出一个「6」');
+});
+
 suite.run();

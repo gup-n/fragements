@@ -19,7 +19,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { IoniconName } from './IconButton';
 import { GlassBackdrop, glassable } from './GlassBackdrop';
 
@@ -107,7 +107,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 1,
-    paddingTop: 4,
+    paddingTop: SPACE.xxs,
     paddingBottom: 2,
   },
   slotPressed: { backgroundColor: c.hairSoft },

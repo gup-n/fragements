@@ -1529,10 +1529,10 @@ export function TimelineScreen({
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   pageContent: { flex: 1 },
-  dialogAction: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
+  dialogAction: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', paddingHorizontal: SPACE.sm },
   composerNotice: { ...TYPE.meta, color: c.text2, paddingVertical: 6, flexShrink: 1 },
   /** 左侧那道竖线是「这是一处正文命中」的标记；用 hair 而不是 focus —— 墨水主题的 focus 是纯黑 */
-  imageMatch: { borderLeftWidth: 2, borderLeftColor: c.hair, paddingLeft: 8, gap: 4 },
+  imageMatch: { borderLeftWidth: 2, borderLeftColor: c.hair, paddingLeft: SPACE.xs, gap: SPACE.xxs },
   imageMatchLabel: { ...TYPE.label, color: c.text },
   pendingRemoveFace: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
   root: { flex: 1, backgroundColor: c.page },
@@ -1569,7 +1569,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     gap: 5,
     maxWidth: '100%',
     paddingHorizontal: 10,
-    paddingVertical: 4,
+    paddingVertical: SPACE.xxs,
     borderRadius: R.pill,
     backgroundColor: c.accentBg,
   },
@@ -1582,12 +1582,12 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     minHeight: 44,
     backgroundColor: c.hairSoft,
     borderRadius: R.pill,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACE.md,
   },
   searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...WEB_INPUT_RESET },
   searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
 
-  listContent: { paddingBottom: 8 },
+  listContent: { paddingBottom: SPACE.xs },
   // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
   sectionHeader: {
     paddingHorizontal: SPACE.md,
@@ -1597,8 +1597,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   sectionHeaderPressed: { backgroundColor: c.hairSoft },
   /** 展开的月里拆出来的天：往左缩一点、小一号，视觉上挂在月头下面 */
-  sectionHeaderNested: { paddingLeft: 28, paddingTop: 8, paddingBottom: 4 },
-  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionHeaderNested: { paddingLeft: 28, paddingTop: SPACE.xs, paddingBottom: SPACE.xxs },
+  sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   sectionTitle: { ...TYPE.label, color: c.text, letterSpacing: 0.3 },
   sectionTitleNested: { ...TYPE.label, color: c.text2 },
   sectionSubNested: { color: c.text3 },
@@ -1620,7 +1620,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dotMuted: { backgroundColor: c.hair },
   rowBody: { flex: 1, paddingBottom: 10, paddingLeft: 2 },
   /** 配图区：一排缩略图 + 下面一行状态 */
-  imageBlock: { marginTop: 8, gap: 6 },
+  imageBlock: { marginTop: SPACE.xs, gap: 6 },
   thumbRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   thumbWrap: { borderRadius: metrics.buttonRadius, overflow: 'hidden' },
   /** 列表缩略图 56：能认出「是不是这张」，又不至于一条碎片占掉半屏 */
@@ -1668,7 +1668,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.tealBg,
     borderRadius: R.pill,
     paddingLeft: 5,
-    paddingRight: 8,
+    paddingRight: SPACE.xs,
     paddingVertical: 2,
   },
   doneBadgeText: { ...TYPE.caption, color: c.tealText },
@@ -1680,7 +1680,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.accentBg,
     borderRadius: R.pill,
     paddingLeft: 5,
-    paddingRight: 8,
+    paddingRight: SPACE.xs,
     paddingVertical: 2,
   },
   orgBadgeText: { ...TYPE.caption, color: c.accentText },
@@ -1717,7 +1717,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     marginBottom: SPACE.md,
     marginLeft: 2,
   },
-  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
+  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: SPACE.xs },
   noteKind: { ...TYPE.label, color: c.accentText },
   notePeriod: { ...TYPE.meta, flex: 1, color: c.text3 },
   noteBody: { ...TYPE.body, color: c.text },
@@ -1756,7 +1756,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   /** 待发送的图：横排缩略图，每张右上角一个叉 */
   pendingStrip: { marginTop: 6 },
-  pendingStripContent: { gap: 6, paddingRight: 4 },
+  pendingStripContent: { gap: 6, paddingRight: SPACE.xxs },
   pendingItem: { width: 52, height: 52 },
   pendingThumb: { width: 52, height: 52, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
   pendingRemove: {
@@ -1768,16 +1768,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   pickRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingTop: 4,
+    gap: SPACE.xs,
+    paddingTop: SPACE.xxs,
     paddingBottom: 2,
-    paddingRight: 4,
+    paddingRight: SPACE.xxs,
   },
   pickChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: 12,
+    paddingHorizontal: SPACE.sm,
     paddingVertical: 7,
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
@@ -1800,7 +1800,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.cardRadius + 8,
     paddingHorizontal: SPACE.md,
     paddingTop: 10,
-    paddingBottom: 8,
+    paddingBottom: SPACE.xs,
     overflow: 'hidden',
   },
   composerBar: {
@@ -1808,7 +1808,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   toolBtn: {
     minWidth: 52, minHeight: metrics.controlHeight, flexDirection: 'row',
-    gap: 4, paddingHorizontal: 6,
+    gap: SPACE.xxs, paddingHorizontal: 6,
     borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
   },
   toolLabel: { ...TYPE.meta, color: c.text2, flexShrink: 1 },
@@ -1833,7 +1833,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    * 这是单/双行的书写密度，不是触控目标 —— 整张卡片都能点进输入框，
    * 真正需要 48 的是下面那排按钮，它们的 controlHeight 没动。
    */
-  input: { ...TYPE.body, color: c.text, minHeight: 38, maxHeight: 120, paddingTop: 2, paddingBottom: 4, paddingRight: 6, ...WEB_INPUT_RESET },
+  input: { ...TYPE.body, color: c.text, minHeight: 38, maxHeight: 120, paddingTop: 2, paddingBottom: SPACE.xxs, paddingRight: 6, ...WEB_INPUT_RESET },
   /** 圆形发送键：48×48 正好是触控下限，所以不用再套 touchTarget */
   send: {
     width: 48, height: 48, borderRadius: 24,
@@ -1879,7 +1879,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     left: 0,
     backgroundColor: c.page,
   },
-  fullOverlay: { paddingTop: 12 },
+  fullOverlay: { paddingTop: SPACE.sm },
 
   // 删除确认：压在列表正中的一块卡片，底色比 scrim 亮，一眼能分出「这是要你决定」的层
   dialogOverlay: {
@@ -1890,7 +1890,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dialog: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    padding: 20,
+    padding: SPACE.lg,
     gap: 10,
   },
   dialogTitle: { ...TYPE.title, color: c.text },
@@ -1901,7 +1901,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: 26,
-    marginTop: 4,
+    marginTop: SPACE.xxs,
   },
   /** 对话框里的三个动作：都走 label 角色，原来各自写死 13 */
   dangerText: { ...TYPE.label, color: c.danger },

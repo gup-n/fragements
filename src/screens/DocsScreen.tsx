@@ -971,7 +971,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   name: { flex: 1, minWidth: 0, ...TYPE.compact, fontWeight: '600', color: c.text },
   /** 摘要降到 meta（12/18）、只留两行：它是「这篇讲什么」的提示，不是正文 */
   excerpt: { ...TYPE.meta, color: c.text2, marginTop: 2 },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 4 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: SPACE.xxs },
   extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 5, paddingVertical: 0 },
   extText: { ...TYPE.caption, color: c.text2, fontWeight: '600' },
   meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
@@ -980,13 +980,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   statusParsing: { color: c.accentText },
   statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
-  errorText: { marginTop: 4, ...TYPE.meta, color: c.danger },
-  warnText: { marginTop: 4, ...TYPE.meta, color: c.amberText },
+  errorText: { marginTop: SPACE.xxs, ...TYPE.meta, color: c.danger },
+  warnText: { marginTop: SPACE.xxs, ...TYPE.meta, color: c.amberText },
   /** 操作行的左边界要和标题对齐（cardMain 的 paddingLeft 是 pagePadding 系） */
-  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: 8 },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: SPACE.xs },
   pill: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5,
-    minHeight: 34, minWidth: 34, paddingHorizontal: 10, paddingVertical: 4,
+    minHeight: 34, minWidth: 34, paddingHorizontal: 10, paddingVertical: SPACE.xxs,
     backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
   },
   pillText: { ...TYPE.label, color: c.text },

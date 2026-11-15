@@ -448,7 +448,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    * hitSlop，再给 8+8 就是「一句话后面空出半行」。6+6 读起来是一张紧凑的清单。
    */
   row: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: 4, paddingHorizontal: SPACE.xs, paddingVertical: 6,
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs, paddingHorizontal: SPACE.xs, paddingVertical: 6,
     borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   /** 子项只有缩进与细分隔，不再单独套一张卡。 */

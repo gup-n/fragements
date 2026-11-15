@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.22.1 / versionCode 64 |
+| 版本 | v0.23.0 / versionCode 65 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.22.1 已由[CI 43726821471](https://github.com/gup-n/fragements/actions/runs/43726821471)构建并发布（26,223,238 字节，SHA-256 `72211d43…7305`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。上一版 v0.22.0（[CI 43723065111](https://github.com/gup-n/fragements/actions/runs/43723065111)，26,222,930 字节）可回退。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -38,8 +38,31 @@
 
 `test:ui` 21 → 28 项，新增「只许有一份实现」的全库 grep 断言 —— 它当场抓到了第六处 `outlineStyle`。
 
-**没做**：`util/organizePlan.ts` 里约 250 行标签时代的死函数，要删得先真机验「杀进程后续跑整理」，
-记在清单 P2-9。**没验**：日历展开后的滚动位置、跨年时「N 个月还没写」的文案，只有断言和编译校验。
+**当时没做**（v0.23 已做）：`util/organizePlan.ts` 的死函数，当时以为「删前得真机验杀进程续跑整理」。
+**没验**：日历展开后的滚动位置、跨年时「N 个月还没写」的文案，只有断言和编译校验。
+
+### v0.23.0：删掉整条死路径 + 小结入口落到缺口月
+
+清单 P2-9 那一条读完链路后发现比预估大：**organizePlan 只是冰山一角**。
+`saveOrganizeSession` / `updateOrganizeSession` / `findUnfinishedOrganizeSession` /
+`finishOrganizeSession` / `deleteOrganizeSession`、`saveRun` / `markRunApplied`
+在 v0.16 就没有调用方了 —— 整理改成「一次对话 + 草稿」后，续跑靠 `ask_sessions` 和游标，
+`plan_json` 写进去从来没被读过。整条链路连同 8 个类型一起删了约 765 行。
+
+- **两张表不删**：`organize_sessions` / `organize_runs` 的建表语句留在迁移里，旧设备的行没动。
+- 顺带发现 `listFragmentIds` / `countFragments` / `markMerged` / `markStatus` /
+  `setFragmentNature` / `countInbox` 也是死的。碎片合并功能早就不在界面上（待办合并还在），
+  所以 `merged_into` 现在只有「取消合并」会写。
+- **小结入口落到缺口月**：原来只数总数、面板停在本月（本月通常没碎片，等于点进去看空面板）。
+  现在传 `initialPeriod`；页头用 `util/digest.reviewSubtitle` 拼成
+  `2 件事没做完 · 3 个月小结没写`。**通知形式的主动提醒仍然没做**，理由见 ROADMAP §6。
+- **间距**：36 处裸数字（数值正好等于 `SPACE` 档位）换成 token，**数值一个没动**；
+  新断言要求「等于档位的裸数字必须换成 `SPACE.*`」，而 2/3/5/6/7/10/14 这类基线微调保持裸写。
+- **SPEC §6.2 / §9 重写**：那一章描述的是 v0.7 的六类契约，点名的五个文件全不存在，
+  照着读会把删掉的东西重建一遍。
+
+`test:ui` 28 → 31 项（「死路径不许复活」「间距档位必须走 token」），`test:todos` 22 → 23 项（页头文案）。
+**没验**：小结面板打开时的滚动位置与键盘、页头两分句在 320dp + 最大字号下的换行。
 
 ### v0.22.0：间距返工 + 回顾日历
 
@@ -178,7 +201,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 统一排版体系 | 本轮新增TYPE/SPACE并接入主页面、聊天/草稿与阅读内容；不是全工程每个字号都已替换，后续局部界面按实际需要继续接入 |
 | 应用内图标体系 | 本轮重新统一图标载体、主次和可见标签；桌面PNG/自适应品牌资源未重绘，不宣称全品牌图标设计完成 |
 | TalkBack 关闭回焦 | 只有开层标题聚焦（`useHeadingFocus`）；关闭覆盖层后回到触发点未实现，仍依赖系统 |
-| 旧业务清理（第一批之外） | `organizePlan` 的旧计划/标签函数、`documents/knowledge.ts` 的旧写入工具、Repo 的 `saveRun`/旧整理会话/`markMerged`/`setFragmentNature`/`countInbox`/`countFragments`/`listFragmentIds` 仍在；目前仅文件内自用或无引用，未动 |
+| 旧业务清理（第一批之外） | v0.23 已删：`organizePlan` 整文件、5 个整理会话方法、`saveRun`/`markRunApplied`、`listFragmentIds`/`countFragments`/`markMerged`/`markStatus`/`setFragmentNature`/`countInbox`、8 个旧类型。仍在的有：`documents/knowledge.ts` 的旧写入工具与 `findFragmentsByIds`/`listFragmentsByIds`——两者都有现行调用方，删前要改调用点 |
 | 通知栏快速记录、Android 分享接收、完整本地备份 | 已在v0.20.5有实现，本轮保留；测试backup纯判据，不代表真实手机恢复/系统Intent验收 |
 | 设备级墨水屏优化、OTA、原生偏好桥、桌面品牌图标 | 本轮未实现；原生冷启动/系统级刷新与媒体观感仍需专门设计和设备验证 |
 
@@ -202,27 +225,27 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 661 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 662 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 100 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1910 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2205 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 629 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 647 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1026 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 50 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
-| `src/types.ts` [打开](<src/types.ts>) | 532 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
+| `src/types.ts` [打开](<src/types.ts>) | 385 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 
 ### 4.2 Repo、文件与文字迁出
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/db/types.ts` [打开](<src/db/types.ts>) | 429 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 1888 | SQLite、16段历史迁移、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1067 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/types.ts` [打开](<src/db/types.ts>) | 388 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 1735 | SQLite、16段历史迁移、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 949 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
@@ -265,7 +288,6 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/askIntent.ts` [打开](<src/util/askIntent.ts>) | 148 | 月总结/待办/整理/问答路由、草稿输入分流与气泡显示判据 |
 | `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 352 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
 | `src/util/batch.ts` [打开](<src/util/batch.ts>) | 61 | 条数/字数装箱与批次数边界，至少保留一条材料 |
-| `src/util/organizePlan.ts` [打开](<src/util/organizePlan.ts>) | 465 | 旧计划形状和兼容读取工具，不是现行整理页面/执行链 |
 
 ### 4.5 文档、PDF与其它阅读器
 
@@ -342,7 +364,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/calendar.ts` [打开](<src/util/calendar.ts>) | 82 | 回顾日历的纯日期网格：固定42格、周一开头、翻月跨年、本地时区解析 |
 | `src/util/color.ts` [打开](<src/util/color.ts>) | 23 | 唯一一份 `withAlpha`：三位/六位十六进制、alpha 夹紧；PDF 高亮与毛玻璃共用 |
 | `src/util/platformStyle.ts` [打开](<src/util/platformStyle.ts>) | 14 | `WEB_INPUT_RESET`：web 上 TextInput 的 outline 复位，全库只此一处 `any` |
-| `src/util/digest.ts` [打开](<src/util/digest.ts>) | 106 | 月总结缺口与历史小结分组，组内不重排 |
+| `src/util/digest.ts` [打开](<src/util/digest.ts>) | 118 | 月总结缺口与历史小结分组，组内不重排 |
 | `src/util/todoTree.ts` [打开](<src/util/todoTree.ts>) | 125 | 父子树、唯一完成级联计划与展开 |
 | `src/util/qaScope.ts` [打开](<src/util/qaScope.ts>) | 70 | 记录/文档范围规范化、身份与比较 |
 | `src/util/qaNote.ts` [打开](<src/util/qaNote.ts>) | 20 | 历史纪要文本包装工具，不是恢复旧整理产物入口 |

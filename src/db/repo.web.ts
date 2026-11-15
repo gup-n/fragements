@@ -6,16 +6,11 @@ import type {
   DocumentChunk,
   DocumentMeta,
   Fragment,
-  FragmentNature,
   FragmentSource,
-  FragmentStatus,
   Note,
-  OrganizeScope,
-  OrganizeSession,
   QaScope,
   Todo,
 } from '../types';
-import { emptyPlan, normalizePlan } from '../util/organizePlan';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
@@ -35,9 +30,7 @@ interface WebDb {
   fragments: Fragment[];
   todos: Todo[];
   notes: Note[];
-  runs: { id: number; startedAt: number; fragmentIds: number[]; model: string; resultJson: string; applied: number }[];
   settings: Record<string, string>;
-  sessions: OrganizeSession[];
   askSessions: AskSession[];
   documents: Document[];
   /** v0.12：文档切片。web 侧不建 FTS，检索直接扫 text */
@@ -50,9 +43,7 @@ function empty(): WebDb {
     fragments: [],
     todos: [],
     notes: [],
-    runs: [],
     settings: {},
-    sessions: [],
     askSessions: [],
     documents: [],
     documentChunks: [],
@@ -78,10 +69,6 @@ function load(): WebDb {
   try {
     const raw = globalThis.localStorage?.getItem(KEY);
     cache = raw ? { ...empty(), ...JSON.parse(raw) } : empty();
-    cache!.sessions = (cache!.sessions ?? []).map((s) => ({
-      ...s,
-      plan: normalizePlan(s.plan ?? emptyPlan()),
-    }));
     // 旧版本没有 doneAt：已完成的用 createdAt 回填，与 native v7 迁移口径一致
     cache!.todos = (cache!.todos ?? []).map((t) => ({
       ...t,
@@ -327,20 +314,10 @@ export const repo: Repo = {
       .sort((a, b) => a.createdAt - b.createdAt);
   },
 
-  async listFragmentIds(scope: OrganizeScope) {
-    return (scope === 'all' ? active(load()) : load().fragments.filter((f) => f.status === 'inbox'))
-      .sort((a, b) => a.createdAt - b.createdAt || a.id - b.id)
-      .map((f) => f.id);
-  },
-
   async listFragmentsByIds(ids: number[]) {
     const set = new Set(ids);
     const byId = new Map(load().fragments.filter((f) => set.has(f.id)).map((f) => [f.id, f]));
     return ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
-  },
-
-  async countFragments(scope: OrganizeScope) {
-    return (await this.listFragmentIds(scope)).length;
   },
 
   async insertFragment(
@@ -466,37 +443,6 @@ export const repo: Repo = {
       if (f.status !== 'merged') f.status = 'tagged';
     }
     persist();
-  },
-
-  async markMerged(dropIds, keepId) {
-    const d = load();
-    d.fragments.forEach((f) => {
-      if (dropIds.includes(f.id)) {
-        f.mergedInto = keepId;
-        f.status = 'merged';
-      }
-    });
-    persist();
-  },
-
-  async markStatus(ids, status: FragmentStatus) {
-    const d = load();
-    d.fragments.forEach((f) => {
-      if (ids.includes(f.id) && f.status !== 'merged') f.status = status;
-    });
-    persist();
-  },
-
-  async setFragmentNature(ids, nature: FragmentNature) {
-    const d = load();
-    d.fragments.forEach((f) => {
-      if (ids.includes(f.id)) f.nature = nature;
-    });
-    persist();
-  },
-
-  async countInbox() {
-    return load().fragments.filter((f) => f.status === 'inbox').length;
   },
 
   async searchFragments(query, limit = 40) {
@@ -729,55 +675,6 @@ export const repo: Repo = {
     persist();
   },
 
-  async saveOrganizeSession(input) {
-    const d = load();
-    const id = nextId(d);
-    const now = Date.now();
-    d.sessions.push({
-      id,
-      scope: input.scope,
-      pendingIds: input.pendingIds,
-      cursor: input.cursor,
-      plan: input.plan,
-      contextSummary: input.contextSummary,
-      finished: input.finished,
-      createdAt: now,
-      updatedAt: now,
-    });
-    persist();
-    return id;
-  },
-
-  async updateOrganizeSession(id, patch) {
-    const d = load();
-    const s = d.sessions.find((x) => x.id === id);
-    if (!s) return;
-    if (patch.cursor !== undefined) s.cursor = patch.cursor;
-    if (patch.plan !== undefined) s.plan = patch.plan;
-    if (patch.contextSummary !== undefined) s.contextSummary = patch.contextSummary;
-    if (patch.finished !== undefined) s.finished = patch.finished;
-    s.updatedAt = Date.now();
-    persist();
-  },
-
-  async findUnfinishedOrganizeSession() {
-    return (
-      [...load().sessions]
-        .filter((s) => !s.finished)
-        .sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null
-    );
-  },
-
-  async finishOrganizeSession(id) {
-    return this.updateOrganizeSession(id, { finished: true });
-  },
-
-  async deleteOrganizeSession(id) {
-    const d = load();
-    d.sessions = d.sessions.filter((s) => s.id !== id);
-    persist();
-  },
-
   async listAskSessions(includeArchived = false) {
     return load()
       .askSessions.filter((s) => includeArchived || !s.archived)
@@ -854,21 +751,6 @@ export const repo: Repo = {
   async deleteAskSession(id) {
     const d = load();
     d.askSessions = d.askSessions.filter((s) => s.id !== id);
-    persist();
-  },
-
-  async saveRun(input) {
-    const d = load();
-    const id = nextId(d);
-    d.runs.push({ id, ...input, applied: 0 });
-    persist();
-    return id;
-  },
-
-  async markRunApplied(id) {
-    const d = load();
-    const r = d.runs.find((x) => x.id === id);
-    if (r) r.applied = 1;
     persist();
   },
 

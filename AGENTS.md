@@ -161,7 +161,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - 恢复先对账 `draft.commit.<draftId>` 的事务凭据；凭据/快照损坏或冲突必须停下来，不换新身份重插。恢复只恢复本地状态，不自动重发AI。
 - 写入使用 `commitDraft`：只传用户批准目标；文档正文/切片/FTS、父子待办、来源标记、会话关联及凭据同事务提交。重复key不复制，已写项后来被用户删除也不偷偷重建。
 - 已提交后的刷新/草稿快照保存失败和未提交失败分别提示；回调核对草稿/会话代次，不把旧请求写到新会话。
-- [organizePlan](<src/util/organizePlan.ts>)用于Web加载旧sessions的兼容读取，旧游标不能证明内容已保存。[旧文档工具](<src/documents/knowledge.ts>)不承担当前整理写入；是否进一步删除以引用审查为准，兼容旧数据不等于保留所有旧写入API。本期不扩大旧Repo接口删减。
+- **整理计划这条路径已在 v0.23 整条删除**（`util/organizePlan.ts`、5 个整理会话方法、`saveRun`/`markRunApplied`，以及 `OrganizePlan`/`OrganizeSession`/`BatchResult` 等类型）。续跑靠 `ask_sessions` 与游标，**不要**再读 `plan_json`，也不要照着 SPEC 旧章节重建确认页。[旧文档工具](<src/documents/knowledge.ts>)不承担当前整理写入；`markMerged`/`markStatus`/`setFragmentNature`/`countInbox`/`countFragments`/`listFragmentIds` 同样已删 —— 碎片合并不在界面上（待办合并仍走 `mergeTodos`），`merged_into` 只有「取消合并」会写。
 
 ## 9. 问答、流式与历史
 

@@ -40,7 +40,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   /** 72 的页头在 6 寸屏上等于一整行内容，压到 56 之后再靠留白分层（用户 2026-11-15 要求收紧） */
   wrap: {
     flexDirection: 'row', alignItems: 'center', minHeight: 56,
-    paddingHorizontal: metrics.pagePadding, paddingVertical: 4, backgroundColor: c.page,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xxs, backgroundColor: c.page,
   },
   bordered: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   back: { alignItems: 'flex-start', justifyContent: 'center', marginRight: SPACE.xxs },

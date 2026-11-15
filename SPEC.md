@@ -660,7 +660,7 @@ CREATE TABLE organize_sessions (
   scope           TEXT    NOT NULL,          -- inbox | all
   pending_ids     TEXT    NOT NULL DEFAULT '[]',  -- 开始那一刻的 id 快照
   cursor          INTEGER NOT NULL DEFAULT 0,     -- 只用于显示进度，不参与切分
-  plan_json       TEXT    NOT NULL DEFAULT '{}',  -- 累积的 OrganizePlan
+  plan_json       TEXT    NOT NULL DEFAULT '{}',  -- 旧整理计划。v0.23 起无读写，表留着不删
   context_summary TEXT    NOT NULL DEFAULT '',    -- 各批 batch_summary 拼起来
   finished        INTEGER NOT NULL DEFAULT 0,
   created_at      INTEGER NOT NULL,
@@ -791,52 +791,54 @@ v10 把文档做成工作区：`documents` 加 `content_revision` / `indexed_rev
 | 正文为空 + `insufficient_system_resource` | 报「对方资源不足，过一会儿再试」 |
 | 正文非空 + `length` | 整理必须**在解析前**拦下（JSON 一定是残的）；小结直接抛错不保存；问答标 `truncated` |
 
-### 6.2 整理：六类 + 一句摘要
+### 6.2 整理：一次请求，产出文档 + 待办
 
-契约全文见 **§0.3**，这里只列不可动摇的部分。
-
-单批输出（七个字段必须都出现，没内容用空数组）：
+判据与流程全文见 **§0.3**，这里只列这份 JSON 契约本身。
 
 ```json
 {
-  "tags":          [{ "id": 1, "labels": ["工作", "报销"], "project": "报销单" }],
-  "todos":         [{ "text": "提交报销单", "due": "2026-10-21", "id": 1 }],
-  "merge":         [{ "keep_id": 3, "drop_ids": [5], "reason": "同一件事" }],
-  "todo_done":     [{ "todo_id": 2, "reason": "碎片里说了已经交了" }],
-  "drop_todos":    [{ "todo_id": 6, "reason": "从纯感想里误抽的" }],
-  "merge_todos":   [{ "keep_id": 6, "drop_ids": [9, 14], "text": null, "reason": "同一件事" }],
-  "batch_summary": "这批主要是 NAS 换盘和报销，抽了 3 条待办，并了 2 条重复待办。"
+  "docs": [
+    {"title": "RAID5 降级处理", "summary": "先看存储池再拔盘", "body_md": "## 顺序\n…"}
+  ],
+  "todos": [
+    {"text": "把群晖那块盘换掉", "due": "2026-11-20",
+     "children": [{"text": "先跑 SMART 长检", "due": null}]}
+  ],
+  "note": "覆盖换盘全过程"
 }
 ```
 
-**上下文清单与上限**（`ai/prompt.ts`）：
-
-| 清单 | 上限 | 作用 |
+| 字段 | 约束 | 谁守 |
 |---|---|---|
-| 已有标签（名字 + 使用次数） | 80 | 复用已有写法，不造近义词 |
-| 未完成待办 | 60 | 三类待办操作的 id 来源 |
-| 已完成待办 | 30 | 防止把做完的事再抽一遍 |
-| 本轮已抽出的待办 | 40 | 前面批次抽的还没写库，不给就会重复抽 |
-| 前几批摘要 | 1,500 字 | `appendSummary` 保留尾部 |
+| `docs[]` | 最多 `MAX_DOCS = 4` 篇，每篇 200~800 字；主题不同才拆 | 提示词 + `normalizeDraft` 截断 |
+| `docs[].body_md` | 空正文的篇整篇丢掉 | `normalizeDraft` |
+| `docs[].title` | 超 24 字截断 | `normalizeDraft` |
+| `todos[]` | 空文字丢掉；`due` 必须是**真实存在**的日期（`2026-02-31` 会被 `Date` 滚到 3 月，要解析回来比对） | `normalizeDraft` |
+| `todos[].children` | 只有两层，子项不能再带子项 | `normalizeDraft` + 提示词 |
+| `note` | 一句话说明这批整理覆盖了什么；一篇都没抽出来时用它解释为什么 | 提示词 |
 
-**校验与合并只有一份实现**：`util/organizePlan.ts` 的 `mergeBatchResult`。它负责：
+**输入侧的上限**（`util/batch.ts` 的 `packFragments` + `ai/knowledge.ts`）：
 
-- id 必须属于本批（待办操作则必须存在于**原始**待办表）
-- 日期必须真实存在（`validDate`，不只校验形状）
-- 待办按 `normText` 跨批去重
-- `merge` 按 `keep_id` 合并 `drop_ids`
-- `todo_done` / `drop_todos` / `merge_todos` 互斥，真删与合并冲突时先到先得
-- 标签按 `normalizeTag` 收敛到已有写法
+| 项 | 值 | 理由 |
+|---|---|---|
+| 一批碎片 | 40 条 / 16,000 字 | 字数按「正文 + 各图文字」算 —— 只算正文会让一批带 40 张截图的碎片撑到三四万字 |
+| 单条超长 | 保留前 70% + 后 30% | 砍中间，卡片上如实写「中间省略了一部分」 |
+| 全库整理 | `MAX_BATCHES = 10`（≈400 条）/ 轮 | 剩下的条数写在卡片上，并给一个看得见的「继续」 |
+| 已有待办上下文 | 全部未完成 + 最近完成 12 条（含子项） | 不带就等于让模型把做完的事再抽一遍 |
 
-**五条铁律**：
+**五条铁律**（与 v0.16 之后的分层一致）：
 
-1. **AI 只出建议，不改数据。** 没走到 `commitPlan`，用户的数据一个字都不变。
-2. **去重永不删除。** `merge` 只写 `merged_into`，原文永久保留、界面上置灰但可查看。
-3. **ID 必须校验。** 模型返回的 id 不在允许集合内，整项丢弃并计入 `rejected`。
-4. **破坏性操作默认不勾。** 合并碎片 / 删待办 / 合并待办；`todo_done` 例外（默认勾）。
-   登记表只有一份：`util/resultItems.ts` 的 `GROUPS` + `isDestructiveKey`。
-5. **显示与写入共用同一个函数。** 分组用 `buildTagGroups`，写库时**重新算一遍**而不是接收界面传来的分组；
-   各写一份的下场是「界面说改 A，实际改 B」。
+1. **AI 只出建议，不改数据。** 草稿没被逐篇「加入文档库」之前，库里的东西一个字都不变。
+2. **原文永不物理删除。** 碎片去重只写 `merged_into`，原文永久保留、置灰可查看。
+3. **ID 必须校验。** 模型给的 id 不属于本批就丢弃；`due` 非法就置空 —— 都不静默放过。
+4. **破坏性与非常规动作默认不勾**（合并、归档、真删）；「标完成」例外。
+5. **显示与写入调同一份判据。** 草稿的展示与写库都走 `util/knowledgeDoc`，不各算一遍。
+
+> 2026-11 之前的那套「六类建议 + 分批 + `mergeBatchResult` + 确认页」已经整条下线：
+> `ai/prompt.ts`、`ai/deepseek.ts`、`db/commit.ts`、`util/resultItems.ts`、
+> `components/ResultSections.tsx` 都不存在了，`util/organizePlan.ts` 与 `Repo` 的
+> 整理会话/运行记录方法在 v0.23 删除。**不要照着旧章节把确认页重新造一遍。**
+
 
 ### 6.3 小结
 
@@ -1274,12 +1276,12 @@ Dialog 窗口也拿不到 Activity 根视图的键盘事件，躲不开输入法
 ```
 screens/      五个页面，各自持有本页状态
    ↓
-components/   覆盖层与可复用区块（详情页、结果确认、标签面板、小结面板、
+components/   覆盖层与可复用区块（详情页、草稿产出、小结面板、待办清单、
               滑动行 SwipeRow、引用面板 CitationSheet、思维链折叠 ReasoningFold、轻提示 Toast）
    ↓
 ai/  db/      能力层：AI 请求与数据读写
    ↓
-util/         纯函数：整理计划、分词、日期、结果元数据、纪要、装箱
+util/         纯函数：草稿收敛、装箱、分词、日期、图片标记、日历网格
 ```
 
 **几条被刻意固定下来的结构决定：**
@@ -1291,18 +1293,16 @@ util/         纯函数：整理计划、分词、日期、结果元数据、纪
 | **`db/types.ts` 的 `Repo` 接口是唯一契约**，上层只认接口 | 才能让 SQLite 与 localStorage 两个实现互换而不动业务代码 |
 | **存储层按平台扩展名分流**，业务代码统一 `import { repo } from '../db/repo'` | Metro 打包时按 `.native.ts` / `.web.ts` 解析；`repo.ts` 只给 tsc 用，运行时不命中 |
 | **AI 层不碰数据库**（唯一例外：`ai/config.ts` 读 `settings` 取配置） | 碎片、待办、标签都由调用方查好传进去，AI 层才能纯函数式地拼 prompt、做收敛 |
-| **业务判据只在 `util/organizePlan.ts`** | `ai/deepseek.ts` 只收敛形状，`db/commit.ts` 只按勾选写入。合并规则写两处必然漂移 |
-| **整理 = 会话 + 循环 + 计划**，三层分工 | `organizeRun` 管进度、`organizePlan` 管判据、`commit` 管落库。谁都能单独测 |
+| **业务判据只在 `util/knowledgeDoc.ts`** | `ai/knowledge.ts` 只管发请求和拼材料，`documents/knowledge.ts` 只管写库。收敛规则写两处必然漂移 |
+| **整理 = 一次对话 + 可审阅草稿** | 没有多轮计划，也没有「确认页」。产出是文档和待办，逐篇写、逐条勾，中途放弃不留任何痕迹 |
 
-**一个新增 AI 输出类型的完整改动面**（六处，前三处由 tsc 兜底）：
+**给 AI 输出加一个字段的完整改动面**（三处，前两处由 tsc 兜底）：
 
-`types.ts` 的 `BatchResult` 加字段 → `ai/prompt.ts` 补 JSON 模板与说明 →
-`util/organizePlan.ts` 的 `mergeBatchResult` 补校验与合并 →
-`util/resultItems.ts` 补 `K.*` 与 `GROUPS` 分组 → `db/commit.ts` 补写入 →
-`components/ResultSections.tsx` 补渲染。
+`util/knowledgeDoc.ts` 的 `normalizeDraft` 加校验与默认值 →
+`ai/knowledge.ts` 的 JSON 模板与说明补一句 → `components/KnowledgeDraft.tsx` 渲染它。
 
-**新增一类「会让内容消失」的操作**，必须同时在 `resultItems.ts` 的 `GROUPS` 里标 `destructive`
-并在 `commit.ts` 里用 `accepted(K.*)` 守住。**只在界面上把默认值设成 false 不算数。**
+**新增一类「会让内容消失」的操作**（真删、合并、归档），必须做成看得见的按钮、
+默认不勾，并且在 `Repo` 层留一条恢复路径。**只在界面上把默认值设成 false 不算数。**
 
 ## 10. 开发进度
 

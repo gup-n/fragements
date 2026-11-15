@@ -5,13 +5,8 @@ import type {
   DocumentContentInput,
   DocumentMeta,
   Fragment,
-  FragmentNature,
   FragmentSource,
-  FragmentStatus,
   Note,
-  OrganizePlan,
-  OrganizeScope,
-  OrganizeSession,
   QaScope,
   QaTurn,
   Todo,
@@ -44,14 +39,6 @@ export interface SafetyCopy {
   name: string;
   bytes: number;
   at: number;
-}
-
-/** 整理会话的增量更新。只传要改的字段 */
-export interface OrganizeSessionPatch {
-  cursor?: number;
-  plan?: OrganizePlan;
-  contextSummary?: string;
-  finished?: boolean;
 }
 
 /**
@@ -131,14 +118,9 @@ export interface Repo {
    */
   listFragmentsBetween(from: number, to: number): Promise<Fragment[]>;
   /**
-   * 整理范围的碎片 id 快照，按时间升序。
-   * 开始整理时取一次，之后每批都从这份快照切 —— 不每轮重新查，避免边跑边记导致漂移。
+   * 按给定 id 取碎片。返回顺序与传入的 ids 一致（SQL 的 IN 不保证顺序）
    */
-  listFragmentIds(scope: OrganizeScope): Promise<number[]>;
-  /** 按给定 id 取碎片。返回顺序与传入的 ids 一致（SQL 的 IN 不保证顺序） */
   listFragmentsByIds(ids: number[]): Promise<Fragment[]>;
-  /** 某个整理范围有多少条 */
-  countFragments(scope: OrganizeScope): Promise<number>;
   /**
    * 新记一条。`images` 有值时同时带上配图 —— 图和正文一起落库，
    * 免得「记录进去了、图没进」留下一条指向空文件的碎片。
@@ -163,10 +145,6 @@ export interface Repo {
   /** 删除。返回被删掉的那几条配图文件名，调用方负责删文件（空数组 = 没有图） */
   deleteFragment(id: number): Promise<string[]>;
   applyTags(id: number, labels: string[], project: string | null): Promise<void>;
-  markMerged(dropIds: number[], keepId: number): Promise<void>;
-  markStatus(ids: number[], status: FragmentStatus): Promise<void>;
-  setFragmentNature(ids: number[], nature: FragmentNature): Promise<void>;
-  countInbox(): Promise<number>;
 
   /**
    * 本地全文检索。native 走 FTS5（中文 bigram），web 走 includes。
@@ -248,22 +226,6 @@ export interface Repo {
   findNote(type: Note['type'], period: string): Promise<Note | null>;
   deleteNote(id: number): Promise<void>;
 
-  /** 新建一次整理会话，返回 id */
-  saveOrganizeSession(input: {
-    scope: OrganizeScope;
-    pendingIds: number[];
-    cursor: number;
-    plan: OrganizePlan;
-    contextSummary: string;
-    finished: boolean;
-  }): Promise<number>;
-  /** 每批结束后更新游标/计划/摘要。只传要改的字段 */
-  updateOrganizeSession(id: number, patch: OrganizeSessionPatch): Promise<void>;
-  /** 最近一次未完成的会话；没有就返回 null */
-  findUnfinishedOrganizeSession(): Promise<OrganizeSession | null>;
-  finishOrganizeSession(id: number): Promise<void>;
-  deleteOrganizeSession(id: number): Promise<void>;
-
   /** 历史会话。默认只返回未归档的，按 updatedAt 倒序 */
   listAskSessions(includeArchived?: boolean): Promise<AskSession[]>;
   findAskSession(id: number): Promise<AskSession | null>;
@@ -296,9 +258,6 @@ export interface Repo {
     sourceIds?: number[],
   ): Promise<void>;
   deleteAskSession(id: number): Promise<void>;
-
-  saveRun(input: { startedAt: number; fragmentIds: number[]; model: string; resultJson: string }): Promise<number>;
-  markRunApplied(id: number): Promise<void>;
 
   /* ---- 文档（v0.10.0） ---- */
   /** 列表，按更新时间倒序。**不含正文** —— 文档的 Markdown 可能几十万字 */

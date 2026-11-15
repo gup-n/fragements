@@ -2142,14 +2142,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   /** DeepSeek 那种胶囊：浅灰底、无边框；选中换成淡蓝底 + 蓝字 + 实心图标 */
   toggle: {
-    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4,
+    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
     borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10,
   },
   toggleOn: { backgroundColor: c.accentBg },
   toggleText: { ...TYPE.meta, color: c.text2, flexShrink: 1 },
   toggleTextOn: { color: c.accentText, fontWeight: '600' },
   toggleOff: {
-    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4,
+    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
     borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10, opacity: 0.55,
   },
   busyHint: { ...TYPE.meta, color: c.text2 },

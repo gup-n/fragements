@@ -22,7 +22,7 @@ import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
-import { NOTE_GROUP_LABEL, groupNotes, missingDigests } from '../util/digest';
+import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle } from '../util/digest';
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
 import { shortPreview } from '../util/text';
@@ -86,7 +86,12 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
   const [loadError, setLoadError] = useState('');
   /** 阅读器停在第几篇 */
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
-  const [sheetOpen, setSheetOpen] = useState(false);
+  /**
+   * 月度总结面板要预选的月份。`undefined` = 没开；
+   * 空串 = 开了但没有缺口（面板自己退到最近一个月）。
+   */
+  const [sheetPeriod, setSheetPeriod] = useState<string | undefined>(undefined);
+  const sheetOpen = sheetPeriod !== undefined;
   const [editor, setEditor] = useState<EditorTarget | null>(null);
 
   const reload = useCallback(async () => {
@@ -125,14 +130,15 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
     editor?.parentId != null ? todos.find((t) => t.id === editor.parentId) : null;
 
   /*
-   * 有碎片、但那个月还没写小结的月份数。
-   *
-   * 判据直接用 `util/digest.missingDigests`（月小结面板里的「待补」也是它），
+   * 还没写小结的月份。判据直接用 `util/digest.missingDigests`（月小结面板里的「待补」也是它），
    * 不在这里重写一遍「哪些月算缺」—— 重写就会和面板里的数字对不上。
    * 本月的碎片不算缺口：月份还没过完，写出来是半截。
+   *
+   * 取 3 条而不是 1 条：入口要能把人直接送到**最近那个缺口**，
+   * 原来只数了总数，点进去却停在本月（本月通常一条碎片都没有）。
    */
-  const missingMonths = useMemo(
-    () => missingDigests(fragments, notes, 1).total,
+  const backlog = useMemo(
+    () => missingDigests(fragments, notes, 3),
     [fragments, notes],
   );
 
@@ -140,7 +146,13 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
     <View style={styles.root}><View style={styles.normalContent} importantForAccessibility={viewerIndex !== null || sheetOpen || editor !== null ? "no-hide-descendants" : "auto"}>
       <ScreenHeader
         title="回顾"
-        subtitle={loading ? '正在读取…' : loadError ? '暂时无法读取' : pending.length > 0 ? `${pending.length} 件事没做完` : '手头的事都做完了'}
+        subtitle={
+          loading
+            ? '正在读取…'
+            : loadError
+              ? '暂时无法读取'
+              : reviewSubtitle(pending.length, backlog.total)
+        }
         onBack={embedded ? undefined : onClose}
       />
 
@@ -188,19 +200,24 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
         <ScrollView contentContainerStyle={styles.content}>
           <Pressable
             style={({ pressed }) => [[styles.genBtn, pressed && { backgroundColor: c.accentBg }], styles.touchTarget]}
-            onPress={() => setSheetOpen(true)}
+            onPress={() => setSheetPeriod(backlog.items[0]?.period ?? '')}
             accessibilityRole="button"
+            accessibilityLabel={
+              backlog.total > 0
+                ? `写月总结，最近没写的是${periodLabel(backlog.items[0]?.period ?? null)}`
+                : '写月总结'
+            }
           >
             <Ionicons name="sparkles-outline" size={20} color={c.accentText} />
             <View style={styles.genCopy}>
               <Text style={styles.genText}>写月总结</Text>
               {/*
-                「一个月一篇」是恒定的事实，说一次就够了；这里换成会变的状态：
-                有几个月的碎片还没被总结过。「记了不少但没总结」这件事，
-                不主动说，用户不会自己发现 —— 小结面板里的待补清单要点进去才看得到。
+                「一个月一篇」是恒定的事实，说一次就够了；这里换成会变的状态。
+                点进去**直接停在最近那个缺口月**（v0.23）—— 原来固定停在本月，
+                而本月通常一条碎片都没有，于是「3 个月还没写」点进去是一张空面板。
               */}
               <Text style={styles.genHint}>
-                {missingMonths > 0 ? `${missingMonths} 个月还没写` : '一个月一篇'}
+                {backlog.total > 0 ? `${backlog.total} 个月还没写` : '一个月一篇'}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color={c.accentText} />
@@ -262,7 +279,8 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
 
       {sheetOpen ? (
         <SummarySheet
-          onClose={() => setSheetOpen(false)}
+          initialPeriod={sheetPeriod || undefined}
+          onClose={() => setSheetPeriod(undefined)}
           onSaved={async () => {
             await reload();
             await onChanged?.();
@@ -614,7 +632,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dayHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.xxs },
   dayTitle: { ...TYPE.label, color: c.text },
   dayCount: { ...TYPE.meta, flex: 1, minWidth: 0, color: c.text3 },
-  dayRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 4, paddingVertical: 2 },
+  dayRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs, paddingVertical: 2 },
   /** 19 的图标 + 9 的 hitSlop = 37 的触控区，配合整行 44 的可点高度够用 */
   dayCheck: { width: 26, height: 26, marginTop: -3, alignItems: 'center', justifyContent: 'center' },
   dayMain: { flex: 1, minWidth: 0, justifyContent: 'center' },

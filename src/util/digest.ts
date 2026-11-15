@@ -104,3 +104,15 @@ export function missingDigests(
   const all = Array.from(buckets.values()).sort((a, b) => b.at - a.at);
   return { items: all.slice(0, limit), total: all.length };
 }
+
+/**
+ * 回顾页页头那一行（v0.23）。
+ *
+ * 「手头的事」和「攒下来的事」是两件事，但都决定今天要不要动手 ——
+ * 所以合成一行说，而不是塞两个角标。没做完的事为 0 时也不能只剩半句
+ * 「· 3 个月小结没写」，那读起来像缺主语的告示。
+ */
+export function reviewSubtitle(pendingTodos: number, missingMonths: number): string {
+  const todo = pendingTodos > 0 ? `${pendingTodos} 件事没做完` : '手头的事都做完了';
+  return missingMonths > 0 ? `${todo} · ${missingMonths} 个月小结没写` : todo;
+}
