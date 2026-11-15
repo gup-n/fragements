@@ -29,7 +29,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, FragmentImage, Note } from '../types';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import { fragmentReaderHits, type FragmentReaderHit } from '../documents/readers/fragmentSearch';
 import { ScreenHeader } from './ScreenHeader';
@@ -518,6 +518,7 @@ export function FragmentDetail({
       {hitTotal > 0 ? (
         <View style={styles.hitBar}>
           <Pressable style={styles.hitCurrentButton} onPress={() => goHit(0)} accessibilityRole="button" accessibilityLabel="定位当前命中">
+            <Text style={styles.hitQuery} numberOfLines={2}>查找「{highlightQuery}」</Text>
             <Text style={styles.hitBarText}>第 {shownHit + 1} / {hitTotal > 99 ? '99+' : hitTotal} 处</Text>
             <Text style={styles.hitLocation}>点按定位 · {hitBlocks[shownHit]?.section.startsWith('image:') ? '图中文字' : hitBlocks[shownHit]?.section === 'project' ? '事项' : '正文'}</Text>
           </Pressable>
@@ -591,7 +592,10 @@ export function FragmentDetail({
       {items.length > 1 ? (
         <View style={styles.footer}>
           <IconButton name="chevron-back" onPress={() => jump(-1)} disabled={current === 0} accessibilityLabel="上一条碎片" />
-          <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
+          <View style={styles.footerInfo}>
+            <Text style={styles.pageCount}>{current + 1} / {items.length}</Text>
+            <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
+          </View>
           <IconButton name="chevron-forward" onPress={() => jump(1)} disabled={atEnd} accessibilityLabel="下一条碎片" />
         </View>
       ) : null}
@@ -826,8 +830,8 @@ function Page({
                     style={[
                       styles.imageBig,
                       {
-                        width: Math.max(0, width - (metrics.pagePadding + 8) * 2),
-                        height: Math.max(0, width - (metrics.pagePadding + 8) * 2) * (aspects[img.id] ?? 0.75),
+                        width: Math.max(0, width - metrics.pagePadding * 2),
+                        height: Math.max(0, width - metrics.pagePadding * 2) * (aspects[img.id] ?? 0.75),
                       },
                     ]}
                     resizeMode="contain" fadeDuration={0}
@@ -866,30 +870,6 @@ function Page({
         </View>
       ) : null}
 
-      {/*
-        加图入口在阅读态也留着（用户 2026-11-12：「全屏时无法插图」）：
-        翻旧记录时想起还有一张图要补，不该逼人先进编辑态。
-      */}
-      <Pressable
-        onPress={onAddImage}
-        style={({ pressed }) => [styles.addImageBtn, pressed && { opacity: 0.6 }]}
-        accessibilityRole="button"
-        accessibilityLabel="给这条碎片加图片"
-        disabled={addingImage}
-        accessibilityState={{ disabled: addingImage, busy: addingImage }}
-      >
-        {addingImage ? (
-          <ActivityIndicator size="small" color={c.text3} />
-        ) : (
-          <>
-            <Ionicons name="image-outline" size={15} color={c.text2} />
-            <Text style={styles.addImageText}>
-              {fragment.images.length ? '再加一张图' : '加一张图'}
-            </Text>
-          </>
-        )}
-      </Pressable>
-
       {texts.length ? fragment.images.map((img, i) => {
         const text = (img.text ?? '').trim();
         if (!text) return null;
@@ -918,6 +898,27 @@ function Page({
           if (i >= 0) onOpenImage(i);
         }}
       />
+
+      {/* 阅读态仍可补图；工具放在正文之后，不打断正文与图文字。 */}
+      <Pressable
+        onPress={onAddImage}
+        style={({ pressed }) => [styles.addImageBtn, pressed && { opacity: 0.6 }]}
+        accessibilityRole="button"
+        accessibilityLabel="给这条碎片加图片"
+        disabled={addingImage}
+        accessibilityState={{ disabled: addingImage, busy: addingImage }}
+      >
+        {addingImage ? (
+          <ActivityIndicator size="small" color={c.text3} />
+        ) : (
+          <>
+            <Ionicons name="image-outline" size={15} color={c.text2} />
+            <Text style={styles.addImageText}>
+              {fragment.images.length ? '再加一张图' : '加一张图'}
+            </Text>
+          </>
+        )}
+      </Pressable>
 
       {hasMeta ? (
         <View style={styles.meta} onLayout={(e) => { if (highlight && fragment.project) registerBlock(fragment.id, 'project:0', e.nativeEvent.layout.y); }}>
@@ -965,78 +966,81 @@ function Page({
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   main: { flex: 1 },
-  editBtn: { minWidth: 64, minHeight: metrics.controlHeight, paddingHorizontal: 12, paddingVertical: 8, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  hitBar: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: metrics.pagePadding, backgroundColor: c.hairSoft, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
-  hitCurrentButton: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 4 },
-  hitBarText: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  hitLocation: { fontSize: 12, lineHeight: 18, color: c.text2 },
-  hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  editBtn: { minWidth: 64, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  hitBar: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, backgroundColor: c.page, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  hitCurrentButton: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, justifyContent: 'center', gap: SPACE.xxs },
+  hitQuery: { ...TYPE.meta, color: c.text2 },
+  hitBarText: { ...TYPE.body, color: c.text, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  hitLocation: { ...TYPE.meta, color: c.text2 },
+  hitBarBtns: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   plainHit: { backgroundColor: c.amberBg },
   plainCurrentHit: { textDecorationLine: 'underline', fontWeight: '700' },
-  content: { paddingHorizontal: metrics.pagePadding + 8, paddingTop: 24, paddingBottom: 32 },
-  imageList: { gap: 12, marginBottom: 16 },
-  imageBox: { gap: 8 },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xl, paddingBottom: SPACE.xxl },
+  imageList: { gap: SPACE.md, marginBottom: SPACE.lg },
+  imageBox: { gap: SPACE.xs },
   imageBig: { borderRadius: metrics.cardRadius, backgroundColor: c.hairSoft, alignSelf: 'center' },
-  imageIndex: { position: 'absolute', top: 8, left: 8, minWidth: 24, minHeight: 24, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
-  imageIndexText: { fontSize: 12, lineHeight: 18, color: c.mediaForeground, fontWeight: '600' },
-  imageState: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  imageIndex: { position: 'absolute', top: SPACE.xs, left: SPACE.xs, minWidth: 24, minHeight: 24, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
+  imageIndexText: { ...TYPE.label, color: c.mediaForeground },
+  imageState: { ...TYPE.body, color: c.text2 },
   imageStateErr: { color: c.danger },
-  imageReadButton: { minHeight: metrics.controlHeight, paddingVertical: 8, justifyContent: 'center' },
-  addImageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, minHeight: metrics.controlHeight, paddingVertical: 8, marginBottom: 16, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderStyle: 'dashed', borderColor: c.text3 },
-  addImageText: { fontSize: 13, lineHeight: 20, color: c.text2 },
-  imageTextBox: { marginBottom: 16, padding: 12, borderRadius: metrics.cardRadius, backgroundColor: c.card, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  imageTextLabel: { fontSize: 12, lineHeight: 19, color: c.text2, fontWeight: '600', marginBottom: 8 },
-  imageTextBody: { fontSize: 16, lineHeight: 27, color: c.text },
-  badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 16 },
-  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.tealBg, borderRadius: metrics.buttonRadius, paddingHorizontal: 8, paddingVertical: 4, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  doneText: { fontSize: 12, lineHeight: 18, color: c.tealText },
-  orgBadge: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 8, paddingVertical: 4, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  orgText: { fontSize: 12, lineHeight: 18, color: c.text2 },
-  merged: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  body: { fontSize: 17, lineHeight: 30, color: c.text },
-  meta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 24, paddingTop: 16, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
-  project: { fontSize: 13, lineHeight: 21, color: c.text2 },
-  source: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  sourceText: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  count: { fontSize: 12, lineHeight: 19, color: c.text2, marginTop: 16, fontVariant: ['tabular-nums'] },
-  noteCard: { marginTop: 24, backgroundColor: c.hairSoft, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, padding: 16 },
-  noteHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 12 },
-  noteKind: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '600' },
-  notePeriod: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2 },
-  noteBody: { fontSize: 15, lineHeight: 25, color: c.text },
+  imageReadButton: { minHeight: metrics.controlHeight, paddingVertical: SPACE.xs, justifyContent: 'center' },
+  addImageBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, marginTop: SPACE.xl, marginBottom: SPACE.xs, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft },
+  addImageText: { ...TYPE.label, color: c.text2 },
+  imageTextBox: { marginBottom: SPACE.xl, paddingLeft: SPACE.md, borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair },
+  imageTextLabel: { ...TYPE.label, color: c.text2, marginBottom: SPACE.sm },
+  imageTextBody: { ...TYPE.reading, color: c.text },
+  badges: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginBottom: SPACE.lg },
+  doneBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.tealBg, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  doneText: { ...TYPE.label, color: c.tealText },
+  orgBadge: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  orgText: { ...TYPE.label, color: c.text2 },
+  merged: { ...TYPE.meta, color: c.text2 },
+  body: { ...TYPE.reading, color: c.text },
+  meta: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xl, paddingTop: SPACE.md, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
+  project: { ...TYPE.body, color: c.text2 },
+  source: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
+  sourceText: { ...TYPE.meta, color: c.text2 },
+  count: { ...TYPE.meta, color: c.text2, marginTop: SPACE.md, fontVariant: ['tabular-nums'] },
+  noteCard: { marginTop: SPACE.xxl, paddingTop: SPACE.lg, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
+  noteHead: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginBottom: SPACE.md },
+  noteKind: { ...TYPE.title, color: c.text },
+  notePeriod: { ...TYPE.meta, color: c.text2 },
+  noteBody: { ...TYPE.body, color: c.text },
   saveBtn: { backgroundColor: c.accent, borderColor: c.accent },
   saveBtnOff: { backgroundColor: c.hairSoft, borderColor: c.hair },
-  saveText: { fontSize: 14, lineHeight: 22, color: c.onAccent, fontWeight: '600' },
+  saveText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   saveTextOff: { color: c.text3 },
-  editImages: { flexGrow: 0, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
-  editImagesContent: { gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 8, alignItems: 'center' },
-  editImageItem: { width: 88 },
-  editImageThumb: { width: 88, height: 72, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
-  editImageRemove: { minHeight: metrics.controlHeight, width: 88, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, alignItems: 'center', justifyContent: 'center', backgroundColor: c.card },
+  editImages: { flexGrow: 0, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  editImagesContent: { gap: SPACE.sm, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm, alignItems: 'center' },
+  editImageItem: { width: 96 },
+  editImageThumb: { width: 96, height: 72, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
+  editImageRemove: { minHeight: metrics.controlHeight, width: 96, paddingHorizontal: SPACE.xxs, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center', backgroundColor: c.card },
   editImageRemoveArmed: { backgroundColor: c.danger, borderColor: c.danger },
-  editImageRemoveText: { fontSize: 12, lineHeight: 19, color: c.text2, fontWeight: '600' },
+  editImageRemoveText: { ...TYPE.label, color: c.text2 },
   editImageRemoveArmedText: { color: c.onDanger },
-  editImageAdd: { width: 80, minHeight: 120, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, alignItems: 'center', justifyContent: 'center', gap: 4, backgroundColor: c.hairSoft },
-  editImageAddText: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  editInput: { flex: 1, fontSize: 17, lineHeight: 30, color: c.text, paddingHorizontal: metrics.pagePadding + 8, paddingVertical: 16 },
-  editFoot: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
-  deleteButton: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: 8 },
-  deleteText: { fontSize: 13, lineHeight: 20, color: c.danger },
-  editHint: { flexShrink: 1, fontSize: 12, lineHeight: 19, color: c.text2 },
-  // 菜单在布局流里：键盘升起后仍跟着输入区，不再绝对定位在键盘下面。
-  imageSheet: { marginHorizontal: metrics.pagePadding, marginVertical: 8, backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, paddingVertical: 4 },
-  imageSheetRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 8 },
-  imageSheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: 16, paddingVertical: 8 },
-  imageSheetText: { fontSize: 14, lineHeight: 22, color: c.text },
-  toast: { paddingHorizontal: metrics.pagePadding, paddingBottom: 8, alignItems: 'center' },
-  toastText: { fontSize: 13, lineHeight: 20, color: c.text2, backgroundColor: c.card, borderRadius: metrics.buttonRadius, paddingHorizontal: 12, paddingVertical: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair },
+  editImageAdd: { width: 88, minHeight: 120, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center', gap: SPACE.xxs, backgroundColor: c.hairSoft },
+  editImageAddText: { ...TYPE.label, color: c.text2 },
+  editInput: { flex: 1, ...TYPE.reading, color: c.text, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.md },
+  editFoot: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
+  deleteButton: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.xs },
+  deleteText: { ...TYPE.body, color: c.danger, fontWeight: '600' },
+  editHint: { flexShrink: 1, ...TYPE.meta, color: c.text2 },
+  // 菜单留在布局流里，沿用当前键盘与返回行为。
+  imageSheet: { marginHorizontal: metrics.pagePadding, marginVertical: SPACE.xs, backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, paddingVertical: SPACE.xxs },
+  imageSheetRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
+  imageSheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm },
+  imageSheetText: { ...TYPE.body, color: c.text },
+  toast: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xs, alignItems: 'center' },
+  toastText: { ...TYPE.body, color: c.text2, backgroundColor: c.card, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
   viewer: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.mediaBackground },
   viewerPage: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   viewerList: { flex: 1 },
   viewerImage: { width: '100%', height: '100%' },
-  viewerBar: { position: 'absolute', top: 8, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  viewerCount: { fontSize: 13, lineHeight: 20, color: c.mediaForeground, backgroundColor: c.mediaScrim, paddingHorizontal: 8, paddingVertical: 4, fontVariant: ['tabular-nums'] },
+  viewerBar: { position: 'absolute', top: SPACE.xs, left: SPACE.md, right: SPACE.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  viewerCount: { ...TYPE.label, color: c.mediaForeground, backgroundColor: c.mediaScrim, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, fontVariant: ['tabular-nums'] },
   viewerClose: { width: metrics.controlHeight, height: metrics.controlHeight, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.mediaForeground, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
-  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: metrics.pagePadding, paddingVertical: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair },
-  hint: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2, textAlign: 'center' },
+  footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
+  footerInfo: { flex: 1, minWidth: 0, alignItems: 'center', gap: SPACE.xxs },
+  pageCount: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
+  hint: { ...TYPE.meta, color: c.text2, textAlign: 'center' },
 });

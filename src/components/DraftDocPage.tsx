@@ -17,7 +17,7 @@
 import React, { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ScreenHeader } from './ScreenHeader';
 import { useKeyboardHeight } from '../util/keyboard';
@@ -62,18 +62,18 @@ export function DraftDocPage({
   const keyboardHeight = useKeyboardHeight();
 
   return (
-    <View style={styles.page}>
+    <View style={styles.page} accessibilityViewIsModal>
       <ScreenHeader
-        title={doc.title.trim() || '未命名文档'}
-        subtitle={`${charsOf(doc.bodyMd)} 字${total > 1 ? ` · ${index + 1} / ${total}` : ''}`}
+        title="文档草稿"
+        subtitle={`${charsOf(doc.bodyMd)} 字${total > 1 ? ` · 第 ${index + 1} / ${total} 篇` : ''}${saved ? ' · 已写入快照' : ' · 待审阅'}`}
         onBack={onClose}
         right={
           <Pressable
             onPress={() => setMode(mode === 'read' ? 'edit' : 'read')}
             disabled={saving || saved}
-            hitSlop={8}
-            style={styles.modeBtn}
+            style={[styles.modeBtn, (saving || saved) && styles.off]}
             accessibilityRole="button"
+            accessibilityState={{ disabled: saving || saved }}
             accessibilityLabel={mode === 'read' ? '编辑这篇' : '预览这篇'}
           >
             <Ionicons
@@ -92,7 +92,13 @@ export function DraftDocPage({
           contentContainerStyle={styles.readBody}
           keyboardShouldPersistTaps="handled"
         >
-          {doc.summary.trim() ? <Text style={styles.summary}>{doc.summary}</Text> : null}
+          <Text style={styles.documentTitle} accessibilityRole="header">{doc.title.trim() || '未命名文档'}</Text>
+          {doc.summary.trim() ? (
+            <View style={styles.summaryWrap}>
+              <Text style={styles.summaryLabel}>摘要</Text>
+              <Text style={styles.summary}>{doc.summary}</Text>
+            </View>
+          ) : null}
           <NoteBody text={doc.bodyMd} variant="reading" selectable literalCitations />
         </ScrollView>
       ) : (
@@ -116,6 +122,7 @@ export function DraftDocPage({
             placeholderTextColor={c.text3}
             selectionColor={c.selection}
             style={styles.bodyInput}
+            accessibilityLabel="文档草稿正文（Markdown）"
             multiline
             textAlignVertical="top"
             editable={!saving && !saved}
@@ -128,14 +135,14 @@ export function DraftDocPage({
 
       <View style={styles.footer}>
         {!saved ? (
-          <Pressable style={styles.choice} onPress={() => onChange({ keep: !doc.keep })} disabled={saving} accessibilityRole="checkbox" accessibilityState={{ checked: doc.keep, disabled: saving }} accessibilityLabel="将这篇列入待写入内容">
-            <Ionicons name={doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+          <Pressable style={[styles.choice, doc.keep && styles.choiceOn]} onPress={() => onChange({ keep: !doc.keep })} disabled={saving} accessibilityRole="checkbox" accessibilityState={{ checked: doc.keep, disabled: saving }} accessibilityLabel="将这篇列入待写入内容">
+            <Ionicons name={doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={doc.keep ? c.accent : c.text2} accessible={false} />
             <Text style={styles.ghostText}>{doc.keep ? '已选择这篇' : '未选择这篇 · 点此确认'}</Text>
           </Pressable>
         ) : <Text style={styles.editHint}>此处显示已写入的草稿快照，不会通过改稿覆盖已保存文档。</Text>}
         {problem && !saved ? <Text style={styles.problem}>{problem}</Text> : null}
         <View style={styles.footerRow}>
-          <Pressable style={styles.ghost} onPress={onClose} disabled={saving}>
+          <Pressable style={[styles.ghost, saving && styles.off]} onPress={onClose} disabled={saving} accessibilityRole="button" accessibilityState={{ disabled: saving }}>
             <Text style={styles.ghostText}>返回对话</Text>
           </Pressable>
           {saved ? (
@@ -148,6 +155,9 @@ export function DraftDocPage({
               style={[styles.solid, (!canWrite || !!problem || saving) && styles.off]}
               onPress={onApprove}
               disabled={!canWrite || !!problem || saving}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !canWrite || !!problem || saving, busy: saving }}
+              accessibilityLabel="加入文档库"
             >
               <Text style={styles.solidText}>{saving ? '写入中…' : '加入文档库'}</Text>
             </Pressable>
@@ -163,97 +173,64 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) =>
     page: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
     flex: { flex: 1 },
     modeBtn: {
-      minHeight: metrics.controlHeight,
-      justifyContent: 'center',
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 4,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderRadius: metrics.buttonRadius,
-      backgroundColor: c.accentBg,
+      minHeight: metrics.controlHeight, minWidth: metrics.controlHeight,
+      justifyContent: 'center', flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+      paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.accentBg,
+      borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
     },
-    modeText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
-    readBody: { paddingHorizontal: 16, paddingTop: 16, paddingBottom: 40 },
-    summary: {
-      fontSize: 12.5,
-      lineHeight: 19,
-      color: c.text3,
-      marginBottom: 14,
-      paddingLeft: 10,
-      borderLeftWidth: 2,
-      borderLeftColor: c.accentHair,
-    },
-    editWrap: { flex: 1, paddingHorizontal: 16, paddingTop: 14, gap: 6 },
-    fieldLabel: { fontSize: 11, color: c.text3, marginTop: 4 },
+    modeText: { ...TYPE.label, color: c.accentText },
+    readBody: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xl, paddingBottom: SPACE.xxl },
+    documentTitle: { ...TYPE.heading, color: c.text, marginBottom: SPACE.md },
+    summaryWrap: { paddingBottom: SPACE.lg, marginBottom: SPACE.lg, gap: SPACE.xs, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+    summaryLabel: { ...TYPE.label, color: c.text2 },
+    summary: { ...TYPE.body, color: c.text2 },
+    editWrap: { flex: 1, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, gap: SPACE.xs },
+    fieldLabel: { ...TYPE.label, color: c.text2, marginTop: SPACE.xxs },
     titleInput: {
-      fontSize: 15,
-      color: c.text,
-      fontWeight: '600',
-      paddingVertical: 9,
-      paddingHorizontal: 11,
-      borderRadius: metrics.buttonRadius,
-      backgroundColor: c.card,
-      borderWidth: metrics.strokeWidth,
-      borderColor: c.hair,
+      ...TYPE.title, minHeight: metrics.controlHeight, color: c.text,
+      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.card,
+      borderWidth: metrics.strokeWidth, borderColor: c.hair,
     },
     bodyInput: {
-      flex: 1,
-      fontSize: 12.5,
-      lineHeight: 20,
-      color: c.text,
-      padding: 11,
-      borderRadius: metrics.buttonRadius,
-      backgroundColor: c.card,
-      borderWidth: metrics.strokeWidth,
-      borderColor: c.hair,
+      ...TYPE.body, flex: 1, minHeight: metrics.controlHeight, color: c.text,
+      padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.card,
+      borderWidth: metrics.strokeWidth, borderColor: c.hair,
       fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
     },
-    editHint: { fontSize: 10.5, lineHeight: 16, color: c.text3, marginTop: 4 },
+    editHint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs },
     footer: {
-      paddingHorizontal: 16,
-      paddingTop: 10,
-      paddingBottom: 12,
-      gap: 8,
-      borderTopWidth: metrics.strokeWidth,
-      borderTopColor: c.hair,
-      backgroundColor: c.page,
+      paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.md,
+      gap: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, backgroundColor: c.page,
     },
-    problem: { fontSize: 11, color: c.danger },
-    footerRow: { flexDirection: 'row', gap: 10 },
+    problem: { ...TYPE.label, fontWeight: '400', color: c.danger },
+    footerRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
     ghost: {
-      minHeight: metrics.controlHeight,
-      justifyContent: 'center',
-      flex: 1,
-      alignItems: 'center',
-      paddingVertical: 11,
-      borderRadius: metrics.buttonRadius,
-      borderWidth: metrics.strokeWidth,
-      borderColor: c.hair,
+      minHeight: metrics.controlHeight, minWidth: 96, justifyContent: 'center', flex: 1, alignItems: 'center',
+      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
+      borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     },
-    ghostText: { fontSize: 13, color: c.text },
+    ghostText: { ...TYPE.label, color: c.text, flexShrink: 1, textAlign: 'center' },
     solid: {
-      minHeight: metrics.controlHeight,
-      justifyContent: 'center',
-      flex: 1.6,
-      alignItems: 'center',
-      paddingVertical: 11,
-      borderRadius: metrics.buttonRadius,
-      backgroundColor: c.accent,
+      minHeight: metrics.controlHeight, minWidth: 144, justifyContent: 'center', flex: 1.6, alignItems: 'center',
+      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.accent,
     },
-    solidText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },
+    solidText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
     doneBox: {
-      minHeight: metrics.controlHeight,
-      flex: 1.6,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 6,
-      paddingVertical: 11,
-      borderRadius: metrics.buttonRadius,
-      backgroundColor: c.hairSoft,
+      minHeight: metrics.controlHeight, minWidth: 144, flex: 1.6,
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+      paddingVertical: SPACE.sm, paddingHorizontal: SPACE.sm,
+      borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
+      borderWidth: surfaceStroke(metrics), borderColor: c.hair,
     },
-    doneText: { fontSize: 13, color: c.text2, fontWeight: '600' },
-    choice: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10 },
-    off: { opacity: 0.4 },
+    doneText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+    choice: {
+      minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+      padding: SPACE.sm, borderRadius: metrics.buttonRadius,
+      borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    },
+    choiceOn: { backgroundColor: c.accentBg, borderColor: c.accentHair },
+    off: { opacity: 0.55 },
   });

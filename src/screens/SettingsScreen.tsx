@@ -19,6 +19,9 @@ import { isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
 import type { SearchProbe } from '../db/types';
 import {
   R,
+  SPACE,
+  TYPE,
+  surfaceStroke,
   THEME_MODE_LABEL,
   THEME_STYLE_LABEL,
   useTheme,
@@ -596,59 +599,31 @@ export function SettingsScreen({ fragments, onClose, onChanged }: Props) {
       {/* ---------------- 模块菜单（根层） ---------------- */}
       {pane === 'root' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          {/*
-            一行一个模块。原来「配置」拆成三行（模型服务 / 思考过程 / 文档解析）、
-            「数据」拆成三行，点进去都是同一页 —— 用户 2026-11-12 说这就是冗余：
-            菜单不该把一页里的分区当成三个入口摆三遍。
-            右侧那句值保留：不点进去也能知道现在是什么。
-          */}
-          <GroupTitle text="配置" />
-          <View style={styles.cardTight}>
-            <MenuRow
-              icon="options-outline"
-              label="接口与模型"
-              value={aiValue}
-              onPress={() => setPane('config')}
-              last
-            />
+          <View style={styles.settingsIntro}>
+            <Text style={styles.introTitle}>按你的习惯来</Text>
+            <Text style={styles.introBody}>模型、外观和本地数据，分开管理。</Text>
           </View>
-          <Text style={styles.groupHint}>
-            模型地址、Key、思考过程与强度、MinerU Token 都在这一页；换服务商也只在这一处改。
-          </Text>
-
-          <GroupTitle text="外观" />
-          <View style={styles.cardTight}>
-            <MenuRow
-              icon="color-palette-outline"
-              label="主题"
-              value={`${THEME_MODE_LABEL[mode]} · ${THEME_STYLE_LABEL[themeStyle]}`}
-              onPress={() => setPane('appearance')}
-              last
-            />
-          </View>
-          <Text style={styles.groupHint}>明暗与界面风格分开设置，修改立即生效。</Text>
-
-          <GroupTitle text="数据" />
-          <View style={styles.cardTight}>
-            <MenuRow
-              icon="albums-outline"
-              label="数据与备份"
-              value={dataValue}
-              onPress={() => setPane('data')}
-              last
-            />
-          </View>
-          <Text style={styles.groupHint}>查看本地数据与索引；Markdown 是文字迁出，不是完整备份。</Text>
-
-          <GroupTitle text="关于" />
-          <View style={styles.cardTight}>
-            <MenuRow
-              icon="information-circle-outline"
-              label="关于碎片"
-              value={'v' + APP_VERSION}
-              onPress={() => setPane('about')}
-              last
-            />
+          <View style={styles.menuStack}>
+            <View style={styles.cardTight}>
+              <MenuRow icon="options-outline" label="接口与模型" value={aiValue}
+                description="模型服务 · 思考强度 · 文档解析"
+                onPress={() => setPane('config')} last />
+            </View>
+            <View style={styles.cardTight}>
+              <MenuRow icon="contrast-outline" label="外观" value={`${THEME_MODE_LABEL[mode]} · ${THEME_STYLE_LABEL[themeStyle]}`}
+                description="明暗与风格独立，切换立即生效"
+                onPress={() => setPane('appearance')} last />
+            </View>
+            <View style={styles.cardTight}>
+              <MenuRow icon="file-tray-full-outline" label="数据与备份" value={dataValue}
+                description="完整备份与恢复 · 文字迁出 · 搜索索引"
+                onPress={() => setPane('data')} last />
+            </View>
+            <View style={styles.cardTight}>
+              <MenuRow icon="information-circle-outline" label="关于碎片" value={'v' + APP_VERSION}
+                description="版本更新 · 仓库 · 下载地址"
+                onPress={() => setPane('about')} last />
+            </View>
           </View>
         </ScrollView>
       ) : null}
@@ -1265,17 +1240,12 @@ function GroupTitle({ text }: { text: string }) {
  * 数据有多少条、索引正不正常。
  */
 function MenuRow({
-  icon,
-  label,
-  value,
-  onPress,
-  last,
-  tone = 'normal',
-  busy,
+  icon, label, value, description, onPress, last, tone = 'normal', busy,
 }: {
   icon: IoniconName;
   label: string;
   value?: string;
+  description?: string;
   onPress: () => void;
   last?: boolean;
   tone?: 'normal' | 'warn' | 'link';
@@ -1284,30 +1254,22 @@ function MenuRow({
   const { c, styles } = useThemedStyles(makeStyles);
   return (
     <Pressable
-      style={({ pressed }) => [[styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed], styles.touchTarget]}
+      style={({ pressed }) => [styles.menuRow, last && styles.menuRowLast, pressed && styles.rowPressed, styles.touchTarget]}
       onPress={onPress}
       accessibilityRole="button"
-      accessibilityLabel={value ? `${label}，${value}` : label}
+      accessibilityLabel={[label, value, description].filter(Boolean).join('，')}
     >
-      <Ionicons name={icon} size={19} color={c.text2} />
-      <Text style={styles.menuLabel}>{label}</Text>
-      <View style={styles.menuValueWrap}>
-        {busy ? (
-          <ActivityIndicator size="small" color={c.text3} />
-        ) : (
-          <Text
-            style={[
-              styles.menuValue,
-              tone === 'warn' && styles.menuValueWarn,
-              tone === 'link' && styles.menuValueLink,
-            ]}
-            numberOfLines={1}
-          >
-            {value}
-          </Text>
-        )}
-        <Ionicons name="chevron-forward" size={14} color={c.hair} />
+      <View style={styles.menuIcon}>
+        <Ionicons name={icon} size={21} color={tone === 'warn' ? c.danger : c.accentText} accessible={false} />
       </View>
+      <View style={styles.menuCopy}>
+        <Text style={styles.menuLabel}>{label}</Text>
+        {busy ? <ActivityIndicator size="small" color={c.text3} /> : value ? (
+          <Text style={[styles.menuValue, tone === 'warn' && styles.menuValueWarn, tone === 'link' && styles.menuValueLink]} numberOfLines={2}>{value}</Text>
+        ) : null}
+        {description ? <Text style={styles.menuDescription}>{description}</Text> : null}
+      </View>
+      <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
     </Pressable>
   );
 }
@@ -1345,37 +1307,32 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   normalContent: { flex: 1 },
   root: { flex: 1, backgroundColor: c.page },
 
-  content: { paddingHorizontal: 16, paddingBottom: 40 },
-  groupTitle: {
-    fontSize: 12,
-    color: c.text2,
-    fontWeight: '600',
-    letterSpacing: 0.6,
-    marginTop: 20,
-    marginBottom: 8,
-    marginLeft: 4,
+  content: { paddingHorizontal: SPACE.md, paddingTop: SPACE.xs, paddingBottom: SPACE.xxl },
+  settingsIntro: { paddingTop: SPACE.sm, paddingBottom: SPACE.xl, gap: SPACE.xs },
+  introTitle: { ...TYPE.heading, color: c.text },
+  introBody: { ...TYPE.body, color: c.text2 },
+  menuStack: { gap: SPACE.sm },
+  menuIcon: {
+    width: 40, height: 40, borderRadius: metrics.buttonRadius,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: c.accentBg,
   },
+  menuCopy: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  menuDescription: { ...TYPE.meta, color: c.text2 },
+  groupTitle: { ...TYPE.label, color: c.text2, letterSpacing: 0.6, marginTop: 20, marginBottom: 8, marginLeft: 4 },
   /** 分组标题下面那句说明：解释这个模块管什么，不占卡片高度 */
-  groupHint: {
-    fontSize: 12,
-    color: c.text3,
-    lineHeight: 16,
-    marginTop: 8,
-    marginLeft: 4,
-    marginRight: 4,
-  },
+  groupHint: { ...TYPE.meta, color: c.text3, marginTop: 8, marginLeft: 4, marginRight: 4 },
   card: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
+    borderWidth: surfaceStroke(metrics),
     borderColor: c.hair,
-    padding: 14,
+    padding: SPACE.md,
   },
   /** 菜单卡片自己不留内边距 —— 行内才有，否则左右会多出一圈空白 */
   cardTight: {
     backgroundColor: c.card,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
+    borderWidth: surfaceStroke(metrics),
     borderColor: c.hair,
     overflow: 'hidden',
   },
@@ -1392,9 +1349,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   menuRowLast: { borderBottomWidth: 0 },
   rowPressed: { backgroundColor: c.hairSoft },
-  menuLabel: { flex: 1, fontSize: 14.5, color: c.text },
-  menuValueWrap: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '54%' },
-  menuValue: { fontSize: 13, lineHeight: 20, color: c.text2, flexShrink: 1, textAlign: 'right' },
+  menuLabel: { ...TYPE.title, color: c.text },
+  menuValue: { ...TYPE.label, color: c.text2 },
   menuValueWarn: { color: c.danger },
   menuValueLink: { color: c.accentText, fontWeight: '600' },
 
@@ -1403,17 +1359,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
-  fieldLabel: { fontSize: 12, color: c.text3, marginBottom: 5 },
-  fieldHint: { fontSize: 12, color: c.text3, lineHeight: 16, marginTop: 4 },
-  hintOk: { fontSize: 12, color: c.accentText, marginTop: 4 },
-  hintErr: { fontSize: 12, color: c.danger, marginTop: 4 },
-  input: {
-    minHeight: metrics.controlHeight,
-    fontSize: 14.5,
-    color: c.text,
-    paddingVertical: 2,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
-  },
+  fieldLabel: { ...TYPE.label, color: c.text3, marginBottom: 5 },
+  fieldHint: { ...TYPE.meta, color: c.text3, marginTop: 4 },
+  hintOk: { ...TYPE.meta, color: c.accentText, marginTop: 4 },
+  hintErr: { ...TYPE.meta, color: c.danger, marginTop: 4 },
+  input: { ...TYPE.body, minHeight: metrics.controlHeight, color: c.text, paddingVertical: 2, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
   keyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   keyInput: { flex: 1 },
 
@@ -1437,7 +1387,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderColor: c.hair,
     marginTop: 14,
   },
-  ghostBtnText: { fontSize: 13, color: c.text },
+  ghostBtnText: { ...TYPE.label, color: c.text },
   solidBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flex: 1,
     alignItems: 'center',
@@ -1446,9 +1396,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.accent,
   },
-  solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
+  solidBtnText: { ...TYPE.label, color: c.onAccent },
 
-  msg: { fontSize: 12, lineHeight: 19, marginTop: 12 },
+  msg: { ...TYPE.body, marginTop: 12 },
   msgOk: { color: c.tealText },
   msgErr: { color: c.danger },
 
@@ -1463,8 +1413,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.dangerBg,
     gap: 6,
   },
-  warnTitle: { fontSize: 13, color: c.danger, fontWeight: '600' },
-  warnLine: { fontSize: 12, lineHeight: 18, color: c.text2 },
+  warnTitle: { ...TYPE.label, color: c.danger },
+  warnLine: { ...TYPE.meta, color: c.text2 },
   warnActions: { flexDirection: 'row', gap: 8, marginTop: 4 },
   warnGhost: {
     flex: 1,
@@ -1483,10 +1433,10 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.danger,
   },
-  warnSolidText: { fontSize: 13, color: c.onDanger, fontWeight: '600' },
+  warnSolidText: { ...TYPE.label, color: c.onDanger },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  toggleHint: { flex: 1, fontSize: 12, color: c.text3, lineHeight: 17 },
+  toggleHint: { ...TYPE.meta, flex: 1, color: c.text3 },
   toggle: {
     width: 38,
     height: 22,
@@ -1501,16 +1451,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
 
   /* ---- 配置：官方区块 ---- */
   officialHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 2 },
-  officialTitle: { fontSize: 13, color: c.text, fontWeight: '600' },
-  officialTag: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: c.accentText,
-    backgroundColor: c.accentBg,
-    borderRadius: R.pill,
-    paddingHorizontal: 7,
-    overflow: 'hidden',
-  },
+  officialTitle: { ...TYPE.label, color: c.text },
+  officialTag: { ...TYPE.caption, color: c.accentText, backgroundColor: c.accentBg, borderRadius: R.pill, paddingHorizontal: 7, overflow: 'hidden' },
   balanceRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1521,7 +1463,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
-  balanceText: { flex: 1, fontSize: 12, lineHeight: 18, color: c.text2 },
+  balanceText: { ...TYPE.meta, flex: 1, color: c.text2 },
   linkRow: { flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' },
   linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',
@@ -1532,7 +1474,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: R.pill,
     backgroundColor: c.accentBg,
   },
-  linkText: { fontSize: 12, color: c.accentText, fontWeight: '500' },
+  linkText: { ...TYPE.label, color: c.accentText },
   modelField: { marginTop: 12, gap: 6 },
 
   /* ---- 配置：第三方折叠 ---- */
@@ -1545,7 +1487,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderTopWidth: metrics.strokeWidth,
     borderTopColor: c.hair,
   },
-  customToggleText: { fontSize: 12, color: c.text3 },
+  customToggleText: { ...TYPE.label, color: c.text3 },
   customBox: { marginTop: 4 },
 
   chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -1557,7 +1499,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderColor: c.hair,
   },
   chipOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
-  chipText: { fontSize: 12, color: c.text2, lineHeight: 17 },
+  chipText: { ...TYPE.label, color: c.text2 },
   chipTextOn: { color: c.accentText },
 
   statRow: { flexDirection: 'row', gap: 10, marginBottom: 4 },
@@ -1568,8 +1510,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingVertical: 12,
     alignItems: 'center',
   },
-  statNum: { fontSize: 20, color: c.text, fontWeight: '600' },
-  statLabel: { fontSize: 12, color: c.text3, marginTop: 3 },
+  statNum: { ...TYPE.heading, color: c.text },
+  statLabel: { ...TYPE.meta, color: c.text3, marginTop: 3 },
 
   indexBox: {
     marginTop: 4,
@@ -1579,11 +1521,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingVertical: 10,
   },
   indexHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  indexTitle: { flex: 1, fontSize: 12.5, fontWeight: '500', lineHeight: 18 },
-  indexHint: { fontSize: 12, color: c.text3, lineHeight: 17, marginTop: 4 },
+  indexTitle: { ...TYPE.label, flex: 1 },
+  indexHint: { ...TYPE.meta, color: c.text3, marginTop: 4 },
 
   updateValue: { flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
-  updateState: { fontSize: 12.5, color: c.text3, maxWidth: 210 },
+  updateState: { ...TYPE.meta, color: c.text3, maxWidth: 210 },
   updateStateNew: { color: c.accentText, fontWeight: '600' },
   updateStateErr: { color: c.danger },
 
@@ -1596,6 +1538,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
-  aboutKey: { fontSize: 13.5, color: c.text2 },
-  aboutVal: { fontSize: 13.5, color: c.text3, fontVariant: ['tabular-nums'] },
+  aboutKey: { ...TYPE.label, color: c.text2 },
+  aboutVal: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
 });

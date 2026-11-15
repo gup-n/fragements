@@ -13,7 +13,7 @@ import type { Todo } from '../types';
 import { repo } from '../db/repo';
 import { dayKey } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { ScreenHeader } from './ScreenHeader';
 
 interface Props {
@@ -132,7 +132,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
 
         <Text style={styles.label}>哪天做（可不填）</Text>
         <TextInput
-          style={styles.input}
+          style={[styles.input, styles.dateInput]}
           value={due} accessibilityLabel="到期日期，可不填" editable={!busy}
           onChangeText={(v) => {
             setDue(v);
@@ -144,6 +144,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
           autoCorrect={false}
           maxLength={10}
         />
+        <Text style={styles.fieldHint}>格式为 YYYY-MM-DD，留空不设到期日。</Text>
         <View style={styles.quickRow}>
           {[
             ['今天', dayKey(Date.now())],
@@ -185,66 +186,38 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
-  content: { paddingHorizontal: 16, paddingTop: 6 },
-
-  parentHint: { fontSize: 12, color: c.text3, lineHeight: 18, marginBottom: 10 },
-
-  label: { fontSize: 12, color: c.text3, marginTop: 18, marginBottom: 8 },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.xl },
+  parentHint: { ...TYPE.body, color: c.text2, padding: SPACE.md, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, marginBottom: SPACE.xs },
+  label: { ...TYPE.title, color: c.text, marginTop: SPACE.xl, marginBottom: SPACE.sm },
   input: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14.5,
-    lineHeight: 22,
-    color: c.text,
-    minHeight: 46,
+    backgroundColor: c.card, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, ...TYPE.reading, color: c.text, minHeight: 120, textAlignVertical: 'top',
   },
-
-  quickRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  quickChip: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: R.pill,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+  dateInput: { ...TYPE.body, minHeight: metrics.controlHeight, textAlignVertical: 'center' },
+  fieldHint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xs },
+  quickRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.sm },
+  quickChip: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft,
+    alignItems: 'center', justifyContent: 'center',
   },
-  quickText: { fontSize: 12, color: c.text2 },
-
-  error: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 14 },
-
+  quickText: { ...TYPE.label, color: c.text2 },
+  error: { ...TYPE.body, color: c.danger, marginTop: SPACE.md },
   footer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 10,
-    paddingBottom: 18,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-    backgroundColor: c.page,
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', justifyContent: 'flex-end', gap: SPACE.sm,
+    paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.md,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, backgroundColor: c.page,
   },
-  primaryBtn: { minHeight: metrics.controlHeight,
-    backgroundColor: c.accent,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 22,
-    paddingVertical: 12,
-    minWidth: 110,
-    alignItems: 'center',
+  primaryBtn: {
+    flexGrow: 1.4, flexBasis: 110, minHeight: metrics.controlHeight, minWidth: 110, backgroundColor: c.accent,
+    borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, alignItems: 'center', justifyContent: 'center',
   },
-  primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+  primaryText: { ...TYPE.body, color: c.onAccent, fontWeight: '600', textAlign: 'center' },
+  ghostBtn: {
+    flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.card, alignItems: 'center', justifyContent: 'center',
   },
-  ghostText: { fontSize: 14, color: c.text2 },
+  ghostText: { ...TYPE.body, color: c.text2 },
   btnDisabled: { opacity: 0.5 },
 });

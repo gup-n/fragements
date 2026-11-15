@@ -3,7 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { BackHandler, FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Note } from '../types';
 import { dayKey, periodLabel } from '../util/date';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from './NoteBody';
 import { ScreenHeader } from './ScreenHeader';
 import { IconButton } from './IconButton';
@@ -68,7 +68,10 @@ export function NoteViewer({ notes, initialIndex, onClose }: Props) {
       {notes.length > 1 ? (
         <View style={styles.footer}>
           <IconButton name="chevron-back" disabled={current === 0} onPress={() => jump(-1)} accessibilityLabel="上一篇小结" />
-          <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
+          <View style={styles.footerInfo}>
+            <Text style={styles.pageCount}>{current + 1} / {notes.length}</Text>
+            <Text style={styles.hint}>左右滑动，或点箭头翻篇</Text>
+          </View>
           <IconButton name="chevron-forward" disabled={current === notes.length - 1} onPress={() => jump(1)} accessibilityLabel="下一篇小结" />
         </View>
       ) : null}
@@ -92,17 +95,15 @@ function Page({ note, width }: { note: Note; width: number }) {
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
-  content: { paddingHorizontal: metrics.pagePadding + 8, paddingTop: 16, paddingBottom: 32 },
-  metaRow: {
-    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 24,
-    paddingBottom: 12, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair,
-  },
-  kind: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '600' },
-  meta: { fontSize: 12, lineHeight: 19, color: c.text2, fontVariant: ['tabular-nums'] },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xl, paddingBottom: SPACE.xxl },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.xl, paddingBottom: SPACE.md, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  kind: { ...TYPE.label, color: c.text },
+  meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
   footer: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    paddingHorizontal: metrics.pagePadding, paddingVertical: 4,
-    borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
-  hint: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2, textAlign: 'center' },
+  footerInfo: { flex: 1, minWidth: 0, alignItems: 'center', gap: SPACE.xxs },
+  pageCount: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
+  hint: { ...TYPE.meta, color: c.text2, textAlign: 'center' },
 });

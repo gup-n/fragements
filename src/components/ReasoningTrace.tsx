@@ -7,7 +7,7 @@
 import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 function fmtCount(n: number) {
   return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
@@ -27,8 +27,8 @@ export function ReasoningTrace({ text, expanded, onToggle, height = 240 }: Props
   if (!text) return null;
   return (
     <View style={styles.card}>
-      <Pressable style={[styles.head, styles.touchTarget]} onPress={onToggle} accessibilityRole="button" accessibilityState={{ expanded }}>
-        <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={13} color={c.text3} />
+      <Pressable style={[styles.head, styles.touchTarget]} onPress={onToggle} accessibilityRole="button" accessibilityState={{ expanded }} accessibilityLabel={expanded ? '收起模型思考过程' : '展开模型思考过程'}>
+        <Ionicons name={expanded ? 'chevron-down' : 'chevron-forward'} size={16} color={c.text2} accessible={false} />
         <Text style={styles.title}>模型思考过程</Text>
         <Text style={styles.meta}>{fmtCount(text.length)} 字</Text>
       </Pressable>
@@ -47,24 +47,18 @@ export function ReasoningTrace({ text, expanded, onToggle, height = 240 }: Props
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
-  card: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    marginBottom: 14,
-    overflow: 'hidden',
+  card: { marginBottom: SPACE.md },
+  head: {
+    minHeight: metrics.controlHeight,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    paddingVertical: SPACE.xs,
   },
-  head: { minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
+  title: { ...TYPE.label, flex: 1, color: c.text2 },
+  meta: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
+  scroll: {
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
+    borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
   },
-  title: { flex: 1, fontSize: 12, color: c.text2 },
-  meta: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
-  scroll: { backgroundColor: c.hairSoft, marginHorizontal: 12, marginBottom: 12, borderRadius: metrics.buttonRadius },
-  scrollBody: { padding: 10 },
-  text: { fontSize: 12, lineHeight: 20, color: c.text2 },
+  scrollBody: { padding: SPACE.sm },
+  text: { ...TYPE.body, color: c.text2 },
 });

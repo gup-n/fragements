@@ -12,7 +12,7 @@
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   /** 为空就不画。清空由调用方的定时器负责 */
@@ -48,8 +48,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     maxWidth: '90%',
     backgroundColor: c.text,
     borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    borderWidth: surfaceStroke(metrics), borderColor: c.page,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.sm,
   },
-  text: { fontSize: 12.5, lineHeight: 17, color: c.page, textAlign: 'center' },
+  text: { ...TYPE.label, fontWeight: '500', color: c.page, textAlign: 'center' },
 });

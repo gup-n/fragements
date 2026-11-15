@@ -19,7 +19,7 @@ import { repo } from '../db/repo';
 import { buildTodoTree, openChildCount, orphanTodos, type TodoNode } from '../util/todoTree';
 import { dayKey } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   todos: Todo[];
@@ -180,24 +180,30 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
               <Ionicons name={(selecting ? selected : todo.done) ? 'checkmark-circle' : 'ellipse-outline'} size={24} color={(selecting ? selected : todo.done) ? c.accent : c.text2} />
             </Pressable>
           )}
-          <Pressable
-            style={[styles.main, styles.touchTarget]}
-            onPress={() => selecting ? pick(todo.id) : onOpenEditor(todo, null)}
-            disabled={selecting && depth > 0}
-            accessibilityRole="button"
-            accessibilityLabel={`${selecting ? '选择' : '编辑待办'}：${todo.text}`}
-            accessibilityState={{ disabled: selecting && depth > 0 }}
-          >
-            <Text style={[styles.text, todo.done && styles.doneText]}>{todo.text}</Text>
-            {progress.total > 0 ? <Text style={styles.progress}>{progress.total - progress.open} / {progress.total} 个步骤</Text> : null}
-            {due ? <Text style={[styles.due, due.overdue && !todo.done && styles.dueOverdue]}>{due.overdue && !todo.done ? '已逾期 · ' : '到期 · '}{due.text}</Text> : null}
-          </Pressable>
-          {progress.total > 0 && !selecting ? (
-            <IconButton name={folded ? 'chevron-down' : 'chevron-up'} size={18} onPress={() => toggleCollapse(todo.id)} accessibilityLabel={`${folded ? '展开' : '收起'}步骤：${todo.text}`} accessibilityState={{ expanded: !folded }} />
-          ) : null}
-          {!selecting && depth === 0 && !todo.done ? (
-            <IconButton name="add" size={20} onPress={() => onOpenEditor(null, todo.id)} accessibilityLabel={`添加子项：${todo.text}`} />
-          ) : null}
+          <View style={styles.rowContent}>
+            <Pressable
+              style={[styles.main, styles.touchTarget]}
+              onPress={() => selecting ? pick(todo.id) : onOpenEditor(todo, null)}
+              disabled={selecting && depth > 0}
+              accessibilityRole="button"
+              accessibilityLabel={`${selecting ? '选择' : '编辑待办'}：${todo.text}`}
+              accessibilityState={{ disabled: selecting && depth > 0 }}
+            >
+              <Text style={[styles.text, todo.done && styles.doneText]}>{todo.text}</Text>
+              {progress.total > 0 ? <Text style={styles.progress}>{progress.total - progress.open} / {progress.total} 个步骤</Text> : null}
+              {due ? <Text style={[styles.due, due.overdue && !todo.done && styles.dueOverdue]}>{due.overdue && !todo.done ? '已逾期 · ' : '到期 · '}{due.text}</Text> : null}
+            </Pressable>
+            {!selecting && (progress.total > 0 || (depth === 0 && !todo.done)) ? (
+              <View style={styles.rowTools}>
+                {progress.total > 0 ? (
+                  <IconButton name={folded ? 'chevron-down' : 'chevron-up'} label={folded ? '展开' : '收起'} size={18} onPress={() => toggleCollapse(todo.id)} accessibilityLabel={`${folded ? '展开' : '收起'}步骤：${todo.text}`} accessibilityState={{ expanded: !folded }} />
+                ) : null}
+                {depth === 0 && !todo.done ? (
+                  <IconButton name="add" label="子项" size={20} onPress={() => onOpenEditor(null, todo.id)} accessibilityLabel={`添加子项：${todo.text}`} />
+                ) : null}
+              </View>
+            ) : null}
+          </View>
         </View>
         {!folded ? children.map((child) => renderRow({ todo: child, children: [] }, depth + 1)) : null}
       </View>
@@ -211,10 +217,9 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>还没有待办</Text>
             <Text style={styles.emptyBody}>
-              整理时 AI 会把「有明确动作」的碎片挑出来，{'\n'}
-              也可以点下面的「新建」自己写一条。
+              整理时 AI 会把「有明确动作」的碎片挑出来，也可以直接新建一条待办。
             </Text>
-            <Pressable style={[[styles.toolBtn, { marginTop: 16 }], styles.touchTarget]} onPress={() => onOpenEditor(null, null)} accessibilityRole="button"><Ionicons name="add" size={18} color={c.accentText} /><Text style={styles.toolText}>新建待办</Text></Pressable>
+            <Pressable style={[[styles.toolBtn, { marginTop: SPACE.xs }], styles.touchTarget]} onPress={() => onOpenEditor(null, null)} accessibilityRole="button"><Ionicons name="add" size={18} color={c.accentText} /><Text style={styles.toolText}>新建待办</Text></Pressable>
           </View>
         ) : (
           <>
@@ -246,9 +251,16 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
             ) : null}
 
             {pending.length > 0 ? (
-              <View style={styles.group}>{pending.map((n) => renderRow(n, 0))}</View>
+              <>
+                <Text style={styles.groupTitle}>未完成 · {pending.length} 件</Text>
+                <View style={styles.group}>{pending.map((n) => renderRow(n, 0))}</View>
+              </>
             ) : (
-              <Text style={styles.allDone}>都做完了。</Text>
+              <View style={styles.allDone}>
+                <Ionicons name="checkmark-circle-outline" size={28} color={c.text2} />
+                <Text style={styles.allDoneTitle}>手头的事都做完了</Text>
+                <Text style={styles.allDoneHint}>有新的安排，随时记一条。</Text>
+              </View>
             )}
 
             {finished.length > 0 ? (
@@ -316,7 +328,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
       {mergeOpen ? (
         <View style={styles.sheet} accessibilityViewIsModal>
           <Pressable style={[styles.backdrop, styles.touchTarget]} onPress={() => setMergeOpen(false)} />
-          <View style={[styles.sheetCard, { marginBottom: keyboardHeight }]}>
+          <ScrollView style={[styles.sheetCard, { marginBottom: keyboardHeight }]} contentContainerStyle={styles.sheetCardContent} keyboardShouldPersistTaps="handled">
             <Text style={styles.sheetTitle}>合并后的待办</Text>
             <Text style={styles.sheetHint}>
               其余 {Math.max(picked.size - 1, 0)} 条会从列表里消失，在「已合并」里可以恢复。
@@ -351,7 +363,7 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
                 <Text style={styles.primaryText}>合并</Text>
               </Pressable>
             </View>
-          </View>
+          </ScrollView>
         </View>
       ) : null}
     </View>
@@ -361,151 +373,78 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   root: { flex: 1 },
-  content: { paddingHorizontal: 16, paddingBottom: 40 },
-
-  toolbar: { flexDirection: 'row', gap: 8, paddingTop: 2, paddingBottom: 10 },
-  toolBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: R.pill,
-    backgroundColor: c.accentBg,
+  content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
+  toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingBottom: SPACE.lg },
+  toolBtn: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accentBg, borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
   },
-  toolBtnOn: { backgroundColor: c.hairSoft },
-  toolText: { fontSize: 12.5, color: c.accentText, fontWeight: '500' },
-  selectHint: { fontSize: 12, color: c.text3, lineHeight: 18, marginBottom: 10 },
-
-  empty: { alignItems: 'center', paddingTop: 80 },
-  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
-  emptyBody: { fontSize: 13, color: c.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
-
-  group: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    overflow: 'hidden',
-  },
+  toolBtnOn: { backgroundColor: c.hairSoft, borderWidth: metrics.strokeWidth, borderColor: c.focus },
+  toolText: { ...TYPE.label, color: c.accentText },
+  selectHint: { ...TYPE.body, color: c.text2, marginBottom: SPACE.md },
+  empty: { alignItems: 'center', paddingTop: SPACE.xxl, gap: SPACE.sm },
+  emptyTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  emptyBody: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  groupTitle: { ...TYPE.label, color: c.text2, marginBottom: SPACE.sm },
+  group: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden' },
   row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 12,
-    borderBottomWidth: metrics.strokeWidth,
-    borderBottomColor: c.hair,
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
-  /** 子项往里缩，且没有独立卡片边框 —— 否则看着像另一条顶层待办 */
-  rowChild: { paddingLeft: 24, paddingVertical: 10, backgroundColor: c.hairSoft },
+  /** 子项只有缩进与细分隔，不再单独套一张卡。 */
+  rowChild: { paddingLeft: SPACE.lg, backgroundColor: c.hairSoft },
   rowLast: { borderBottomWidth: 0 },
-  checkHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: 48, alignItems: 'center', justifyContent: 'center' },
-  checkBox: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: c.text3,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkBoxOn: { backgroundColor: c.accent, borderColor: c.accent },
-  main: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 2 },
-  text: { fontSize: 14, lineHeight: 21, color: c.text },
-  doneText: { color: c.text3, textDecorationLine: 'line-through' },
-  progress: { fontSize: 12, color: c.text3, marginTop: 2, fontVariant: ['tabular-nums'] },
-  due: { fontSize: 12, color: c.text3 },
+  checkHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: metrics.controlHeight, alignItems: 'center', justifyContent: 'center' },
+  rowContent: { flex: 1, minWidth: 0 },
+  main: { minWidth: 0, minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: SPACE.xxs },
+  rowTools: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.xs, marginTop: SPACE.xxs },
+  text: { ...TYPE.body, color: c.text },
+  doneText: { color: c.text2, textDecorationLine: 'line-through' },
+  progress: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xs, fontVariant: ['tabular-nums'] },
+  due: { ...TYPE.label, color: c.text2, marginTop: SPACE.xxs },
   dueOverdue: { color: c.danger },
-  iconHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, width: 22, alignItems: 'center' },
-
-  hint: { fontSize: 12, color: c.text3, marginTop: 18, marginBottom: 8 },
-  allDone: { fontSize: 12.5, color: c.text3, paddingVertical: 14, textAlign: 'center' },
-
-  mergedBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 20,
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-  },
-  mergedLabel: { flex: 1, fontSize: 12, color: c.text3 },
-  mergedText: { flex: 1, fontSize: 13, lineHeight: 20, color: c.text3 },
-  mergedUndo: { fontSize: 12, color: c.accent },
-
-  error: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 12 },
-
+  hint: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.sm },
+  allDone: { alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.xl },
+  allDoneTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
+  allDoneHint: { ...TYPE.body, color: c.text2, textAlign: 'center' },
+  mergedBar: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.lg, paddingVertical: SPACE.sm, paddingHorizontal: SPACE.xxs },
+  mergedLabel: { flex: 1, ...TYPE.label, color: c.text2 },
+  mergedText: { flex: 1, ...TYPE.body, color: c.text2, paddingVertical: SPACE.xs },
+  mergedUndo: { ...TYPE.label, color: c.accentText },
+  error: { ...TYPE.body, color: c.danger, marginTop: SPACE.md },
   selectBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-    backgroundColor: c.page,
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.sm, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, backgroundColor: c.page,
   },
-  selectCount: { flex: 1, fontSize: 13, color: c.text2 },
-  mergeBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    backgroundColor: c.accent,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 22,
-    paddingVertical: 10,
-    alignItems: 'center',
-  },
-  mergeText2: { fontSize: 13.5, color: c.onAccent, fontWeight: '500' },
-
+  selectCount: { flex: 1, ...TYPE.body, color: c.text, fontWeight: '600' },
+  mergeBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, backgroundColor: c.accent, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, alignItems: 'center', justifyContent: 'center' },
+  mergeText2: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   sheet: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, justifyContent: 'flex-end' },
-  backdrop: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    backgroundColor: c.scrim,
-  },
+  backdrop: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.scrim },
   sheetCard: {
-    backgroundColor: c.page,
-    borderTopLeftRadius: metrics.cardRadius + 4,
-    borderTopRightRadius: metrics.cardRadius + 4,
-    paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 16,
+    flexGrow: 0, flexShrink: 1, maxHeight: '100%', backgroundColor: c.page,
+    borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
-  sheetTitle: { fontSize: 14.5, color: c.text, fontWeight: '600' },
-  sheetHint: { fontSize: 12, color: c.text3, lineHeight: 18, marginTop: 6, marginBottom: 12 },
+  sheetCardContent: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.lg, paddingBottom: SPACE.md },
+  sheetTitle: { ...TYPE.heading, color: c.text },
+  sheetHint: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs, marginBottom: SPACE.md },
   input: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 14.5,
-    lineHeight: 22,
-    color: c.text,
-    minHeight: 46,
+    backgroundColor: c.card, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, ...TYPE.reading, color: c.text, minHeight: 120, textAlignVertical: 'top',
   },
-  sheetFooter: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10, marginTop: 14 },
-
-  primaryBtn: { minHeight: metrics.controlHeight,
-    backgroundColor: c.accent,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 22,
-    paddingVertical: 11,
-    minWidth: 100,
-    alignItems: 'center',
+  sheetFooter: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.sm, marginTop: SPACE.lg },
+  primaryBtn: {
+    minHeight: metrics.controlHeight, backgroundColor: c.accent, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.xl, paddingVertical: SPACE.sm, minWidth: 100, alignItems: 'center', justifyContent: 'center',
   },
-  primaryText: { fontSize: 14, color: c.onAccent, fontWeight: '500' },
-  ghostBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 16,
-    paddingVertical: 11,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+  primaryText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
+  ghostBtn: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.card, alignItems: 'center', justifyContent: 'center',
   },
-  ghostText: { fontSize: 14, color: c.text2 },
-  btnDisabled: { opacity: 0.4 },
+  ghostText: { ...TYPE.body, color: c.text2 },
+  btnDisabled: { opacity: 0.5 },
 });

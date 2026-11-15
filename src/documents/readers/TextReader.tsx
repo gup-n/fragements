@@ -6,7 +6,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 import type { Document } from '../../types';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { NoteBody } from '../../components/NoteBody';
 import { findHits } from '../../util/highlight';
@@ -188,14 +188,14 @@ export function TextReader({ document: doc, mode, text: providedText, notice }: 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1 },
   list: { flex: 1 },
-  listContent: { paddingHorizontal: metrics.pagePadding, paddingTop: 16, paddingBottom: 40 },
-  block: { marginBottom: 8, paddingLeft: 8, borderLeftWidth: 2, borderLeftColor: 'transparent' },
+  listContent: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xl, paddingBottom: SPACE.xxl },
+  block: { marginBottom: SPACE.sm, paddingLeft: SPACE.xs, borderLeftWidth: 2, borderLeftColor: 'transparent' },
   currentBlock: { borderLeftColor: c.focus },
-  notice: { fontSize: 13, lineHeight: 20, color: c.text2, marginBottom: 12 },
-  body: { fontSize: 17, lineHeight: 30, color: c.text },
+  notice: { ...TYPE.body, color: c.text2, marginBottom: SPACE.xl, paddingBottom: SPACE.md, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  body: { ...TYPE.reading, color: c.text },
   hit: { backgroundColor: c.amberBg },
   hitCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
-  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
+  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl, gap: SPACE.sm },
+  stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  stateHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
 });

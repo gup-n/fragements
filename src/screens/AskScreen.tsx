@@ -47,7 +47,7 @@ import type {
   QaScope,
   QaTurn,
 } from '../types';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useOrganize, type StartDraftOptions } from '../organize/useOrganize';
 import { hasUnsavedWorkspace, remainingIds } from '../organize/workspace';
@@ -234,8 +234,8 @@ function TurnAnswer({
           <Pressable
             style={styles.srcToggle}
             onPress={() => setSourcesOpen((v) => !v)}
-            hitSlop={8}
             accessibilityRole="button"
+            accessibilityState={{ expanded: sourcesOpen }}
             accessibilityLabel={sourcesOpen ? '收起引用来源' : '展开引用来源'}
           >
             <Ionicons name="link-outline" size={13} color={c.text3} />
@@ -1185,39 +1185,43 @@ export function AskScreen({
   function historyRow(s: AskSession) {
     const last = s.turns[s.turns.length - 1];
     return (
-      <View key={s.id} style={styles.histRow}>
+      <View key={s.id} style={[styles.histRow, sessionId === s.id && styles.histRowSelected]}>
         <Pressable
           style={styles.histMain}
           onPress={() => loadSession(s)}
           accessibilityRole="button"
           accessibilityLabel={`打开会话 ${s.title}`}
+          accessibilityState={{ selected: sessionId === s.id }}
         >
           <View style={styles.histTop}>
-            <Text style={styles.histTitle} numberOfLines={1}>
+            <Text style={styles.histTitle} numberOfLines={2}>
               {s.title}
             </Text>
-            {s.documentIds.length || s.documentId ? (
-              <Pressable
-                onPress={() => void openSessionDocs(s)}
-                style={styles.controlButton}
-                hitSlop={6}
-                accessibilityLabel="打开这场会话整理出的文档"
-              >
-                <Text style={styles.histBadge}>
-                  {s.documentIds.length > 1 ? `已写入 ${s.documentIds.length} 篇` : '已写入文档'}
-                </Text>
-              </Pressable>
-            ) : s.fragmentId ? (
-              <Text style={styles.histBadge}>已整理</Text>
-            ) : null}
-            {s.scope?.kind === 'documents' ? (
-              <Text style={styles.histScope}>文档 {s.scope.documentIds.length} 份</Text>
-            ) : null}
-            {s.archived ? <Text style={styles.histArchived}>已归档</Text> : null}
           </View>
           <Text style={styles.histMeta}>
             {dayKey(s.updatedAt)} {formatTime(s.updatedAt)} · {s.turns.length} 轮
           </Text>
+          {s.documentIds.length || s.documentId || s.fragmentId || s.scope?.kind === 'documents' || s.archived || sessionId === s.id ? (
+            <View style={styles.histStatus}>
+              {sessionId === s.id ? <Text style={styles.histScope}>当前会话</Text> : null}
+              {s.documentIds.length || s.documentId ? (
+                <Pressable
+                  onPress={() => void openSessionDocs(s)}
+                  style={styles.histBadgeHit}
+                  accessibilityRole="button"
+                  accessibilityLabel="打开这场会话整理出的文档"
+                >
+                  <Text style={styles.histBadge}>
+                    {s.documentIds.length > 1 ? `已写入 ${s.documentIds.length} 篇` : '已写入文档'}
+                  </Text>
+                </Pressable>
+              ) : s.fragmentId ? (
+                <Text style={styles.histBadge}>已整理</Text>
+              ) : null}
+              {s.scope?.kind === 'documents' ? <Text style={styles.histScope}>文档 {s.scope.documentIds.length} 份</Text> : null}
+              {s.archived ? <Text style={styles.histArchived}>已归档</Text> : null}
+            </View>
+          ) : null}
           {last ? (
             <Text style={styles.histPreview} numberOfLines={2}>
               {plainPreview(last.answer)}
@@ -1257,10 +1261,17 @@ export function AskScreen({
     }),
     [historyAnim, screenW, reduceMotion],
   );
+  const sheetVisible = !!actionSession || !!deleteSession || !!sessionDocs || !!cite || discardConfirm ||
+    summaryOpen || openDocId !== null || !!draftDocCurrent;
+  const conversationCovered = historyMounted || sheetVisible;
 
   return (
     <View style={styles.root} {...openPan.panHandlers}>
-      <Animated.View style={[styles.flex, { transform: [{ translateX: contentX }] }]}>
+      <Animated.View
+        style={[styles.flex, { transform: [{ translateX: contentX }] }]}
+        accessibilityElementsHidden={conversationCovered}
+        importantForAccessibility={conversationCovered ? 'no-hide-descendants' : 'auto'}
+      >
         {/* 已经在新对话里再点「+」：按钮没坏，只是没什么可新建的 */}
         {newHint ? (
           <View style={styles.newHint} pointerEvents="none">
@@ -1298,10 +1309,11 @@ export function AskScreen({
         <View style={styles.scopeBar}>
           <Ionicons
             name={docMode ? 'documents-outline' : 'albums-outline'}
-            size={13}
-            color={c.text3}
+            size={16}
+            color={c.text2}
+            accessible={false}
           />
-          <Text style={styles.scopeText} numberOfLines={2}>
+          <Text style={styles.scopeText} numberOfLines={2} accessibilityLabel={scopeLine}>
             {scopeLine}
           </Text>
           {docMode ? <Text style={styles.scopeTag}>不联网</Text> : null}
@@ -1326,63 +1338,78 @@ export function AskScreen({
               <Text style={styles.recoveryText}>{organize.recovery.request.source.kind === 'session' ? '会话：' + organize.recovery.request.source.title : '来源快照：' + organize.recovery.request.source.ids.length + ' 条碎片'} · {organize.recovery.draft.docs.length} 篇文档</Text>
               <Text style={styles.recoveryText}>恢复会回到原会话范围，只恢复本地内容，不自动发送模型请求。</Text>
               <View style={styles.recoveryActions}>
-                <Pressable style={styles.controlButton} onPress={organize.restore} disabled={busy || savingDraft} accessibilityRole="button"><Text style={styles.ghostBtnText}>恢复草稿</Text></Pressable>
-                <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(true)} disabled={busy || savingDraft} accessibilityRole="button"><Text style={styles.danger}>放弃草稿</Text></Pressable>
+                <Pressable style={[styles.controlButton, styles.recoveryPrimary]} onPress={organize.restore} disabled={busy || savingDraft} accessibilityRole="button" accessibilityState={{ disabled: busy || savingDraft }}><Text style={styles.recoveryPrimaryText}>恢复草稿</Text></Pressable>
+                <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(true)} disabled={busy || savingDraft} accessibilityRole="button" accessibilityState={{ disabled: busy || savingDraft }}><Text style={styles.danger}>放弃草稿</Text></Pressable>
               </View>
             </View>
           ) : null}
           {organize.storageError ? <AgentError title="本地草稿未保存" message={organize.storageError} onRetry={() => void (draft ? organize.saveLocal() : organize.reloadRecovery())} /> : null}
           {draftBusy ? (
-            <Pressable style={styles.controlButton} onPress={() => void organize.pause()} accessibilityRole="button" accessibilityLabel="暂停后续整理并保留当前材料">
-              <Text style={styles.ghostBtnText}>暂停整理 · 保留材料和进度</Text>
+            <Pressable style={styles.pauseButton} onPress={() => void organize.pause()} accessibilityRole="button" accessibilityLabel="暂停后续整理并保留当前材料">
+              <Ionicons name="pause-circle-outline" size={20} color={c.text2} accessible={false} />
+              <Text style={styles.pauseText}>暂停整理 · 保留材料和进度</Text>
             </Pressable>
           ) : null}
           {!hasContent && !pendingQ && !draft && !organize.recovery ? (
             <View style={styles.empty}>
-              <Ionicons name="chatbubble-ellipses-outline" size={30} color={c.text3} />
-              <Text style={styles.emptyTitle}>{docMode ? '就这几份文档提问' : '问、或者让它整理'}</Text>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="chatbubble-ellipses-outline" size={26} color={c.accentText} accessible={false} />
+              </View>
+              <Text style={styles.emptyTitle} accessibilityRole="header">{docMode ? '围绕这些文档提问' : '从碎片里找答案'}</Text>
               <Text style={styles.emptyBody}>
                 {docMode
-                  ? '它只会在你选的这几份文档里找答案。\n找到的片段会标在回答里，点一下能看到原文和位置。'
-                  : '提问会先在你的碎片里找依据，再把答案写出来。\n整理只提炼能复用的知识，按主题拆成几篇，写之前先给你看。'}
+                  ? '只在你选的文档里找依据。回答中的引用可以打开，查看当时的原文与位置。'
+                  : '问一句，找回记录里的线索。也可以整理成文档或待办，先审阅，再决定写入。'}
               </Text>
 
               {!docMode ? (
                 <View style={styles.hints}>
                   <Pressable
-                    style={styles.hint}
+                    style={[styles.hint, styles.hintDivider]}
                     onPress={() => void startDraft('knowledge', { instruction: TASK_SEED.organize })}
                     disabled={draftBusy || busy}
+                    accessibilityRole="button"
+                    accessibilityLabel="整理碎片"
+                    accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="sparkles-outline" size={16} color={c.accentText} />
+                    <Ionicons name="sparkles-outline" size={20} color={c.accentText} accessible={false} />
                     <View style={styles.hintBody}>
                       <Text style={styles.hintTitle}>整理碎片</Text>
-                      <Text style={styles.hintText}>只收做法、结论和参数，按主题拆成几篇</Text>
+                      <Text style={styles.hintText}>保留做法、结论和参数，按主题成文</Text>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
                   </Pressable>
 
                   <Pressable
-                    style={styles.hint}
+                    style={[styles.hint, styles.hintDivider]}
                     onPress={() => void startDraft('todos', { instruction: TASK_SEED.todos })}
                     disabled={draftBusy || busy}
+                    accessibilityRole="button"
+                    accessibilityLabel="整理待办"
+                    accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="checkbox-outline" size={16} color={c.accentText} />
+                    <Ionicons name="checkbox-outline" size={20} color={c.accentText} accessible={false} />
                     <View style={styles.hintBody}>
                       <Text style={styles.hintTitle}>整理待办</Text>
-                      <Text style={styles.hintText}>抽成两层的待办，已经有的不重复</Text>
+                      <Text style={styles.hintText}>提炼事项与步骤，已有的不重复</Text>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
                   </Pressable>
 
                   <Pressable
                     style={styles.hint}
                     onPress={() => setSummaryOpen(true)}
                     disabled={draftBusy || busy}
+                    accessibilityRole="button"
+                    accessibilityLabel="写月小结"
+                    accessibilityState={{ disabled: draftBusy || busy }}
                   >
-                    <Ionicons name="calendar-outline" size={16} color={c.accentText} />
+                    <Ionicons name="calendar-outline" size={20} color={c.accentText} accessible={false} />
                     <View style={styles.hintBody}>
                       <Text style={styles.hintTitle}>写月小结</Text>
-                      <Text style={styles.hintText}>按日期把一个月的事列成表，另挑要紧的写进展</Text>
+                      <Text style={styles.hintText}>按日期回看一个月，梳理重要进展</Text>
                     </View>
+                    <Ionicons name="chevron-forward" size={16} color={c.text3} accessible={false} />
                   </Pressable>
                 </View>
               ) : null}
@@ -1436,15 +1463,16 @@ export function AskScreen({
               </View>
               <View style={styles.aRow}>
                 {received > 0 ? (
-                  <Text style={styles.aText}>正在读资料组织回答…（已收到 {received} 字）</Text>
+                  <Text style={styles.thinkingText}>正在读资料组织回答…（已收到 {received} 字）</Text>
                 ) : (
                   <View style={styles.thinkingRow}>
-                    <ActivityIndicator size="small" color={c.text3} />
+                    <ActivityIndicator size="small" color={c.text2} />
                     <Text style={styles.thinkingText}>
                       {thinkingOn ? '在想…' : docMode ? '在读选定的文档…' : '在读你的记录…'}
                     </Text>
                   </View>
                 )}
+                {!!webNote ? <Text style={styles.busyNote}>{webNote}</Text> : null}
               </View>
             </View>
           ) : null}
@@ -1529,7 +1557,6 @@ export function AskScreen({
               <Pressable
                 onPress={() => setContext(null)}
                 style={styles.controlButton}
-                hitSlop={8}
                 accessibilityRole="button"
                 accessibilityLabel="移除这条上下文"
               >
@@ -1537,34 +1564,6 @@ export function AskScreen({
               </Pressable>
             </View>
           ) : null}
-
-          <View style={styles.toggleRow}>
-            <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityState={{ checked: thinkingOn }}>
-              <Ionicons
-                name="bulb-outline"
-                size={13}
-                color={thinkingOn ? c.accentText : c.text3}
-              />
-              <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>思考 · {thinkingOn ? '开' : '关'}</Text>
-            </Pressable>
-            {docMode ? (
-              // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
-              <View style={[styles.toggle, styles.toggleOff]} accessibilityLabel="文档模式不联网">
-                <Ionicons name="cloud-offline-outline" size={13} color={c.text3} />
-                <Text style={styles.toggleText}>不联网</Text>
-              </View>
-            ) : (
-              <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb} accessibilityRole="switch" accessibilityState={{ checked: webOn }}>
-                <Ionicons
-                  name="globe-outline"
-                  size={13}
-                  color={webOn ? c.accentText : c.text3}
-                />
-                <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网 · {webOn ? '开' : '关'}</Text>
-              </Pressable>
-            )}
-            {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
-          </View>
 
           <View style={styles.inputRow}>
             <TextInput
@@ -1575,18 +1574,43 @@ export function AskScreen({
               selectionColor={c.selection}
               style={styles.input}
               multiline
+              textAlignVertical="top"
               maxLength={500}
               editable={!busy}
+              accessibilityLabel={draft ? '改稿要求' : '问题或整理要求'}
             />
-            <Pressable
-              onPress={() => void send()}
-              // 范围有问题时按钮直接不可用：原因就写在上面的红字里
-              disabled={!canSend}
-              style={[styles.send, canSend && styles.sendOn]}
-              hitSlop={6}
-            >
-              <Ionicons name="arrow-up" size={16} color={canSend ? c.onAccent : c.text3} />
-            </Pressable>
+            <View style={styles.inputTools}>
+              <View style={styles.toggleRow}>
+                <Pressable style={[styles.toggle, thinkingOn && styles.toggleOn]} onPress={toggleThinking} accessibilityRole="switch" accessibilityLabel="思考模式" accessibilityState={{ checked: thinkingOn }}>
+                  <Ionicons name="bulb-outline" size={16} color={thinkingOn ? c.accentText : c.text2} accessible={false} />
+                  <Text style={[styles.toggleText, thinkingOn && styles.toggleTextOn]}>思考 · {thinkingOn ? '开' : '关'}</Text>
+                </Pressable>
+                {docMode ? (
+                  // 文档模式首版直接禁用联网：来源必须只有用户选的那几份
+                  <View style={[styles.toggle, styles.toggleOff]} accessible accessibilityLabel="文档模式不联网" accessibilityState={{ disabled: true }}>
+                    <Ionicons name="cloud-offline-outline" size={16} color={c.text2} accessible={false} />
+                    <Text style={styles.toggleText}>不联网</Text>
+                  </View>
+                ) : (
+                  <Pressable style={[styles.toggle, webOn && styles.toggleOn]} onPress={toggleWeb} accessibilityRole="switch" accessibilityLabel="联网检索" accessibilityState={{ checked: webOn }}>
+                    <Ionicons name="globe-outline" size={16} color={webOn ? c.accentText : c.text2} accessible={false} />
+                    <Text style={[styles.toggleText, webOn && styles.toggleTextOn]}>联网 · {webOn ? '开' : '关'}</Text>
+                  </Pressable>
+                )}
+                {busy ? <Text style={styles.busyHint}>回答中…</Text> : null}
+              </View>
+              <Pressable
+                onPress={() => void send()}
+                // 范围有问题时按钮直接不可用：原因就写在上面的红字里
+                disabled={!canSend}
+                style={[styles.send, canSend && styles.sendOn]}
+                accessibilityRole="button"
+                accessibilityLabel={draft ? '发送改稿要求' : '发送问题'}
+                accessibilityState={{ disabled: !canSend, busy: busy || draftBusy || savingDraft }}
+              >
+                <Ionicons name="arrow-up" size={20} color={canSend ? c.onAccent : c.text3} accessible={false} />
+              </Pressable>
+            </View>
           </View>
           <View style={{ height: keyboardHeight }} />
         </View>
@@ -1603,6 +1627,9 @@ export function AskScreen({
       {historyMounted ? (
         <Animated.View
           style={[styles.historyPage, { transform: [{ translateX: historyX }] }]}
+          accessibilityViewIsModal
+          accessibilityElementsHidden={sheetVisible}
+          importantForAccessibility={sheetVisible ? 'no-hide-descendants' : 'auto'}
           {...closePan.panHandlers}
         >
           <ScreenHeader
@@ -1655,9 +1682,9 @@ export function AskScreen({
 
       {/* ---------------- 会话操作 ---------------- */}
       {actionSession ? (
-        <View style={styles.sheetOverlay}>
+        <View style={styles.sheetOverlay} accessibilityViewIsModal>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setActionSession(null)} />
-          <View style={styles.sheet}>
+          <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled">
             <Text style={styles.sheetTitle} numberOfLines={2}>
               {actionSession.title}
             </Text>
@@ -1737,18 +1764,18 @@ export function AskScreen({
               <Text style={[styles.sheetActionText, { color: c.danger }]}>删除会话</Text>
             </Pressable>
 
-            <Pressable style={styles.sheetCancel} onPress={() => setActionSession(null)}>
+            <Pressable style={styles.sheetCancel} onPress={() => setActionSession(null)} accessibilityRole="button">
               <Text style={styles.sheetCancelText}>取消</Text>
             </Pressable>
-          </View>
+          </ScrollView>
         </View>
       ) : null}
 
       {/* ---------------- 一场会话整理出的多篇文档 ---------------- */}
       {sessionDocs ? (
-        <View style={styles.sheetOverlay}>
+        <View style={styles.sheetOverlay} accessibilityViewIsModal>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setSessionDocs(null)} />
-          <View style={styles.sheet}>
+          <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetBody} keyboardShouldPersistTaps="handled">
             <Text style={styles.sheetTitle} numberOfLines={2}>
               这场会话整理出的文档
             </Text>
@@ -1775,28 +1802,28 @@ export function AskScreen({
                 <Ionicons name="chevron-forward" size={13} color={c.text3} />
               </Pressable>
             ))}
-            <Pressable style={styles.sheetCancel} onPress={() => setSessionDocs(null)}>
+            <Pressable style={styles.sheetCancel} onPress={() => setSessionDocs(null)} accessibilityRole="button">
               <Text style={styles.sheetCancelText}>取消</Text>
             </Pressable>
-          </View>
+          </ScrollView>
         </View>
       ) : null}
 
       {/* ---------------- 删除确认 ---------------- */}
       {deleteSession ? (
-        <View style={styles.dialogOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteSession(null)} />
+        <View style={styles.dialogOverlay} accessibilityViewIsModal>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteSession(null)} accessibilityRole="button" accessibilityLabel="取消删除会话" />
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>删除这个会话？</Text>
+            <Text style={styles.dialogTitle} accessibilityRole="header">删除这个会话？</Text>
             <Text style={styles.dialogBody}>
               「{deleteSession.title}」的问答记录会从历史里移除，无法恢复。
-              已经整理成碎片的副本不受影响。
+              已写入的文档、待办和碎片副本不受影响。
             </Text>
             <View style={styles.dialogActions}>
-              <Pressable style={styles.controlButton} onPress={() => setDeleteSession(null)} hitSlop={8}>
+              <Pressable style={styles.controlButton} onPress={() => setDeleteSession(null)} accessibilityRole="button">
                 <Text style={styles.muted}>取消</Text>
               </Pressable>
-              <Pressable style={styles.controlButton} onPress={confirmDeleteSession} disabled={working === 'delete'} hitSlop={8}>
+              <Pressable style={styles.controlButton} onPress={confirmDeleteSession} disabled={working === 'delete'} accessibilityRole="button" accessibilityState={{ disabled: working === 'delete', busy: working === 'delete' }}>
                 <Text style={styles.danger}>
                   {working === 'delete' ? '删除中…' : '删除'}
                 </Text>
@@ -1808,7 +1835,7 @@ export function AskScreen({
 
       {/* ---------------- 月小结面板 ---------------- */}
       {summaryOpen ? (
-        <View style={styles.summaryPage}>
+        <View style={styles.summaryPage} accessibilityViewIsModal>
           <SummarySheet
             onClose={() => setSummaryOpen(false)}
             onSaved={async () => {
@@ -1826,7 +1853,7 @@ export function AskScreen({
 
       {/* ---------------- 文档阅读（写完直接看 / 历史里跳过来） ---------------- */}
       {openDocId !== null ? (
-        <View style={styles.summaryPage}>
+        <View style={styles.summaryPage} accessibilityViewIsModal>
           <DocViewer
             docId={openDocId}
             reloadKey={docReload}
@@ -1861,13 +1888,13 @@ export function AskScreen({
       ) : null}
 
       {discardConfirm ? (
-        <View style={styles.dialogOverlay}>
+        <View style={styles.dialogOverlay} accessibilityViewIsModal>
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle}>放弃这份本地草稿？</Text>
+            <Text style={styles.dialogTitle} accessibilityRole="header">放弃这份本地草稿？</Text>
             <Text style={styles.dialogBody}>尚未写入的文档、待办和改稿记录会被移除。已经写入的文档、待办及原始碎片不受影响。</Text>
             <View style={styles.dialogActions}>
-              <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(false)} disabled={savingDraft}><Text style={styles.muted}>保留</Text></Pressable>
-              <Pressable style={styles.controlButton} onPress={() => { void discardDraft().then((ok) => { if (ok) setDiscardConfirm(false); }); }} disabled={savingDraft}><Text style={styles.danger}>确认放弃</Text></Pressable>
+              <Pressable style={styles.controlButton} onPress={() => setDiscardConfirm(false)} disabled={savingDraft} accessibilityRole="button" accessibilityState={{ disabled: savingDraft }}><Text style={styles.muted}>保留</Text></Pressable>
+              <Pressable style={styles.controlButton} onPress={() => { void discardDraft().then((ok) => { if (ok) setDiscardConfirm(false); }); }} disabled={savingDraft} accessibilityRole="button" accessibilityState={{ disabled: savingDraft }}><Text style={styles.danger}>确认放弃</Text></Pressable>
             </View>
           </View>
         </View>
@@ -1880,411 +1907,189 @@ export function AskScreen({
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
-  recovery: { padding: metrics.pagePadding, gap: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.cardRadius, backgroundColor: c.card, marginBottom: 16 },
-  recoveryTitle: { color: c.text, fontSize: 16, fontWeight: '600', lineHeight: 24 },
-  recoveryText: { color: c.text2, fontSize: 13, lineHeight: 21 },
-  recoveryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  controlButton: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center' },
-  /**
-   * 「已在新对话中」的提示条。
-   *
-   * 半透明黑浮在页头下方：它说的是「什么都没发生」，不能长得像一条错误，
-   * 也不能像底部 Toast 那样占着输入框的位置。
-   */
+  flex: { flex: 1 },
+  recovery: {
+    padding: SPACE.md, gap: SPACE.sm,
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
+    borderRadius: metrics.cardRadius, backgroundColor: c.card, marginBottom: SPACE.lg,
+  },
+  recoveryTitle: { ...TYPE.title, color: c.text },
+  recoveryText: { ...TYPE.label, fontWeight: '400', color: c.text2 },
+  recoveryActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
+  recoveryPrimary: { backgroundColor: c.accent, borderRadius: metrics.buttonRadius },
+  recoveryPrimaryText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
+  controlButton: {
+    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight,
+    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs, justifyContent: 'center', alignItems: 'center',
+  },
+  pauseButton: {
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    padding: SPACE.sm, backgroundColor: c.hairSoft, marginBottom: SPACE.md,
+    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+  },
+  pauseText: { ...TYPE.label, color: c.text, flex: 1 },
   newHint: {
-    position: 'absolute',
-    top: 58,
-    alignSelf: 'center',
-    zIndex: 30,
-    backgroundColor: c.accent,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 16,
-    paddingVertical: 9,
+    position: 'absolute', top: 80, alignSelf: 'center', zIndex: 30,
+    backgroundColor: c.accent, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
   },
-  newHintText: { fontSize: 13, color: c.onAccent, fontWeight: '500' },
-  content: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 20 },
-  /** 没内容时把「问点什么」放在可视区中间，而不是贴着顶部 */
-  contentEmpty: { flexGrow: 1, justifyContent: 'center', paddingBottom: 90 },
-
-  /* ---- 空态的三张提示框 ---- */
-  hints: { alignSelf: 'stretch', gap: 10, marginTop: 22, paddingHorizontal: 4 },
+  newHintText: { ...TYPE.label, color: c.onAccent },
+  content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.xl },
+  contentEmpty: { flexGrow: 1, paddingTop: SPACE.xl, paddingBottom: SPACE.xl },
+  empty: { alignItems: 'flex-start', gap: SPACE.sm },
+  emptyIcon: {
+    width: metrics.controlHeight, height: metrics.controlHeight,
+    backgroundColor: c.accentBg, borderRadius: metrics.cardRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
+    alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.xxs,
+  },
+  emptyTitle: { ...TYPE.heading, color: c.text },
+  emptyBody: { ...TYPE.body, color: c.text2 },
+  hints: {
+    alignSelf: 'stretch', marginTop: SPACE.md,
+    backgroundColor: c.card, borderRadius: metrics.cardRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden',
+  },
   hint: {
-    minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    backgroundColor: c.card,
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    padding: SPACE.md,
   },
-  hintBody: { flex: 1, gap: 2 },
-  hintTitle: { fontSize: 13.5, color: c.text, fontWeight: '600' },
-  hintText: { fontSize: 11.5, lineHeight: 17, color: c.text3 },
-
-  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-
-  /* ---- 范围条（常驻） ---- */
+  hintDivider: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  hintBody: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  hintTitle: { ...TYPE.body, color: c.text, fontWeight: '600' },
+  hintText: { ...TYPE.meta, color: c.text2 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
   scopeBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginHorizontal: 16,
-    marginTop: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: metrics.buttonRadius,
-    backgroundColor: c.hairSoft,
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs,
+    marginHorizontal: metrics.pagePadding, marginTop: SPACE.sm, paddingBottom: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
-  scopeText: { flex: 1, minWidth: 0, fontSize: 11.5, lineHeight: 17, color: c.text2 },
+  scopeText: { ...TYPE.meta, flex: 1, minWidth: 0, color: c.text2 },
   scopeTag: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: c.text3,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 6,
-    overflow: 'hidden',
+    ...TYPE.meta, color: c.text2, backgroundColor: c.hairSoft,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs, overflow: 'hidden',
   },
-  scopeWarn: {
-    fontSize: 11.5,
-    lineHeight: 17,
-    color: c.danger,
-    marginHorizontal: 16,
-    marginTop: 6,
-  },
-  /** 只读的开关：看着像开关，但不给点，也不给「关掉后偷偷联网」的错觉 */
-  toggleOff: { opacity: 0.75 },
-
-  empty: { alignItems: 'center', gap: 8 },
-  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500', marginTop: 4 },
-  emptyBody: { fontSize: 12.5, color: c.text3, textAlign: 'center', lineHeight: 20 },
-
-  qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16, marginBottom: 10 },
+  scopeWarn: { ...TYPE.label, fontWeight: '400', color: c.danger, marginHorizontal: metrics.pagePadding, marginTop: SPACE.xs },
+  qRow: { flexDirection: 'row', justifyContent: 'flex-end', marginTop: SPACE.xl, marginBottom: SPACE.md },
   qBubble: {
-    maxWidth: '85%',
-    backgroundColor: c.accentBg,
-    borderRadius: metrics.cardRadius,
-    paddingHorizontal: 13,
-    paddingVertical: 9,
+    maxWidth: '85%', backgroundColor: c.accentBg,
+    borderRadius: metrics.cardRadius, borderBottomRightRadius: metrics.buttonRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
   },
-  qText: { fontSize: 14, lineHeight: 21, color: c.accentText },
-
-  aRow: { marginBottom: 6 },
-  aText: { fontSize: 14, lineHeight: 23, color: c.text },
-  /** 「只读了部分片段」的说明。不显眼但必须常驻，不能只写进回答正文 */
-  covText: { fontSize: 11, lineHeight: 16, color: c.text3, marginTop: 6 },
-
-  thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 6 },
-  thinkingText: { fontSize: 13, color: c.text3 },
-
-  srcBlock: { marginTop: 12, gap: 6 },
-  srcToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 5 },
-  srcLabel: { fontSize: 11, color: c.text3 },
+  qText: { ...TYPE.body, color: c.accentText },
+  // Assistant answers remain open text, not a notification card.
+  aRow: { marginBottom: SPACE.md, gap: SPACE.xs },
+  aText: { ...TYPE.body, color: c.text },
+  covText: {
+    ...TYPE.meta, color: c.text2, marginTop: SPACE.xs,
+    paddingLeft: SPACE.sm, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
+  },
+  thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.xs },
+  thinkingText: { ...TYPE.label, fontWeight: '400', color: c.text2, flexShrink: 1 },
+  busyNote: { ...TYPE.meta, color: c.text2 },
+  srcBlock: { marginTop: SPACE.xs, gap: SPACE.xxs },
+  srcToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, alignSelf: 'flex-start' },
+  srcLabel: { ...TYPE.label, color: c.text2 },
   srcRow: {
-    minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
+    paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm,
   },
   srcIndex: {
-    width: 18,
-    fontSize: 11,
-    lineHeight: 16,
-    color: c.accentText,
-    fontWeight: '600',
-    textAlign: 'center',
+    ...TYPE.meta, minWidth: SPACE.xl, color: c.accentText, fontWeight: '600', textAlign: 'center',
+    backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
+    paddingVertical: SPACE.xxs, overflow: 'hidden',
   },
-  srcTitle: { flex: 1, fontSize: 12.5, color: c.text2 },
-
-  /* ---- 网页来源：这一轮真搜到的页面，点一下开浏览器 ---- */
-  webBlock: { marginTop: 10, gap: 4 },
-  webTitle: { fontSize: 11, color: c.text3, letterSpacing: 0.3 },
-  webRow: {
-    minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 2,
-  },
-  webRowText: { flex: 1, fontSize: 12.5, color: c.accentText },
-  webMore: { fontSize: 11, color: c.text3, lineHeight: 16 },
-  webErr: { fontSize: 11, color: c.danger, lineHeight: 16 },
-
-  webNote: { fontSize: 11, color: c.text3, lineHeight: 17, marginTop: 10 },
-  errText: { fontSize: 12, color: c.danger, lineHeight: 19, marginTop: 10 },
-
+  srcTitle: { ...TYPE.body, flex: 1, color: c.text2 },
+  webBlock: { marginTop: SPACE.sm, paddingTop: SPACE.xs, gap: SPACE.xxs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
+  webTitle: { ...TYPE.label, color: c.text2 },
+  webRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.xs },
+  webRowText: { ...TYPE.body, flex: 1, color: c.accentText },
+  webErr: { ...TYPE.meta, color: c.danger },
+  webNote: { ...TYPE.meta, color: c.text2, marginTop: SPACE.sm, paddingLeft: SPACE.sm, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
   footer: {
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-    backgroundColor: c.page,
-    paddingTop: 8,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
+    backgroundColor: c.page, paddingTop: SPACE.xs, paddingBottom: SPACE.xs,
   },
   contextBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginHorizontal: 16,
-    marginBottom: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accentBg,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    marginHorizontal: metrics.pagePadding, marginBottom: SPACE.xs,
+    paddingLeft: SPACE.sm, paddingVertical: SPACE.xxs,
+    borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.accent, backgroundColor: c.hairSoft,
   },
-  contextText: { flex: 1, fontSize: 11.5, color: c.accentText },
-
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  toggle: {
-    minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  toggleOn: { backgroundColor: c.accentBg, borderColor: c.accentBg },
-  toggleText: { fontSize: 12, color: c.text3 },
-  toggleTextOn: { color: c.accentText },
-  busyHint: { fontSize: 11, color: c.text3, marginLeft: 'auto' },
-
+  contextText: { ...TYPE.meta, flex: 1, color: c.text2 },
   inputRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 8,
-    marginHorizontal: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
+    marginHorizontal: metrics.pagePadding, padding: SPACE.sm, gap: SPACE.xs,
+    backgroundColor: c.card, borderRadius: metrics.cardRadius,
+    borderWidth: metrics.strokeWidth, borderColor: c.hair,
   },
   input: {
-    flex: 1,
-    fontSize: 14,
-    lineHeight: 20,
-    color: c.text,
-    maxHeight: 96,
-    paddingTop: 4,
-    paddingBottom: 4,
+    ...TYPE.body, color: c.text,
+    minHeight: metrics.controlHeight + SPACE.md, maxHeight: TYPE.body.lineHeight * 5,
+    paddingTop: SPACE.xxs, paddingBottom: SPACE.xxs,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
   },
+  inputTools: { flexDirection: 'row', alignItems: 'flex-end', gap: SPACE.xs },
+  toggleRow: { flex: 1, minWidth: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  toggle: {
+    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
+    borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.hairSoft, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xs,
+  },
+  toggleOn: { backgroundColor: c.accentBg, borderWidth: metrics.strokeWidth, borderColor: c.accent },
+  toggleText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  toggleTextOn: { color: c.accentText },
+  toggleOff: { backgroundColor: c.hairSoft },
+  busyHint: { ...TYPE.meta, color: c.text2 },
   send: {
-    width: metrics.controlHeight,
-    height: metrics.controlHeight,
-    borderRadius: metrics.buttonRadius,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.hairSoft,
+    width: metrics.controlHeight, height: metrics.controlHeight,
+    borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.hairSoft, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
   },
-  sendOn: { backgroundColor: c.accent },
-
-  /* ---- 历史会话 ---- */
-  flex: { flex: 1 },
-  /** 抽屉下面那层压暗。transparent 里带 alpha，深浅主题都不用换色 */
-  scrim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: c.scrim,
-  },
-  historyPage: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: c.page,
-  },
-  historyContent: { paddingHorizontal: 16, paddingBottom: 40 },
-  historyLoading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingTop: 40,
-  },
-  historyEmpty: { alignItems: 'center', gap: 8, paddingTop: 70 },
-  histGroupTitle: {
-    fontSize: 11.5,
-    color: c.text3,
-    fontWeight: '600',
-    letterSpacing: 0.4,
-    marginTop: 18,
-    marginBottom: 7,
-    marginLeft: 4,
-  },
+  sendOn: { backgroundColor: c.accent, borderColor: c.accent },
+  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
+  historyPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
+  historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
+  historyLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, paddingTop: SPACE.xxl },
+  historyEmpty: { alignItems: 'flex-start', gap: SPACE.sm, paddingTop: SPACE.xxl },
+  histGroupTitle: { ...TYPE.label, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.xs },
   histRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingLeft: 12,
-    paddingRight: 6,
-    paddingVertical: 9,
-    marginBottom: 8,
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs,
+    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.md, marginBottom: SPACE.xxs,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
-  histMain: { minHeight: metrics.controlHeight, justifyContent: 'center', flex: 1, paddingRight: 4 },
-  histTop: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  histTitle: { flexShrink: 1, fontSize: 13.5, color: c.text, fontWeight: '500' },
-  histBadge: {
-    fontSize: 10,
-    lineHeight: 14,
-    color: c.tealText,
-    backgroundColor: c.tealBg,
-    borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 5,
-    overflow: 'hidden',
-  },
-  histArchived: { fontSize: 10, color: c.text3 },
-  histScope: { fontSize: 10, color: c.text3 },
-  histMeta: { fontSize: 10.5, color: c.text3, marginTop: 3, fontVariant: ['tabular-nums'] },
-  histPreview: { fontSize: 11.5, lineHeight: 17, color: c.text3, marginTop: 4 },
-
-  /* ---- 底部操作面板 ---- */
-  sheetOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'flex-end',
-    backgroundColor: c.scrim,
-  },
+  histRowSelected: { backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius, borderLeftWidth: metrics.strokeWidth * 2, borderLeftColor: c.accent },
+  histMain: { minHeight: metrics.controlHeight, justifyContent: 'center', flex: 1, minWidth: 0 },
+  histTop: { alignItems: 'flex-start' },
+  histTitle: { ...TYPE.title, color: c.text },
+  histStatus: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xxs },
+  histBadgeHit: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.sm, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  histBadge: { ...TYPE.label, color: c.accentText },
+  histArchived: { ...TYPE.meta, color: c.text2 },
+  histScope: { ...TYPE.meta, color: c.text2 },
+  histMeta: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, fontVariant: ['tabular-nums'] },
+  histPreview: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
+  sheetOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end', backgroundColor: c.scrim },
   sheet: {
-    backgroundColor: c.card,
-    borderTopLeftRadius: metrics.cardRadius,
-    borderTopRightRadius: metrics.cardRadius,
-    paddingHorizontal: 18,
-    paddingTop: 16,
-    paddingBottom: 24,
+    backgroundColor: c.card, borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
+    maxHeight: '88%', flexGrow: 0, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair,
   },
-  sheetTitle: { fontSize: 14.5, color: c.text, fontWeight: '600' },
-  sheetSub: { fontSize: 11, color: c.text3, marginTop: 3, marginBottom: 8 },
-  sheetAction: {
-    minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingVertical: 12,
-    borderBottomWidth: metrics.strokeWidth,
-    borderBottomColor: c.hair,
-  },
-  sheetActionText: { fontSize: 13.5, color: c.text },
-  sheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: 11, alignItems: 'center', marginTop: 4 },
-  sheetCancelText: { fontSize: 13, color: c.text2 },
-
-  /* ---- 删除确认 ---- */
-  dialogOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    padding: 24,
-    backgroundColor: c.scrim,
-  },
-  dialog: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    padding: 20,
-    gap: 10,
-  },
-  dialogTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
-  dialogBody: { fontSize: 12.5, color: c.text2, lineHeight: 20 },
-  dialogActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 22,
-    marginTop: 8,
-  },
-  danger: { fontSize: 13, color: c.danger },
-  muted: { fontSize: 13, color: c.text2 },
-
-  /* ---- AI 整理预览 ---- */
-  summaryPage: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: c.page,
-  },
-  summaryCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 28,
-    paddingBottom: 40,
-  },
-  summaryBusyTitle: { fontSize: 15, color: c.text, fontWeight: '600', marginTop: 6 },
-  summaryBusyBody: {
-    fontSize: 12.5,
-    color: c.text2,
-    lineHeight: 20,
-    textAlign: 'center',
-  },
-  summaryMeta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'], marginTop: 4 },
-  summaryError: { fontSize: 13, color: c.danger, lineHeight: 20, textAlign: 'center' },
-  summaryButtons: { flexDirection: 'row', gap: 10, marginTop: 8, alignSelf: 'stretch' },
-  summaryCancel: { paddingVertical: 10, paddingHorizontal: 18 },
-
-  summaryContent: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 24 },
-  summaryHint: { fontSize: 11.5, color: c.text3, lineHeight: 18 },
-  summaryOmitted: { fontSize: 11.5, color: c.danger, lineHeight: 18, marginTop: 6 },
-  summaryBody: { fontSize: 14.5, lineHeight: 23, color: c.text, marginTop: 12 },
-  summaryFooter: {
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 16,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-  },
-  ghostBtn: {
-    minHeight: metrics.controlHeight,
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 11,
-    borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-  },
-  ghostBtnText: { fontSize: 13, color: c.text },
-  solidBtn: {
-    minHeight: metrics.controlHeight,
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 11,
-    borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accent,
-  },
-  solidBtnText: { fontSize: 13, color: c.onAccent, fontWeight: '600' },
+  sheetBody: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.lg, paddingBottom: SPACE.xl },
+  sheetTitle: { ...TYPE.title, color: c.text },
+  sheetSub: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, marginBottom: SPACE.sm },
+  sheetAction: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm, paddingVertical: SPACE.sm, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  sheetActionText: { ...TYPE.body, color: c.text, flex: 1, minWidth: 0 },
+  sheetCancel: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingVertical: SPACE.sm, alignItems: 'center', marginTop: SPACE.xs },
+  sheetCancelText: { ...TYPE.label, color: c.text2 },
+  dialogOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: SPACE.lg, backgroundColor: c.scrim },
+  dialog: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, padding: SPACE.lg, gap: SPACE.sm },
+  dialogTitle: { ...TYPE.title, color: c.text },
+  dialogBody: { ...TYPE.body, color: c.text2 },
+  dialogActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-end', gap: SPACE.xs, marginTop: SPACE.xs },
+  danger: { ...TYPE.label, color: c.danger },
+  muted: { ...TYPE.label, color: c.text2 },
+  summaryPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
+  ghostBtnText: { ...TYPE.label, color: c.text, textAlign: 'center' },
 });

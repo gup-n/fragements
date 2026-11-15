@@ -20,7 +20,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { QaCitation } from '../types';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { IconButton, type IoniconName } from './IconButton';
 import { repo } from '../db/repo';
 import { openOriginal } from '../db/docFiles';
@@ -118,11 +118,11 @@ export function CitationSheet({ cite, onClose }: Props) {
       <View style={styles.panel}>
         <View style={styles.head}>
           <View style={styles.iconWrap}>
-            <Ionicons name={ICON[cite.kind]} size={16} color={c.accentText} />
+            <Ionicons name={ICON[cite.kind]} size={20} color={c.accentText} accessible={false} />
           </View>
           <View style={styles.headText}>
             <Text style={styles.kind}>{KIND_NAME[cite.kind]}</Text>
-            <Text ref={headingRef} accessible accessibilityRole="header" style={styles.label} numberOfLines={2}>
+            <Text ref={headingRef} accessible accessibilityRole="header" style={styles.label} numberOfLines={2} accessibilityLabel={cite.label}>
               {cite.label}
             </Text>
           </View>
@@ -141,6 +141,7 @@ export function CitationSheet({ cite, onClose }: Props) {
           contentContainerStyle={styles.bodyContent}
           showsVerticalScrollIndicator={false}
         >
+          <Text style={styles.snapshotLabel}>引用片段 · 提问时快照</Text>
           <Text style={styles.bodyText} selectable>
             {cite.body.trim() || '（这条没有正文）'}
           </Text>
@@ -149,7 +150,7 @@ export function CitationSheet({ cite, onClose }: Props) {
         {cite.kind === 'D' ? (
           <View style={styles.docFooter}>
             <View style={styles.docRow}>
-              <Text style={styles.docHint} numberOfLines={2}>
+              <Text style={styles.docHint}>
                 片段是提问当时发出去的那一段，原件改动或删除都不影响这里
               </Text>
               <Pressable
@@ -169,7 +170,7 @@ export function CitationSheet({ cite, onClose }: Props) {
         {linkError ? <Text style={styles.docNote} accessibilityLiveRegion="polite">{linkError}</Text> : null}
         {url ? (
           <View style={styles.linkRow}>
-            <Text style={styles.url} numberOfLines={1}>
+            <Text style={styles.url} numberOfLines={2}>
               {url}
             </Text>
             <Pressable
@@ -189,94 +190,49 @@ export function CitationSheet({ cite, onClose }: Props) {
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'flex-end',
-  },
-  /** 压在面板下面，点空白处关掉 */
-  scrim: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: c.scrim,
-  },
-  /**
-   * `maxHeight` 而不是固定高度：待办引用只有一行字，固定高度会留一大片空。
-   * 上限 72% 是给长碎片留的余量，超过就滚。
-   */
+  overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end' },
+  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
   panel: {
-    backgroundColor: c.card,
-    borderTopLeftRadius: metrics.cardRadius,
-    borderTopRightRadius: metrics.cardRadius,
-    maxHeight: '86%',
-    borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    paddingBottom: 16,
+    backgroundColor: c.card, borderTopLeftRadius: metrics.cardRadius, borderTopRightRadius: metrics.cardRadius,
+    maxHeight: '86%', borderTopWidth: metrics.strokeWidth, borderColor: c.hair, paddingBottom: SPACE.md,
   },
-
   head: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 14,
-    paddingBottom: 10,
-    borderBottomWidth: metrics.strokeWidth,
-    borderBottomColor: c.hair,
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm,
+    paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.md,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
   iconWrap: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: c.accentBg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
+    width: 40, height: 40, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accentBg, alignItems: 'center', justifyContent: 'center',
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
   },
-  headText: { flex: 1, minWidth: 0 },
-  kind: { fontSize: 12, color: c.text3, letterSpacing: 0.5 },
-  label: { fontSize: 13, lineHeight: 19, color: c.text, fontWeight: '600', marginTop: 2 },
-
+  headText: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  kind: { ...TYPE.meta, color: c.text2 },
+  label: { ...TYPE.title, color: c.text },
   body: { flexGrow: 0, flexShrink: 1 },
-  bodyContent: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
-  bodyText: { fontSize: 14.5, lineHeight: 23, color: c.text2 },
-
+  bodyContent: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.sm, gap: SPACE.sm },
+  snapshotLabel: { ...TYPE.label, color: c.text2 },
+  bodyText: { ...TYPE.reading, color: c.text },
   linkRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    marginTop: 4,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
+    flexDirection: 'column', alignItems: 'stretch', gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, marginTop: SPACE.xs,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
-  url: { flex: 1, fontSize: 12, color: c.text3 },
-  openBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accentBg,
+  url: { ...TYPE.meta, color: c.text2 },
+  openBtn: {
+    minWidth: 96, minHeight: metrics.controlHeight, alignSelf: 'flex-start',
+    justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    borderRadius: metrics.buttonRadius, backgroundColor: c.accentBg,
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair,
   },
-  openText: { fontSize: 12.5, color: c.accentText, fontWeight: '600' },
+  openText: { ...TYPE.label, color: c.accentText, textAlign: 'center' },
   pressed: { opacity: 0.7 },
-
-  /* ---- 文档引用：打开原件 ---- */
   docFooter: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    marginTop: 4,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-    gap: 6,
+    paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, marginTop: SPACE.xs,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, gap: SPACE.xs,
   },
-  docRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  docHint: { flex: 1, fontSize: 12, lineHeight: 16, color: c.text3 },
-  /** 原件被删/版本变了就写在这里，就近反馈，不要另弹一个框 */
-  docNote: { fontSize: 12, lineHeight: 17, color: c.danger },
+  docRow: { flexDirection: 'column', alignItems: 'stretch', gap: SPACE.sm },
+  docHint: { ...TYPE.meta, color: c.text2 },
+  docNote: { ...TYPE.meta, color: c.danger, paddingHorizontal: SPACE.xxs },
 });

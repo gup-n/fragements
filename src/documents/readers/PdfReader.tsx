@@ -15,7 +15,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import type { Document } from '../../types';
 import { LOCAL_READER_LIMITS } from '../formats';
-import { useTheme, useThemedStyles, type Palette } from '../../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { SearchBar } from './SearchBar';
 import { PdfWebView, PDF_WEBVIEW_SUPPORTED } from './PdfWebView';
 import { pdfHtmlUri } from './pdfAsset';
@@ -161,6 +161,7 @@ export function PdfReader({ document: doc }: Props) {
         </View>
       ) : (
         <>
+          {opened && pageCount ? <Text style={styles.pageMeta}>PDF 原版式 · 共 {pageCount} 页</Text> : null}
           <SearchBar
             value={query}
             onChange={setQuery}
@@ -210,30 +211,20 @@ export function PdfReader({ document: doc }: Props) {
   );
 }
 
-const makeStyles = (c: Palette) => StyleSheet.create({
+const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1 },
   webWrap: { flex: 1 },
   web: { flex: 1, backgroundColor: c.page },
-  /** 首屏盖一层，避免白屏一秒钟还看不出在干什么 */
-  loading: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingTop: 48,
-    alignItems: 'center',
-    gap: 10,
-  },
-  loadingText: { fontSize: 13, color: c.text2 },
+  pageMeta: { ...TYPE.meta, color: c.text2, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs },
+  /** 首屏提示不改变PDF画布、页码控件或消息协议。 */
+  loading: { position: 'absolute', top: 0, left: 0, right: 0, paddingTop: SPACE.xxl, alignItems: 'center', gap: SPACE.sm },
+  loadingText: { ...TYPE.body, color: c.text2 },
   notice: {
-    fontSize: 13,
-    lineHeight: 20,
-    color: c.amberText,
-    backgroundColor: c.amberBg,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    ...TYPE.body, color: c.amberText, backgroundColor: c.amberBg,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
   },
-  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
+  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl, gap: SPACE.sm },
+  stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  stateHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
 });

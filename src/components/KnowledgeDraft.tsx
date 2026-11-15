@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator } from './BusyIndicator';
 import { AgentError } from './AgentError';
 import { ReasoningFold } from './ReasoningFold';
@@ -66,11 +66,12 @@ export function KnowledgeDraftCard({
     <View style={styles.card}>
       <View style={styles.heading}>
         {busy ? <BusyIndicator color={c.text2} size="small" /> : null}
-        <Text style={styles.title}>{busy ? '正在整理' : draft.mode === 'todos' ? `提炼出 ${todoTotal} 条待办` : `产出 ${draft.docs.length} 篇文档${todoTotal ? ` · ${todoTotal} 条待办` : ''}`}</Text>
+        <Text style={styles.title} accessibilityRole="header">{busy ? '正在整理' : draft.mode === 'todos' ? `提炼出 ${todoTotal} 条待办` : `产出 ${draft.docs.length} 篇文档${todoTotal ? ` · ${todoTotal} 条待办` : ''}`}</Text>
         {busy ? <Text style={styles.meta}>{elapsed}s</Text> : null}
       </View>
       {steps.length ? (
         <View style={styles.steps}>
+          <Text style={styles.label}>处理过程</Text>
           {visibleSteps.map((step, i) => (
             <View key={`${i}-${step.text}`} style={styles.step}>
               {step.state === 'running'
@@ -96,14 +97,14 @@ export function KnowledgeDraftCard({
         const saved = savedDocs.get(doc.key);
         const problem = docProblem(doc);
         return (
-          <View key={doc.key} style={styles.document}>
+          <View key={doc.key} style={[styles.document, (saved || doc.keep) && styles.documentSelected]}>
             <View style={styles.docHeading}>
               <Pressable
-                style={styles.checkHit} disabled={locked || !!saved} onPress={() => patchDoc(doc.key, !doc.keep)}
+                style={[styles.checkHit, (saved || doc.keep) && styles.checkSelected]} disabled={locked || !!saved} onPress={() => patchDoc(doc.key, !doc.keep)}
                 accessibilityRole="checkbox" accessibilityState={{ checked: !!saved || doc.keep, disabled: locked || !!saved }}
                 accessibilityLabel={`${saved ? '已写入' : doc.keep ? '取消写入' : '选择写入'}文档 ${doc.title || '未命名文档'}`}
               >
-                <Ionicons name={saved ? 'checkmark-circle' : doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+                <Ionicons name={saved ? 'checkmark-circle' : doc.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={saved || doc.keep ? c.accent : c.text2} accessible={false} />
               </Pressable>
               <Pressable style={styles.docTitleHit} onPress={() => onOpenDraft(doc.key, 'read')} accessibilityRole="button" accessibilityLabel={`查看 ${doc.title || '未命名文档'}`}>
                 <Text style={styles.docTitle}>{doc.title || '未命名文档'}</Text>
@@ -112,13 +113,13 @@ export function KnowledgeDraftCard({
             </View>
             <Text style={styles.secondary}>{doc.summary || '没有摘要，点查看阅读全文'}</Text>
             <View style={styles.row}>
-              <Pressable style={styles.smallButton} onPress={() => onOpenDraft(doc.key, 'read')} accessibilityRole="button"><Text style={styles.buttonText}>查看</Text></Pressable>
+              <Pressable style={styles.smallButton} onPress={() => onOpenDraft(doc.key, 'read')} accessibilityRole="button"><Text style={styles.buttonText}>查看全文</Text></Pressable>
               {saved ? (
-                <Pressable style={styles.smallButton} onPress={() => onOpenDoc(saved.id)} accessibilityRole="button"><Text style={styles.buttonText}>打开已存文档</Text></Pressable>
+                <Pressable style={[styles.smallButton, styles.writeButton]} onPress={() => onOpenDoc(saved.id)} accessibilityRole="button"><Text style={styles.writeButtonText}>打开已存文档</Text></Pressable>
               ) : (
                 <>
-                  <Pressable style={styles.smallButton} disabled={locked} onPress={() => onOpenDraft(doc.key, 'edit')} accessibilityRole="button"><Text style={styles.buttonText}>编辑</Text></Pressable>
-                  <Pressable style={[styles.smallButton, (!allowDoc || !doc.keep || !!problem || locked) && styles.off]} disabled={!allowDoc || !doc.keep || !!problem || locked} onPress={() => onApprove(doc.key)} accessibilityRole="button"><Text style={styles.buttonText}>写入这一篇</Text></Pressable>
+                  <Pressable style={[styles.smallButton, locked && styles.off]} disabled={locked} onPress={() => onOpenDraft(doc.key, 'edit')} accessibilityRole="button" accessibilityState={{ disabled: locked }}><Text style={styles.buttonText}>编辑</Text></Pressable>
+                  <Pressable style={[styles.smallButton, styles.writeButton, (!allowDoc || !doc.keep || !!problem || locked) && styles.off]} disabled={!allowDoc || !doc.keep || !!problem || locked} onPress={() => onApprove(doc.key)} accessibilityRole="button" accessibilityState={{ disabled: !allowDoc || !doc.keep || !!problem || locked }}><Text style={styles.writeButtonText}>写入这一篇</Text></Pressable>
                 </>
               )}
             </View>
@@ -133,8 +134,8 @@ export function KnowledgeDraftCard({
         return (
           <View key={todo.key} style={styles.todoGroup}>
             <View style={styles.todoRow}>
-              <Pressable style={styles.checkHit} onPress={() => patchTodo(todo.key, { keep: !todo.keep })} disabled={locked || saved} accessibilityRole="checkbox" accessibilityState={{ checked: saved || todo.keep, disabled: locked || saved }} accessibilityLabel={`${saved ? '已写入' : todo.keep ? '取消写入' : '选择写入'}待办 ${todo.text}`}>
-                <Ionicons name={saved ? 'checkmark-circle' : todo.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={c.text} />
+              <Pressable style={[styles.checkHit, (saved || todo.keep) && styles.checkSelected]} onPress={() => patchTodo(todo.key, { keep: !todo.keep })} disabled={locked || saved} accessibilityRole="checkbox" accessibilityState={{ checked: saved || todo.keep, disabled: locked || saved }} accessibilityLabel={`${saved ? '已写入' : todo.keep ? '取消写入' : '选择写入'}待办 ${todo.text}`}>
+                <Ionicons name={saved ? 'checkmark-circle' : todo.keep ? 'checkbox-outline' : 'square-outline'} size={23} color={saved || todo.keep ? c.accent : c.text2} accessible={false} />
               </Pressable>
               <TextInput value={todo.text} onChangeText={(text) => patchTodo(todo.key, { text })} style={[styles.todoInput, !todo.keep && styles.unselected]} multiline editable={!locked && !saved} accessibilityLabel="待办内容" selectionColor={c.selection} />
             </View>
@@ -144,7 +145,7 @@ export function KnowledgeDraftCard({
               return (
                 <View key={child.key} style={styles.childRow}>
                   <Pressable style={styles.checkHit} onPress={() => patchChild(todo.key, child.key, !child.keep)} disabled={locked || childSaved || !todo.keep} accessibilityRole="checkbox" accessibilityState={{ checked: childSaved || child.keep, disabled: locked || childSaved || !todo.keep }} accessibilityLabel={`${childSaved ? '已写入' : child.keep ? '取消写入' : '选择写入'}步骤 ${child.text}`}>
-                    <Ionicons name={childSaved ? 'checkmark-circle' : child.keep ? 'checkbox-outline' : 'square-outline'} size={20} color={c.text2} />
+                    <Ionicons name={childSaved ? 'checkmark-circle' : child.keep ? 'checkbox-outline' : 'square-outline'} size={20} color={childSaved || (child.keep && todo.keep) ? c.accent : c.text2} accessible={false} />
                   </Pressable>
                   <Text style={[styles.childText, (!child.keep || !todo.keep) && styles.unselected]}>{child.text}{childSaved ? ' · 已写入' : !child.keep ? ' · 未选择' : ''}</Text>
                 </View>
@@ -155,19 +156,23 @@ export function KnowledgeDraftCard({
       })}
 
       <View style={styles.permissions}>
-        <Pressable style={styles.permission} onPress={() => onAllowDoc(!allowDoc)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowDoc, disabled: locked }} accessibilityLabel="允许写入文档">
-          <Ionicons name={allowDoc ? 'checkbox-outline' : 'square-outline'} size={22} color={c.text} />
-          <Text style={styles.permissionText}>文档写入 · {allowDoc ? '开' : '关'}{draft.mode === 'todos' ? '（本轮不写文档）' : ''}</Text>
+        <View style={styles.permissionHeading}>
+          <Ionicons name="shield-checkmark-outline" size={18} color={c.text2} accessible={false} />
+          <Text style={styles.label}>确认写入权限</Text>
+        </View>
+        <Pressable style={[styles.permission, locked && styles.off]} onPress={() => onAllowDoc(!allowDoc)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowDoc, disabled: locked }} accessibilityLabel="允许写入文档">
+          <Ionicons name={allowDoc ? 'checkbox-outline' : 'square-outline'} size={22} color={allowDoc ? c.accent : c.text2} accessible={false} />
+          <Text style={styles.permissionText}>文档写入 · {allowDoc ? '开启' : '关闭'}{draft.mode === 'todos' ? '（本轮不写文档）' : ''}</Text>
         </Pressable>
-        <Pressable style={styles.permission} onPress={() => onAllowTodos(!allowTodos)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowTodos, disabled: locked }} accessibilityLabel="允许新增待办">
-          <Ionicons name={allowTodos ? 'checkbox-outline' : 'square-outline'} size={22} color={c.text} />
-          <Text style={styles.permissionText}>待办写入 · {allowTodos ? '开' : '关'}</Text>
+        <Pressable style={[styles.permission, locked && styles.off]} onPress={() => onAllowTodos(!allowTodos)} disabled={locked} accessibilityRole="switch" accessibilityState={{ checked: allowTodos, disabled: locked }} accessibilityLabel="允许新增待办">
+          <Ionicons name={allowTodos ? 'checkbox-outline' : 'square-outline'} size={22} color={allowTodos ? c.accent : c.text2} accessible={false} />
+          <Text style={styles.permissionText}>待办写入 · {allowTodos ? '开启' : '关闭'}</Text>
         </Pressable>
         <Text style={styles.note}>只写你选择的条目；原始碎片不删除。离开页面会保留这份草稿，不会自动继续请求。</Text>
       </View>
       <View style={styles.row}>
         <Pressable style={styles.outline} onPress={onDiscard} disabled={locked} accessibilityRole="button"><Text style={styles.buttonText}>放弃草稿</Text></Pressable>
-        <Pressable style={[styles.primary, (!hasTargets || locked) && styles.off]} onPress={() => onApprove(null)} disabled={!hasTargets || locked} accessibilityRole="button" accessibilityLabel={hasTargets ? `确认写入 ${writeLabel}` : writeLabel}>
+        <Pressable style={[styles.primary, (!hasTargets || locked) && styles.off]} onPress={() => onApprove(null)} disabled={!hasTargets || locked} accessibilityRole="button" accessibilityState={{ disabled: !hasTargets || locked, busy: saving }} accessibilityLabel={hasTargets ? `确认写入 ${writeLabel}` : writeLabel}>
           <Text style={styles.primaryText}>{hasTargets && !saving ? `确认写入 ${writeLabel}` : writeLabel}</Text>
         </Pressable>
       </View>
@@ -176,38 +181,64 @@ export function KnowledgeDraftCard({
 }
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
-  card: { paddingTop: 8, gap: 12 },
-  heading: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title: { flex: 1, color: c.text, fontSize: 16, lineHeight: 24, fontWeight: '600' },
-  meta: { color: c.text3, fontSize: 12, lineHeight: 19 },
-  secondary: { color: c.text2, fontSize: 14, lineHeight: 22 },
-  note: { color: c.text2, fontSize: 12.5, lineHeight: 20 },
-  steps: { gap: 6, borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair, paddingLeft: 12 },
-  step: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
-  stepText: { flex: 1, color: c.text2, fontSize: 13, lineHeight: 20 },
-  textButton: { minHeight: metrics.controlHeight, justifyContent: 'center' },
-  document: { backgroundColor: c.card, borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.cardRadius, padding: 12, gap: 8 },
-  docHeading: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  docTitleHit: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', gap: 4 },
-  docTitle: { color: c.text, fontSize: 16, lineHeight: 24, fontWeight: '600' },
-  checkHit: { width: metrics.controlHeight, minHeight: metrics.controlHeight, alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
-  smallButton: { minHeight: metrics.controlHeight, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center', borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft },
-  buttonText: { color: c.text, fontSize: 14, lineHeight: 21 },
-  outline: { minHeight: metrics.controlHeight, paddingVertical: 10, paddingHorizontal: 12, justifyContent: 'center', alignItems: 'center', borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.buttonRadius },
-  primary: { flex: 1, minWidth: 160, minHeight: metrics.controlHeight, padding: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: c.accent, borderRadius: metrics.buttonRadius },
-  primaryText: { color: c.onAccent, fontSize: 14, lineHeight: 21, fontWeight: '600' },
-  permissions: { gap: 4, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair, paddingTop: 8 },
-  permission: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  permissionText: { flex: 1, color: c.text, fontSize: 14, lineHeight: 22 },
-  label: { color: c.text2, fontSize: 14, lineHeight: 22, fontWeight: '600' },
-  todoGroup: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, paddingBottom: 10 },
-  todoRow: { flexDirection: 'row', alignItems: 'center' },
-  todoInput: { flex: 1, minHeight: metrics.controlHeight, color: c.text, fontSize: 15, lineHeight: 24, paddingVertical: 10 },
-  todoState: { marginLeft: metrics.controlHeight, color: c.text2, fontSize: 12, lineHeight: 19 },
-  childRow: { flexDirection: 'row', alignItems: 'center', marginLeft: 24 },
-  childText: { flex: 1, color: c.text2, fontSize: 14, lineHeight: 22 },
+  card: { paddingTop: SPACE.xs, paddingBottom: SPACE.md, gap: SPACE.md },
+  heading: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  title: { ...TYPE.title, flex: 1, minWidth: 140, color: c.text },
+  meta: { ...TYPE.meta, color: c.text2 },
+  secondary: { ...TYPE.body, color: c.text2 },
+  note: { ...TYPE.label, fontWeight: '400', color: c.text2 },
+  steps: { gap: SPACE.xs, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair, paddingLeft: SPACE.sm },
+  step: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs },
+  stepText: { ...TYPE.label, fontWeight: '400', flex: 1, color: c.text2 },
+  textButton: { minHeight: metrics.controlHeight, justifyContent: 'center', alignSelf: 'flex-start' },
+  document: {
+    backgroundColor: c.card,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderRadius: metrics.cardRadius, padding: SPACE.md, gap: SPACE.sm,
+  },
+  documentSelected: { borderColor: c.accentHair },
+  docHeading: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs },
+  docTitleHit: { flex: 1, minHeight: metrics.controlHeight, justifyContent: 'center', gap: SPACE.xxs },
+  docTitle: { ...TYPE.title, color: c.text },
+  checkHit: { width: metrics.controlHeight, minHeight: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', borderRadius: metrics.buttonRadius },
+  checkSelected: { backgroundColor: c.accentBg },
+  row: { flexDirection: 'row', gap: SPACE.xs, flexWrap: 'wrap' },
+  smallButton: {
+    minHeight: metrics.controlHeight, minWidth: 72, flexGrow: 1,
+    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.xs,
+    justifyContent: 'center', alignItems: 'center', borderRadius: metrics.buttonRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.hairSoft,
+  },
+  writeButton: { backgroundColor: c.accentBg, borderColor: c.accentHair },
+  buttonText: { ...TYPE.label, color: c.text, textAlign: 'center' },
+  writeButtonText: { ...TYPE.label, color: c.accentText, textAlign: 'center' },
+  outline: {
+    minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, paddingHorizontal: SPACE.md,
+    justifyContent: 'center', alignItems: 'center', borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderRadius: metrics.buttonRadius,
+  },
+  primary: {
+    flex: 1, minWidth: 160, minHeight: metrics.controlHeight,
+    padding: SPACE.sm, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: c.accent, borderRadius: metrics.buttonRadius,
+  },
+  primaryText: { ...TYPE.label, color: c.onAccent, textAlign: 'center' },
+  permissions: {
+    gap: SPACE.xs, backgroundColor: c.hairSoft,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderRadius: metrics.cardRadius, padding: SPACE.md,
+  },
+  permissionHeading: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
+  permission: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm },
+  permissionText: { ...TYPE.body, flex: 1, color: c.text },
+  label: { ...TYPE.label, color: c.text },
+  todoGroup: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair, paddingBottom: SPACE.sm, gap: SPACE.xxs },
+  todoRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
+  todoInput: { ...TYPE.body, flex: 1, minHeight: metrics.controlHeight, color: c.text, paddingVertical: SPACE.xs },
+  todoState: { ...TYPE.meta, marginLeft: metrics.controlHeight + SPACE.xs, color: c.text2 },
+  childRow: { flexDirection: 'row', alignItems: 'center', marginLeft: SPACE.xl, gap: SPACE.xxs },
+  childText: { ...TYPE.body, flex: 1, color: c.text2 },
   unselected: { color: c.text3 },
-  problem: { color: c.danger, fontSize: 13, lineHeight: 20 },
+  problem: { ...TYPE.label, fontWeight: '400', color: c.danger },
   off: { opacity: 0.55 },
 });

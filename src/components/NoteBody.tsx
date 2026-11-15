@@ -25,7 +25,7 @@ import {
   type StyleProp,
   type TextStyle,
 } from 'react-native';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { blockHitCount, segmentHitCount } from '../documents/readers/markdownSearch';
 import { findHits } from '../util/highlight';
 import {
@@ -217,8 +217,8 @@ const ALIGN: Record<Align, 'left' | 'center' | 'right'> = {
  * 表格。
  *
  * 列宽按内容估的相对权重分，不是平均分 —— 三列里「品牌」两个字和「进 BIOS」
- * 一样宽的话，一半屏幕就浪费在空白上了。窄屏列多时（≥5 列）整体缩字号，
- * 因为那时候再换行也读不出结构。
+ * 一样宽的话，一半屏幕就浪费在空白上了。窄屏列多时（≥5 列）收窄内边距，
+ * 保持正文字号并换行，不再用小字挤进屏幕。
  */
 function Table({
   block,
@@ -240,12 +240,12 @@ function Table({
     const start = hitOffset;
     hitOffset += highlight ? segmentHitCount(segs, highlight) : 0;
     return (
-      <View key={col} style={[styles.td, { flex: block.weights[col] ?? 3 }, col > 0 && styles.tdDivider]}>
+      <View key={col} style={[styles.td, dense && styles.tdDense, { flex: block.weights[col] ?? 3 }, col > 0 && styles.tdDivider]}>
         <Text
           selectable={selectable}
           style={[
             reading ? styles.tdTextReading : styles.tdText,
-            dense && styles.tdTextDense, head && styles.thText, mutedStyle,
+            head && styles.thText, mutedStyle,
             { textAlign: ALIGN[block.align[col] ?? 'left'] },
           ]}
         >
@@ -481,8 +481,8 @@ export function NoteBody({
   /*
    * ---- 逐块模式：详情页要按块滚动到命中处，所以不合并 ----
    *
-   * 每块单独一个 View 只是为了拿到 y，不给它加 margin：块与块之间本来就只有
-   * 行高本身那点间距，加东西就会比合并渲染时松一截。
+   * 阅读块的间距来自共享 token；onLayout 回报留白之后的真实 y，
+   * 不用字符比例猜命中位置。
    * 表格 / 代码块也要回调：命中可能落在表格单元格或代码里，只量文字块的话
    * 「第 4 / 7 处」会跳到别的段落上去。
    */
@@ -515,7 +515,7 @@ export function NoteBody({
             );
           }
           return (
-            <View key={bi} onLayout={measure}>
+            <View key={bi} style={[reading && styles.textBlockReading, reading && b.kind === 'h' && bi > 0 && styles.headingBlockReading]} onLayout={measure}>
               <Text style={[styles.root, reading && styles.rootReading, style, mutedStyle]} selectable={selectable}>
                 {blockInner(b)}
               </Text>
@@ -554,45 +554,42 @@ export function NoteBody({
 }
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
-  root: { fontSize: 15, lineHeight: 24, color: c.text },
-  rootReading: { fontSize: 17, lineHeight: 30 },
-  h: { fontSize: 16, lineHeight: 25, color: c.text, fontWeight: '600' },
-  hReading: { fontSize: 19, lineHeight: 30, color: c.text, fontWeight: '600' },
+  root: { ...TYPE.body, color: c.text },
+  rootReading: { ...TYPE.reading },
+  h: { ...TYPE.title, color: c.text },
+  hReading: { ...TYPE.heading, color: c.text },
   b: {},
   p: {},
+  textBlockReading: { paddingBottom: SPACE.xs },
+  headingBlockReading: { marginTop: SPACE.md },
   bold: { fontWeight: '600' },
   hit: { backgroundColor: c.amberBg, borderRadius: 2 },
   hitCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
-  code: { fontFamily: MONO, fontSize: 14 },
-  codeReading: { fontFamily: MONO, fontSize: 15 },
+  code: { ...TYPE.body, fontFamily: MONO },
+  codeReading: { ...TYPE.body, fontFamily: MONO },
   /** 引用仍是原有的编号与点击契约，不把作者的字面引用吞掉。 */
   cite: {
-    fontSize: 12, lineHeight: 18, fontWeight: '600', color: c.accentText,
-    backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
-    paddingHorizontal: 4, marginHorizontal: 1, textDecorationLine: 'underline',
+    ...TYPE.label, color: c.accentText, backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
+    paddingHorizontal: SPACE.xxs, marginHorizontal: 1, textDecorationLine: 'underline',
   },
-  hr: { height: metrics.strokeWidth, backgroundColor: c.hair, marginVertical: 16 },
+  hr: { height: surfaceStroke(metrics), backgroundColor: c.hair, marginVertical: SPACE.lg },
   codeBox: {
-    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    paddingHorizontal: 12, paddingVertical: 8, marginVertical: 8,
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, marginVertical: SPACE.sm,
   },
-  codeText: { fontFamily: MONO, fontSize: 13, lineHeight: 21, color: c.text },
-  codeTextReading: { fontFamily: MONO, fontSize: 15, lineHeight: 24, color: c.text },
-  table: {
-    marginVertical: 8, borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    borderRadius: metrics.buttonRadius, overflow: 'hidden',
-  },
+  codeText: { ...TYPE.body, fontFamily: MONO, color: c.text },
+  codeTextReading: { ...TYPE.body, fontFamily: MONO, color: c.text },
+  table: { marginVertical: SPACE.sm, borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius, overflow: 'hidden' },
   tr: { flexDirection: 'row', alignItems: 'stretch' },
-  trHead: { backgroundColor: c.hairSoft },
-  tableNote: { fontSize: 12, lineHeight: 19, color: c.text2, marginTop: -4, marginBottom: 8, paddingHorizontal: 2 },
-  trDivider: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
-  imageBox: { marginVertical: 8 },
+  trHead: { backgroundColor: c.hairSoft, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  tableNote: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, marginBottom: SPACE.sm, paddingHorizontal: SPACE.xxs },
+  trDivider: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  imageBox: { marginVertical: SPACE.sm },
   inlineImage: { width: '100%', borderRadius: metrics.cardRadius, backgroundColor: c.hairSoft },
-  td: { paddingHorizontal: 8, paddingVertical: 8, justifyContent: 'center', minWidth: 0 },
-  tdDivider: { borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.hair },
-  tdText: { fontSize: 13, lineHeight: 21, color: c.text },
-  tdTextReading: { fontSize: 15, lineHeight: 24, color: c.text },
-  tdTextDense: { fontSize: 12, lineHeight: 19 },
+  td: { paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm, justifyContent: 'center', minWidth: 0 },
+  tdDense: { paddingHorizontal: SPACE.xxs },
+  tdDivider: { borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
+  tdText: { ...TYPE.body, color: c.text },
+  tdTextReading: { ...TYPE.body, color: c.text },
   thText: { fontWeight: '600', color: c.text },
 });

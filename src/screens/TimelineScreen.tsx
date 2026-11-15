@@ -17,7 +17,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import type { Fragment, Note, PendingFragmentImage } from '../types';
-import { R, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { R, SPACE, TYPE, navigationLayout, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
 import { FragmentDetail } from '../components/FragmentDetail';
@@ -186,9 +186,8 @@ export function TimelineScreen({
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
-  const { width } = useWindowDimensions();
-  /** 窄屏让副标题让路，四个入口仍保留可见文字和48dp触控槽。 */
-  const tightHeader = width < 410;
+  const { width, fontScale } = useWindowDimensions();
+  const navLayout = navigationLayout(width, fontScale);
   const [sending, setSending] = useState(false);
   const [picking, setPicking] = useState(false);
   const sendingRef = useRef(false);
@@ -856,66 +855,34 @@ export function TimelineScreen({
       <View style={styles.pageContent} importantForAccessibility={fullEdit || deleteTarget || (detail && detailItems.length > 0) ? 'no-hide-descendants' : 'auto'}>
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <Text style={styles.brand} numberOfLines={1}>
-            碎片
-          </Text>
-          {tightHeader ? null : (
-            <Text style={styles.brandSub} numberOfLines={1}>
-              {todayCount > 0 ? `今天记了 ${todayCount} 条` : '今天还没记东西'}
-            </Text>
-          )}
+          {keyboardHeight === 0 ? <Text style={styles.eyebrow}>你的日常记录</Text> : null}
+          <Text style={styles.brand} numberOfLines={1} accessibilityRole="header">碎片</Text>
         </View>
-
-        <View style={styles.headerActions}>
-          {/* 文档、回顾、设置，最后是加大一号的「问」 */}
-          <IconButton
-            name="documents-outline"
-            size={19}
-            tone="soft"
-            color={c.text2}
-            diameter={34}
-            onPress={() => navigate(onOpenDocs)}
-            disabled={composerBusy}
-            label="文档"
-            accessibilityLabel="文档：上传并阅读文档"
-          />
-          <IconButton
-            name="checkmark-circle-outline"
-            size={20}
-            tone="soft"
-            color={c.text2}
-            diameter={34}
-            onPress={() => navigate(onOpenReview)}
-            disabled={composerBusy}
-            label="回顾"
-            accessibilityLabel="回顾待办与小结"
-          />
-          <IconButton
-            name="settings-outline"
-            size={20}
-            tone="soft"
-            color={c.text2}
-            diameter={34}
-            onPress={() => navigate(onOpenSettings)}
-            disabled={composerBusy}
-            label="设置"
-            accessibilityLabel="设置"
-          />
-          {/*
-            问 放在最右边、也比别人大一圈（用户 2026-11-11 要求）：
-            它是这一页真正的常用动作 —— 记完就想问，整理也在这里发起。
-          */}
-          <IconButton
-            name="chatbubble-ellipses-outline"
-            size={23}
-            tone="accent"
-            color={c.accentText}
-            diameter={42}
-            onPress={() => navigate(() => onOpenAsk())}
-            disabled={composerBusy}
-            label="问"
-            accessibilityLabel="问：查自己的记录，或者让它整理"
-          />
+        <View style={styles.todaySummary} accessible accessibilityLabel={`今天已记 ${todayCount} 条`}>
+          <Text style={styles.todayNumber}>{todayCount}</Text>
+          <Text style={styles.brandSub}>今日记录</Text>
+        </View>
+      </View>
+      <View style={[styles.headerActions, { gap: navLayout.gap, paddingHorizontal: navLayout.horizontalPadding }]}>
+        <View style={styles.navSlot}>
+          <IconButton name="documents-outline" size={21} tone="soft" diameter={36}
+            onPress={() => navigate(onOpenDocs)} disabled={composerBusy} label="文档"
+            accessibilityLabel="文档：上传并阅读文档" />
+        </View>
+        <View style={styles.navSlot}>
+          <IconButton name="checkmark-circle-outline" size={21} tone="soft" diameter={36}
+            onPress={() => navigate(onOpenReview)} disabled={composerBusy} label="回顾"
+            accessibilityLabel="回顾待办与小结" />
+        </View>
+        <View style={styles.navSlot}>
+          <IconButton name="settings-outline" size={21} tone="soft" diameter={36}
+            onPress={() => navigate(onOpenSettings)} disabled={composerBusy} label="设置"
+            accessibilityLabel="设置" />
+        </View>
+        <View style={styles.navSlot}>
+          <IconButton name="chatbubble-ellipses-outline" size={23} tone="primary" diameter={40}
+            onPress={() => navigate(() => onOpenAsk())} disabled={composerBusy} label="问"
+            accessibilityLabel="问：查自己的记录，或者让它整理" />
         </View>
       </View>
 
@@ -1390,6 +1357,7 @@ export function TimelineScreen({
                 accessibilityRole="button" accessibilityLabel="展开成整页写" disabled={composerBusy} accessibilityState={{ disabled: composerBusy }}
               >
                 <Ionicons name="expand-outline" size={18} color={c.text2} />
+                <Text style={styles.toolLabel}>展开</Text>
               </Pressable>
 
               <View style={styles.flex} />
@@ -1402,6 +1370,7 @@ export function TimelineScreen({
                 accessibilityLabel="加图片"
               >
                 <Ionicons name="image-outline" size={18} color={c.text2} />
+                <Text style={styles.toolLabel}>图片</Text>
                 {pending.length ? (
                   <View style={styles.toolBadge}>
                     <Text style={styles.toolBadgeText}>{pending.length}</Text>
@@ -1415,7 +1384,8 @@ export function TimelineScreen({
                 style={[[styles.send, canSend && styles.sendActive], styles.touchTarget]}
                 accessibilityRole="button" accessibilityLabel={sending ? "正在保存" : "发布这条碎片"} accessibilityState={{ disabled: !canSend, busy: sending }}
               >
-                <>{sending ? <ActivityIndicator size="small" color={c.text2} /> : <Ionicons name="arrow-up" size={19} color={canSend ? c.onAccent : c.text3} />}</>
+                {sending ? <ActivityIndicator size="small" color={c.onAccent} /> : <Ionicons name="arrow-up" size={18} color={canSend ? c.onAccent : c.text3} />}
+                <Text style={[styles.sendLabel, { color: canSend ? c.onAccent : c.text3 }]}>{sending ? '保存中' : '发布'}</Text>
               </Pressable>
             </View>
           </View>
@@ -1577,29 +1547,28 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dialogAction: { minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   composerNotice: { fontSize: 12, lineHeight: 18, color: c.text2, paddingVertical: 6, flexShrink: 1 },
   imageMatch: { borderLeftWidth: 2, borderLeftColor: c.focus, paddingLeft: 8, gap: 4 },
-  imageMatchLabel: { fontSize: 12, lineHeight: 18, color: c.text, fontWeight: '600' },
+  imageMatchLabel: { ...TYPE.label, color: c.text },
   pendingRemoveFace: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center', backgroundColor: c.mediaScrim },
   root: { flex: 1, backgroundColor: c.page },
   flex: { flex: 1 },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    paddingLeft: 20,
-    paddingRight: 14,
-    paddingTop: 6,
-    paddingBottom: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: SPACE.md, paddingHorizontal: SPACE.lg, paddingTop: SPACE.sm, paddingBottom: SPACE.xs,
   },
-  headerLeft: { flexShrink: 1, minWidth: 40 },
-  brand: { fontSize: 20, color: c.text, fontWeight: '600', letterSpacing: 0.8 },
-  brandSub: { fontSize: 12, color: c.text3, marginTop: 2 },
-  headerActions: { flexShrink: 0, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  headerLeft: { flex: 1, minWidth: 0 },
+  eyebrow: { ...TYPE.meta, color: c.text2, marginBottom: SPACE.xxs },
+  brand: { ...TYPE.display, color: c.text, letterSpacing: 1 },
+  brandSub: { ...TYPE.meta, color: c.text2 },
+  todaySummary: { alignItems: 'flex-end', paddingLeft: SPACE.md },
+  todayNumber: { ...TYPE.heading, color: c.accentText, fontVariant: ['tabular-nums'] },
+  headerActions: { flexDirection: 'row', alignItems: 'stretch', paddingBottom: SPACE.xs },
+  navSlot: { flex: 1, minWidth: 48, alignItems: 'stretch' },
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
-    paddingHorizontal: 20,
-    paddingBottom: 10,
-    borderBottomWidth: metrics.strokeWidth,
+    paddingHorizontal: SPACE.md,
+    paddingTop: SPACE.xxs,
+    paddingBottom: SPACE.sm,
+    borderBottomWidth: surfaceStroke(metrics),
     borderBottomColor: c.hair,
   },
   filterRow: { flexDirection: 'row', marginTop: 8 },
@@ -1613,7 +1582,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: R.pill,
     backgroundColor: c.accentBg,
   },
-  filterText: { fontSize: 12, color: c.accentText, fontWeight: '500', maxWidth: 220 },
+  filterText: { ...TYPE.label, color: c.accentText, maxWidth: 220 },
   searchBox: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1623,14 +1592,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.buttonRadius + 2,
     paddingHorizontal: 12,
   },
-  searchInput: {
-    flex: 1,
-    fontSize: 14,
-    color: c.text,
-    paddingVertical: 0,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
-  },
-  searchStat: { fontSize: 12, color: c.text3, marginTop: 7, paddingLeft: 2 },
+  searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  searchStat: { ...TYPE.meta, color: c.text3, marginTop: 7, paddingLeft: 2 },
 
   listContent: { paddingBottom: 8 },
   // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
@@ -1644,26 +1607,15 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   /** 展开的月里拆出来的天：往左缩一点、小一号，视觉上挂在月头下面 */
   sectionHeaderNested: { paddingLeft: 32, paddingTop: 11, paddingBottom: 6 },
   sectionHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sectionTitle: { fontSize: 13.5, color: c.text, fontWeight: '600', letterSpacing: 0.3 },
-  sectionTitleNested: { fontSize: 12.5, color: c.text2, fontWeight: '500' },
+  sectionTitle: { ...TYPE.label, color: c.text, letterSpacing: 0.3 },
+  sectionTitleNested: { ...TYPE.label, color: c.text2 },
   sectionSubNested: { color: c.text3 },
-  sectionSub: {
-    flex: 1,
-    fontSize: 12,
-    color: c.text3,
-    fontVariant: ['tabular-nums'],
-  },
-  sectionPreview: { fontSize: 12, lineHeight: 17, color: c.text3, marginTop: 5 },
+  sectionSub: { ...TYPE.meta, flex: 1, color: c.text3, fontVariant: ['tabular-nums'] },
+  sectionPreview: { ...TYPE.meta, color: c.text3, marginTop: 5 },
 
   row: { flexDirection: 'row', paddingHorizontal: 20 },
   rowPressed: { backgroundColor: c.hairSoft },
-  time: {
-    width: 44,
-    fontSize: 12,
-    color: c.text3,
-    paddingTop: 3,
-    fontVariant: ['tabular-nums'],
-  },
+  time: { ...TYPE.meta, width: 44, color: c.text3, paddingTop: 3, fontVariant: ['tabular-nums'] },
   rail: { width: 16, alignItems: 'center' },
   railLine: { position: 'absolute', top: 17, bottom: -8, width: 1, backgroundColor: c.hair },
   dot: {
@@ -1697,16 +1649,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.mediaScrim,
   },
   thumbMore: { alignItems: 'center', justifyContent: 'center' },
-  thumbMoreText: { fontSize: 13, color: c.text2, fontWeight: '600' },
-  imageNote: { fontSize: 12, lineHeight: 17, color: c.text3 },
+  thumbMoreText: { ...TYPE.label, color: c.text2 },
+  imageNote: { ...TYPE.meta, color: c.text3 },
   imageNoteErr: { color: c.danger },
 
-  content: { fontSize: 15, lineHeight: 23, color: c.text },
+  content: { ...TYPE.body, color: c.text },
   expandBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, marginTop: 6, alignSelf: 'flex-start' },
-  expandText: { fontSize: 12.5, color: c.accent },
+  expandText: { ...TYPE.label, color: c.accent },
   metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 8 },
-  project: { fontSize: 12, color: c.text3, maxWidth: 120 },
-  mergedTag: { fontSize: 12, color: c.text3 },
+  project: { ...TYPE.meta, color: c.text3, maxWidth: 120 },
+  mergedTag: { ...TYPE.meta, color: c.text3 },
 
   // 已完成标记：浅青底小胶囊，比标签低调，不和用户自己的 tag 抢注意力
   doneBadge: {
@@ -1719,7 +1671,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 2,
   },
-  doneBadgeText: { fontSize: 11, lineHeight: 15, color: c.tealText },
+  doneBadgeText: { ...TYPE.caption, color: c.tealText },
   /** 「已整理」：和「已完成」并排时不抢戏，用主色淡淡的底 */
   orgBadge: {
     flexDirection: 'row',
@@ -1731,7 +1683,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingRight: 8,
     paddingVertical: 2,
   },
-  orgBadgeText: { fontSize: 11, lineHeight: 15, color: c.accentText },
+  orgBadgeText: { ...TYPE.caption, color: c.accentText },
   /**
    * 命中处数徽标。观感贴着小号 TagPill，但颜色固定走 amber 系 ——
    * 标签色是按标签名算的，命中数是系统信息，不该跟着标签的配色跑。
@@ -1742,7 +1694,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: 7,
     paddingVertical: 2,
   },
-  hitBadgeText: { fontSize: 12, lineHeight: 15, color: c.amberText, fontWeight: '500' },
+  hitBadgeText: { ...TYPE.meta, color: c.amberText },
 
   // 周期总结条目
   noteRow: { flexDirection: 'row', paddingHorizontal: 20 },
@@ -1766,18 +1718,18 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     marginLeft: 2,
   },
   noteHead: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 8 },
-  noteKind: { fontSize: 12, color: c.accentText, fontWeight: '600' },
-  notePeriod: { flex: 1, fontSize: 12, color: c.text3 },
-  noteBody: { fontSize: 14.5, lineHeight: 23, color: c.text },
+  noteKind: { ...TYPE.label, color: c.accentText },
+  notePeriod: { ...TYPE.meta, flex: 1, color: c.text3 },
+  noteBody: { ...TYPE.body, color: c.text },
   noteFoot: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 10,
   },
-  noteToggle: { fontSize: 12.5, color: c.accent },
+  noteToggle: { ...TYPE.label, color: c.accent },
   noteDeleteHit: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, paddingVertical: 2 },
-  noteDelete: { fontSize: 12, color: c.danger },
+  noteDelete: { ...TYPE.meta, color: c.danger },
 
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 60 },
   emptyIcon: {
@@ -1789,21 +1741,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 18,
   },
-  emptyTitle: { fontSize: 15.5, color: c.text2, fontWeight: '500' },
-  emptyBody: {
-    fontSize: 13,
-    color: c.text3,
-    textAlign: 'center',
-    lineHeight: 21,
-    marginTop: 10,
-  },
+  emptyTitle: { ...TYPE.title, color: c.text2 },
+  emptyBody: { ...TYPE.body, color: c.text3, textAlign: 'center', marginTop: 10 },
 
   composerWrap: {
-    paddingHorizontal: 16,
-    paddingTop: 9,
-    paddingBottom: 10,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
+    paddingHorizontal: SPACE.md,
+    paddingTop: SPACE.sm,
+    paddingBottom: SPACE.xs,
     backgroundColor: c.page,
   },
   /** 待发送的图：横排缩略图，每张右上角一个叉 */
@@ -1834,8 +1778,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderRadius: metrics.buttonRadius,
     backgroundColor: c.hairSoft,
   },
-  pickChipText: { fontSize: 12.5, color: c.text },
-  pickCancel: { fontSize: 12.5, color: c.text3 },
+  pickChipText: { ...TYPE.label, color: c.text },
+  pickCancel: { ...TYPE.label, color: c.text3 },
   /** 长文页那一行要和底栏对齐 */
   pickRowFull: { paddingHorizontal: 18 },
   /**
@@ -1846,30 +1790,24 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    */
   composerCard: {
     backgroundColor: c.card,
-    borderRadius: metrics.cardRadius + 6,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingLeft: 14,
-    paddingRight: 8,
-    paddingTop: 10,
-    paddingBottom: 6,
+    borderRadius: metrics.cardRadius + 4,
+    borderWidth: surfaceStroke(metrics),
+    borderColor: c.accentHair,
+    paddingHorizontal: SPACE.sm,
+    paddingTop: SPACE.sm,
+    paddingBottom: SPACE.xs,
   },
   composerBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    marginTop: 2,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.xs,
   },
-  toolBtn: { minWidth: metrics.controlHeight,
-    width: 32,
-    minHeight: metrics.controlHeight,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: c.hairSoft,
+  toolBtn: {
+    minWidth: 64, minHeight: metrics.controlHeight, flexDirection: 'row',
+    gap: SPACE.xxs, paddingHorizontal: SPACE.xs,
+    borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
   },
-  /** 选择行开着时给图标一点底色：否则那一行像是凭空冒出来的 */
-  toolBtnOn: { backgroundColor: c.hair },
+  toolLabel: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  /** 菜单展开使用明确底色，不将未选中的操作都套一层卡片。 */
+  toolBtnOn: { backgroundColor: c.accentBg },
   /** 已选图张数。压在图标右上角，不额外占位置 */
   toolBadge: {
     position: 'absolute',
@@ -1883,26 +1821,15 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: c.accent,
   },
-  toolBadgeText: { fontSize: 9.5, lineHeight: 12, color: c.onAccent, fontWeight: '600' },
-  input: {
-    fontSize: 15,
-    lineHeight: 21,
-    color: c.text,
-    minHeight: 24,
-    maxHeight: 132,
-    paddingTop: 2,
-    paddingBottom: 6,
-    paddingRight: 6,
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
-  },
-  send: { minWidth: metrics.controlHeight,
-    width: 32,
-    minHeight: metrics.controlHeight,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+  toolBadgeText: { ...TYPE.caption, color: c.onAccent },
+  input: { ...TYPE.body, color: c.text, minHeight: 48, maxHeight: 132, paddingTop: 2, paddingBottom: 6, paddingRight: 6, ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  send: {
+    minWidth: 84, minHeight: metrics.controlHeight, flexDirection: 'row',
+    gap: SPACE.xxs, paddingHorizontal: SPACE.sm,
+    borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center',
     backgroundColor: c.hairSoft,
   },
+  sendLabel: { ...TYPE.label, flexShrink: 1 },
   sendActive: { backgroundColor: c.accent },
 
   fullHeader: {
@@ -1914,18 +1841,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderBottomWidth: metrics.strokeWidth,
     borderBottomColor: c.hair,
   },
-  fullTitle: { fontSize: 14, color: c.text, fontWeight: '500' },
-  fullInput: {
-    flex: 1,
-    fontSize: 15,
-    lineHeight: 23,
-    color: c.text,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
-    textAlignVertical: 'top',
-    ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}),
-  },
-  fullCount: { flex: 1, fontSize: 12, color: c.text3 },
+  fullTitle: { ...TYPE.title, color: c.text },
+  fullInput: { ...TYPE.reading, flex: 1, color: c.text, paddingHorizontal: 18, paddingVertical: 16, textAlignVertical: 'top', ...(Platform.OS === 'web' ? { outlineStyle: 'none' as any } : {}) },
+  fullCount: { ...TYPE.meta, flex: 1, color: c.text3 },
   /** 长文底栏：字数在左、插图在右，贴着键盘上沿 */
   fullBar: {
     flexDirection: 'row',
@@ -1963,9 +1881,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     padding: 20,
     gap: 10,
   },
-  dialogTitle: { fontSize: 15, color: c.text, fontWeight: '600' },
-  dialogBody: { fontSize: 12.5, color: c.text2, lineHeight: 19 },
-  dialogHint: { fontSize: 12, color: c.text3, lineHeight: 17 },
+  dialogTitle: { ...TYPE.title, color: c.text },
+  dialogBody: { ...TYPE.body, color: c.text2 },
+  dialogHint: { ...TYPE.meta, color: c.text3 },
   dialogActions: {
     flexDirection: 'row',
     alignItems: 'center',

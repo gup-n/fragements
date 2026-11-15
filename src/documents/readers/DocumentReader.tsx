@@ -3,7 +3,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Document } from '../../types';
 import { ScreenHeader } from '../../components/ScreenHeader';
-import { useThemedStyles, type Palette } from '../../theme';
+import { SPACE, TYPE, useThemedStyles, type Palette } from '../../theme';
 import { localReaderLimitNote } from '../../util/docSupport';
 import { documentFormat, LOCAL_READER_LIMITS, type DocumentFormat } from '../formats';
 import { formatSize } from './errors';
@@ -66,7 +66,7 @@ export function DocumentReader({ document: doc, embedded = false }: {
 
 const makeStyles = (c: Palette) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
-  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
+  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl, gap: SPACE.sm },
+  stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  stateHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
 });

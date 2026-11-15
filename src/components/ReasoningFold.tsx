@@ -12,7 +12,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 interface Props {
   text: string;
@@ -34,11 +34,11 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
         accessibilityRole="button" accessibilityState={{ expanded: open }}
         accessibilityLabel={open ? '收起深度思考' : '展开深度思考'}
       >
-        <Ionicons name="bulb-outline" size={14} color={c.text3} />
+        <Ionicons name="bulb-outline" size={18} color={c.text2} accessible={false} />
         <Text style={styles.title}>深度思考</Text>
         <Text style={styles.meta}>{text.length} 字</Text>
         <View style={styles.flex} />
-        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={14} color={c.text3} />
+        <Ionicons name={open ? 'chevron-up' : 'chevron-down'} size={16} color={c.text2} accessible={false} />
       </Pressable>
 
       {open ? (
@@ -46,7 +46,7 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
           style={styles.body}
           contentContainerStyle={styles.bodyContent}
           nestedScrollEnabled
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
         >
           <Text style={styles.text} selectable>
             {text}
@@ -59,26 +59,20 @@ export function ReasoningFold({ text, defaultOpen = false }: Props) {
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
-  wrap: {
-    marginTop: 2,
-    marginBottom: 10,
-    backgroundColor: c.hairSoft,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    overflow: 'hidden',
+  wrap: { marginTop: SPACE.xxs, marginBottom: SPACE.md },
+  head: {
+    minHeight: metrics.controlHeight,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    paddingVertical: SPACE.xs,
   },
-  head: { minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 11,
-    paddingVertical: 8,
-  },
-  title: { fontSize: 12, color: c.text2, fontWeight: '500' },
-  meta: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
+  title: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  meta: { ...TYPE.meta, color: c.text3, fontVariant: ['tabular-nums'] },
   flex: { flex: 1 },
-  body: { maxHeight: 280 },
-  bodyContent: { paddingHorizontal: 11, paddingBottom: 11 },
-  text: { fontSize: 12, lineHeight: 19, color: c.text2 },
+  body: {
+    maxHeight: 280, backgroundColor: c.hairSoft,
+    borderRadius: metrics.buttonRadius,
+    borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
+  },
+  bodyContent: { padding: SPACE.sm },
+  text: { ...TYPE.body, color: c.text2 },
 });

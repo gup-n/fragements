@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { IconButton } from '../../components/IconButton';
 
 interface Props {
@@ -68,9 +68,12 @@ export function SearchBar({
 
       {trimmed ? (
         <View style={styles.hitRow}>
-          <Text style={styles.hitText} accessibilityLiveRegion="polite">
-            {busy ? '正在索引文字…' : countLabel(total, current, note)}
-          </Text>
+          <View style={styles.hitInfo}>
+            <Text style={styles.hitText} accessibilityLiveRegion="polite">
+              {busy ? '正在索引文字…' : countLabel(total, current)}
+            </Text>
+            {!busy && total > 0 && note ? <Text style={styles.hitNote}>{note}</Text> : null}
+          </View>
           <View style={styles.hitBtns}>
             <IconButton
               name="chevron-up" size={18} tone="soft" diameter={32}
@@ -89,24 +92,25 @@ export function SearchBar({
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   wrap: {
-    paddingHorizontal: metrics.pagePadding, paddingVertical: 8,
-    borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, backgroundColor: c.page,
+    paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.xs,
+    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair, backgroundColor: c.page,
   },
   box: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    minHeight: metrics.controlHeight, backgroundColor: c.card,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair,
-    borderRadius: metrics.buttonRadius, paddingLeft: 12, paddingRight: 4,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, backgroundColor: c.card,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius,
+    paddingLeft: SPACE.md, paddingRight: SPACE.xxs,
   },
-  boxFocused: { borderColor: c.focus },
+  boxFocused: { borderColor: c.focus, borderWidth: metrics.strokeWidth },
   boxDisabled: { backgroundColor: c.hairSoft },
   input: {
-    flex: 1, minWidth: 0, minHeight: metrics.controlHeight, fontSize: 15,
-    color: c.text, paddingVertical: 8, paddingHorizontal: 0,
+    flex: 1, minWidth: 0, minHeight: metrics.controlHeight, ...TYPE.body, color: c.text,
+    paddingVertical: SPACE.xs, paddingHorizontal: 0,
     ...(Platform.OS === 'web' ? { outlineStyle: 'none' as unknown as undefined } : {}),
   },
-  hitRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 },
-  hitText: { flex: 1, fontSize: 13, lineHeight: 20, color: c.text2, fontVariant: ['tabular-nums'] },
-  hitBtns: { flexDirection: 'row', gap: 4 },
-  indexing: { fontSize: 12, lineHeight: 18, color: c.text2, marginTop: 4 },
+  hitRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xs },
+  hitInfo: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  hitText: { ...TYPE.body, color: c.text, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  hitNote: { ...TYPE.meta, color: c.text2 },
+  hitBtns: { flexDirection: 'row', gap: SPACE.xxs },
+  indexing: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
 });

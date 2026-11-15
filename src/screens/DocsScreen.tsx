@@ -28,7 +28,7 @@ import {
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocumentMeta } from '../types';
 import { MAX_ASK_DOCUMENTS } from '../types';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
@@ -382,7 +382,7 @@ export function DocsScreen({ onClose, onAsk }: Props) {
 
       {/* 检索框常驻在标题下面：文档一多，翻列表找不到东西 */}
       <View style={[styles.searchBar, searchFocused && styles.searchFocused]}>
-        <Ionicons name="search" size={15} color={c.text3} />
+        <Ionicons name="search" size={18} color={c.text3} />
         <TextInput
           value={query}
           onChangeText={setQuery}
@@ -445,7 +445,7 @@ export function DocsScreen({ onClose, onAsk }: Props) {
             {notice ? (
               <Text
                 style={[styles.notice, notice.kind === 'err' ? styles.noticeErr : styles.noticeOk]}
-                numberOfLines={3}
+                accessibilityLiveRegion="polite"
               >
                 {notice.text}
               </Text>
@@ -659,32 +659,31 @@ function DocRow({
           accessibilityLabel={selectMode ? `${selected ? '取消选择' : '选择'} ${doc.name}` : `打开 ${doc.name}`}
         >
           <View style={styles.titleRow}>
-            <View style={styles.extBadge}>
-              <Text style={styles.extText} numberOfLines={1}>
-                {doc.origin === 'knowledge' ? '知识' : (doc.ext || 'file').slice(0, 4).toUpperCase()}
-              </Text>
-            </View>
-            <Text style={styles.name} numberOfLines={1}>
+            <Text style={styles.name} numberOfLines={2}>
               {doc.name}
             </Text>
           </View>
 
-          <Text style={styles.meta}>
-            {sizeText(doc.size)} · {dayLabel(doc.updatedAt)} {formatTime(doc.updatedAt)}
-          </Text>
-
-          {/*
-            知识文档把摘要直接铺在卡片上：这类文档的价值是「里面写了什么」，
-            而不是「有这么一个文件」。要读全文还是点一下，但不必靠点开才知道是什么。
-          */}
+          {/* 标题后先说明内容，再展示格式、时间和处理状态。 */}
           {doc.origin === 'knowledge' && doc.excerpt ? (
             <Text style={styles.excerpt} numberOfLines={3}>
               {doc.excerpt}
             </Text>
           ) : null}
 
+          <View style={styles.metaRow}>
+            <View style={styles.extBadge}>
+              <Text style={styles.extText}>
+                {doc.origin === 'knowledge' ? '知识' : (doc.ext || 'file').slice(0, 4).toUpperCase()}
+              </Text>
+            </View>
+            <Text style={styles.meta}>
+              {sizeText(doc.size)} · {dayLabel(doc.updatedAt)} {formatTime(doc.updatedAt)}
+            </Text>
+          </View>
+
           <View style={styles.statusRow}>
-            <Ionicons name={icon.name} size={13} color={icon.color} />
+            <Ionicons name={icon.name} size={16} color={icon.color} />
             <Text
               style={[
                 styles.status,
@@ -692,19 +691,18 @@ function DocRow({
                 running && styles.statusParsing,
                 ready && !running && styles.statusReady,
               ]}
-              numberOfLines={1}
             >
               {status}
             </Text>
           </View>
 
           {doc.state === 'failed' && !running && doc.error ? (
-            <Text style={styles.errorText} numberOfLines={2}>
+            <Text style={styles.errorText}>
               {doc.error}
             </Text>
           ) : null}
           {limitNote && !running ? (
-            <Text style={styles.warnText} numberOfLines={2}>
+            <Text style={styles.warnText}>
               {limitNote}
             </Text>
           ) : null}
@@ -798,10 +796,10 @@ function AskBlockedSheet({
         <View style={styles.blockList}>
           {docs.slice(0, MAX_ASK_DOCUMENTS).map((d) => (
             <View key={d.id} style={styles.blockRow}>
-              <Text style={styles.blockName} numberOfLines={1}>
+              <Text style={styles.blockName}>
                 {d.name}
               </Text>
-              <Text style={styles.blockReason} numberOfLines={1}>
+              <Text style={styles.blockReason}>
                 {supportsLocalDocument(d.ext) && !localReaderLimitNote(d) ? '待本地准备' : '需要云解析'}
               </Text>
             </View>
@@ -866,7 +864,7 @@ function DeleteConfirm({
           <Text style={styles.sheetTitle}>删除这篇文档？</Text>
         </View>
 
-        <Text style={styles.fileName} numberOfLines={2}>
+        <Text style={styles.fileName}>
           {doc.name}
         </Text>
         <Text style={styles.sheetHint}>
@@ -897,92 +895,93 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1, backgroundColor: c.page },
   main: { flex: 1 },
   list: { flex: 1 },
-  listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: 24 },
-  listContentWithBar: { paddingBottom: 24 },
-  sep: { height: 12 },
-  loading: { paddingTop: 48, alignItems: 'center' },
-  uploadBlock: { paddingTop: 8, paddingBottom: 16 },
+  listContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
+  listContentWithBar: { paddingBottom: SPACE.xxl },
+  sep: { height: SPACE.md },
+  loading: { paddingTop: SPACE.xxl, alignItems: 'center' },
+  uploadBlock: { paddingTop: SPACE.xs, paddingBottom: SPACE.xl },
   uploadBtn: {
-    minHeight: metrics.controlHeight, paddingVertical: 8, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    minHeight: metrics.controlHeight, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
   },
-  uploadText: { fontSize: 15, lineHeight: 24, color: c.onAccent, fontWeight: '600' },
-  limitText: { marginTop: 8, fontSize: 12, lineHeight: 19, color: c.text2 },
-  supportToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
-  supportText: { fontSize: 13, lineHeight: 20, color: c.text2 },
-  notice: { marginTop: 8, fontSize: 13, lineHeight: 21 },
+  uploadText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
+  limitText: { marginTop: SPACE.sm, ...TYPE.body, color: c.text2 },
+  supportToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: SPACE.xs },
+  supportText: { ...TYPE.label, color: c.text2, flexShrink: 1 },
+  notice: { marginTop: SPACE.sm, ...TYPE.body },
   noticeOk: { color: c.tealText },
   noticeErr: { color: c.danger },
-  webNote: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, padding: 12 },
-  webText: { flex: 1, fontSize: 13, lineHeight: 21, color: c.text2 },
-  empty: { alignItems: 'center', paddingTop: 32, paddingHorizontal: 12, gap: 8 },
-  emptyTitle: { fontSize: 16, lineHeight: 25, color: c.text, textAlign: 'center', fontWeight: '500', maxWidth: 320 },
-  emptyHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 320 },
+  webNote: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, padding: SPACE.md },
+  webText: { flex: 1, ...TYPE.body, color: c.text2 },
+  empty: { alignItems: 'center', paddingTop: SPACE.xl, paddingHorizontal: SPACE.sm, gap: SPACE.sm },
+  emptyTitle: { ...TYPE.heading, color: c.text, textAlign: 'center', maxWidth: 360 },
+  emptyHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
   searchBar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: metrics.controlHeight,
-    marginHorizontal: metrics.pagePadding, marginTop: 8, marginBottom: 8, paddingLeft: 12, paddingRight: 4,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair, borderRadius: metrics.buttonRadius, backgroundColor: c.card,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight,
+    marginHorizontal: metrics.pagePadding, marginTop: SPACE.sm, marginBottom: SPACE.xs, paddingLeft: SPACE.md, paddingRight: SPACE.xxs,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, borderRadius: metrics.buttonRadius, backgroundColor: c.card,
   },
-  searchFocused: { borderColor: c.focus },
-  searchInput: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, fontSize: 15, color: c.text, paddingVertical: 8 },
-  card: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, overflow: 'hidden' },
-  cardSelected: { borderColor: c.focus, backgroundColor: c.accentBg },
+  searchFocused: { borderColor: c.focus, borderWidth: metrics.strokeWidth },
+  searchInput: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, ...TYPE.body, color: c.text, paddingVertical: SPACE.xs },
+  card: { backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, overflow: 'hidden' },
+  cardSelected: { borderColor: c.focus, borderWidth: 2, backgroundColor: c.accentBg },
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
-  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: 16, paddingRight: 4, paddingVertical: 16 },
-  side: { paddingHorizontal: 4, paddingTop: 8 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: 6, paddingVertical: 2, maxWidth: 56 },
-  extText: { fontSize: 11, lineHeight: 17, color: c.text2, fontWeight: '600' },
-  name: { flex: 1, fontSize: 16, lineHeight: 25, color: c.text, fontWeight: '500' },
-  meta: { fontSize: 12, lineHeight: 19, color: c.text2, fontVariant: ['tabular-nums'], marginTop: 4 },
-  excerpt: { fontSize: 14, lineHeight: 23, color: c.text2, marginTop: 8 },
-  statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
-  status: { flex: 1, fontSize: 12, lineHeight: 19, color: c.text2 },
+  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: SPACE.lg },
+  side: { paddingRight: SPACE.xxs, paddingTop: SPACE.sm },
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
+  name: { flex: 1, minWidth: 0, ...TYPE.title, color: c.text },
+  excerpt: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.sm },
+  extBadge: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.xxs },
+  extText: { ...TYPE.meta, color: c.text2, fontWeight: '600' },
+  meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
+  statusRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, marginTop: SPACE.sm },
+  status: { flex: 1, ...TYPE.label, color: c.text2 },
   statusParsing: { color: c.accentText },
   statusReady: { color: c.tealText },
   statusErr: { color: c.danger },
-  errorText: { marginTop: 4, fontSize: 12, lineHeight: 19, color: c.danger },
-  warnText: { marginTop: 4, fontSize: 12, lineHeight: 19, color: c.amberText },
-  cardActions: { flexDirection: 'row', justifyContent: 'flex-end', paddingHorizontal: 12, paddingBottom: 8 },
+  errorText: { marginTop: SPACE.xs, ...TYPE.body, color: c.danger },
+  warnText: { marginTop: SPACE.xs, ...TYPE.body, color: c.amberText },
+  cardActions: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'flex-start', paddingHorizontal: SPACE.md, paddingBottom: SPACE.sm },
   pill: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    minHeight: metrics.controlHeight, paddingHorizontal: 12, paddingVertical: 8,
-    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    minHeight: metrics.controlHeight, minWidth: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
+    backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
   },
-  pillText: { fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '500' },
+  pillText: { ...TYPE.label, color: c.text },
   selectBar: {
-    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8,
-    paddingHorizontal: metrics.pagePadding, paddingVertical: 8, backgroundColor: c.page,
-    borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair,
+    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.sm,
+    paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm, backgroundColor: c.page,
+    borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,
   },
   selectInfo: { flex: 1, minWidth: 140 },
-  selectCount: { fontSize: 14, lineHeight: 22, color: c.text, fontWeight: '600' },
-  selectHint: { marginTop: 2, fontSize: 12, lineHeight: 19, color: c.text2 },
-  askBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: metrics.controlHeight, paddingHorizontal: 16, paddingVertical: 8, borderRadius: metrics.buttonRadius, backgroundColor: c.accent },
+  selectCount: { ...TYPE.body, color: c.text, fontWeight: '600' },
+  selectHint: { marginTop: SPACE.xxs, ...TYPE.meta, color: c.text2 },
+  askBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.accent },
   askBtnOff: { backgroundColor: c.hairSoft },
-  askText: { fontSize: 14, lineHeight: 22, color: c.onAccent, fontWeight: '600' },
+  askText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   askTextOff: { color: c.text3 },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: metrics.pagePadding },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
-  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  sheetContent: { padding: 16 },
-  sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  sheetIcon: { width: 28, height: 28, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
+  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  sheetContent: { padding: SPACE.lg },
+  sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm },
+  sheetIcon: { width: 32, height: 32, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
   sheetIconDanger: { backgroundColor: c.dangerBg },
   sheetIconWarn: { backgroundColor: c.amberBg },
-  sheetTitle: { fontSize: 18, lineHeight: 28, fontWeight: '600', color: c.text, flex: 1 },
-  fileName: { marginTop: 12, fontSize: 15, lineHeight: 24, color: c.text, fontWeight: '500' },
-  sheetHint: { marginTop: 12, fontSize: 13, lineHeight: 21, color: c.text2 },
-  blockList: { marginTop: 12, gap: 8 },
-  blockRow: { gap: 2, paddingBottom: 8, borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
-  blockName: { fontSize: 14, lineHeight: 22, color: c.text },
-  blockReason: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 16 },
-  cancelBtn: { flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, padding: 8, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair, alignItems: 'center', justifyContent: 'center' },
-  cancelText: { fontSize: 14, lineHeight: 22, color: c.text2, textAlign: 'center' },
-  startBtn: { flexGrow: 1.4, flexBasis: 100, minWidth: 100, minHeight: metrics.controlHeight, padding: 8, borderRadius: metrics.buttonRadius, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' },
-  startText: { fontSize: 14, lineHeight: 22, fontWeight: '600', color: c.onAccent, textAlign: 'center' },
-  deleteBtn: { flexGrow: 1.4, flexBasis: 100, minWidth: 100, minHeight: metrics.controlHeight, padding: 8, borderRadius: metrics.buttonRadius, backgroundColor: c.danger, alignItems: 'center', justifyContent: 'center' },
-  deleteText: { fontSize: 14, lineHeight: 22, fontWeight: '600', color: c.onDanger, textAlign: 'center' },
+  sheetTitle: { ...TYPE.heading, color: c.text, flex: 1 },
+  fileName: { marginTop: SPACE.md, ...TYPE.title, color: c.text },
+  sheetHint: { marginTop: SPACE.md, ...TYPE.body, color: c.text2 },
+  blockList: { marginTop: SPACE.md, gap: SPACE.sm },
+  blockRow: { gap: SPACE.xxs, paddingBottom: SPACE.sm, borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
+  blockName: { ...TYPE.body, color: c.text, fontWeight: '600' },
+  blockReason: { ...TYPE.label, color: c.text2 },
+  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginTop: SPACE.xl },
+  cancelBtn: { flexGrow: 1, flexBasis: 80, minWidth: 80, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair, alignItems: 'center', justifyContent: 'center' },
+  cancelText: { ...TYPE.body, color: c.text2, textAlign: 'center' },
+  startBtn: { flexGrow: 1.4, flexBasis: 100, minWidth: 100, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' },
+  startText: { ...TYPE.body, fontWeight: '600', color: c.onAccent, textAlign: 'center' },
+  deleteBtn: { flexGrow: 1.4, flexBasis: 100, minWidth: 100, minHeight: metrics.controlHeight, padding: SPACE.sm, borderRadius: metrics.buttonRadius, backgroundColor: c.danger, alignItems: 'center', justifyContent: 'center' },
+  deleteText: { ...TYPE.body, fontWeight: '600', color: c.onDanger, textAlign: 'center' },
 });

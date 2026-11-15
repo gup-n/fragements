@@ -15,7 +15,7 @@
 import React, { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import type { AiErrorDetail } from '../ai/chat';
 
 interface Props {
@@ -57,8 +57,8 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
   return (
     <View style={styles.card}>
       <View style={styles.head}>
-        <Ionicons name="alert-circle" size={15} color={c.danger} />
-        <Text style={styles.title}>{title}</Text>
+        <Ionicons name="alert-circle-outline" size={20} color={c.danger} accessible={false} />
+        <Text style={styles.title} accessibilityRole="header">{title}</Text>
         {code ? <Text style={styles.code}>{code}</Text> : null}
       </View>
 
@@ -97,7 +97,7 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
             </View>
           ))}
           {detail?.raw ? (
-            <ScrollView style={styles.rawBox} nestedScrollEnabled showsVerticalScrollIndicator={false}>
+            <ScrollView style={styles.rawBox} nestedScrollEnabled showsVerticalScrollIndicator>
               <Text style={styles.raw} selectable>
                 {detail.raw}
               </Text>
@@ -115,55 +115,37 @@ export function AgentError({ message, code, detail, title = '出错了', onRetry
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   card: {
-    backgroundColor: c.card,
+    backgroundColor: c.dangerBg,
     borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    paddingHorizontal: 13,
-    paddingVertical: 11,
-    marginTop: 12,
-    gap: 7,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    borderLeftWidth: metrics.strokeWidth * 2, borderLeftColor: c.danger,
+    padding: SPACE.md, marginTop: SPACE.md, gap: SPACE.xs,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  title: { fontSize: 12.5, color: c.danger, fontWeight: '600' },
-  code: { fontSize: 10, color: c.text3, fontVariant: ['tabular-nums'] },
-  message: { fontSize: 13, lineHeight: 20, color: c.text },
-
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 14 },
-  retry: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: R.pill,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-  },
-  retryText: { fontSize: 12, color: c.text },
-  more: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: 3 },
-  moreText: { fontSize: 12, color: c.text3 },
-
-  detailBox: {
-    gap: 6,
-    paddingTop: 8,
-    borderTopWidth: metrics.strokeWidth,
-    borderTopColor: c.hair,
-  },
-  kvRow: { flexDirection: 'row', gap: 8 },
-  k: { width: 96, fontSize: 12, color: c.text3 },
-  v: { flex: 1, fontSize: 12, color: c.text2 },
-  rawBox: {
-    maxHeight: 220,
-    backgroundColor: c.hairSoft,
+  head: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  title: { ...TYPE.label, color: c.danger, flexShrink: 1 },
+  code: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'], flexShrink: 1 },
+  message: { ...TYPE.body, color: c.text },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.sm },
+  retry: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
     borderRadius: metrics.buttonRadius,
-    padding: 9,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    backgroundColor: c.card,
   },
-  raw: {
-    fontSize: 12,
-    lineHeight: 17,
-    color: c.text2,
-    fontFamily: Platform.OS === 'android' ? 'monospace' : undefined,
+  retryText: { ...TYPE.label, color: c.text },
+  more: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    paddingHorizontal: SPACE.xs,
   },
-  hint: { fontSize: 11, lineHeight: 15, color: c.text3 },
+  moreText: { ...TYPE.label, color: c.text2 },
+  detailBox: { gap: SPACE.xs, paddingTop: SPACE.sm, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
+  kvRow: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
+  k: { ...TYPE.meta, minWidth: 96, color: c.text2 },
+  v: { ...TYPE.meta, flex: 1, minWidth: 100, color: c.text },
+  rawBox: { maxHeight: 248, backgroundColor: c.card, borderRadius: metrics.buttonRadius, padding: SPACE.sm },
+  raw: { ...TYPE.meta, color: c.text2, fontFamily: Platform.OS === 'android' ? 'monospace' : undefined },
+  hint: { ...TYPE.meta, color: c.text2 },
 });

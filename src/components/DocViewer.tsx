@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Document, DocumentMeta } from '../types';
-import { useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import { ScreenHeader } from './ScreenHeader';
 import type { IoniconName } from './IconButton';
@@ -206,9 +206,11 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
     <View style={[styles.root, { paddingBottom: keyboardHeight }]} accessibilityViewIsModal>
       <View style={styles.main} importantForAccessibility={cloudAsk ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={cloudAsk}>
         <ScreenHeader
-          title={doc.name} subtitle={statusLine(doc, jobText)} backIcon="close"
-          backLabel="关闭文档" onBack={attemptClose}
+          title={doc.name}
+          subtitle={fileDocument ? `${doc.ext ? doc.ext.toUpperCase() : '未知格式'} · ${sizeText(doc.size)}` : '整理生成的文档'}
+          backIcon="close" backLabel="关闭文档" onBack={attemptClose}
         />
+        <Text style={styles.documentStatus} accessibilityLiveRegion="polite">{statusLine(doc, jobText)}</Text>
         {loadError ? <Text style={styles.warnLine}>刷新失败：{loadError}。仍显示上次读取的内容。</Text> : null}
         {canRead ? (
           <View style={styles.readerWrap}>
@@ -246,7 +248,7 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
 
           {actionsOpen ? (
             <ScrollView style={styles.operations} contentContainerStyle={styles.operationContent} keyboardShouldPersistTaps="handled">
-              <Text style={styles.operationTitle}>{doc.name}</Text>
+              <Text style={styles.operationTitle}>文档操作</Text>
               <Text style={styles.operationHint}>{fileDocument ? '本地准备不上传；云解析每次都会先确认文件、接收方与通道。' : '这是整理生成的文档，没有原文件副本。'}</Text>
               {fileDocument ? (
                 <View style={styles.actions}>
@@ -271,7 +273,7 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
             />
             {fileDocument ? <Action label="打开原件" icon="open-outline" onPress={() => void open()} busy={busy === 'opening'} disabled={busy !== 'idle' || !doc.fileUri} /> : null}
             <Pressable
-              style={({ pressed }) => [styles.actionBtn, actionsOpen && styles.actionSelected, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.actionBtn, styles.disclosureBtn, actionsOpen && styles.actionSelected, pressed && styles.pressed]}
               onPress={() => { setActionsOpen((v) => !v); setArmedDelete(false); }}
               accessibilityRole="button" accessibilityLabel="文档操作" accessibilityState={{ expanded: actionsOpen }}
             >
@@ -299,7 +301,7 @@ function Action({ label, icon, onPress, disabled = false, busy = false, tone = '
       style={({ pressed }) => [styles.actionBtn, tone === 'primary' && styles.primaryBtn, tone === 'danger' && styles.dangerBtn, disabled && styles.btnDisabled, pressed && styles.pressed]}
     >
       {busy ? <ActivityIndicator size="small" color={color} /> : icon ? <Ionicons name={icon} size={16} color={color} accessible={false} /> : null}
-      <Text style={[styles.actionText, { color }]}>{label}</Text>
+      <Text style={[styles.actionText, tone === 'primary' && styles.primaryActionText, { color }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -380,47 +382,50 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   main: { flex: 1 },
   readerWrap: { flex: 1 },
-  stateContent: { flexGrow: 1, padding: 24 },
-  stateBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, gap: 12 },
-  stateTitle: { fontSize: 17, lineHeight: 26, fontWeight: '600', color: c.text, textAlign: 'center' },
-  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 320 },
-  failText: { fontSize: 13, lineHeight: 21, color: c.danger },
-  warnLine: { fontSize: 13, lineHeight: 20, color: c.amberText, backgroundColor: c.amberBg, paddingHorizontal: metrics.pagePadding, paddingVertical: 8 },
-  footer: { paddingHorizontal: metrics.pagePadding, paddingVertical: 8, gap: 8, borderTopWidth: metrics.strokeWidth, borderTopColor: c.hair, backgroundColor: c.page },
-  actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', gap: 8 },
+  documentStatus: { ...TYPE.label, color: c.text2, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.xxs },
+  stateContent: { flexGrow: 1, padding: SPACE.md },
+  stateBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: SPACE.xl, gap: SPACE.sm },
+  stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  stateHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  failText: { ...TYPE.body, color: c.danger },
+  warnLine: { ...TYPE.body, color: c.amberText, backgroundColor: c.amberBg, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm },
+  footer: { paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm, gap: SPACE.sm, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair, backgroundColor: c.page },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', gap: SPACE.xs },
   actionBtn: {
     flexGrow: 1, flexBasis: 80, minHeight: metrics.controlHeight, minWidth: 80,
-    paddingHorizontal: 8, paddingVertical: 8, borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair, backgroundColor: c.card,
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.card,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
   },
-  actionText: { flexShrink: 1, fontSize: 13, lineHeight: 20, color: c.text, fontWeight: '500', textAlign: 'center' },
-  primaryBtn: { backgroundColor: c.accent, borderColor: c.accent },
-  dangerBtn: { backgroundColor: c.dangerBg, borderColor: c.danger },
+  actionText: { flexShrink: 1, ...TYPE.label, color: c.text, textAlign: 'center' },
+  primaryBtn: { flexGrow: 1.4, backgroundColor: c.accent, borderColor: c.accent },
+  primaryActionText: { ...TYPE.body, fontWeight: '600' },
+  dangerBtn: { backgroundColor: c.dangerBg, borderColor: c.danger, borderWidth: metrics.strokeWidth },
   btnDisabled: { backgroundColor: c.hairSoft, borderColor: c.hair },
-  actionSelected: { borderColor: c.focus, backgroundColor: c.hairSoft },
+  actionSelected: { borderColor: c.focus, borderWidth: metrics.strokeWidth, backgroundColor: c.hairSoft },
+  disclosureBtn: { backgroundColor: c.page },
   pressed: { opacity: 0.75 },
-  msg: { fontSize: 13, lineHeight: 20, color: c.text2 },
-  taskRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  taskText: { flex: 2, fontSize: 12, lineHeight: 19, color: c.text2 },
+  msg: { ...TYPE.body, color: c.text2 },
+  taskRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs },
+  taskText: { flex: 2, minWidth: 140, ...TYPE.body, color: c.text2 },
   operations: { maxHeight: 240, flexGrow: 0 },
-  operationContent: { gap: 8, paddingBottom: 8 },
-  operationTitle: { fontSize: 14, lineHeight: 22, color: c.text, fontWeight: '600' },
-  operationHint: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  deleteWarning: { fontSize: 13, lineHeight: 21, color: c.danger, padding: 12, backgroundColor: c.dangerBg, borderWidth: metrics.strokeWidth, borderColor: c.danger, borderRadius: metrics.buttonRadius },
+  operationContent: { gap: SPACE.sm, paddingBottom: SPACE.sm },
+  operationTitle: { ...TYPE.title, color: c.text },
+  operationHint: { ...TYPE.body, color: c.text2 },
+  deleteWarning: { ...TYPE.body, color: c.danger, padding: SPACE.md, backgroundColor: c.dangerBg, borderWidth: metrics.strokeWidth, borderColor: c.danger, borderRadius: metrics.buttonRadius },
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: metrics.pagePadding },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
-  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  sheetContent: { padding: 16, gap: 8 },
-  sheetTitle: { fontSize: 18, lineHeight: 28, fontWeight: '600', color: c.text },
-  fileName: { fontSize: 15, lineHeight: 24, color: c.text, marginTop: 4 },
-  fileMeta: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  privacy: { fontSize: 13, lineHeight: 21, color: c.amberText, backgroundColor: c.amberBg, padding: 12, borderRadius: metrics.buttonRadius },
-  sheetHint: { marginTop: 4, fontSize: 13, lineHeight: 21, color: c.text2 },
-  option: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: metrics.controlHeight, padding: 12, borderRadius: metrics.buttonRadius, borderWidth: metrics.strokeWidth, borderColor: c.hair },
-  optionOn: { borderColor: c.focus, backgroundColor: c.accentBg },
+  sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  sheetContent: { padding: SPACE.lg, gap: SPACE.sm },
+  sheetTitle: { ...TYPE.heading, color: c.text },
+  fileName: { ...TYPE.title, color: c.text, marginTop: SPACE.xxs },
+  fileMeta: { ...TYPE.meta, color: c.text2 },
+  privacy: { ...TYPE.body, color: c.amberText, backgroundColor: c.amberBg, padding: SPACE.md, borderRadius: metrics.buttonRadius },
+  sheetHint: { marginTop: SPACE.xs, ...TYPE.label, color: c.text2 },
+  option: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm, minHeight: metrics.controlHeight, padding: SPACE.md, borderRadius: metrics.buttonRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair },
+  optionOn: { borderColor: c.focus, borderWidth: metrics.strokeWidth, backgroundColor: c.accentBg },
   optionBody: { flex: 1, minWidth: 0 },
-  optionTitle: { fontSize: 14, lineHeight: 22, color: c.text, fontWeight: '500' },
-  optionHint: { marginTop: 4, fontSize: 12, lineHeight: 19, color: c.text2 },
-  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  optionTitle: { ...TYPE.title, color: c.text },
+  optionHint: { marginTop: SPACE.xs, ...TYPE.body, color: c.text2 },
+  sheetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm, marginTop: SPACE.sm },
 });

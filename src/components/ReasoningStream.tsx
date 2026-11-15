@@ -8,7 +8,7 @@ import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import React, { useRef } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 function fmtCount(n: number) {
   return n < 1000 ? `${n}` : `${(n / 1000).toFixed(1)}k`;
@@ -37,7 +37,7 @@ export function ReasoningStream({ title, text, received, elapsed, thinking, heig
     <View style={styles.card}>
       <View style={styles.head}>
         <ActivityIndicator size="small" color={c.accent} />
-        <Text style={styles.title} numberOfLines={1}>
+        <Text style={styles.title}>
           {title}
         </Text>
         <Text style={styles.clock}>{elapsed}s</Text>
@@ -49,7 +49,7 @@ export function ReasoningStream({ title, text, received, elapsed, thinking, heig
           style={[styles.scroll, { maxHeight: height }]}
           contentContainerStyle={styles.scrollBody}
           nestedScrollEnabled
-          showsVerticalScrollIndicator={false}
+          showsVerticalScrollIndicator
           onScroll={(event) => {
             const { contentSize, contentOffset, layoutMeasurement } = event.nativeEvent;
             atBottom.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 48;
@@ -75,19 +75,17 @@ export function ReasoningStream({ title, text, received, elapsed, thinking, heig
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   card: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.accentBg,
-    padding: 12,
+    borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
+    paddingLeft: SPACE.sm, paddingVertical: SPACE.xs, marginBottom: SPACE.md,
+    gap: SPACE.sm,
   },
-  head: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  title: { flex: 1, fontSize: 13, color: c.text, fontWeight: '500' },
-  clock: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
-  scroll: { marginTop: 9, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius },
-  scrollBody: { padding: 10 },
-  text: { fontSize: 12, lineHeight: 19, color: c.text2 },
-  empty: { fontSize: 12, color: c.text3, lineHeight: 19, marginTop: 9 },
-  foot: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 9 },
-  meta: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
+  head: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
+  title: { ...TYPE.body, flex: 1, color: c.text, fontWeight: '600' },
+  clock: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
+  scroll: { backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius },
+  scrollBody: { padding: SPACE.sm },
+  text: { ...TYPE.body, color: c.text2 },
+  empty: { ...TYPE.label, fontWeight: '400', color: c.text2 },
+  foot: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: SPACE.xs },
+  meta: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
 });

@@ -16,7 +16,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Note, Todo } from '../types';
-import { R, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes } from '../util/digest';
@@ -104,7 +104,9 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
           ['todo', `待办${pending.length ? ` ${pending.length}` : ''}`],
           ['note', '小结'],
         ] as [Tab, string][]).map(([key, label]) => (
-          <ChoiceChip key={key} label={label} selected={tab === key} onPress={() => setTab(key)} role="tab" />
+          <View key={key} style={styles.tabSlot}>
+            <ChoiceChip label={label} selected={tab === key} onPress={() => setTab(key)} role="tab" />
+          </View>
         ))}
       </View>
 
@@ -129,18 +131,21 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
           <Pressable
             style={({ pressed }) => [[styles.genBtn, pressed && { backgroundColor: c.accentBg }], styles.touchTarget]}
             onPress={() => setSheetOpen(true)}
+            accessibilityRole="button"
           >
-            <Ionicons name="sparkles-outline" size={17} color={c.accentText} />
-            <Text style={styles.genText}>写月总结</Text>
-            <Text style={styles.genHint}>一个月一篇</Text>
+            <Ionicons name="sparkles-outline" size={20} color={c.accentText} />
+            <View style={styles.genCopy}>
+              <Text style={styles.genText}>写月总结</Text>
+              <Text style={styles.genHint}>一个月一篇</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={c.accentText} />
           </Pressable>
 
           {notes.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>还没有总结</Text>
               <Text style={styles.emptyBody}>
-                点上面的「写月总结」，AI 会把一个月{'\n'}
-                记下的东西压成一段，存进时间轴对应的时间点。
+                点上面的「写月总结」，AI 会把一个月记下的内容归纳成小结，存进时间轴对应的时间点。
               </Text>
             </View>
           ) : (
@@ -156,11 +161,11 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
                     onPress={() => setViewerIndex(notes.indexOf(note))}
                     style={({ pressed }) => [[styles.noteCard, pressed && { opacity: 0.7 }], styles.touchTarget]}
                   >
+                    <Text style={styles.noteTitle}>
+                      {periodLabel(note.period) || dayKey(note.createdAt)}
+                    </Text>
                     <View style={styles.noteHead}>
                       <Text style={styles.noteKind}>{NOTE_GROUP_LABEL[note.type]}</Text>
-                      <Text style={styles.noteDate}>
-                        {periodLabel(note.period) || dayKey(note.createdAt)}
-                      </Text>
                       <Text style={styles.noteChars}>
                         {note.bodyMd.replace(/\s/g, '').length} 字
                       </Text>
@@ -217,64 +222,35 @@ export function ReviewScreen({ onClose, onChanged }: Props) {
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   touchTarget: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight },
   normalContent: { flex: 1 },
-  loadError: { color: c.danger, fontSize: 13, lineHeight: 21, padding: 20 },
+  loadError: { ...TYPE.body, color: c.danger, padding: SPACE.lg, textAlign: 'center' },
   root: { flex: 1, backgroundColor: c.page },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-
-  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12 },
-  tab: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: R.pill,
-    backgroundColor: c.hairSoft,
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.md },
+  tabs: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.md, paddingBottom: SPACE.lg },
+  tabSlot: { flex: 1, minWidth: 120 },
+  content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
+  empty: { alignItems: 'center', paddingTop: SPACE.xxl, gap: SPACE.sm },
+  emptyTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  emptyBody: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  genBtn: {
+    minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.md, borderRadius: metrics.buttonRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.accentHair, backgroundColor: c.accentBg, marginBottom: SPACE.xl,
   },
-  tabActive: { backgroundColor: c.accentBg },
-  tabText: { fontSize: 13.5, color: c.text2 },
-  tabTextActive: { color: c.accentText, fontWeight: '600' },
-
-  content: { paddingHorizontal: 16, paddingBottom: 28 },
-
-  empty: { alignItems: 'center', paddingTop: 90 },
-  emptyTitle: { fontSize: 15, color: c.text2, fontWeight: '500' },
-  emptyBody: { fontSize: 13, color: c.text3, textAlign: 'center', lineHeight: 21, marginTop: 10 },
-
-  genBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderRadius: metrics.cardRadius,
-    backgroundColor: c.accentBg,
-    marginBottom: 12,
-  },
-  genText: { flex: 1, fontSize: 14, color: c.accentText, fontWeight: '500' },
-  genHint: { fontSize: 12, color: c.accentText, opacity: 0.7 },
-
-  noteGroupHead: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    gap: 8,
-    paddingHorizontal: 2,
-    marginTop: 6,
-    marginBottom: 8,
-  },
-  noteGroupTitle: { fontSize: 12, color: c.text2, fontWeight: '600' },
-  noteGroupCount: { fontSize: 12, color: c.text3 },
-
+  genCopy: { flex: 1, minWidth: 0, gap: SPACE.xxs },
+  genText: { ...TYPE.title, color: c.accentText },
+  genHint: { ...TYPE.meta, color: c.accentText },
+  noteGroupHead: { flexDirection: 'row', alignItems: 'baseline', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.xs, marginBottom: SPACE.sm },
+  noteGroupTitle: { ...TYPE.label, color: c.text2 },
+  noteGroupCount: { ...TYPE.meta, color: c.text2 },
   noteCard: {
-    backgroundColor: c.card,
-    borderRadius: metrics.cardRadius,
-    borderWidth: metrics.strokeWidth,
-    borderColor: c.hair,
-    padding: 14,
-    marginBottom: 10,
+    backgroundColor: c.card, borderRadius: metrics.cardRadius, borderWidth: surfaceStroke(metrics), borderColor: c.hair,
+    padding: SPACE.lg, marginBottom: SPACE.md,
   },
-  noteHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
-  noteKind: { flex: 1, fontSize: 12, color: c.accentText, fontWeight: '500' },
-  noteDate: { fontSize: 12, color: c.text3, fontVariant: ['tabular-nums'] },
-  noteChars: { fontSize: 11, color: c.text3, fontVariant: ['tabular-nums'] },
-  noteBody: { fontSize: 14, lineHeight: 23, color: c.text },
-  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 9 },
-  noteToggle: { fontSize: 12, color: c.accent },
+  noteTitle: { ...TYPE.title, color: c.text, marginBottom: SPACE.xxs },
+  noteHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: SPACE.xs, marginBottom: SPACE.sm },
+  noteKind: { ...TYPE.meta, color: c.text2 },
+  noteChars: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
+  noteBody: { ...TYPE.body, color: c.text },
+  noteOpenRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, marginTop: SPACE.md },
+  noteToggle: { ...TYPE.label, color: c.accentText },
 });

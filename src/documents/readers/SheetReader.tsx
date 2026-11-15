@@ -32,7 +32,7 @@ import {
   type ScrollViewInstance,
 } from 'react-native';
 import type { Document } from '../../types';
-import { useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
+import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { findHits } from '../../util/highlight';
 import {
@@ -559,7 +559,7 @@ export function SheetReader({ document: doc }: { document: Document }) {
                   accessibilityLabel={`工作表 ${s.name}`}
                   accessibilityState={{ selected: i === active }}
                 >
-                  <Text style={[styles.tabText, i === active && styles.tabTextOn]} numberOfLines={1}>
+                  <Text style={[styles.tabText, i === active && styles.tabTextOn]}>
                     {i === active ? '✓ ' : ''}{s.name}
                   </Text>
                 </Pressable>
@@ -635,40 +635,31 @@ export function SheetReader({ document: doc }: { document: Document }) {
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { flex: 1 },
-  tabsWrap: { borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair, backgroundColor: c.page },
-  tabs: { paddingHorizontal: metrics.pagePadding, paddingVertical: 4, gap: 8 },
+  tabsWrap: { borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair, backgroundColor: c.page },
+  tabs: { paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.xs, gap: SPACE.xs },
   tab: {
-    maxWidth: 180, minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
-    paddingHorizontal: 12, paddingVertical: 8, borderRadius: metrics.buttonRadius,
-    borderWidth: metrics.strokeWidth, borderColor: c.hair, backgroundColor: c.card, justifyContent: 'center',
+    maxWidth: 220, minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, borderRadius: metrics.buttonRadius,
+    borderWidth: surfaceStroke(metrics), borderColor: c.hair, backgroundColor: c.card, justifyContent: 'center',
   },
-  tabOn: { backgroundColor: c.accentBg, borderColor: c.focus },
-  tabText: { fontSize: 13, lineHeight: 20, color: c.text2 },
+  tabOn: { backgroundColor: c.accentBg, borderColor: c.focus, borderWidth: metrics.strokeWidth },
+  tabText: { ...TYPE.body, color: c.text2 },
   tabTextOn: { color: c.accentText, fontWeight: '600' },
-  notice: {
-    fontSize: 13, lineHeight: 20, color: c.amberText, backgroundColor: c.amberBg,
-    paddingHorizontal: metrics.pagePadding, paddingVertical: 8,
-  },
+  notice: { ...TYPE.body, color: c.amberText, backgroundColor: c.amberBg, paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm },
   gridScroll: { flex: 1 },
   gridContent: { flexGrow: 1 },
   grid: { flex: 1 },
-  tr: { flexDirection: 'row', borderBottomWidth: metrics.strokeWidth, borderBottomColor: c.hair },
+  tr: { flexDirection: 'row', borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair },
   trAlt: { backgroundColor: c.hairSoft },
-  gutter: {
-    width: SHEET_GUTTER, paddingHorizontal: 8, paddingVertical: 8,
-    borderRightWidth: metrics.strokeWidth, borderRightColor: c.hair, alignItems: 'flex-end',
-  },
-  gutterText: { fontSize: 12, color: c.text2, fontVariant: ['tabular-nums'] },
-  td: { paddingHorizontal: 9, paddingVertical: 8, borderRightWidth: metrics.strokeWidth, borderRightColor: c.hair },
-  cellText: { fontSize: 13, lineHeight: 21, color: c.text },
+  gutter: { width: SHEET_GUTTER, paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm, borderRightWidth: metrics.strokeWidth, borderRightColor: c.hair, alignItems: 'flex-end' },
+  gutterText: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
+  td: { paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm, borderRightWidth: surfaceStroke(metrics), borderRightColor: c.hair },
+  cellText: { ...TYPE.body, color: c.text },
   cellHit: { backgroundColor: c.amberBg },
   cellCurrent: { textDecorationLine: 'underline', fontWeight: '700' },
-  currentOutline: {
-    position: 'absolute', top: 1, left: 1, right: 1, bottom: 1,
-    borderWidth: 2, borderColor: c.focus,
-  },
-  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 8 },
-  stateTitle: { fontSize: 16, color: c.text, fontWeight: '600' },
-  stateHint: { fontSize: 13, lineHeight: 21, color: c.text2, textAlign: 'center', maxWidth: 300 },
-  stateTip: { fontSize: 12, lineHeight: 19, color: c.text2, textAlign: 'center', maxWidth: 280 },
+  currentOutline: { position: 'absolute', top: 1, left: 1, right: 1, bottom: 1, borderWidth: 2, borderColor: c.focus },
+  state: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: SPACE.xl, gap: SPACE.sm },
+  stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },
+  stateHint: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
+  stateTip: { ...TYPE.body, color: c.text2, textAlign: 'center', maxWidth: 360 },
 });
