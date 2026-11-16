@@ -60,7 +60,8 @@ import { dayLabel, formatTime } from '../util/date';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { CloudConfirmSheet, DocViewer } from '../components/DocViewer';
 import { IconButton } from '../components/IconButton';
-import { Toast, TAB_BAR_HEIGHT } from '../components/Toast';
+import { Toast } from '../components/Toast';
+import { EmptyState } from '../components/EmptyState';
 
 interface Props {
   /** 作为底栏 tab 常驻时不画返回箭头（多选态仍然要「取消」，那是页内状态） */
@@ -106,6 +107,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const [docVersion, setDocVersion] = useState(0);
 
   const [selectMode, setSelectMode] = useState(false);
+  /** 多选底条实测高度：提示条要落在它上面，不能写死一个数（见 selectBar 的 onLayout） */
+  const [barHeight, setBarHeight] = useState(0);
   /** 勾选顺序无所谓，只用来算范围与上限 */
   const [selected, setSelected] = useState<number[]>([]);
   /** 点了「问」但选中里有没准备好的：列出来让人决定，**不静默丢掉** */
@@ -457,30 +460,24 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
               <ActivityIndicator color={c.text3} />
             </View>
           ) : query.trim() && (searching || searchError) ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="search-outline" size={22} color={c.text3} />
-              </View>
-              <Text style={styles.emptyTitle}>{searching ? '正在搜索…' : '搜索未完成'}</Text>
-              <Text style={styles.emptyHint}>{searching ? '标题、摘要和已准备的正文' : searchError}</Text>
-            </View>
+            <EmptyState
+              icon="search-outline"
+              title={searching ? '正在搜索…' : '搜索未完成'}
+              body={searching ? '标题、摘要和已准备的正文' : searchError ?? '稍后再试一次'}
+            />
           ) : query.trim() && !searching ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="search-outline" size={22} color={c.text3} />
-              </View>
-              <Text style={styles.emptyTitle}>没有找到「{query.trim()}」</Text>
-              {/* 原来这里两行在解释「搜什么、为什么搜不到」，压成一句 */}
-              <Text style={styles.emptyHint}>正文还没准备的文档只有文件名能搜</Text>
-            </View>
+            <EmptyState
+              icon="search-outline"
+              title={`没有找到「${query.trim()}」`}
+              /* 原来这里两行在解释「搜什么、为什么搜不到」，压成一句 */
+              body="正文还没准备的文档只有文件名能搜"
+            />
           ) : (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="documents-outline" size={22} color={c.text3} />
-              </View>
-              <Text style={styles.emptyTitle}>先把文件存进来</Text>
-              <Text style={styles.emptyHint}>原文件留在本机；要读或要问时再决定本地提取还是上传</Text>
-            </View>
+            <EmptyState
+              icon="documents-outline"
+              title="先把文件存进来"
+              body="原文件留在本机；要读或要问时再决定本地提取还是上传"
+            />
           )
         }
         renderItem={({ item }) => (
@@ -498,7 +495,16 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
       />
 
       {selectMode ? (
-        <View style={styles.selectBar}>
+        <View
+          style={styles.selectBar}
+          /*
+            实测底条高度给提示条用。
+            这里**不是**底栏那 56：底栏在页面之外（SafeAreaView 里页面和底栏是并列的两块），
+            页面底部根本没有东西挡着。原来按底栏高度 + 8 算，提示条会悬在离底 60 的地方；
+            进入多选又换成写死的 96 —— 一个估一个猜，底条一改文案就又不准了。
+          */
+          onLayout={(e) => setBarHeight(e.nativeEvent.layout.height)}
+        >
           <View style={styles.selectInfo}>
             <Text style={styles.selectCount}>已选 {selectedCount} 份</Text>
             <Text style={styles.selectHint}>只问这几份，不混入笔记和其它文档</Text>
@@ -583,7 +589,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
       ) : null}
 
       {/* 有底栏时要抬到底栏之上，否则「已删除」这种反馈会被底栏盖住 */}
-      <Toast text={covered ? null : toast} bottom={selectMode ? 96 : TAB_BAR_HEIGHT + 8} />
+      <Toast text={covered ? null : toast} bottom={(selectMode ? barHeight : 0) + 8} />
     </View>
   );
 }
@@ -917,10 +923,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   webNote: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xs, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius, padding: SPACE.md },
   webText: { flex: 1, ...TYPE.compact, color: c.text2 },
   /** 空态：48 圆 + 浅灰底，全项目同一套规格 */
-  empty: { alignItems: 'center', paddingTop: SPACE.xl, paddingHorizontal: SPACE.sm, gap: SPACE.sm },
-  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
-  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center', maxWidth: 360 },
-  emptyHint: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
   /**
    * 检索框和首页用同一套：浅灰胶囊、无边框。
    *

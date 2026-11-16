@@ -92,7 +92,7 @@ export function ImportSheet({ preview, busy, onCancel, onConfirm, error }: Props
         ))}
 
         {nothing && (
-          <Text style={styles.emptyHint}>没有可导入的新内容，这份文件可能已经导过了。</Text>
+          <Text style={styles.nothingHint}>没有可导入的新内容，这份文件可能已经导过了。</Text>
         )}
 
         {error ? <Text style={[styles.dupHint, { color: c.danger }]} accessibilityLiveRegion="polite">{error}</Text> : null}
@@ -190,7 +190,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs, marginTop: SPACE.xs },
   noteText: { flex: 1, ...TYPE.meta, color: c.amberText },
 
-  emptyHint: { marginTop: SPACE.xs, ...TYPE.meta, color: c.text3 },
+  nothingHint: { marginTop: SPACE.xs, ...TYPE.meta, color: c.text3 },
 
   actions: { flexDirection: 'row', gap: SPACE.xs, marginTop: SPACE.md },
   /** 取消：浅灰底、无边框 */

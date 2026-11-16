@@ -34,6 +34,7 @@ import { ChoiceChip } from '../components/ChoiceChip';
 import { IconButton } from '../components/IconButton';
 import { TodoEditor } from '../components/TodoEditor';
 import { TodoPanel } from '../components/TodoPanel';
+import { EmptyState } from '../components/EmptyState';
 
 interface Props {
   /**
@@ -224,15 +225,11 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
           </Pressable>
 
           {notes.length === 0 ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="sparkles-outline" size={22} color={c.text3} />
-              </View>
-              <Text style={styles.emptyTitle}>还没有总结</Text>
-              <Text style={styles.emptyBody}>
-                点上面的「写月总结」，AI 会把一个月记下的内容归纳成小结，存进时间轴。
-              </Text>
-            </View>
+            <EmptyState
+              icon="sparkles-outline"
+              title="还没有总结"
+              body="点上面的「写月总结」，AI 会把一个月记下的内容归纳成小结，存进时间轴。"
+            />
           ) : (
             noteGroups.map((group) => (
               <View key={group.kind}>
@@ -570,10 +567,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   tabSlot: { flex: 1, minWidth: 88 },
   content: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.lg },
   /** 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 说明 14 */
-  empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
-  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
-  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
   /** 写月总结入口：淡蓝块，不描边 —— 一圈 accentHair 在淡蓝底上等于没有边界 */
   genBtn: {
     minWidth: metrics.controlHeight, minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
@@ -620,7 +613,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   /** 今天：一圈主色细边。它和「选中」是两件事，可以同时成立（选中优先，实心更明显） */
   cellToday: { borderWidth: metrics.strokeWidth, borderColor: c.accentHair, backgroundColor: c.hairSoft },
   cellDay: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
-  cellDayOut: { color: c.text3, opacity: 0.45 },
+  /**
+   * 邻月的日子：靠颜色变淡，不靠透明度。
+   *
+   * 原来写的是 `color: c.text3, opacity: 0.45` —— 浅色下 text3 是 5.1:1，
+   * 乘 0.45 之后只剩 2 出头；深色下更糊。它们**仍然可以点**（点一下就翻到那个月），
+   * 不是装饰，得读得出来。字重从 600 掉回 400 已经够区分「不在本月」。
+   */
+  cellDayOut: { color: c.text3, fontWeight: '400' },
   cellDayOn: { color: c.onAccent, fontWeight: '700' },
   cellDots: { flexDirection: 'row', gap: 2, height: 4, marginTop: 1 },
   dot: { width: 4, height: 4, borderRadius: 2 },

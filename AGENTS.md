@@ -91,10 +91,12 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 
 ### v0.20.7 起的两条硬约束
 
-- **主入口在底栏，不在页头**。timeline/docs/ask/review/settings 五项由[底栏](<src/components/TabBar.tsx>)平级切换 —— **设置也在里面，它不再是覆盖层**。五个页面都是 tab，没有「覆盖层形态」：`embedded` 为真时不画返回箭头、不画关闭叉，出口就是底栏。键盘抬起时底栏整条隐藏，所以页面自己的 `keyboardHeight` 占位不要额外加底栏高度；反过来，**浮在页面底部的提示条（`Toast`）必须让开 `TAB_BAR_HEIGHT`**，否则会被底栏盖住。
+- **主入口在底栏，不在页头**。timeline/docs/ask/review/settings 五项由[底栏](<src/components/TabBar.tsx>)平级切换 —— **设置也在里面，它不再是覆盖层**。五个页面都是 tab，没有「覆盖层形态」：`embedded` 为真时不画返回箭头、不画关闭叉，出口就是底栏。键盘抬起时底栏整条隐藏，所以页面自己的 `keyboardHeight` 占位不要额外加底栏高度。**页面底部就是底栏顶边**（`SafeAreaView` 里是「页面 + 底栏」竖排），所以页面里的 `Toast` 不加底栏高度；只有 App 根节点那个和底栏同父的 `writeNotice` 要加 `TAB_BAR_HEIGHT`。页面底部若有工具条（如文档多选的底条），用 `onLayout` 实测它的高度 —— v0.23.1 文档页写的是 `TAB_BAR_HEIGHT + 8`，多选时又换成写死的 `96`，提示条一直悬在半空。`assert_ui` 钉着「这个常量只许出现在 `App.tsx`」。
 - **「要不要画边线」看 `metrics.outline`，不要从圆角大小反推**。以前是 `cardRadius <= 4 ? strokeWidth : 0.5`，墨水圆角一调圆（4→8）就静默掉回 0.5，边线全没而 tsc 与断言都不响。`surfaceStroke` 现在读 `outline`；新增风格时必须显式给这个字段。
 - **毛玻璃（[GlassBackdrop](<src/components/GlassBackdrop.tsx>)）只给墨水风格**，且宿主卡片的 `backgroundColor` 必须用 `glassable(metrics, c.card)` 让出实底 —— 不透明底会把模糊盖死，看起来像什么都没做。Android 侧必须 `experimentalBlurMethod="dimezisBlurView"`，默认那套只是半透明白。`assert_ui` 里为它留了桩，改它的导出签名要同步改断言。
 - **缩视觉可以，缩触控不行**。搜索框、缩略图、空状态图标、工具按钮都可以小一档；48dp 槽、发布按钮 84 宽、输入框 48 高是断言钉着的无障碍底线，用户说「缩小」也不放开。
+- **空屏只有 [EmptyState](<src/components/EmptyState.tsx>) 一份实现**（v0.24）。要「希望用户做点什么」的整屏空屏才用 `tone="accent"`，全 App 只许首页一处；列表为空的占位用 `fill`。别再自己拼 `emptyIcon` / `emptyTitle`，`assert_ui` 会拦。
+- **次要文字用色阶，不用 `opacity`**。`opacity: 0.45` 乘在 `text3` 上只剩 2 出头的对比度，深色下几乎看不见；禁用态（`btnDisabled` / `off`）是唯一例外。
 
 ## 5. 存储、历史兼容与配图
 

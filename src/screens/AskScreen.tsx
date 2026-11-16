@@ -73,6 +73,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { IconButton } from '../components/IconButton';
 import { CitationSheet } from '../components/CitationSheet';
 import { Toast } from '../components/Toast';
+import { EmptyState } from '../components/EmptyState';
 
 interface Props {
   /**
@@ -1404,17 +1405,18 @@ export function AskScreen({
             </Pressable>
           ) : null}
           {!hasContent && !pendingQ && !draft && !organize.recovery ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="chatbubble-ellipses-outline" size={24} color={c.accentText} accessible={false} />
-              </View>
-              <Text style={styles.emptyTitle} accessibilityRole="header">{docMode ? '围绕这些文档提问' : '从碎片里找答案'}</Text>
-              {/*
-                这里原来还有一段两行的产品说明（「只在你选的文档里找依据。回答中的引用
-                可以打开……」）。标题已经说了这件事，下面三行入口也说清了能做什么 ——
-                第三层解释就是每次进来都要重读一遍废话（用户 2026-11-15 反复要求删）。
-              */}
-
+            /*
+              这里原来还有一段两行的产品说明（「只在你选的文档里找依据。回答中的引用
+              可以打开……」）。标题已经说了这件事，下面三行入口也说清了能做什么 ——
+              第三层解释就是每次进来都要重读一遍废话（用户 2026-11-15 反复要求删）。
+              底色是灰的不是主色：这不是唯一入口（输入框就在下面），不该抢邀请的话。
+            */
+            <EmptyState
+              icon="chatbubble-ellipses-outline"
+              iconSize={24}
+              iconColor={c.accentText}
+              title={docMode ? '围绕这些文档提问' : '从碎片里找答案'}
+            >
               {!docMode ? (
                 <View style={styles.hints}>
                   <Pressable
@@ -1457,7 +1459,7 @@ export function AskScreen({
                   </Pressable>
                 </View>
               ) : null}
-            </View>
+            </EmptyState>
           ) : null}
 
           {turns.map((t, i) =>
@@ -1729,13 +1731,11 @@ export function AskScreen({
           ) : (
             <ScrollView contentContainerStyle={styles.historyContent}>
               {history.groups.length === 0 && history.archived.length === 0 ? (
-                <View style={styles.historyEmpty}>
-                  <View style={styles.emptyIcon}>
-                    <Ionicons name="time-outline" size={22} color={c.text3} />
-                  </View>
-                  <Text style={styles.emptyTitle}>还没有历史会话</Text>
-                  <Text style={styles.emptyBody}>问过的问题会自动留在这里。</Text>
-                </View>
+                <EmptyState
+                  icon="time-outline"
+                  title="还没有历史会话"
+                  body="问过的问题会自动留在这里。"
+                />
               ) : null}
 
               {history.groups.map(([label, list]) => (
@@ -2017,19 +2017,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   newHintText: { ...TYPE.label, color: c.onAccent },
   content: { paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.sm, paddingBottom: SPACE.lg },
   contentEmpty: { flexGrow: 1, paddingTop: SPACE.lg, paddingBottom: SPACE.lg },
-  /*
-   * 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 可选说明 14。
-   * 原来是「48 的圆角方块 + 淡蓝底 + 淡蓝描边」，和首页那个 52 的圆、
-   * 文档页那个裸图标各写一套 —— 同一个 App 里空屏长得像三个产品。
-   */
-  empty: { alignItems: 'center', gap: SPACE.sm, paddingTop: SPACE.md },
-  emptyIcon: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: c.hairSoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center' },
   /** 空态里的三个入口：一块浅灰底，行间用分隔线，不再各自套边框 */
   hints: {
     alignSelf: 'stretch', marginTop: SPACE.sm,
@@ -2148,9 +2135,16 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   toggleOn: { backgroundColor: c.accentBg },
   toggleText: { ...TYPE.meta, color: c.text2, flexShrink: 1 },
   toggleTextOn: { color: c.accentText, fontWeight: '600' },
+  /**
+   * 文档模式下的「不联网」：它就是一个 off 状态的胶囊，长得和别的 off 一样。
+   *
+   * 原来还叠了 `opacity: 0.55`，本意是「这条不能用」，代价是胶囊里的字
+   * （text2）乘 0.55 之后对比度掉到 2 出头 —— 在深色主题下几乎看不见。
+   * 「不能用」由 `accessibilityState.disabled` 说，界面不必再糊一遍。
+   */
   toggleOff: {
     minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
-    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10, opacity: 0.55,
+    borderRadius: 999, backgroundColor: c.hairSoft, paddingHorizontal: 10,
   },
   busyHint: { ...TYPE.meta, color: c.text2 },
   send: {
@@ -2163,7 +2157,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   historyPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
   historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
   historyLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, paddingTop: SPACE.xxl },
-  historyEmpty: { alignItems: 'center', gap: SPACE.sm, paddingTop: SPACE.xxl },
   histGroupTitle: { ...TYPE.label, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.xs },
   histRow: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs,

@@ -15,11 +15,15 @@ import { StyleSheet, Text, View } from 'react-native';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
 /**
- * 底栏占的高度。**有底栏的页面必须用它算提示位置。**
+ * 底栏占的高度。
  *
- * `bottom` 的默认值 24 只适合「页面底部就是屏幕底部」的场景。底栏一出现，
- * 那 52dp 就把提示条整个盖住了 —— 用户点了个按钮，什么都没看到，
- * 看起来像没生效。v0.20.9 的时间轴和文档页都踩了这个（当时给的是 24）。
+ * **只给「铺满整屏」的覆盖层用** —— 也就是 App 根节点里那句 `writeNotice`：
+ * 它和底栏是同一个父容器的兄弟，`bottom` 从屏幕底算起，不加这 56 就被底栏盖住。
+ *
+ * 页面内部的提示条**不要**加它：页面本身是底栏上面的兄弟块（`SafeAreaView` 里
+ * 「页面 + 底栏」竖排），页面底部就是底栏顶边，再加 56 会悬空 56。
+ * v0.23.1 的文档页就是这么错的（`TAB_BAR_HEIGHT + 8`，多选时又换成一个写死的 96），
+ * 现在改成 `onLayout` 实测底条高度。
  */
 export const TAB_BAR_HEIGHT = 56;
 

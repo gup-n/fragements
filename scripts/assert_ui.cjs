@@ -483,4 +483,81 @@ test('分享接收的 Kotlin：取真实文件名、单独带一份原名', () =
   }
 });
 
+/*
+ * 空屏只有一个实现。
+ *
+ * 这一条原来有五个各写一遍的版本：说明句的 maxWidth 一处有一处没有（窄屏换行、
+ * 平板上拉成一整行），图标底有的主色有的灰，标题有的带 header 角色有的不带。
+ * 查的是「还有人自己写 emptyIcon / emptyTitle 吗」—— 写了就说明又在抄第六份。
+ */
+test('空屏只有 EmptyState 一份实现', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const walk = (dir, acc = []) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, acc);
+      else if (/\.tsx?$/.test(e.name)) acc.push(p.replace(/\\/g, '/'));
+    }
+    return acc;
+  };
+  const files = walk('src');
+
+  assert.ok(fs.existsSync('src/components/EmptyState.tsx'), 'EmptyState 组件不能删');
+  const copies = [];
+  for (const f of files) {
+    if (f === 'src/components/EmptyState.tsx') continue;
+    const src = fs.readFileSync(f, 'utf8');
+    if (/emptyIcon:|emptyTitle:/.test(src)) copies.push(f);
+  }
+  assert.deepEqual(copies, [], `这些文件又自己写了一套空屏：${copies.join('、')}`);
+
+  // 五个有列表的页面都要真的用它 —— 只是把样式删了不算统一
+  for (const f of [
+    'src/screens/TimelineScreen.tsx',
+    'src/screens/AskScreen.tsx',
+    'src/screens/DocsScreen.tsx',
+    'src/screens/ReviewScreen.tsx',
+    'src/components/TodoPanel.tsx',
+  ]) {
+    assert.ok(fs.readFileSync(f, 'utf8').includes('<EmptyState'), `${f} 的空屏要走 EmptyState`);
+  }
+
+  // 唯一的「邀请型」空屏只该有一处：首页还没有碎片时
+  const accentUsers = files.filter((f) => /<EmptyState[^>]*tone="accent"/.test(fs.readFileSync(f, 'utf8')));
+  assert.deepEqual(accentUsers, ['src/screens/TimelineScreen.tsx'], '主色底的空屏只留给首页那一处');
+});
+
+/*
+ * 提示条的高度从哪儿算，曾经算错过两次。
+ *
+ * `SafeAreaView` 里是「页面 + 底栏」竖排，所以页面底部**就是**底栏顶边 ——
+ * 页面里的提示条再加 56 就悬在半空。只有 App 根节点那个 `writeNotice`
+ * 和底栏是同一个父容器的兄弟，才需要加。
+ */
+test('底栏高度只在铺满整屏的壳层里用，页面内不许加', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+
+  const walk = (dir, acc = []) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory()) walk(p, acc);
+      else if (/\.tsx?$/.test(e.name)) acc.push(p.replace(/\\/g, '/'));
+    }
+    return acc;
+  };
+  const users = [...walk('src'), 'App.tsx'].filter((f) => {
+    if (f === 'src/components/Toast.tsx') return false; // 定义处
+    return /TAB_BAR_HEIGHT/.test(fs.readFileSync(f, 'utf8'));
+  });
+  assert.deepEqual(users, ['App.tsx'], `底栏高度只该在 App 壳层用，现在还有：${users.join('、')}`);
+
+  const docs = fs.readFileSync('src/screens/DocsScreen.tsx', 'utf8');
+  assert.ok(docs.includes('onLayout={(e) => setBarHeight(e.nativeEvent.layout.height)}'), '多选底条要实测高度');
+  assert.ok(docs.includes('(selectMode ? barHeight : 0) + 8'), '提示条要落在实测底条之上');
+  assert.ok(!/bottom=\{selectMode \? \d+/.test(docs), '不能再写死一个「大概是这么高」的数');
+});
+
 suite.run();

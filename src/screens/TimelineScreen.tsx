@@ -20,6 +20,7 @@ import { R, SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette,
 import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { NoteBody } from '../components/NoteBody';
 import { IconButton } from '../components/IconButton';
+import { EmptyState } from '../components/EmptyState';
 import { GlassBackdrop, glassable } from '../components/GlassBackdrop';
 import { FragmentDetail } from '../components/FragmentDetail';
 import { SwipeRow } from '../components/SwipeRow';
@@ -912,29 +913,21 @@ export function TimelineScreen({
       <View style={styles.flex}>
         {sections.length === 0 ? (
           narrowed ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="search-outline" size={22} color={c.text3} />
-              </View>
-              <Text style={styles.emptyTitle}>没有匹配的碎片</Text>
-              <Text style={styles.emptyBody}>
-                {filter ? '换个事项，或点上面的胶囊清掉' : '换个词试试'}
-              </Text>
-            </View>
+            <EmptyState
+              fill
+              icon="search-outline"
+              title="没有匹配的碎片"
+              body={filter ? '换个事项，或点上面的胶囊清掉' : '换个词试试'}
+            />
           ) : (
             /*
              * 空状态只说一句话。原来两行说明（「不用管分类」「攒够了去问里整理」）
              * 都是在解释产品，而人此刻只想记点什么 —— DeepSeek 的空屏也只有一句问候。
              *
-             * 底色用 accentBg：这是全 App 唯一一个「希望你做点什么」的空屏，
+             * tone="accent"：这是全 App 唯一一个「希望你做点什么」的空屏，
              * 其它空屏（搜不到、没待办、没文档）都是中性的浅灰。
              */
-            <View style={styles.empty}>
-              <View style={[styles.emptyIcon, styles.emptyIconAccent]}>
-                <Ionicons name="sparkles" size={22} color={c.accent} />
-              </View>
-              <Text style={styles.emptyTitle}>今天记点什么？</Text>
-            </View>
+            <EmptyState fill tone="accent" icon="sparkles" title="今天记点什么？" />
           )
         ) : (
           <SectionList
@@ -1737,17 +1730,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
    * 原来这里有三个不同尺寸的圆（52 的空态、52 的问候标记、44 的搜索图标）
    * 和三套字号，同一个 App 的空屏长得像三个产品。
    */
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingBottom: 48, gap: SPACE.sm },
-  emptyIcon: {
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: c.hairSoft,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  /** 唯一一个「邀请型」空屏：首页还没有碎片时用主色底 */
-  emptyIconAccent: { backgroundColor: c.accentBg },
-  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.compact, color: c.text3, textAlign: 'center' },
-
   composerWrap: {
     paddingHorizontal: SPACE.md,
     paddingTop: 6,

@@ -13,6 +13,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { IconButton } from './IconButton';
+import { EmptyState } from './EmptyState';
 import { DONE_TODO_KEEP } from '../types';
 import type { Todo } from '../types';
 import { repo } from '../db/repo';
@@ -253,16 +254,13 @@ export function TodoPanel({ todos, merged, onReload, onOpenEditor }: Props) {
     <View style={styles.root}>
       <ScrollView importantForAccessibility={mergeOpen ? "no-hide-descendants" : "auto"} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {todos.length === 0 ? (
-          <View style={styles.empty}>
-            <View style={styles.emptyIcon}>
-              <Ionicons name="checkbox-outline" size={22} color={c.text3} />
-            </View>
-            <Text style={styles.emptyTitle}>还没有待办</Text>
-            <Text style={styles.emptyBody}>
-              整理时会挑出「有明确动作」的碎片，也可以直接新建一条。
-            </Text>
+          <EmptyState
+            icon="checkbox-outline"
+            title="还没有待办"
+            body="整理时会挑出「有明确动作」的碎片，也可以直接新建一条。"
+          >
             <Pressable style={[[styles.toolBtn, { marginTop: SPACE.xs }], styles.touchTarget]} onPress={() => onOpenEditor(null, null)} accessibilityRole="button"><Ionicons name="add" size={18} color={c.accentText} /><Text style={styles.toolText}>新建待办</Text></Pressable>
-          </View>
+          </EmptyState>
         ) : (
           <>
             <View style={styles.toolbar}>
@@ -434,10 +432,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   toolTextOn: { color: c.onAccent },
   selectHint: { ...TYPE.compact, color: c.text2, marginBottom: SPACE.xs },
   /** 空态规格（全项目统一）：48 圆 + 浅灰底 + 标题 18 + 说明 14 */
-  empty: { alignItems: 'center', paddingTop: SPACE.xl, gap: SPACE.sm },
-  emptyIcon: { width: 48, height: 48, borderRadius: 24, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
-  emptyTitle: { ...TYPE.title, color: c.text, textAlign: 'center' },
-  emptyBody: { ...TYPE.compact, color: c.text2, textAlign: 'center', maxWidth: 360 },
   groupTitle: { ...TYPE.label, color: c.text2, marginBottom: 6 },
   /** 分组：白卡浮在浅灰页上，不描边；行间靠 0.5 的分隔线 */
   group: { backgroundColor: c.card, borderRadius: metrics.cardRadius, overflow: 'hidden' },
