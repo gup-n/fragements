@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.24.0 / versionCode 67 |
+| 版本 | v0.24.1 / versionCode 68 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.23.1 已发布（[Release](https://github.com/gup-n/fragements/releases/tag/v0.23.1)，26,206,138 字节，SHA-256 `96d9d3a4…a21a`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致；CI 运行编号未记 —— 查询时 GitHub API 已限流）。上一版 v0.23.0（26,203,618 字节，SHA-256 `fcac4e06…b3bb`）可回退。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,19 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.24.1：问页拆出两百行
+
+`AskScreen.tsx` 2205 → **1994** 行。只搬**没有状态**的部分，所以不用逐屏点：
+
+- `citeKey` / `plainPreview` / `coverageLine` / `orderedCitations` → `src/util/askText.ts`；
+- `TurnAnswer`（回答 + 来源 + 网页链接）→ `src/components/TurnAnswer.tsx`，
+  样式由它导出 `makeTurnStyles`，页面 `...spread` 复用（`aRow` / `aText` 页面里还有两处要用）。
+
+`test:ask` 83 → 88：引用编号按正文首次出现排序、同号不同类不串、`coverageLine` 三种说法、
+`plainPreview` 剥外壳。
+
+TEXTS 2.3 不再写行号（v0.21 那套编号早漂了，`check:docs` 只查越界查不出指错），改成按区域定位。
 
 ### v0.24.0：空屏统一 + 两处透明度 + 提示条悬空
 
@@ -246,7 +259,9 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 126 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1892 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2198 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1994 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
+| `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 647 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1015 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |

@@ -28,6 +28,11 @@ function stylesOf(file, c = appearance.LIGHT, metrics = appearance.DEFAULT_METRI
     WEB_INPUT_RESET: {},
     // 与 src/components/GlassBackdrop.tsx 的 glassable 同一条判据
     glassable: (metrics, solid) => (metrics.outline > 0 ? 'transparent' : solid),
+    /*
+     * 回答区的样式在 v0.24 跟着 TurnAnswer 一起搬走了，由页面 spread 进来。
+     * 这里给空对象：下面这些断言查的是开关 / 输入框 / 待办行，不涉及回答区。
+     */
+    makeTurnStyles: () => ({}),
   });
   return plain(makeStyles(c, metrics));
 }

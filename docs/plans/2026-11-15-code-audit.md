@@ -45,7 +45,7 @@
 | # | 问题 | 证据 | 建议 |
 |---|---|---|---|
 | 9 | `util/organizePlan.ts` 里约 250 行是标签时代的死函数 | `effectiveTodos` / `effectiveTags` / `mergeBatchResult` / `buildTagGroups` / `finalizePlan` / `appendSummary` / `plannedTodoTexts` 在 v0.18.1 拆掉标签后**无人调用**；仓库只在 `normalizePlan` / `emptyPlan` 两个入口用到它 | 只保留 `OrganizePlan` 类型 + `normalizePlan` + `emptyPlan`（旧会话的 plan 字段还要能读），其余删掉。**动之前先跑 `test:reliability`**，整理会话恢复的路径在那里 |
-| 10 | `AskScreen.tsx` 2205 行是单体 | 一个文件里塞了：聊天流、历史抽屉、引用面板、草稿改稿、整理控制器接线、意图分流 | 按「聊天 / 历史 / 草稿」拆三个子组件 + 一个 hook。收益是可读性，风险是回归 —— 必须在能真机点的轮次里做 |
+| 10 | `AskScreen.tsx` 2205 行是单体 | 一个文件里塞了：聊天流、历史抽屉、引用面板、草稿改稿、整理控制器接线、意图分流 | **v0.24.1 已搬走无状态部分**（`util/askText` + `components/TurnAnswer`，2205 → 1994）。剩下的聊天流/历史抽屉仍耦合页面状态，必须留在能真机点的轮次里拆 |
 | 11 | 48dp 触控下限的实现有两套写法 | `IconButton`（含 `compact`）、`ChoiceChip`、各处 `minHeight: metrics.controlHeight` | 目前**不建议统一**：按钮、胶囊、列表行本来就是三种东西，硬套一个组件会把差异藏进 props |
 | 12 | `R = { pill: 999 }` 只剩一个常量 | `theme.tsx:23`，全库 11 处 `R.pill` | 留着。它比散落 11 个 `999` 好 |
 

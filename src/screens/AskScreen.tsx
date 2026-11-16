@@ -23,7 +23,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
-  Linking,
   PanResponder,
   Pressable,
   ScrollView,
@@ -40,7 +39,6 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type {
   AiConfig,
   AskSession,
-  DocumentCoverage,
   Fragment,
   QaCitation,
   QaScope,
@@ -65,8 +63,7 @@ import { DocViewer } from '../components/DocViewer';
 import { normalizeQaScope } from '../util/qaScope';
 import { dayKey, formatTime } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { collectCitations, type CiteRef } from '../util/mdBlocks';
-import { NoteBody } from '../components/NoteBody';
+import { plainPreview } from '../util/askText';
 import { ReasoningFold } from '../components/ReasoningFold';
 import { ReasoningStream } from '../components/ReasoningStream';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -74,6 +71,7 @@ import { IconButton } from '../components/IconButton';
 import { CitationSheet } from '../components/CitationSheet';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
+import { TurnAnswer, makeTurnStyles } from '../components/TurnAnswer';
 
 interface Props {
   /**
@@ -126,21 +124,6 @@ const TOGGLE_SLOP = { top: 7, bottom: 7, left: 4, right: 4 };
 
 
 
-function citeKey(kind: string, id: number) {
-  return `${kind}${id}`;
-}
-
-
-
-/** 历史列表的预览：把 Markdown 外壳剥掉，只留能读的一行 */
-function plainPreview(text: string): string {
-  return text
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[#*>`]+/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 /**
  * 解析打开页面时带进来的范围。
  *
@@ -159,168 +142,6 @@ function readPageScope(initial?: QaScope): { scope: QaScope; error: string | nul
     };
   }
 }
-
-/**
- * 「读了多少」的一行话。只报事实，不粉饰：
- * 用户看到 2/10 就知道答案是基于部分片段来的。
- */
-function coverageLine(coverage: DocumentCoverage[]): string {
-  const read = coverage.filter((c) => c.includedChunks > 0);
-  const missing = coverage.filter((c) => c.includedChunks === 0);
-  const parts = read.map((c) => `《${c.name}》${c.includedChunks}/${c.totalChunks} 段`);
-  const body = `${parts.slice(0, 3).join(' · ')}${parts.length > 3 ? ` 等 ${parts.length} 份` : ''}`;
-  // 全部读完就别说「部分」，把话说准才有用
-  const partial = read.some((c) => c.includedChunks < c.totalChunks);
-  const head = !read.length
-    ? '没有读到可用的片段'
-    : partial
-      ? `基于部分片段：${body}`
-      : `读到的片段：${body}`;
-  const absent = missing.length ? `；${missing.map((c) => `《${c.name}》`).join('')}里没找到相关内容` : '';
-  return `${head}${absent}`;
-}
-
-/**
- * 引用编号按「在回答里第一次出现的顺序」排。
- * 这样正文里的小标是 1、2、3，底下的来源列表也是 1、2、3，对得上。
- */
-function orderedCitations(turn: QaTurn): QaCitation[] {
-  const all = turn.citations ?? [];
-  if (!all.length) return [];
-  const byKey = new Map(all.map((c) => [citeKey(c.kind, c.id), c]));
-  const out: QaCitation[] = [];
-  const seen = new Set<string>();
-  for (const ref of collectCitations(turn.answer)) {
-    const k = citeKey(ref.kind, ref.id);
-    if (seen.has(k)) continue;
-    const c = byKey.get(k);
-    if (!c) continue;
-    seen.add(k);
-    out.push(c);
-  }
-  // 模型没在正文里写、但 citations 里有的（理论上不会），附在最后，别让来源丢掉
-  for (const c of all) {
-    const k = citeKey(c.kind, c.id);
-    if (seen.has(k)) continue;
-    seen.add(k);
-    out.push(c);
-  }
-  return out;
-}
-
-/** 一条回答 + 它的引用列表。单独抽出来是为了让 useMemo 有地方挂 */
-function TurnAnswer({
-  turn,
-  onCite,
-}: {
-  turn: QaTurn;
-  onCite: (cite: QaCitation) => void;
-}) {
-  const { c, styles } = useThemedStyles(makeStyles);
-  const cites = useMemo(() => orderedCitations(turn), [turn]);
-  const labels = useMemo(
-    () => new Map(cites.map((cite, i) => [citeKey(cite.kind, cite.id), String(i + 1)])),
-    [cites],
-  );
-  const byKey = useMemo(
-    () => new Map(cites.map((cite) => [citeKey(cite.kind, cite.id), cite])),
-    [cites],
-  );
-  const [sourcesOpen, setSourcesOpen] = useState(false);
-  /** 打不开链接的原因。就近写在那一块下面，不弹框 */
-  const [linkErr, setLinkErr] = useState('');
-
-  const citeLabel = useCallback(
-    (ref: CiteRef) => labels.get(citeKey(ref.kind, ref.id)) ?? null,
-    [labels],
-  );
-  const openCite = useCallback(
-    (ref: CiteRef) => {
-      const cite = byKey.get(citeKey(ref.kind, ref.id));
-      if (cite) onCite(cite);
-    },
-    [byKey, onCite],
-  );
-
-  return (
-    <View style={styles.aRow}>
-      <NoteBody text={turn.answer} style={styles.aText} citeLabel={citeLabel} onCite={openCite} />
-
-      {turn.documentCoverage?.length ? (
-        <Text style={styles.covText}>{coverageLine(turn.documentCoverage)}</Text>
-      ) : null}
-
-      {cites.length > 0 ? (
-        <View style={styles.srcBlock}>
-          <Pressable
-            style={styles.srcToggle}
-            onPress={() => setSourcesOpen((v) => !v)}
-            accessibilityRole="button"
-            accessibilityState={{ expanded: sourcesOpen }}
-            accessibilityLabel={sourcesOpen ? '收起引用来源' : '展开引用来源'}
-          >
-            <Ionicons name="link-outline" size={13} color={c.text3} />
-            <Text style={styles.srcLabel}>参考 {cites.length} 条</Text>
-            <Ionicons
-              name={sourcesOpen ? 'chevron-up' : 'chevron-down'}
-              size={12}
-              color={c.text3}
-            />
-          </Pressable>
-
-          {sourcesOpen
-            ? cites.map((cite, i) => (
-                <Pressable
-                  key={citeKey(cite.kind, cite.id)}
-                  style={styles.srcRow}
-                  onPress={() => onCite(cite)}
-                >
-                  <Text style={styles.srcIndex}>{i + 1}</Text>
-                  <Text style={styles.srcTitle} numberOfLines={1}>
-                    {cite.label}
-                  </Text>
-                  <Ionicons name="chevron-forward" size={12} color={c.text3} />
-                </Pressable>
-              ))
-            : null}
-        </View>
-      ) : null}
-
-      {/*
-        网页来源：**不依赖模型有没有写 [W 编号]**。
-        它只在自己真的搜过网时出现，点一下直接开浏览器 ——
-        用户说的「网页链接没法点」就是这里缺了一块：内容进了回答，链接却没落地。
-      */}
-      {turn.webSources?.length ? (
-        <View style={styles.webBlock}>
-          <Text style={styles.webTitle}>网页来源</Text>
-          {turn.webSources.map((w) => (
-            <Pressable
-              key={w.url}
-              style={({ pressed }) => [styles.webRow, pressed && { opacity: 0.6 }]}
-              onPress={() => {
-                setLinkErr('');
-                Linking.openURL(w.url).catch(() =>
-                  setLinkErr(`打不开这个链接：${w.url}`),
-                );
-              }}
-              accessibilityRole="link"
-              accessibilityLabel={`打开网页 ${w.title}`}
-            >
-              <Ionicons name="globe-outline" size={12} color={c.text3} />
-              <Text style={styles.webRowText} numberOfLines={1}>
-                {w.title}
-              </Text>
-              <Ionicons name="open-outline" size={12} color={c.text3} />
-            </Pressable>
-          ))}
-          {linkErr ? <Text style={styles.webErr}>{linkErr}</Text> : null}
-        </View>
-      ) : null}
-    </View>
-  );
-}
-
 export function AskScreen({
   embedded = false,
   onClose,
@@ -1986,6 +1807,7 @@ export function AskScreen({
 }
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  ...makeTurnStyles(c, metrics),
   root: { flex: 1, backgroundColor: c.page },
   flex: { flex: 1 },
   /** 恢复卡：靠 accentBg 底表态，不再套一圈有色描边 */
@@ -2050,35 +1872,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
   },
   qText: { ...TYPE.body, color: c.accentText },
-  // Assistant answers remain open text, not a notification card.
-  aRow: { marginBottom: SPACE.sm, gap: SPACE.xs },
-  aText: { ...TYPE.body, color: c.text },
-  covText: {
-    ...TYPE.meta, color: c.text2, marginTop: SPACE.xs,
-    paddingLeft: SPACE.sm, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair,
-  },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.xs },
   thinkingText: { ...TYPE.label, fontWeight: '400', color: c.text2, flexShrink: 1 },
   busyNote: { ...TYPE.meta, color: c.text2 },
-  srcBlock: { marginTop: SPACE.xs, gap: SPACE.xxs },
-  srcToggle: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, alignSelf: 'flex-start' },
-  srcLabel: { ...TYPE.label, color: c.text2 },
-  srcRow: {
-    minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
-    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
-    paddingHorizontal: SPACE.xs, paddingVertical: SPACE.sm,
-  },
-  srcIndex: {
-    ...TYPE.meta, minWidth: SPACE.xl, color: c.accentText, fontWeight: '600', textAlign: 'center',
-    backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius,
-    paddingVertical: SPACE.xxs, overflow: 'hidden',
-  },
-  srcTitle: { ...TYPE.body, flex: 1, color: c.text2 },
-  webBlock: { marginTop: SPACE.sm, paddingTop: SPACE.xs, gap: SPACE.xxs, borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair },
-  webTitle: { ...TYPE.label, color: c.text2 },
-  webRow: { minHeight: metrics.controlHeight, flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, paddingVertical: SPACE.xs },
-  webRowText: { ...TYPE.body, flex: 1, color: c.accentText },
-  webErr: { ...TYPE.meta, color: c.danger },
   webNote: { ...TYPE.meta, color: c.text2, marginTop: SPACE.sm, paddingLeft: SPACE.sm, borderLeftWidth: surfaceStroke(metrics), borderLeftColor: c.hair },
   footer: {
     borderTopWidth: surfaceStroke(metrics), borderTopColor: c.hair,

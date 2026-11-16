@@ -60,6 +60,7 @@ const tscArgs = [
   'src/util/inlineImages.ts',
   'src/util/mdBlocks.ts',
   'src/util/pendingImages.ts',
+  'src/util/askText.ts',
   'src/util/urls.ts',
   '--rootDir',
   'src',
@@ -94,6 +95,7 @@ const urls = require(path.join(outDir, 'util', 'urls.js'));
 const inline = require(path.join(outDir, 'util', 'inlineImages.js'));
 const mdBlocks = require(path.join(outDir, 'util', 'mdBlocks.js'));
 const pending = require(path.join(outDir, 'util', 'pendingImages.js'));
+const askText = require(path.join(outDir, 'util', 'askText.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -764,8 +766,61 @@ check('月总结提示词要求表格与重要事件两段', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 5. 回答区的纯函数（v0.24 从 AskScreen 搬进 util/askText）
+// ---------------------------------------------------------------------------
+const turnOf = (answer, citations, extra = {}) => ({ question: 'q', answer, citations, ...extra });
+
+check('引用编号按正文第一次出现的顺序，重复只算一次', () => {
+  // 模型给 citations 的顺序和正文里的 [F12] 不一定一致，小标必须按正文排
+  const ordered = askText.orderedCitations(turnOf('先看 [F12]，再看 [N3]，又提到 [F12]', [
+    { kind: 'N', id: 3, label: '月总结' },
+    { kind: 'F', id: 12, label: '那条碎片' },
+  ]));
+  eq(ordered.map((c) => c.label).join(','), '那条碎片,月总结', '顺序');
+});
+
+check('正文没引用的来源附在最后，不丢', () => {
+  const ordered = askText.orderedCitations(turnOf('只写了一句话', [
+    { kind: 'F', id: 1, label: 'A' },
+    { kind: 'T', id: 2, label: 'B' },
+  ]));
+  eq(ordered.length, 2, '条数');
+  eq(ordered[0].label, 'A', '按 citations 原序附在后面');
+});
+
+check('引用编号带类型，碎片与待办同号也不会串台', () => {
+  eq(askText.citeKey('F', 7), 'F7', 'key');
+  eq(askText.citeKey('T', 7), 'T7', '同号不同类型必须不同 key');
+  const ordered = askText.orderedCitations(turnOf('看 [F7] 和 [T7]', [
+    { kind: 'T', id: 7, label: '待办七' },
+    { kind: 'F', id: 7, label: '碎片七' },
+  ]));
+  eq(ordered.map((c) => c.label).join(','), '碎片七,待办七', '两类 id 相同也不能串');
+});
+
+check('「读了多少」：部分、全部、一段没读到三种说法', () => {
+  const part = askText.coverageLine([
+    { name: '制度.pdf', includedChunks: 2, totalChunks: 10 },
+    { name: '附件.docx', includedChunks: 0, totalChunks: 4 },
+  ]);
+  assert(part.includes('基于部分片段'), '部分读到要说「部分」：' + part);
+  assert(part.includes('附件.docx') && part.includes('没找到相关内容'), '没读到的文档要点名：' + part);
+  const all = askText.coverageLine([{ name: '制度.pdf', includedChunks: 10, totalChunks: 10 }]);
+  assert(all.startsWith('读到的片段'), '全读完不许说「部分」：' + all);
+  const none = askText.coverageLine([{ name: 'x.pdf', includedChunks: 0, totalChunks: 3 }]);
+  assert(none.startsWith('没有读到可用的片段'), '一段没读到要直说：' + none);
+});
+
+check('历史预览剥掉 Markdown 外壳，压成一行', () => {
+  eq(askText.plainPreview('## 标题\nn\n```\ncode\n```\n> 引用'), '标题 n 引用', '预览');
+});
+
+// ---------------------------------------------------------------------------
 // 收尾
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+
 fs.rmSync(outDir, { recursive: true, force: true });
 
 if (failures.length) {
