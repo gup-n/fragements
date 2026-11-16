@@ -43,6 +43,8 @@ interface Props {
    */
   embedded?: boolean;
   onClose?: () => void;
+  /** 切到设置页（App 的 tab 切换）。月总结面板缺 Key 时要一个真能点的入口 */
+  onOpenSettings?: () => void;
   /** 数据变了（新存了一条总结、改动了待办），通知上层刷新时间轴 */
   onChanged?: () => void | Promise<void>;
   /** 全部碎片。日历用它标出「哪天记过东西」，也是点开某天后的明细来源 */
@@ -76,7 +78,7 @@ function marksText(m: DayMarks): string {
   return bits.length ? bits.join(' · ') : '这天没有内容';
 }
 
-export function ReviewScreen({ embedded = false, onClose, onChanged, fragments = [] }: Props) {
+export function ReviewScreen({ embedded = false, onClose, onChanged, onOpenSettings, fragments = [] }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [tab, setTab] = useState<Tab>('todo');
   const [todos, setTodos] = useState<Todo[]>([]);
@@ -277,6 +279,7 @@ export function ReviewScreen({ embedded = false, onClose, onChanged, fragments =
       {sheetOpen ? (
         <SummarySheet
           initialPeriod={sheetPeriod || undefined}
+          onOpenSettings={onOpenSettings}
           onClose={() => setSheetPeriod(undefined)}
           onSaved={async () => {
             await reload();

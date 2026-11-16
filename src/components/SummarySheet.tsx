@@ -53,11 +53,18 @@ interface Props {
   onClose: () => void;
   /** 存进库之后通知上层刷新（时间轴才会立刻出现这条总结） */
   onSaved: () => void | Promise<void>;
+  /**
+   * 打开设置页（App 的 tab 切换）。
+   *
+   * 这里必须由外面传进来：面板是覆盖层，自己换不了 tab；只写一句「先去设置页填一个」
+   * 等于让用户先关面板再找底栏 —— 项目规则里说的「文案指一个点不到的地方」就是这种。
+   */
+  onOpenSettings?: () => void;
   /** 从「待补总结」点进来时预选月份 */
   initialPeriod?: string;
 }
 
-export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
+export function SummarySheet({ onClose, onSaved, initialPeriod, onOpenSettings }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [period, setPeriod] = useState(() => initialPeriod ?? recentMonths(1)[0]);
   const [count, setCount] = useState<number | null>(null);
@@ -67,6 +74,8 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
   const [phase, setPhase] = useState<Phase>('pick');
   const [draft, setDraft] = useState<SummarizeOutcome | null>(null);
   const [error, setError] = useState('');
+  /** 错误是「没配 Key」——这时才给「去设置」按钮，别的错误不给（去了也没用） */
+  const [needKey, setNeedKey] = useState(false);
   const [saving, setSaving] = useState(false);
 
   /** 还没写总结的月份。进面板时算一次，用来勾选批量 */
@@ -184,6 +193,7 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
   async function generateOne(target: string) {
     setPeriod(target);
     setError('');
+    setNeedKey(false);
     setDraft(null);
     setReasoning('');
     setReceived(0);
@@ -197,7 +207,8 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
       const config = await loadAiConfig();
       if (!config.apiKey) {
         setPhase('pick');
-        setError('还没配置 API Key，先去设置页填一个');
+        setError('还没配置 API Key，填一个就能生成');
+        setNeedKey(true);
         return;
       }
       setThinkingOn(config.thinking);
@@ -544,6 +555,21 @@ export function SummarySheet({ onClose, onSaved, initialPeriod }: Props) {
             </View>
 
             {error ? <Text style={styles.error} accessibilityLiveRegion="polite">{error}</Text> : null}
+            {needKey && onOpenSettings ? (
+              <Pressable
+                style={[[styles.errorBtn], styles.touchTarget]}
+                onPress={() => {
+                  // 先关面板再换 tab：App 是按 route 条件渲染的，不关的话回来时面板还开着
+                  onClose();
+                  onOpenSettings();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="去设置填 API Key"
+              >
+                <Ionicons name="settings-outline" size={14} color={c.accentText} />
+                <Text style={styles.errorBtnText}>去设置填 Key</Text>
+              </Pressable>
+            ) : null}
           </ScrollView>
 
           <View style={styles.footer}>
@@ -660,6 +686,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   replaceText: { ...TYPE.meta, color: c.text2 },
 
   error: { ...TYPE.meta, color: c.danger, marginTop: SPACE.sm },
+  /** 「去设置填 Key」：和错误文案同一块，紧跟在它下面 */
+  errorBtn: {
+    alignSelf: 'flex-start', marginTop: SPACE.xs,
+    minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs,
+    backgroundColor: c.accentBg, borderRadius: 999, paddingHorizontal: SPACE.sm,
+  },
+  errorBtnText: { ...TYPE.label, color: c.accentText },
 
   previewMetaRow: {
     flexDirection: 'row',

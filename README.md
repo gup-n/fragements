@@ -12,7 +12,7 @@
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.24.1（versionCode 68） |
+| 当前版本 | v0.24.2（versionCode 69） |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

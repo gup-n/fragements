@@ -565,4 +565,27 @@ test('底栏高度只在铺满整屏的壳层里用，页面内不许加', () =>
   assert.ok(!/bottom=\{selectMode \? \d+/.test(docs), '不能再写死一个「大概是这么高」的数');
 });
 
+/*
+ * 「先去设置页填一个」原来是一句点不到的话：月总结面板是覆盖层，自己换不了 tab，
+ * 用户得先关面板、再找底栏、再进设置 —— 项目规则里点名的「文案指一个点不到的地方」。
+ * 现在给一个真按钮，而且必须能从 App 一路接到 `setRoute('settings')`，
+ * 否则按钮点了没反应，比没有更坏。
+ */
+test('缺 API Key 时有「去设置」按钮，并且真的能切到设置页', () => {
+  const fs = require('node:fs');
+  const sheet = fs.readFileSync('src/components/SummarySheet.tsx', 'utf8');
+  assert.ok(sheet.includes('onOpenSettings'), '面板要接一个「打开设置」的回调');
+  assert.ok(sheet.includes('去设置填 Key'), '按钮文案要说清去哪做什么');
+  const closeAt = sheet.indexOf('onClose();');
+  const openAt = sheet.indexOf('onOpenSettings();');
+  assert.ok(closeAt > 0 && openAt > closeAt, '先关面板再切 tab（App 按 route 条件渲染）');
+  assert.ok(sheet.includes('setNeedKey(true)'), '只有「没配 Key」才给这个按钮');
+
+  const review = fs.readFileSync('src/screens/ReviewScreen.tsx', 'utf8');
+  assert.ok(review.includes('onOpenSettings={onOpenSettings}'), '回顾页要把回调透传下去');
+
+  const app = fs.readFileSync('App.tsx', 'utf8');
+  assert.ok(app.includes("onOpenSettings={() => setRoute('settings')}"), 'App 必须真的切到设置页');
+});
+
 suite.run();

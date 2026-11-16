@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.24.1 / versionCode 68 |
+| 版本 | v0.24.2 / versionCode 69 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.24.1 已由[CI 43878966762](https://github.com/gup-n/fragements/actions/runs/43878966762)构建并发布（26,206,058 字节，SHA-256 `1f8349d6…631e`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。同批 v0.24.0（[CI 43877650378](https://github.com/gup-n/fragements/actions/runs/43877650378)，26,205,166 字节，SHA-256 `e276ecde…1e0e`）可回退。上一版 v0.23.1（26,206,138 字节）也可回退。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,15 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.24.2：「先去设置页填一个」现在真的能去
+
+月总结面板缺 API Key 时只写一句话，而面板是覆盖层、自己换不了 tab。现在文案改成
+`还没配置 API Key，填一个就能生成`，紧跟 `去设置填 Key` 按钮：先关面板（App 按 route 条件渲染），
+再切到设置 tab。回调由 App 传下来，面板不认识路由；**只有缺 Key 才给按钮**，网络/格式错误不给。
+
+`test:ui` 35 → 36：断言面板有按钮、先关后切、App 真接到 `setRoute('settings')` ——
+只断言「有按钮」的话，回调没接上照样是死按钮。
 
 ### v0.24.1：问页拆出两百行
 
@@ -262,7 +271,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1994 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 647 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 650 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1015 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
@@ -368,7 +377,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 438 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
 | `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 607 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
 | `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
-| `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 747 | 月总结单篇/缺口队列、原稿对照和确认保存 |
+| `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 780 | 月总结单篇/缺口队列、原稿对照和确认保存 |
 | `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 512 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 229 | 全屏覆盖编辑、子项和到期日 |
 | `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 529 | 更新提示/下载/安装/错误状态 |
