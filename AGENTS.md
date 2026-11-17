@@ -34,10 +34,16 @@ type Route = MainTab; // 五个页面即底栏五项，只此一处定义
 | `npm run test:reliability` | 真实控制流、故障注入、授权与恢复 |
 | `npm run test:appearance` | 两轴主题、对比度与PDF协议 |
 | `npm run test:backup` | 新备份清单与路径等纯判据 |
-| `npm run test:ui` | 语义排版、窄屏导航、控件与原事件保留 |
+| `npm run test:reminder` | 小结提醒的时刻、不重排、冷却、撤销与正文本 |
+| `npm run test:ui` | 语义排版、窄屏导航、控件与原事件保留、分享契约、空屏只有一份 |
 | `npm run check:docs` | 版本、文件行数、路径/链接、提示词等 |
 | `npm test` | 以上检查的串行聚合 |
 | `npm run prepare:pdf` | 生成产品PDF阅读器资源，Lead/CI执行 |
+
+**断言脚本自己会不会失败，也要能查出来。** `createSuite` 的 `run()` 把用例异常收进返回值里
+（为了打完整报告），所以只写 `suite.run();` 的脚本**失败也退出 0** —— `assert_ui` 就这样
+白跑了两个版本（v0.25 修好，一跑从 28 项变成 37 项）。新写断言脚本必须 `process.exitCode`，
+`test:reminder` 里有一条卫生断言专门查这个。`check:docs` 的行数表连 `.cjs/.mjs` 一起查了。
 | `npm run build:web` | Web编译校验，产物同次清理，不供预览 |
 
 - 并行开发期间不要各自跑整套检查、争用测试临时目录或生成PDF资源。可以做获分配范围的内存断言，最终集中验证由Lead负责。
@@ -111,6 +117,8 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - App持有记录正文、待发图片、唯一待发键；它们跨页面/风格保留，但当前没有进程重启恢复承诺。不要和整理工作区的持久化混为一谈。
 - 正文配图标记仅走[inlineImages](<src/util/inlineImages.ts>)：光标插入、pending键换id、去重与删除标记。模型材料、检索、文字导出剥离定位语法；原图与图片文字不是同一数据。
 - 历史SQL清空字段沿用 `NULL` 字面量，不把已踩过坑的UPDATE改回绑定null；不拿驱动返回的 `changed === 0` 判失败。刷新与实际提交状态分别处理。
+- **系统分享的 json 有两个形状**：v0.25 起是 `files: [{file, name}]`，之前是单个 `file`/`name`。读的时候两条都要认 —— 升级前分享、升级后才打开 App 的机器上，磁盘里躺的是旧形状。`disk`（安全名）只用来删文件，`name`（原名）才入库。
+- **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。
 
 ## 6. 搜索与Markdown文字迁出
 

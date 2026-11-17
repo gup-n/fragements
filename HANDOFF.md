@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.24.2 / versionCode 69 |
+| 版本 | v0.25.0 / versionCode 70 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.24.2 已由[CI 43881231804](https://github.com/gup-n/fragements/actions/runs/43881231804)构建并发布（26,206,774 字节，SHA-256 `f76bfa76…f200`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.24.1（[CI 43878966762](https://github.com/gup-n/fragements/actions/runs/43878966762)，26,206,058 字节）、v0.24.0（[CI 43877650378](https://github.com/gup-n/fragements/actions/runs/43877650378)，26,205,166 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,38 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.25.0：有欠账才提醒一次，相册多选不再全丢
+
+审阅清单里两条「真的没做完」的项。都不是新界面，是补上「用户已经做过一次动作、App 却没接住」的缺口。
+
+**月度小结提醒**（`src/digestReminder.ts` + `src/util/digestReminder.ts`）
+- 判据复用 `util/digest.missingDigests`，不另算一套；纯函数 `planDigestReminder` 输出
+  `keep` / `cancel` / `schedule` 三种动作，副作用全在外面。
+- 三条容易写错的：**已经排在未来的不重排**（否则天天开 App 永远收不到）、**3 天冷却**
+  （否则连着催）、**账清了要撤**（否则写完还被提醒）。
+- 设置页「快捷入口」改名「通知」，两行并排；打开开关**先要权限再落库** ——
+  反过来的「开着但发不出来」是用户查不出来的状态。
+- 通知权限的判断与文案合成 `util/notifyPerm` 一份，`quickRecord` 改用同一个。
+
+**分享接收补多选**（`plugins/withShareReceiver.js`、`src/shareInbox.ts`、`App.tsx`）
+- manifest 的同一个 filter 里加 `ACTION_SEND_MULTIPLE`，`captureShare` 分两条读
+  `EXTRA_STREAM`（单个 Uri / `ArrayList<Uri>`）。
+- json 从 `file`/`name` 变成 `files: [{file, name}]`，旧版留下的 json 仍然认；
+  磁盘名 `时间戳-序号-名字`，避免同名文件互相覆盖。
+- JS 侧：图片合成**一条**碎片（多选三张图是一件事），文档**一份一条**进文档库；
+  中转副本逐个消费逐个删。
+
+**`test:ui` 从来没拦过东西**：收尾是裸 `suite.run()`，而 `createSuite.run()` 把异常收进返回值 ——
+失败也退出 0。改成 `process.exitCode`，一跑就是 37 项（不是 28）。并加了一条卫生断言：
+凡是用 `createSuite` 的脚本必须设退出码。`check:docs` 的行数表也扩到 `.cjs/.mjs`
+（以前只查 `.ts/.tsx`，于是 4 个断言脚本的行数漂了几百行没人发现）。
+
+**`AskScreen` 再搬一块**：`historyRow` → `components/AskHistoryRow.tsx`（1938 行）。
+聊天流、抽屉外壳、输入区仍留在页面：与页面状态和 `onLayout` 实测高度缠在一起。
+
+**没验**：通知响不响（要等一个 20:00）、MIUI/vivo 的省电策略会不会吃掉通道、
+点通知落不落到回顾页；相册多选在微信里是否真的露出「碎片」。这些都只有装包能验。
 
 ### v0.24.2：「先去设置页填一个」现在真的能去
 
@@ -264,16 +296,20 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 677 | route state、两轴偏好落盘、底栏四页与键盘让位、记录草稿/待发图、数据/图片提交接线、返回与文档运行时 |
-| `src/quickRecord.ts` | 129 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
-| `src/shareInbox.ts` | 126 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件，用时间戳做幂等键只消费一次；类型判断以 mime 为主、扩展名兜底 |
+| `App.tsx` [打开](<App.tsx>) | 729 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
+| `src/quickRecord.ts` | 125 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
+| `src/shareInbox.ts` | 155 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件列表，用时间戳做幂等键只消费一次；`files[]` 与旧版单文件 json 都认；每个文件各自判 mime / 扩展名 |
+| `src/digestReminder.ts` | 188 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
+| `src/util/digestReminder.ts` | 91 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
+| `src/util/notifyPerm.ts` | 27 | 通知权限只有一份判断与一句话文案，两个通知入口共用 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1892 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1994 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1938 | 问答聊天、历史抽屉、引用、文档范围及整理控制器接线 |
+| `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 650 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1015 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1504 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1571 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 50 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
@@ -431,16 +467,17 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `scripts/assert_md.cjs` [打开](<scripts/assert_md.cjs>) | 303 | 原有Markdown往返断言 |
 | `scripts/assert_backup.cjs` | 243 | 完整备份的 19 项断言：命名、清单、四种拒绝、路径穿越过滤、SQLite 头、体积上限 |
-| `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 482 | 限定文档问答/预算/引用 |
-| `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 567 | 文档任务控制流 |
+| `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 483 | 限定文档问答/预算/引用 |
+| `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 576 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |
-| `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 340 | 父子待办和月总结规则 |
-| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 776 | 问页意图、草稿与输出兼容 |
+| `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 392 | 父子待办和月总结规则 |
+| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 831 | 问页意图、草稿与输出兼容 |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1871 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 403 | 两轴外观、真实对比度、PDF与阅读器契约 |
-| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 221 | 20项纯内存UI布局/控件回归，含语义字号与窄屏导航，非真机视觉验收 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 621 | 37项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
+| `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 187 | 11项：提醒时刻、不重排、3天冷却、账清就撤、正文口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
-| `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 264 | 文档机器一致性；不得通过降低覆盖率躲检查 |
+| `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 
 ## 5. 数据模型与可靠性边界
 

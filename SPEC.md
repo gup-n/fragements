@@ -327,8 +327,8 @@
 
 | 环节 | 做法 |
 |---|---|
-| 开关 | `settings.quick_record`，**默认关**。设置 → 数据与备份 → 快捷入口 |
-| 权限 | Android 13+ 运行时申请 `POST_NOTIFICATIONS`；被拒时把原因原样显示（系统只会问一次，之后只能去设置里开） |
+| 开关 | `settings.quick_record`，**默认关**。设置 → 数据 → 通知（v0.25 起与「小结提醒」同一组） |
+| 权限 | Android 13+ 运行时申请 `POST_NOTIFICATIONS`；被拒时把原因原样显示（系统只会问一次，之后只能去设置里开）。判断与文案只有一份：`util/notifyPerm.ensureNotifyPermission` |
 | 通道 | `quick-record`，`AndroidImportance.MIN` |
 | 点击 | `addNotificationResponseReceivedListener` + **`getLastNotificationResponseAsync`**（冷启动那一次监听还没挂上，不补就漏），拿到后立刻清掉 |
 | 聚焦 | App 用自增 `focusSignal` 传给时间轴：页面已经在这不会重新挂载，只有值变才再聚焦一次 |
@@ -340,16 +340,38 @@
 
 | 环节 | 做法 |
 |---|---|
-| 声明 | `plugins/withShareReceiver.js`：给 MainActivity 加 `ACTION_SEND`（`text/plain` / `image/*` / `application/pdf`），并把接收逻辑注入 `MainActivity.kt` |
+| 声明 | `plugins/withShareReceiver.js`：给 MainActivity 加 `ACTION_SEND` **和 `ACTION_SEND_MULTIPLE`**（`text/plain` / `image/*` / pdf / docx / xlsx / pptx / csv / markdown 共 11 种），并把接收逻辑注入 `MainActivity.kt` |
 | 落盘 | **在原生就把文件复制到 `files/incoming/`**。`content://` 的读权限跟着 Activity 走，等 JS 回来读多半已经打不开 |
-| 交接 | 写 `incoming/incoming-share.json`（`at` / `mime` / `text` / `file`），JS 读同一份 |
+| 交接 | 写 `incoming/incoming-share.json`（`at` / `mime` / `text` / `files: [{file, name}]`），JS 读同一份。`file` 是磁盘安全名（`时间戳-序号-名字`），`name` 是给人看的原名；旧版只写单个 `file`/`name`，JS 仍然认 |
+| 多选 | 相册 / 文件管理器一次选多个走 `SEND_MULTIPLE`，文件在 `EXTRA_STREAM` 的 `ArrayList<Uri>` 里。**只接单选的话那些文件会全部丢掉且没有任何提示**（v0.25） |
 | 消费 | `src/shareInbox.ts` 用 `settings.share_last_at` 做幂等键：只处理比上次新的，**先落库再返回** |
 | 时机 | 启动读完后一次 + `AppState` 回到 active 时一次。MainActivity 是 `singleTask`，已开着时分享进来只走 `onNewIntent`，不重启 |
 | 文本 | 拼在已有草稿**后面**（不覆盖用户写了一半的话），停在时间轴等用户确认再发布 |
-| 图片 | 直接存成一条碎片（带上分享时附的那句文字） |
-| 文件（PDF / Word / 表格） | **直接写进文档库**（v0.23）：走 `documents/importLocal` 的「先落原文件 → 再写记录 → 失败删原件」，与文档页的导入是同一份顺序；存成 `stored` 后自动切到文档页，能不能本地读由文档页自己说 |
-| 中转副本 | 消费成功之后删除 `files/incoming/` 里那份（`dropIncomingFile`）。不删的话每分享一次就多存一份，用户只在系统存储占用里能看到 |
+| 图片 | 直接存成一条碎片（带上分享时附的那句文字）。一次分享多张图时**合成同一条碎片** —— 多选三张图是一件事，不是三件事 |
+| 文件（PDF / Word / 表格） | **直接写进文档库**（v0.23）：走 `documents/importLocal` 的「先落原文件 → 再写记录 → 失败删原件」，与文档页的导入是同一份顺序；一份一条，存成 `stored` 后自动切到文档页，能不能本地读由文档页自己说 |
+| 中转副本 | 消费成功之后**逐个**删除 `files/incoming/` 里那份（`dropIncomingFile(disk)`）。不删的话每分享一次就多存一份，用户只在系统存储占用里能看到；逐个删是为了「第 2 份失败时，第 1 份不会在下次重试里再来一遍」 |
 | 不支持的形状 | 分享里没有文字也没有文件（只有链接等）时如实说「这次分享里没有可保存的文件」 |
+
+### 4.1.6 月度小结提醒（v0.25）
+
+「哪几个月还没写小结」原来只在回顾页页头写着，要用户自己切过去才看得见。现在做成本地定时通知，
+**有账才提醒**：晚上 8 点响一次，点开落到回顾页。
+
+| 环节 | 做法 |
+|---|---|
+| 开关 | `settings.digest_reminder`，**默认关**。设置 → 数据 → 通知 |
+| 判据 | 复用 `util/digest.missingDigests`（只算已结束、有碎片、没有月总结的月份），不另算一套 |
+| 时刻 | `util/digestReminder.nextRemindAt`：当天 20:00，过了就明天 20:00。白天推送会被顺手划掉，22 点后算打扰 |
+| 不重排 | 已排的时刻还在未来就**不动时刻**，只换内容。否则天天开 App 的人永远收不到 |
+| 冷却 | 上次排定时刻在 3 天内不再排 —— 提醒过一次没管，隔天再排就是「天天催」 |
+| 撤掉 | 账清了（写完那个月）或关掉开关时 `cancelScheduledNotificationAsync`，否则写完了还会被提醒 |
+| 通道 | `digest-reminder`，`AndroidImportance.DEFAULT`（要出声、要弹，否则不叫提醒） |
+| 顺序 | **先要权限再落库**：反过来会出现「开关显示开着、其实永远发不出来」，那种状态用户查不出来 |
+| 内容 | 「2026 年 10 月有 14 条碎片，还没写小结」；欠多个月时补一句「一共 2 个月欠着」 |
+| 点击 | 固定 id + `watchDigestReminder`：监听 + 冷启动捞一次（`getLastNotificationResponseAsync`），和「记一条」各认各的 `kind` |
+
+**为什么不是「月底那天提醒」**：月底提醒很容易空转 —— 用户 29 号已经写完，30 号那条就是噪音；
+整月没打开 App 时那条也排不进去。看欠账则天然只在有账时响。
 
 ### 4.2 设置页的四个模块（v0.20）
 
@@ -503,6 +525,7 @@
 - Markdown 导入：选文件 → 预览（新增 / 跳过）→ 确认后才写库，见第 7 节
 - **完整备份（v0.20.5）**：库快照 + 配图 + 文档原件打成一个 zip，见 §4.1.3
 - **通知栏快捷记录（v0.20.5）**：常驻「记一条」，点开光标在输入框，见 §4.1.4
+- **月度小结提醒（v0.25）**：有月份的小结没写时晚上 8 点提醒一次，见 §4.1.6
 - 设置页（v0.20 按模块分层，见 §4.2）
 - 本地全文索引（FTS5 + bigram），启动时自动校验条数并回填
 

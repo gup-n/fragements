@@ -72,6 +72,7 @@ import { CitationSheet } from '../components/CitationSheet';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { TurnAnswer, makeTurnStyles } from '../components/TurnAnswer';
+import { AskHistoryRow } from '../components/AskHistoryRow';
 
 interface Props {
   /**
@@ -1053,65 +1054,6 @@ export function AskScreen({
     return { groups: Array.from(map.entries()), archived };
   }, [sessions]);
 
-  /** 历史行。没有 hooks，可以放在组件里当普通函数 */
-  function historyRow(s: AskSession) {
-    const last = s.turns[s.turns.length - 1];
-    return (
-      <View key={s.id} style={[styles.histRow, sessionId === s.id && styles.histRowSelected]}>
-        <Pressable
-          style={styles.histMain}
-          onPress={() => loadSession(s)}
-          accessibilityRole="button"
-          accessibilityLabel={`打开会话 ${s.title}`}
-          accessibilityState={{ selected: sessionId === s.id }}
-        >
-          <View style={styles.histTop}>
-            <Text style={styles.histTitle} numberOfLines={2}>
-              {s.title}
-            </Text>
-          </View>
-          <Text style={styles.histMeta}>
-            {dayKey(s.updatedAt)} {formatTime(s.updatedAt)} · {s.turns.length} 轮
-          </Text>
-          {s.documentIds.length || s.documentId || s.fragmentId || s.scope?.kind === 'documents' || s.archived || sessionId === s.id ? (
-            <View style={styles.histStatus}>
-              {sessionId === s.id ? <Text style={styles.histScope}>当前会话</Text> : null}
-              {s.documentIds.length || s.documentId ? (
-                <Pressable
-                  onPress={() => void openSessionDocs(s)}
-                  style={styles.histBadgeHit}
-                  accessibilityRole="button"
-                  accessibilityLabel="打开这场会话整理出的文档"
-                >
-                  <Text style={styles.histBadge}>
-                    {s.documentIds.length > 1 ? `已写入 ${s.documentIds.length} 篇` : '已写入文档'}
-                  </Text>
-                </Pressable>
-              ) : s.fragmentId ? (
-                <Text style={styles.histBadge}>已整理</Text>
-              ) : null}
-              {s.scope?.kind === 'documents' ? <Text style={styles.histScope}>文档 {s.scope.documentIds.length} 份</Text> : null}
-              {s.archived ? <Text style={styles.histArchived}>已归档</Text> : null}
-            </View>
-          ) : null}
-          {last ? (
-            <Text style={styles.histPreview} numberOfLines={2}>
-              {plainPreview(last.answer)}
-            </Text>
-          ) : null}
-        </Pressable>
-        <IconButton
-          name="ellipsis-horizontal"
-          size={18}
-          tone="soft"
-          diameter={30}
-          onPress={() => setActionSession(s)}
-          accessibilityLabel={`管理会话 ${s.title}`}
-        />
-      </View>
-    );
-  }
-
   /*
    * 抽屉跟手时，问答页往右让出一点、压暗一点 —— 这是「仿真」的另一半。
    * 用 useMemo 固定插值节点：每帧新建一个节点会让原生动画重新挂一次，看起来是一跳。
@@ -1562,14 +1504,32 @@ export function AskScreen({
               {history.groups.map(([label, list]) => (
                 <View key={label}>
                   <Text style={styles.histGroupTitle}>{label}</Text>
-                  {list.map(historyRow)}
+                  {list.map((one) => (
+                    <AskHistoryRow
+                      key={one.id}
+                      session={one}
+                      active={sessionId === one.id}
+                      onOpen={loadSession}
+                      onOpenDocs={(s) => void openSessionDocs(s)}
+                      onManage={setActionSession}
+                    />
+                  ))}
                 </View>
               ))}
 
               {history.archived.length > 0 ? (
                 <View>
                   <Text style={styles.histGroupTitle}>已归档 · {history.archived.length}</Text>
-                  {history.archived.map(historyRow)}
+                  {history.archived.map((one) => (
+                    <AskHistoryRow
+                      key={one.id}
+                      session={one}
+                      active={sessionId === one.id}
+                      onOpen={loadSession}
+                      onOpenDocs={(s) => void openSessionDocs(s)}
+                      onManage={setActionSession}
+                    />
+                  ))}
                 </View>
               ) : null}
             </ScrollView>
@@ -1954,22 +1914,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
   historyLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, paddingTop: SPACE.xxl },
   histGroupTitle: { ...TYPE.label, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.xs },
-  histRow: {
-    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.xxs,
-    paddingHorizontal: SPACE.sm, paddingVertical: SPACE.md, marginBottom: SPACE.xxs,
-    borderBottomWidth: surfaceStroke(metrics), borderBottomColor: c.hair,
-  },
-  histRowSelected: { backgroundColor: c.accentBg, borderRadius: metrics.buttonRadius, borderLeftWidth: metrics.strokeWidth * 2, borderLeftColor: c.accent },
-  histMain: { minHeight: metrics.controlHeight, justifyContent: 'center', flex: 1, minWidth: 0 },
-  histTop: { alignItems: 'flex-start' },
-  histTitle: { ...TYPE.title, color: c.text },
-  histStatus: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xxs },
-  histBadgeHit: { minHeight: metrics.controlHeight, justifyContent: 'center', paddingHorizontal: SPACE.sm, backgroundColor: c.hairSoft, borderRadius: metrics.buttonRadius },
-  histBadge: { ...TYPE.label, color: c.accentText },
-  histArchived: { ...TYPE.meta, color: c.text2 },
-  histScope: { ...TYPE.meta, color: c.text2 },
-  histMeta: { ...TYPE.meta, color: c.text2, marginTop: SPACE.xxs, fontVariant: ['tabular-nums'] },
-  histPreview: { ...TYPE.body, color: c.text2, marginTop: SPACE.xs },
   sheetOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end', backgroundColor: c.scrim },
   /** 底部面板：白底 + 上圆角就够分层了，上沿那条线是多余的 */
   sheet: {

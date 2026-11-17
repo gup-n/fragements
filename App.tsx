@@ -32,6 +32,7 @@ import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
+import { syncDigestReminder, watchDigestReminder } from './src/digestReminder';
 import { dropIncomingFile, takeIncomingShare } from './src/shareInbox';
 
 /**
@@ -236,6 +237,15 @@ function Shell({ booted }: { booted: boolean }) {
   }, []);
 
   /*
+   * 小结提醒点进来要落到「回顾」——那里才写着欠了哪几个月。
+   * 和「记一条」的监听各认各的 kind，两条通知互不抢。
+   */
+  useEffect(() => {
+    if (isWeb) return;
+    return watchDigestReminder(() => setRoute('review'));
+  }, []);
+
+  /*
    * 启动 3 秒后查一次新版本。
    *
    * 延迟不是偷懒：首屏要读库、渲染时间轴，这时候再打一次网络请求会抢主线程；
@@ -274,6 +284,12 @@ function Shell({ booted }: { booted: boolean }) {
     setFragments(list);
     setNotes(noteList);
     setDoneIds(new Set(done));
+    /*
+     * 数据一变就对一次「小结提醒」：新记的碎片可能让某个空月份变成有账，
+     * 写完一篇小结又可能把账清掉。放在这里而不是单开一个 effect，
+     * 是因为它要的就是「这一次 reload 之后的数据」，多一个状态只会多一处同步问题。
+     */
+    void syncDigestReminder(list, noteList);
   }, []);
 
   useEffect(() => {
@@ -446,19 +462,29 @@ function Shell({ booted }: { booted: boolean }) {
       try {
         const inc = await takeIncomingShare();
         if (!inc || !alive) return;
-        if (inc.kind === 'text') {
-          // 拼在已有草稿后面：用户可能已经写了一半，直接覆盖等于把他的话删了
-          setDraft((prev) => (prev.trim() ? `${prev}\n${inc.text}` : inc.text));
-          setRoute('timeline');
-          setWriteNotice('已把分享的文字放进输入框，确认后再发布');
-        } else if (inc.kind === 'image' && inc.fileUri) {
-          await handleAdd(inc.text, [{ key: `p${inc.at}`, uri: inc.fileUri }]);
-          // 内容已经进了碎片，中转那份留着只会让「每分享一次多存一份」
-          await dropIncomingFile(inc.file);
+
+        /*
+         * 一次分享里可能有好几个文件（相册多选、文件管理器多选）。分两路走：
+         * - 图片 → 合成**一条**碎片（用户多选三张图，是一件事，不是三件事）
+         * - 文档 → 一份一条进文档库（各自能读、能云解析，合成一条反而不好找）
+         * 只有文字时才拼进输入框。
+         */
+        const images = inc.files.filter((f) => f.kind === 'image');
+        const docs = inc.files.filter((f) => f.kind !== 'image');
+        const notices: string[] = [];
+
+        if (images.length) {
+          await handleAdd(inc.text, images.map((f, i) => ({ key: `p${inc.at}-${i}`, uri: f.uri })));
+          // 内容已经进了碎片目录，中转那份留着只会让「每分享一次多存一份」
+          for (const image of images) await dropIncomingFile(image.disk);
           if (!alive) return;
-          setRoute('timeline');
-          setWriteNotice('已把分享的图片存成一条碎片');
-        } else if (inc.fileUri && inc.file) {
+          notices.push(
+            images.length > 1 ? `已把分享的 ${images.length} 张图存成一条碎片` : '已把分享的图片存成一条碎片',
+          );
+        }
+
+        const savedDocs: string[] = [];
+        for (const doc of docs) {
           /*
            * PDF / Word / 表格这类**直接进文档库**（v0.23）。
            *
@@ -466,14 +492,35 @@ function Shell({ booted }: { booted: boolean }) {
            * 又让他做一遍：文件已经到私有目录了，缺的只是写一条记录。
            * 存成 `stored` 之后文档页自己会说这份能不能本地读、能不能云解析。
            */
-          const saved = await importLocalFile({ uri: inc.fileUri, name: inc.name ?? inc.file });
-          await dropIncomingFile(inc.file);
-          if (!alive) return;
-          setRoute('docs');
-          setWriteNotice(`已存进文档库：${saved.name}`);
-        } else {
-          setWriteNotice('这次分享里没有可保存的文件');
+          const saved = await importLocalFile({ uri: doc.uri, name: doc.name });
+          // 每成功一份就清一份：中途失败时，已经入库的那些不会在下次重试里再来一遍
+          await dropIncomingFile(doc.disk);
+          savedDocs.push(saved.name);
         }
+        if (savedDocs.length) {
+          notices.push(
+            savedDocs.length > 1
+              ? `已存进文档库：${savedDocs[0]} 等 ${savedDocs.length} 份`
+              : `已存进文档库：${savedDocs[0]}`,
+          );
+        }
+
+        if (!inc.files.length) {
+          if (!inc.text.trim()) {
+            setWriteNotice('这次分享里没有可保存的内容');
+            return;
+          }
+          // 拼在已有草稿后面：用户可能已经写了一半，直接覆盖等于把他的话删了
+          setDraft((prev) => (prev.trim() ? `${prev}\n${inc.text}` : inc.text));
+          setRoute('timeline');
+          setWriteNotice('已把分享的文字放进输入框，确认后再发布');
+          return;
+        }
+
+        if (!alive) return;
+        // 只进了文档就停在文档页，让人一眼看到「东西在哪儿」
+        setRoute(savedDocs.length && !images.length ? 'docs' : 'timeline');
+        setWriteNotice(notices.join('；'));
       } catch (e) {
         if (alive) {
           setWriteNotice(e instanceof Error ? `没接住这次分享：${e.message}` : '没接住这次分享');
@@ -588,6 +635,11 @@ function Shell({ booted }: { booted: boolean }) {
                   embedded
                   fragments={fragments}
                   onChanged={reload}
+                  /*
+                   * 开关一拨就要立刻重排那条通知，所以这里传的是「用当前数据对齐一次」。
+                   * 传 reload 不行：Reload 之后数据没变，重排的时机就错过了。
+                   */
+                  onReminderChange={() => void syncDigestReminder(fragments, notes)}
                 />
               )}
               {route === 'review' && (

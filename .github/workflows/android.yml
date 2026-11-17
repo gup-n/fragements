@@ -74,6 +74,11 @@ jobs:
       - name: 完整备份断言
         run: npm run test:backup
 
+      # 小结提醒只做一次判断：什么时候该提醒。时刻怎么算、什么时候不该重排、
+      # 账清了要撤 —— 这些在真机上看不出来（要等一个晚上），只能在这里钉住。
+      - name: 小结提醒断言
+        run: npm run test:reminder
+
       - name: UI排版与窄屏布局断言
         run: npm run test:ui
 

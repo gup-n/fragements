@@ -2,12 +2,15 @@
  * 系统「分享」进来的内容。
  *
  * 原生那半边见 `plugins/withShareReceiver.js`：MainActivity 收到 `ACTION_SEND`
- * 就把文字和文件落到 `files/incoming/`，再写一份 `incoming-share.json`。
- * 这里只负责**读出来并消费一次**。
+ * （或一次选多张的 `ACTION_SEND_MULTIPLE`）就把文字和文件落到 `files/incoming/`，
+ * 再写一份 `incoming-share.json`。这里只负责**读出来并消费一次**。
  *
  * 为什么要记 `share_last_at`：分享进来的内容会一直躺在那份 json 里，
  * 每次启动都读一遍就会重复弹出同一条。用时间戳做幂等键 —— 比删文件稳，
  * 删文件删到一半失败的场景不用再考虑。
+ *
+ * v0.25 起 json 里是 `files: [{file, name}]`。旧版只写一个 `file`/`name`，
+ * 那种 json 可能还在磁盘上（升级前分享、升级后才打开 App），所以读的时候两条路都认。
  */
 import { Platform } from 'react-native';
 import { File, Paths } from 'expo-file-system';
@@ -17,25 +20,39 @@ const DIR = 'incoming';
 const JSON_NAME = 'incoming-share.json';
 const LAST_KEY = 'share_last_at';
 
+export interface IncomingFile {
+  /** 磁盘上的安全名（`incoming/` 下）。清理时用这个，不是 `name` */
+  disk: string;
+  /**
+   * 文件的**原始文件名**（中文、空格都在）。`disk` 是 ASCII 安全化过的，
+   * 入库和显示都必须用这个 —— 把 `2026-11-15T…-0-____.docx` 当文档名给用户看是错的。
+   */
+  name: string;
+  /** 能直接交给 <Image> / 导入链路的绝对 uri */
+  uri: string;
+  /** 图片单独走「存成一条碎片」，其余进文档库 */
+  kind: 'image' | 'other';
+}
+
 export interface IncomingShare {
   at: number;
   mime: string;
   /** 分享时带的文字（微信分享图片常带一句描述，也可能为空） */
   text: string;
-  /** 已复制到私有目录的文件名；null = 只有文字 */
-  file: string | null;
-  /**
-   * 文件的**原始文件名**（中文、空格都在）。`file` 是磁盘上的安全名，
-   * 入库和显示都必须用这个 —— 把 `2026-11-15T…-____.docx` 当文档名给用户看是错的。
-   * 原生没带上时退回 `file`。
-   */
-  name: string | null;
-  /** 能给 <Image> / 导入链路直接用的绝对 uri */
-  fileUri: string | null;
-  kind: 'text' | 'image' | 'other';
+  /** 已复制到私有目录的文件，可能 0 个（纯文字分享）或好几个（多选分享） */
+  files: IncomingFile[];
 }
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i;
+
+/**
+ * 类型判断以 mime 为主、扩展名为辅：微信分享图片时 mime 有时是
+ * `application/octet-stream`，只看 mime 会把一张图当成「其它文件」拒掉。
+ */
+function kindOf(mime: string, ...names: string[]): IncomingFile['kind'] {
+  if (mime.startsWith('image/')) return 'image';
+  return names.some((name) => IMAGE_EXT.test(name)) ? 'image' : 'other';
+}
 
 /**
  * 取出一次分享。没有新的就返回 null。
@@ -81,29 +98,40 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
 
   const mime = typeof parsed.mime === 'string' ? parsed.mime : '';
   const text = typeof parsed.text === 'string' ? parsed.text : '';
-  const file = typeof parsed.file === 'string' && parsed.file ? parsed.file : null;
-  const name = typeof parsed.name === 'string' && parsed.name ? parsed.name : null;
-  let fileUri: string | null = null;
-  if (file) {
+
+  /**
+   * 逐条把磁盘名换成可用的 uri。
+   *
+   * 文件已经被系统清掉的条目直接跳过：留着一条 `uri` 指向不存在文件的记录，
+   * 后面导入时才失败，错误信息会指向「导入」，而不是「文件不在了」。
+   */
+  const pick = (disk: unknown, name: unknown): IncomingFile | null => {
+    if (typeof disk !== 'string' || !disk) return null;
     try {
-      const f = new File(Paths.document, DIR, file);
-      fileUri = f.exists ? f.uri : null;
+      const f = new File(Paths.document, DIR, disk);
+      if (!f.exists) return null;
+      const shown = typeof name === 'string' && name ? name : disk;
+      return { disk, name: shown, uri: f.uri, kind: kindOf(mime, shown, disk) };
     } catch {
-      fileUri = null;
+      return null;
     }
+  };
+
+  const files: IncomingFile[] = [];
+  if (Array.isArray(parsed.files)) {
+    for (const item of parsed.files) {
+      if (!item || typeof item !== 'object') continue;
+      const entry = item as Record<string, unknown>;
+      const one = pick(entry.file, entry.name);
+      if (one) files.push(one);
+    }
+  } else {
+    // 升级前写下的那份 json：只有一个 file/name
+    const legacy = pick(parsed.file, parsed.name);
+    if (legacy) files.push(legacy);
   }
 
-  /*
-   * 类型判断以 mime 为主、扩展名为辅：微信分享图片时 mime 有时是
-   * application/octet-stream，只看 mime 会把一张图当成「其它文件」拒掉。
-   */
-  const kind: IncomingShare['kind'] = !file
-    ? 'text'
-    : mime.startsWith('image/') || IMAGE_EXT.test(file)
-      ? 'image'
-      : 'other';
-
-  return { at, mime, text, file, name, fileUri, kind };
+  return { at, mime, text, files };
 }
 
 /**
@@ -114,11 +142,12 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
  * 只能在系统设置的存储占用里发现问题。
  *
  * **只在消费成功之后调**：失败时留着那份，下次启动还能再读一次。
+ * 传的是 `disk`（磁盘名），不是给人看的 `name`。
  */
-export async function dropIncomingFile(name: string | null): Promise<void> {
-  if (!name) return;
+export async function dropIncomingFile(disk: string | null): Promise<void> {
+  if (!disk) return;
   try {
-    const f = new File(Paths.document, DIR, name);
+    const f = new File(Paths.document, DIR, disk);
     if (f.exists) f.delete();
   } catch {
     /* 删不掉不影响内容已经入库 */

@@ -45,7 +45,7 @@
 | # | 问题 | 证据 | 建议 |
 |---|---|---|---|
 | 9 | `util/organizePlan.ts` 里约 250 行是标签时代的死函数 | `effectiveTodos` / `effectiveTags` / `mergeBatchResult` / `buildTagGroups` / `finalizePlan` / `appendSummary` / `plannedTodoTexts` 在 v0.18.1 拆掉标签后**无人调用**；仓库只在 `normalizePlan` / `emptyPlan` 两个入口用到它 | 只保留 `OrganizePlan` 类型 + `normalizePlan` + `emptyPlan`（旧会话的 plan 字段还要能读），其余删掉。**动之前先跑 `test:reliability`**，整理会话恢复的路径在那里 |
-| 10 | `AskScreen.tsx` 2205 行是单体 | 一个文件里塞了：聊天流、历史抽屉、引用面板、草稿改稿、整理控制器接线、意图分流 | **v0.24.1 已搬走无状态部分**（`util/askText` + `components/TurnAnswer`，2205 → 1994）。剩下的聊天流/历史抽屉仍耦合页面状态，必须留在能真机点的轮次里拆 |
+| 10 | `AskScreen.tsx` 2205 行是单体 | 一个文件里塞了：聊天流、历史抽屉、引用面板、草稿改稿、整理控制器接线、意图分流 | **v0.24.1 已搬走无状态部分**（`util/askText` + `components/TurnAnswer`，2205 → 1994）；**v0.25 又搬走 `historyRow`**（→ `components/AskHistoryRow`，1994 → 1938）。剩下的聊天流/抽屉外壳/输入区仍耦合页面状态与 `onLayout` 实测高度，必须留在能真机点的轮次里拆 |
 | 11 | 48dp 触控下限的实现有两套写法 | `IconButton`（含 `compact`）、`ChoiceChip`、各处 `minHeight: metrics.controlHeight` | 目前**不建议统一**：按钮、胶囊、列表行本来就是三种东西，硬套一个组件会把差异藏进 props |
 | 12 | `R = { pill: 999 }` 只剩一个常量 | `theme.tsx:23`，全库 11 处 `R.pill` | 留着。它比散落 11 个 `999` 好 |
 
@@ -64,9 +64,9 @@
 | 功能 | 现状 | 缺口 | 代价 |
 |---|---|---|---|
 | **大库分页** | 全量读进内存 | `SectionList` 拿到的是全部碎片；几千条时首屏要等查询 | 中：分页 + 按日窗口，界面要引入「加载更多」 |
-| **小结提醒** | 待补月份只在月总结面板里列 | 没有「这个月快过完了」的主动提示 | 小-中：通知（`expo-notifications` 已在包里）或首页角标 |
+| ~~**小结提醒**~~ | **v0.25 已做**：`digestReminder` 看欠账，有账就在 20:00 推一条，点开落回顾页 | 只剩真机验（通道存活、是否准点、点进来落不落页） | — |
 | **OTA（EAS Update）** | 改 JS 后仍需装 APK | 未接 `expo-updates` | 大：装依赖 + prebuild + 重编；决策未定 |
-| **微信/其他应用的文档分享接收** | 文字与图片能接住（`shareInbox`），文件走 `kind: 'other'` 时只提示「去文档页导入」 | 没有 `ACTION_SEND` 文件分支 + `saveOriginal(uri)` 接线 | 中：要原生 intent-filter 或 `expo-share-intent`，且必须真机验证微信是否露出这条路 |
+| ~~**微信/其他应用的文档分享接收**~~ | **v0.23.1 接了单选、v0.25 接了 `ACTION_SEND_MULTIPLE`**：文件直接进文档库，多选图片合成一条碎片 | 上限没定（一次 50 张会不会卡）；仍要真机确认微信里露不露这条路 | — |
 | **文档：Word/PPT 本机阅读、扫描件 OCR、多轮追问回带上轮片段** | 三条都**明确决定不做**（ROADMAP P1-7 写了理由） | — | — |
 
 ### 文档说没做、代码其实做完了（v0.22.1 已改）
@@ -93,6 +93,11 @@
 
 **v0.24.0 已做**：另起的一轮把上面判为 P3 的两件做了（空屏统一成 `EmptyState`、两处 opacity 改色阶），
 外加一个不在清单上的真缺陷（文档页提示条多加了底栏高度，见 CHANGELOG v0.24.0）。
+
+**v0.25.0 已做**：上面「下一批建议」的第 1、2 条（`organizePlan` 死代码、小结提醒）都落地了；
+第 1 条在 v0.23 就删完，第 2 条是这一轮的主体。同一个版本顺手补了清单外的两件：
+`ACTION_SEND_MULTIPLE`（原来相册多选会全丢且无提示）与 `assert_ui` 的退出码
+（**失败也退出 0**，等于那组断言从来没拦过东西）。第 3 条只搬了 `historyRow`，其余仍等设备。
 
 1. `organizePlan.ts` 的 250 行死代码（P2-9）—— 有 `test:reliability` 兜着，风险可控，收益是「读代码的人不会再被标签时代的函数误导」。
 2. 小结提醒（未完成-2）—— 判据已经在 `digest.ts` 里，只差一个入口和一个「什么时候提醒」的决定。

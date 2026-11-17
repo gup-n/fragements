@@ -70,60 +70,84 @@ const KOTLIN_BODY = `
     }
   }
 
+  /** 磁盘名只用字母数字和 . _ -；\`isLetterOrDigit\` 认 Unicode，中文不会被吃掉 */
+  private fun safeDiskName(name: String): String = name.map { ch ->
+    if (ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-') ch else '_'
+  }.joinToString("")
+
+  /**
+   * 复制一条 uri 进私有目录，返回 (磁盘名, 原名)。失败返回 null。
+   *
+   * 为什么要 index 前缀：多选时同一次分享里可能有两个同名的 \`报告.pdf\`，
+   * 只靠时间戳会把后一个覆盖掉，用户以为「只存进去一份」。
+   */
+  private fun saveStream(uri: Uri, dir: File, stamp: Long, index: Int, fallback: String?): Pair<String, String>? {
+    return try {
+      val name = displayNameOf(uri)
+        ?: fallback
+        ?: uri.lastPathSegment?.substringAfterLast('/')
+        ?: "share-$index.bin"
+      val target = File(dir, "$stamp-$index-" + safeDiskName(name))
+      contentResolver.openInputStream(uri)?.use { input ->
+        target.outputStream().use { output -> input.copyTo(output) }
+      }
+      Pair(target.name, name)
+    } catch (e: Exception) {
+      // 复制失败就跳过这一个文件；不因为一张图把整次分享丢掉
+      null
+    }
+  }
+
   /**
    * 把分享进来的文字与文件落到私有目录，JS 只读本地（见 src/shareInbox.ts）。
    *
-   * 同一个时间戳写进 json 和文件名，JS 靠 it 判断「是不是同一次分享」，
+   * 单选（ACTION_SEND）给的是 EXTRA_STREAM 一个 Uri；多选（ACTION_SEND_MULTIPLE）
+   * 给的是同一个 key 下的 ArrayList<Uri>。两条都要接 —— 相册里一次选三张图
+   * 走的就是多选，只接单选的话那三张会全部丢掉。
+   *
+   * 同一个时间戳写进 json 和文件名，JS 靠它判断「是不是同一次分享」，
    * 避免把上一次留下的文件当成这次的内容。
    *
-   * \`file\` 是磁盘上的名字（ASCII 安全化过），\`name\` 是给人看的原名 ——
+   * \`files[].file\` 是磁盘上的名字（ASCII 安全化过），\`files[].name\` 是给人看的原名 ——
    * 两者必须分开：中文文件名换了安全字符之后在文档库里就是一片下划线。
    */
   private fun captureShare(incoming: Intent?) {
     val action = incoming?.action ?: return
-    if (action != Intent.ACTION_SEND) return
+    if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
 
     val stamp = System.currentTimeMillis()
     val dir = File(filesDir, "${INCOMING_DIR}")
     if (!dir.exists()) dir.mkdirs()
 
     val text = incoming.getStringExtra(Intent.EXTRA_TEXT) ?: ""
-    val uri = incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
     val mime = incoming.type ?: ""
-    var savedName = ""
-    var originalName = ""
+    val single = action == Intent.ACTION_SEND
 
-    if (uri != null) {
-      try {
-        val name = incoming.getStringExtra(Intent.EXTRA_TITLE)
-          ?: displayNameOf(uri)
-          ?: uri.lastPathSegment?.substringAfterLast('/')
-          ?: "share.bin"
-        originalName = name
-        // 磁盘名只用字母数字和 . _ -；\`isLetterOrDigit\` 认 Unicode，中文不会被吃掉
-        val safe = name.map { ch ->
-          if (ch.isLetterOrDigit() || ch == '.' || ch == '_' || ch == '-') ch else '_'
-        }.joinToString("")
-        val target = File(dir, "$stamp-$safe")
-        contentResolver.openInputStream(uri)?.use { input ->
-          target.outputStream().use { output -> input.copyTo(output) }
-        }
-        savedName = target.name
-      } catch (e: Exception) {
-        // 复制失败就只留文字；不因为一个文件把整次分享丢掉
-        savedName = ""
-        originalName = ""
-      }
+    val uris: List<Uri> = if (single) {
+      listOfNotNull(incoming.getParcelableExtra<Uri>(Intent.EXTRA_STREAM))
+    } else {
+      incoming.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM) ?: emptyList()
+    }
+    // EXTRA_TITLE 只对单选有意义（多选时它是整次分享的标题，不是文件名）
+    val fallback = if (single) incoming.getStringExtra(Intent.EXTRA_TITLE) else null
+
+    val files = org.json.JSONArray()
+    uris.forEachIndexed { index, uri ->
+      val saved = saveStream(uri, dir, stamp, index, fallback) ?: return@forEachIndexed
+      files.put(
+        org.json.JSONObject()
+          .put("file", saved.first)
+          .put("name", saved.second),
+      )
     }
 
-    if (text.isEmpty() && savedName.isEmpty()) return
+    if (text.isEmpty() && files.length() == 0) return
 
     val json = org.json.JSONObject()
     json.put("at", stamp)
     json.put("mime", mime)
     json.put("text", text)
-    json.put("file", savedName)
-    json.put("name", originalName)
+    json.put("files", files)
     File(dir, "incoming-share.json").writeText(json.toString())
   }
 
@@ -146,11 +170,16 @@ module.exports = function withShareReceiver(config) {
 
     activity['intent-filter'] = activity['intent-filter'] || [];
     const has = activity['intent-filter'].some((f) =>
-      (f.action || []).some((a) => a.$['android:name'] === 'android.intent.action.SEND'),
+      (f.action || []).some((a) => a.$['android:name'] === 'android.intent.action.SEND_MULTIPLE'),
     );
     if (!has) {
       activity['intent-filter'].push({
-        action: [{ $: { 'android:name': 'android.intent.action.SEND' } }],
+        // 两个 action 共用一个 filter：相册一次选多张走的是 SEND_MULTIPLE，
+        // 只声明 SEND 的话那些图根本不会出现在「分享到碎片」里
+        action: [
+          { $: { 'android:name': 'android.intent.action.SEND' } },
+          { $: { 'android:name': 'android.intent.action.SEND_MULTIPLE' } },
+        ],
         category: [{ $: { 'android:name': 'android.intent.category.DEFAULT' } }],
         data: MIME.map((mimeType) => ({ $: { 'android:mimeType': mimeType } })),
       });

@@ -16,6 +16,7 @@ import type { Fragment, ReasoningEffort } from '../types';
 import type { BackupManifest } from '../util/backupPlan';
 import { humanBytes } from '../util/backupPlan';
 import { isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
+import { isDigestReminderEnabled, setDigestReminderEnabled } from '../digestReminder';
 import type { SearchProbe } from '../db/types';
 import {
   R,
@@ -64,6 +65,14 @@ interface Props {
   onClose?: () => void;
   /** 导入会新增碎片，得让 App 重新拉一遍时间轴 */
   onChanged: () => void;
+  /**
+   * 通知类开关拨完之后，让 App 拿当前数据对齐那条通知。
+   *
+   * 为什么要回到 App 做：对齐要知道「哪些月还没写」，那是整个库的数据，
+   * 设置页只拿到 `fragments`，拿不到 notes。放在这里传一个回调，
+   * 比让设置页自己再读一遍库干净。
+   */
+  onReminderChange?: () => void;
 }
 
 const EFFORT_LABEL: Record<ReasoningEffort, string> = {
@@ -96,7 +105,7 @@ const PANE_TITLE: Record<Pane, string> = {
   about: '关于',
 };
 
-export function SettingsScreen({ embedded = false, fragments, onClose, onChanged }: Props) {
+export function SettingsScreen({ embedded = false, fragments, onClose, onChanged, onReminderChange }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { mode, setMode, style: themeStyle, setStyle, saveError } = useTheme();
   const keyboardHeight = useKeyboardHeight();
@@ -131,6 +140,9 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
   /** 通知栏常驻入口的开关状态。默认关：常驻通知该是用户主动开的 */
   const [quickOn, setQuickOn] = useState(false);
   const [quickMsg, setQuickMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /** 小结提醒开关。同样默认关：主动提醒该由用户点开 */
+  const [remindOn, setRemindOn] = useState(false);
+  const [remindMsg, setRemindMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /**
    * 选好但还没确认的备份包。
    *
@@ -197,6 +209,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
       setIndexState(await repo.searchIndexStats());
       setProbe(await repo.selfTestSearch(5));
       setQuickOn(await isQuickRecordEnabled());
+      setRemindOn(await isDigestReminderEnabled());
     })();
   }, []);
 
@@ -469,6 +482,31 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
     } else {
       setQuickMsg({ kind: 'ok', text: next ? '已放到通知栏' : '已撤掉' });
     }
+  }
+
+  /**
+   * 小结提醒的开关。
+   *
+   * 打开时先要权限再落库（在 `setDigestReminderEnabled` 里），被拒就把开关弹回去
+   * 并把原因写出来 —— 显示「开着」但永远发不出来是最糟的状态。
+   * 拨成功之后立刻让 App 对齐那条通知，不等下一次数据变化：
+   * 用户可能就是在月底这一天打开开关的，等到明天才排就已经错过了。
+   */
+  async function handleToggleRemind() {
+    const next = !remindOn;
+    setRemindOn(next);
+    setRemindMsg(null);
+    const res = await setDigestReminderEnabled(next);
+    if (!res.ok) {
+      setRemindOn(!next);
+      setRemindMsg({ kind: 'err', text: res.reason });
+      return;
+    }
+    onReminderChange?.();
+    setRemindMsg({
+      kind: 'ok',
+      text: next ? '有月份的小结没写时，晚上 8 点提醒一次' : '已关掉',
+    });
   }
 
   /** 保存自定义下载地址。空串 = 清掉，退回「官方直连 → 镜像兜底」 */
@@ -1032,7 +1070,11 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
             </Text>
           </View>
 
-          <GroupTitle text="快捷入口" />
+          {/*
+            两组都是「碎片会在什么时候主动出声」，所以合成一组，不再分「快捷入口」
+            和「提醒」—— 分开之后用户要滑两处才知道自己能收到哪些通知。
+          */}
+          <GroupTitle text="通知" />
           <View style={styles.card}>
             <View style={styles.toggleRow}>
               <ChoiceChip
@@ -1049,6 +1091,24 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
             {quickMsg && (
               <Text style={[styles.msg, quickMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
                 {quickMsg.text}
+              </Text>
+            )}
+
+            <View style={[styles.toggleRow, styles.toggleRowNext]}>
+              <ChoiceChip
+                label={remindOn ? '开启' : '关闭'}
+                accessibilityLabel="有月份的小结没写时提醒"
+                role="switch"
+                selected={remindOn}
+                onPress={() => void handleToggleRemind()}
+              />
+              <Text style={styles.toggleHint}>
+                有月份的小结没写时，晚上 8 点提醒一次；点开直接到回顾页
+              </Text>
+            </View>
+            {remindMsg && (
+              <Text style={[styles.msg, remindMsg.kind === 'err' ? styles.msgErr : styles.msgOk]}>
+                {remindMsg.text}
               </Text>
             )}
           </View>
@@ -1418,6 +1478,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   warnSolidText: { ...TYPE.label, color: c.onDanger },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
+  /** 同一张卡里的第二条：一条发丝线分开，否则两眼开关挤成一块 */
+  toggleRowNext: {
+    marginTop: SPACE.sm,
+    paddingTop: SPACE.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hairSoft,
+  },
   toggleHint: { ...TYPE.meta, flex: 1, color: c.text3 },
 
   /* ---- 配置：官方区块 ---- */

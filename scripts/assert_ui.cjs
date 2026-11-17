@@ -451,14 +451,38 @@ test('间距档位必须走 SPACE，微调数字保持裸写', () => {
 test('分享进来的文件进文档库，中转副本用完就删', () => {
   const app = parseSource('App.tsx').getText();
   const inbox = parseSource('src/shareInbox.ts').getText();
-  assert.ok(app.includes('importLocalFile({ uri: inc.fileUri, name: inc.name ?? inc.file })'), '文件分享要直接入库，且用原始文件名');
+  assert.ok(app.includes('importLocalFile({ uri: doc.uri, name: doc.name })'), '文件分享要直接入库，且用原始文件名');
   assert.ok(!app.includes('这种文件还不支持从分享进来'), '不能再让用户「去文档页导入」做第二遍');
   const importAt = app.indexOf('await importLocalFile(');
-  const dropAt = app.indexOf('await dropIncomingFile(inc.file)', importAt);
+  const dropAt = app.indexOf('await dropIncomingFile(doc.disk)', importAt);
   assert.ok(importAt > 0 && dropAt > importAt, '入库成功之后才删中转副本（失败要留着下次再读）');
   assert.ok(inbox.includes('export async function dropIncomingFile'), '删中转副本的入口在 shareInbox');
   // 图片那条路同样要删：内容已经复制进碎片目录
-  assert.ok(app.includes('await dropIncomingFile(inc.file);'), '图片分享也要清理中转副本');
+  assert.ok(app.includes('await dropIncomingFile(image.disk)'), '图片分享也要清理中转副本');
+});
+
+/*
+ * 多选分享（相册里一次选三张图）走的是 ACTION_SEND_MULTIPLE，和单选是两种 intent。
+ * 只接单选时那些图会**全部丢掉**，而且没有任何提示 —— 这类问题只能在源码层面钉。
+ */
+test('多选分享：声明 SEND_MULTIPLE，原生读列表，JS 按条解析', () => {
+  const fs = require('node:fs');
+  const plugin = fs.readFileSync('plugins/withShareReceiver.js', 'utf8');
+  assert.ok(plugin.includes('android.intent.action.SEND_MULTIPLE'), 'manifest 要声明多选，否则相册多选里没有碎片');
+  const open = 'const KOTLIN_BODY = `';
+  const start = plugin.indexOf(open) + open.length;
+  const end = plugin.indexOf('\n`;', start);
+  const body = new Function(`INCOMING_DIR`, `return \`${plugin.slice(start, end)}\`;`)('incoming');
+  assert.ok(body.includes('Intent.ACTION_SEND_MULTIPLE'), 'captureShare 要认多选的 action');
+  assert.ok(body.includes('getParcelableArrayListExtra'), '多选的文件在 EXTRA_STREAM 的 ArrayList 里');
+  assert.ok(body.includes('org.json.JSONArray'), '多个文件要写成数组，不能只剩最后一个');
+  assert.ok(body.includes('"$stamp-$index-"'), '同名文件靠 index 前缀区分，否则后一个覆盖前一个');
+  assert.ok(body.includes('json.put("files", files)'), 'json 里要带 files 列表');
+
+  const inbox = parseSource('src/shareInbox.ts').getText();
+  assert.ok(inbox.includes('Array.isArray(parsed.files)'), 'JS 要能读 files 列表');
+  assert.ok(inbox.includes('pick(parsed.file, parsed.name)'), '升级前留下的旧 json 仍然要能读');
+  assert.ok(inbox.includes("kind: 'image' | 'other'"), '每个文件各自判类型（同一次分享可能图文混着）');
 });
 
 /*
@@ -479,7 +503,7 @@ test('分享接收的 Kotlin：取真实文件名、单独带一份原名', () =
 
   assert.ok(body.includes('displayNameOf(uri)'), '要问系统要原始文件名，不能只用 lastPathSegment');
   assert.ok(body.includes('OpenableColumns.DISPLAY_NAME'), 'DISPLAY_NAME 才是真名');
-  assert.ok(body.includes('json.put("name", originalName)'), 'json 里要单独带原名');
+  assert.ok(body.includes('.put("name", saved.second)'), 'json 里要单独带原名（磁盘名和原名分开）');
   assert.ok(body.includes('isLetterOrDigit'), '中文文件名不能被安全化成下划线');
   assert.ok(!body.includes('\\p{'), 'Kotlin 字符串里写 \\p{…} 是非法转义，别用正则字符类');
   // 微信分享 docx 报的是完整的长 mime，只声明 pdf 的话它压根不会出现在「打开方式」里
@@ -588,4 +612,10 @@ test('缺 API Key 时有「去设置」按钮，并且真的能切到设置页',
   assert.ok(app.includes("onOpenSettings={() => setRoute('settings')}"), 'App 必须真的切到设置页');
 });
 
-suite.run();
+if (require.main === module) {
+  suite.run().then(({ failed }) => { process.exitCode = failed ? 1 : 0; }).catch((error) => {
+    console.error(error && error.stack ? error.stack : error);
+    process.exitCode = 1;
+  });
+}
+module.exports = { run: suite.run };

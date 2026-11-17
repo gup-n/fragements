@@ -70,7 +70,8 @@ const fail = (check, detail) => problems.push({ check, detail });
 /* ------------------------------------------------------------------ */
 {
   const src = read('HANDOFF.md');
-  const rows = src.matchAll(/\|\s*`([\w./-]+\.tsx?)`[^|]*\|\s*(\d+)\s*\|/g);
+  // 也覆盖 scripts/ 下的 .cjs / .mjs：只查 .ts/.tsx 时，断言脚本的行数漂了没人发现
+  const rows = src.matchAll(/\|\s*`([\w./-]+\.(?:tsx?|cjs|mjs))`[^|]*\|\s*(\d+)\s*\|/g);
   let checked = 0;
   for (const m of rows) {
     const [, p, n] = m;

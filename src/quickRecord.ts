@@ -23,6 +23,7 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { repo } from './db/repo';
+import { ensureNotifyPermission } from './util/notifyPerm';
 
 /** 固定 id：同一时间只有一条，重复调用不会叠出一排 */
 export const QUICK_ID = 'fragments-quick-record';
@@ -64,14 +65,9 @@ export async function showQuickRecord(): Promise<QuickResult> {
       sound: null,
     });
 
-    const cur = await Notifications.getPermissionsAsync();
-    let granted = cur.status === 'granted';
-    if (!granted) {
-      granted = (await Notifications.requestPermissionsAsync()).status === 'granted';
-    }
-    if (!granted) {
-      return { ok: false, reason: '没有通知权限。到系统设置 → 应用 → 碎片 → 通知里打开' };
-    }
+    // 权限判断和文案只有一份（util/notifyPerm），别在这里再抄一遍
+    const perm = await ensureNotifyPermission();
+    if (!perm.ok) return perm;
 
     await Notifications.scheduleNotificationAsync({
       identifier: QUICK_ID,
