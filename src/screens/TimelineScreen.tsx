@@ -163,6 +163,8 @@ interface Props {
   total?: number;
   /** 正在读更早那一页。按钮据此变成「读取中…」并禁用 */
   loadingOlder?: boolean;
+  /** 今天一共写了多少字（v0.27）。页头那一小块显示「N 字 · M 条」 */
+  todayChars?: number;
   onLoadOlder?: () => void;
   /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
@@ -195,6 +197,7 @@ export function TimelineScreen({
   focusSignal,
   total = 0,
   loadingOlder = false,
+  todayChars = 0,
   onLoadOlder,
   imageBusy,
   imageFail,
@@ -909,7 +912,17 @@ export function TimelineScreen({
         <View style={styles.headerLeft}>
           <Text style={styles.brand} numberOfLines={1} accessibilityRole="header">碎片</Text>
         </View>
-        <View style={styles.todaySummary} accessible accessibilityLabel={`今天已记 ${todayCount} 条`}>
+        {/*
+          今天写了多少（v0.27，用户要求「在条数的左边加上小字的字数」）。
+          字数在小、条数在大：条数是「记了几下」，字数是「写了多少」，
+          而这一块存在的意义是后者。
+        */}
+        <View
+          style={styles.todaySummary}
+          accessible
+          accessibilityLabel={`今天已记 ${todayCount} 条，共 ${todayChars} 字`}
+        >
+          {todayChars ? <Text style={styles.todayChars}>{todayChars} 字</Text> : null}
           <Text style={styles.todayNumber}>{todayCount}</Text>
           <Text style={styles.brandSub}>今天</Text>
         </View>
@@ -1628,6 +1641,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   todaySummary: { alignItems: 'center', paddingLeft: SPACE.md },
   /** 今日条数：和字标同字号、行高压紧，读成一枚数字而不是一行字 */
   todayNumber: { fontSize: 20, lineHeight: 22, fontWeight: '700', color: c.accentText, fontVariant: ['tabular-nums'] },
+  /** 字数：比条数小一号、用次要色 —— 它是补充信息，不该和「今天记了几条」争第一眼 */
+  todayChars: { ...TYPE.caption, color: c.text3, fontVariant: ['tabular-nums'] },
   // 搜索框放在页头下，用浅灰底和留白跟列表区分，不额外加边框
   searchWrap: {
     paddingHorizontal: SPACE.md,

@@ -6,13 +6,13 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.26.0 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.26.0/fragments-v0.26.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.26.0)。26,235,074 字节，SHA-256 `02763df3bbfdb96a6a8c9be9bd282a9ee9b8a7327421d514979d5b4fef03d790`，`draft=false`（分段下载拼接后字节数与资产一致、文件头为 `PK`）。同批可回退：[v0.25.3](https://github.com/gup-n/fragements/releases/download/v0.25.3/fragments-v0.25.3.apk)（26,225,738 字节，SHA-256 `5cd1fa39938e2d445366f86aec78f3dc2e63a6b3bfb62c3e6d57977e177794e7`）、[v0.25.2](https://github.com/gup-n/fragements/releases/download/v0.25.2/fragments-v0.25.2.apk)（26,224,674 字节）。这一批补的是「大库」：首页不再整库读进内存（200 条一页 + 三条 SQL 聚合），设置里多了四档字号，历史抽屉搬成组件。**真机仍未实测**（几千条库的耗时、特大字号下的换行）。
+**v0.26.1 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.26.1/fragments-v0.26.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.26.1)。26,236,094 字节，SHA-256 `6766b40c5e9fb3e8ab3bf976259bc40b31c8911f263e04a0e7eb8fa15fcce9ed`，`draft=false`。同批可回退：[v0.26.0](https://github.com/gup-n/fragements/releases/download/v0.26.0/fragments-v0.26.0.apk)（26,235,074 字节，SHA-256 `02763df3bbfdb96a6a8c9be9bd282a9ee9b8a7327421d514979d5b4fef03d790`）。v0.26 把首页改成按页读 + 三条 SQL 聚合，v0.26.1 补上「搜索也要问库」（否则只搜得到第一页）。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.26.1（versionCode 75） |
+| 当前版本 | v0.27.0（versionCode 76） |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

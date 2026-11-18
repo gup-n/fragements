@@ -34,6 +34,8 @@ export interface DayCount {
   /** YYYY-MM-DD，和 `dayKey` 同一个格式 */
   day: string;
   count: number;
+  /** 这天的正文一共多少字（v0.27）。日历用它调点阵深浅、顶部用它显示「今天写了多少」 */
+  chars: number;
 }
 
 export interface MonthRef {

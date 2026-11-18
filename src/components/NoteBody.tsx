@@ -369,7 +369,10 @@ export function NoteBody({
   };
 
   /** 文字块的内层：标题 / 列表 / 段落，样式按块种类定 */
-  const blockInner = (b: TextBlock) => (
+  const blockInner = (b: TextBlock) => {
+    // 空段落（作者写的空行）：它的作用只是让外层多一个换行符，自己不画东西
+    if (b.kind === 'p' && b.segs.length === 0) return null;
+    return (
     <Text
       style={
         b.kind === 'h'
@@ -391,7 +394,8 @@ export function NoteBody({
         activeHit={nextActiveHit(highlight ? segmentHitCount(b.segs, highlight) : 0)}
       />
     </Text>
-  );
+    );
+  };
 
   /**
    * 代码块里的命中。

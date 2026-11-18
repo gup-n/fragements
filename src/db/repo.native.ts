@@ -919,14 +919,20 @@ export const repo: Repo = {
    *   记的东西会被算到前一天/前一月 —— 日历上「今天明明记了」却没有点。
    */
   async dayCounts() {
-    const rows = db().getAllSync<{ day: string; n: number }>(
+    /*
+     * 一条查询同时给「几条」和「多少字」：它们永远是同一批行上的两个数，
+     * 分两次查在并发写入时会互相打架（条数变了字没变）。
+     * `LENGTH()` 对 TEXT 返回**字符数**（不是字节），中文一个字算一个。
+     */
+    const rows = db().getAllSync<{ day: string; n: number; c: number | null }>(
       `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS day,
-              COUNT(*) AS n
+              COUNT(*) AS n,
+              SUM(LENGTH(content)) AS c
          FROM fragments
         GROUP BY day
         ORDER BY day`,
     );
-    return rows.map((r) => ({ day: r.day, count: r.n }));
+    return rows.map((r) => ({ day: r.day, count: r.n, chars: r.c ?? 0 }));
   },
 
   async monthCounts() {

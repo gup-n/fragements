@@ -42,9 +42,10 @@ interface Item {
  */
 const ITEMS: Item[] = [
   { key: 'timeline', label: '碎片', icon: 'layers-outline', iconOn: 'layers', accessibilityLabel: '碎片：时间轴' },
-  { key: 'docs', label: '文档', icon: 'documents-outline', iconOn: 'documents', accessibilityLabel: '文档：上传并阅读' },
-  { key: 'ask', label: '问', icon: 'chatbubble-ellipses-outline', iconOn: 'chatbubble-ellipses', accessibilityLabel: '问：查记录或让它整理' },
+  // 文档与回顾换位（v0.27，用户 2026-11-18 要求）：回顾是每天都会翻的，文档不是
   { key: 'review', label: '回顾', icon: 'checkmark-circle-outline', iconOn: 'checkmark-circle', accessibilityLabel: '回顾：待办与小结' },
+  { key: 'ask', label: '问', icon: 'chatbubble-ellipses-outline', iconOn: 'chatbubble-ellipses', accessibilityLabel: '问：查记录或让它整理' },
+  { key: 'docs', label: '文档', icon: 'documents-outline', iconOn: 'documents', accessibilityLabel: '文档：上传并阅读' },
   { key: 'settings', label: '设置', icon: 'settings-outline', iconOn: 'settings', accessibilityLabel: '设置：模型、外观与数据' },
 ];
 

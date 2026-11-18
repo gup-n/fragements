@@ -130,7 +130,7 @@ export function TodoEditor({ todo, parentId, parentText, onClose, onSaved }: Pro
           maxLength={200}
         />
 
-        <Text style={styles.label}>哪天做（可不填）</Text>
+        <Text style={styles.label}>截止日期（可不填）</Text>
         <TextInput
           style={[styles.input, styles.dateInput]}
           value={due} accessibilityLabel="到期日期，可不填" editable={!busy}

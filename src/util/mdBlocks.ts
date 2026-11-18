@@ -349,7 +349,18 @@ export function parseBlocks(text: string, opts?: { literalCitations?: boolean })
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
-    if (!line) continue;
+    if (!line) {
+      /*
+       * 空行要留下（v0.27）。它是作者分段的唯一手段 —— 原来直接 `continue`，
+       * 于是「第一段\n\n第二段」在时间轴上会挤成上下两行，读起来像一句话断了行。
+       *
+       * 用「空段落」表示，而不是新加一种块：渲染时它正好多贡献一个换行符，
+       * 表格/代码/图片的分组逻辑完全不用动。连续多个空行只留一个 ——
+       * 多余的空行在手机上只会让滚动变长。
+       */
+      if (blocks.length && !isBlank(blocks[blocks.length - 1])) blocks.push({ kind: 'p', segs: [] });
+      continue;
+    }
 
     /*
      * 配图定位。必须在代码围栏之后、其它规则之前判断 ——
@@ -414,7 +425,15 @@ export function parseBlocks(text: string, opts?: { literalCitations?: boolean })
     blocks.push({ kind: 'p', segs: parseInline(line, opts) });
   }
 
+  // 末尾的空行没用：它只会在最后多出一段空白
+  while (blocks.length && isBlank(blocks[blocks.length - 1])) blocks.pop();
+
   return blocks;
+}
+
+/** 空段落：作者写了一个空行 */
+function isBlank(b: Block): boolean {
+  return b.kind === 'p' && b.segs.length === 0;
 }
 
 /**
@@ -458,6 +477,8 @@ export function flattenForPreview(blocks: Block[]): { segs: Seg[]; newlineBefore
       prevWasHeading = false;
       continue;
     }
+    // 空行在预览里只是浪费一行 —— 卡片本来就只有 3~4 行
+    if (isBlank(b)) continue;
     out.push({ segs: b.segs, newlineBefore: b.kind === 'h' && out.length > 0 });
     prevWasHeading = b.kind === 'h';
   }

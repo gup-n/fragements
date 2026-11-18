@@ -39,6 +39,7 @@ import { syncDigestReminder, watchDigestReminder } from './src/digestReminder';
 import { dropIncomingFile, rewindIncomingShare, takeIncomingShare, type IncomingShare } from './src/shareInbox';
 import { PAGE_SIZE, appendPage } from './src/util/paging';
 import { keyToTs, type DayCount } from './src/util/calendar';
+import { dayKey } from './src/util/date';
 import type { MonthCount } from './src/util/digest';
 
 /** 一天的毫秒数。只用来把「某一天」换算成 `[from, to)` —— 夏令时地区也不会有 23/25 小时的问题，因为按本地日界算是 CalendarTab 的事 */
@@ -759,6 +760,7 @@ function Shell({ booted }: { booted: boolean }) {
                   focusSignal={quickTap}
                   total={fragmentTotal}
                   loadingOlder={loadingOlder}
+                  todayChars={days.find((d) => d.day === dayKey(Date.now()))?.chars ?? 0}
                   onLoadOlder={() => void loadOlder()}
                 />
               )}

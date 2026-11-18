@@ -28,6 +28,7 @@ import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle, type MonthCount } from '../util/digest';
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type DayCount, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
+import { withAlpha } from '../util/color';
 import { shortPreview } from '../util/text';
 import { NoteBody } from '../components/NoteBody';
 import { NoteViewer } from '../components/NoteViewer';
@@ -89,15 +90,33 @@ interface DayMarks {
   frags: number;
   todos: number;
   notes: number;
+  /** 这天的正文字数（v0.27）。0 = 没记东西，格子不加深 */
+  chars: number;
 }
 
 function marksText(m: DayMarks): string {
   const bits = [
     m.frags ? `${m.frags} 条记录` : '',
+    m.chars ? `${m.chars} 字` : '',
     m.todos ? `${m.todos} 件到期` : '',
     m.notes ? `${m.notes} 篇小结` : '',
   ].filter(Boolean);
   return bits.length ? bits.join(' · ') : '这天没有内容';
+}
+
+/**
+ * 格子的深浅：按**字数**分四档，不是按条数。
+ *
+ * 条数只说明「点了几下」，字数才说明「这天写了多少」——
+ * 三条各 10 个字和一条 2000 字，哪一种算「这天写得多」，答案显而易见。
+ * 四档而不是线性透明度：线性会让 50 字和 80 字几乎看不出差别，
+ * 而人需要的只是「一眼看出哪几天厚」。
+ */
+function depthOf(chars: number): 0 | 1 | 2 | 3 {
+  if (!chars) return 0;
+  if (chars < 200) return 1;
+  if (chars < 800) return 2;
+  return 3;
 }
 
 export function ReviewScreen({
@@ -388,6 +407,13 @@ function CalendarTab({
    * 等于没有功能。现在点它就地展开，不再跨页。
    */
   const [allFrags, setAllFrags] = useState(false);
+  /**
+   * 展开的那几条碎片（v0.27）。
+   *
+   * 日历里的碎片原来固定两行、点不动 —— 用户看到的是一堆被裁掉的半句话，
+   * 「这天写了什么」还是得回时间轴找。现在点一下就地展开全文，再点收起。
+   */
+  const [openFrags, setOpenFrags] = useState<Set<number>>(new Set());
 
   const cells = useMemo(() => monthCells(view.year, view.month), [view.year, view.month]);
 
@@ -397,13 +423,13 @@ function CalendarTab({
    */
   const byDay = useMemo(() => {
     const map = new Map<string, DayMarks>();
-    const bump = (key: string, field: keyof DayMarks) => {
-      const row = map.get(key) ?? { frags: 0, todos: 0, notes: 0 };
+    const bump = (key: string, field: 'todos' | 'notes') => {
+      const row = map.get(key) ?? { frags: 0, todos: 0, notes: 0, chars: 0 };
       row[field] += 1;
       map.set(key, row);
     };
-    // 碎片条数来自 SQL 聚合（`days`），不再在这里数一遍数组
-    for (const d of days) map.set(d.day, { frags: d.count, todos: 0, notes: 0 });
+    // 碎片条数与字数来自 SQL 聚合（`days`），不再在这里数一遍数组
+    for (const d of days) map.set(d.day, { frags: d.count, chars: d.chars, todos: 0, notes: 0 });
     // 已完成的不再标红：日历是「还要做什么」，不是「做过什么」
     for (const t of todos) if (t.dueAt && !t.done && t.mergedInto === null) bump(t.dueAt, 'todos');
     for (const n of notes) bump(dayKey(periodAnchor(n.period) ?? n.createdAt), 'notes');
@@ -510,7 +536,13 @@ function CalendarTab({
               accessibilityState={{ selected: on }}
               accessibilityLabel={`${cell.month} 月 ${cell.day} 日${marks ? '，' + marksText(marks) : ''}`}
             >
-              <View style={[styles.cell, on && styles.cellOn, isToday && !on && styles.cellToday]}>
+              <View style={[
+                styles.cell,
+                // 记过的日子按字数加深（accent 的低透明度底），墨水里则是灰底
+                !on && marks?.chars ? { backgroundColor: withAlpha(c.accent, 0.06 * depthOf(marks.chars)) } : null,
+                on && styles.cellOn,
+                isToday && !on && styles.cellToday,
+              ]}>
                 <Text
                   style={[
                     styles.cellDay,
@@ -540,7 +572,14 @@ function CalendarTab({
       <View style={styles.dayPanel}>
         <View style={styles.dayHead}>
           <Text style={styles.dayTitle}>{daySubLabel(dayTs)}</Text>
-          <Text style={styles.dayCount}>{marksText({ frags: pickedFrags, todos: dayTodo.length, notes: dayNote.length })}</Text>
+          <Text style={styles.dayCount}>
+            {marksText({
+              frags: pickedFrags,
+              chars: byDay.get(picked)?.chars ?? 0,
+              todos: dayTodo.length,
+              notes: dayNote.length,
+            })}
+          </Text>
         </View>
 
         {dayTodo.map((todo) => (
@@ -575,10 +614,24 @@ function CalendarTab({
           <View style={styles.dayFrags}>
             {(allFrags ? dayFrag.slice(0, DAY_FRAG_LIMIT) : dayFrag.slice(0, DAY_FRAG_PREVIEW)).map((f) => {
               const text = stripImageTokens(f.content).replace(/\s+/g, ' ').trim();
+              const open = openFrags.has(f.id);
               return (
-                <Text key={`f${f.id}`} style={styles.dayQuote} numberOfLines={2}>
-                  {text ? shortPreview(text, 70) : `[${f.images.length} 张图]`}
-                </Text>
+                <Pressable
+                  key={`f${f.id}`}
+                  onPress={() => setOpenFrags((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+                    return next;
+                  })}
+                  accessibilityRole="button"
+                  accessibilityState={{ expanded: open }}
+                  accessibilityLabel={open ? '收起这条记录' : '展开这条记录'}
+                >
+                  {/* 收起时两行 + 省略号；展开时给全文，不再裁 */}
+                  <Text style={styles.dayQuote} numberOfLines={open ? undefined : 2}>
+                    {text || `[${f.images.length} 张图]`}
+                  </Text>
+                </Pressable>
               );
             })}
             {dayFrag.length > DAY_FRAG_PREVIEW ? (
@@ -599,7 +652,7 @@ function CalendarTab({
             ) : null}
             {allFrags && dayFrag.length > DAY_FRAG_LIMIT ? (
               <Text style={styles.dayEmpty}>
-                只列最近 {DAY_FRAG_LIMIT} 条，更早的请在时间轴里看。
+                只列前 {DAY_FRAG_LIMIT} 条（按时间先后）。
               </Text>
             ) : null}
           </View>

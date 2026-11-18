@@ -174,16 +174,17 @@ test('底栏五项顺序固定、问居中、设置在最后，选中不靠颜�
   const tabs = flatten(bar).filter((node) => node.type === 'Pressable');
   assert.equal(tabs.length, 5, '底栏必须正好五项');
   const labels = tabs.map((t) => t.props.accessibilityLabel.split('：')[0]);
-  // 用户 2026-11-15 指定：问在中间，设置在最右
-  assert.deepEqual(labels, ['碎片', '文档', '问', '回顾', '设置']);
+  // 用户 2026-11-15 指定：问在中间，设置在最右；2026-11-18 把文档与回顾换了位
+  assert.deepEqual(labels, ['碎片', '回顾', '问', '文档', '设置']);
   assert.equal(labels[Math.floor(labels.length / 2)], '问');
   // 选中态：selected 语义 + 实心图标（不是只换个颜色）
-  assert.equal(tabs[1].props.accessibilityState.selected, true);
+  assert.equal(tabs[3].props.accessibilityState.selected, true);
   assert.equal(tabs[0].props.accessibilityState.selected, false);
-  assert.equal(flatten(tabs[1]).find((n) => n.type === 'Icon').props.name, 'documents');
+  // 文档还是那个实心 icons，只是挪到了第四格（换位不影响图标本身）
+  assert.equal(flatten(tabs[3]).find((n) => n.type === 'Icon').props.name, 'documents');
   assert.equal(flatten(tabs[0]).find((n) => n.type === 'Icon').props.name, 'layers-outline');
   // 点当前页不重复触发；点别的页把 tab 交回去
-  tabs[1].props.onPress();
+  tabs[3].props.onPress();
   tabs[0].props.onPress();
   assert.deepEqual(seen, ['timeline']);
   // 每个 tab 都有 48dp 槽
@@ -625,6 +626,54 @@ test('缺 API Key 时有「去设置」按钮，并且真的能切到设置页',
 
   const app = fs.readFileSync('App.tsx', 'utf8');
   assert.ok(app.includes("onOpenSettings={() => setRoute('settings')}"), 'App 必须真的切到设置页');
+});
+
+/*
+ * v0.27：空行要留下。
+ *
+ * 作者写「第一段\n\n第二段」就是在分段；原来的解析器直接 `continue` 掉空行，
+ * 于是时间轴、文档、日历里所有多段文字都挤成一坨。
+ */
+test('空行变成一个空段落，预览里不占行', () => {
+  const md = pure.load('src/util/mdBlocks.ts');
+  const blocks = md.parseBlocks('第一段\n\n第二段');
+  assert.equal(blocks.length, 3, '中间那个空行要留下');
+  assert.equal(blocks[1].kind, 'p');
+  assert.equal(blocks[1].segs.length, 0, '空段落没有文字，它只贡献一个换行');
+  // 连续空行只留一个：手机上多出来的空白只会让滚动变长
+  assert.equal(md.parseBlocks('a\n\n\n\nb').length, 3);
+  // 末尾空行不影响渲染，也不该留下一个空段落
+  assert.equal(md.parseBlocks('a\n\n').length, 1);
+  // 预览只有几行高，空行不该占掉其中一行
+  assert.equal(md.flattenForPreview(blocks).length, 2);
+
+  const body = parseSource('src/components/NoteBody.tsx').getText();
+  assert.ok(body.includes('b.segs.length === 0) return null'), '空段落自己不画东西');
+});
+
+/*
+ * v0.27 的日历与页头。
+ *
+ * 这三条都能在桌面验：格子按字数分档、碎片行能就地展开、页头把字数放在条数左边。
+ * 真机上好不好看另说，但「有没有这个功能」不该靠肉眼找。
+ */
+test('日历按字数加深、碎片能展开、页头有字数', () => {
+  const review = parseSource('src/screens/ReviewScreen.tsx').getText();
+  assert.ok(review.includes('function depthOf(chars: number)'), '深浅按字数分档，不按条数');
+  assert.ok(review.includes('withAlpha(c.accent, 0.06 * depthOf(marks.chars))'), '格子用 accent 的透明度表达深浅');
+  assert.ok(review.includes('const [openFrags, setOpenFrags]'), '日历里的碎片要能就地展开');
+  assert.ok(review.includes('numberOfLines={open ? undefined : 2}'), '展开时不再裁两行');
+  assert.ok(review.includes("m.chars ? `${m.chars} 字`"), '那天写了多少要写出来');
+
+  const timeline = parseSource('src/screens/TimelineScreen.tsx').getText();
+  assert.ok(timeline.includes('todayChars'), '页头要接字数');
+  const charsAt = timeline.indexOf('<Text style={styles.todayChars}>');
+  const countAt = timeline.indexOf('<Text style={styles.todayNumber}>');
+  assert.ok(charsAt > 0 && countAt > charsAt, '字数在条数左边');
+
+  const todo = parseSource('src/components/TodoEditor.tsx').getText();
+  assert.ok(todo.includes('截止日期（可不填）'), '「哪天做」改成「截止日期」');
+  assert.ok(!todo.includes('哪天做'), '旧说法要清干净');
 });
 
 if (require.main === module) {

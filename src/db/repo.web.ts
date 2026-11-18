@@ -310,12 +310,15 @@ export const repo: Repo = {
 
   async dayCounts() {
     // 没有 SQL，就在 JS 里数一遍；口径与 native 的 strftime(…,'localtime') 一致
-    const buckets = new Map<string, number>();
+    const buckets = new Map<string, { count: number; chars: number }>();
     for (const f of load().fragments) {
       const key = dayKey(f.createdAt);
-      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+      const row = buckets.get(key) ?? { count: 0, chars: 0 };
+      row.count += 1;
+      row.chars += f.content.length;
+      buckets.set(key, row);
     }
-    return Array.from(buckets, ([day, count]) => ({ day, count })).sort((a, b) =>
+    return Array.from(buckets, ([day, row]) => ({ day, count: row.count, chars: row.chars })).sort((a, b) =>
       a.day < b.day ? -1 : a.day > b.day ? 1 : 0,
     );
   },

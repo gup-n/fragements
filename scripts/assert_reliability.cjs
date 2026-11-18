@@ -1571,11 +1571,16 @@ test('碎片详情可见命中按OCR→正文→事项定位，旧标签/图片i
     images: [image(11, 'OCR命中 [F12]'), image(12, null), image(13, '另一张OCR命中')],
     project: '事项命中', tags: ['legacyneedle'],
   });
+  /*
+   * 正文里的块序号从 v0.27 起把**空行**也算进去（它现在是一个空段落），
+   * 所以「正文再次命中」从 1 变成 2、图片块也跟着后移。
+   * 序号两边（命中定位 / 渲染测量）都来自同一次 `parseBlocks`，不会错位。
+   */
   assert.deepEqual(plain(fragmentReaderHits(f, '命中')), [
     { section: 'image:11', blockKey: 'image:11:0', localIndex: 0 },
     { section: 'image:13', blockKey: 'image:13:0', localIndex: 0 },
     { section: 'body', blockKey: 'body:0', localIndex: 0 },
-    { section: 'body', blockKey: 'body:1', localIndex: 1 },
+    { section: 'body', blockKey: 'body:2', localIndex: 1 },
     { section: 'project', blockKey: 'project:0', localIndex: 0 },
   ]);
   assert.deepEqual(plain(fragmentReaderHits(f, 'F12')).map((hit) => hit.section), ['image:11'], 'OCR按字面读取引用标记，正文仍按引用徽标规则');
