@@ -367,6 +367,31 @@ test('没有正文的文档在批量里安静跳过，不是失败', () => {
 /* 五、界面：入口与文案                                                 */
 /* ------------------------------------------------------------------ */
 
+test('重新整理：正文与标签一起重做，旧的那篇归档', () => {
+  const src = read('src/documents/proposals.ts');
+  const at = src.indexOf('export async function proposeRetag');
+  assert.ok(at > 0, '缺少 proposeRetag —— 「重新整理重打标签」就没有入口');
+  const body = src.slice(at, src.indexOf('export type ApproveChoice', at));
+  assert.ok(body.includes('withTags: true'), '重新整理要让模型一次给出正文和标签');
+  assert.ok(src.includes("insertProposal({ kind: 'retag'"), '提案的 kind 必须是 retag，否则审批时不会归档旧篇');
+  const approve = src.slice(src.indexOf('export async function approveProposal'));
+  assert.ok(
+    approve.includes("if (proposal.kind === 'retag') await repo.setDocumentStage(original.id, 'archived')"),
+    'retag 通过后要把旧的那篇归档',
+  );
+  const viewer = read('src/components/DocViewer.tsx');
+  assert.ok(viewer.includes("runAi('retag')"), '阅读器里要有「重新整理」的入口');
+  assert.ok(viewer.includes('原稿内容仍然不变'), '归档不等于改原稿，这句话必须说出来');
+});
+
+test('批量先问做什么：整理正文 / 打标签', () => {
+  const sheet = read('src/components/DocBatchSheet.tsx');
+  assert.ok(sheet.includes("planBatch('optimize'"), '要有「整理正文」这条路');
+  assert.ok(sheet.includes("planBatch('tag'"), '要有「打标签」这条路');
+  assert.ok(sheet.includes('const [kind, setKind] = useState<ProposalKind | null>(null)'), '没选之前不许自己猜一个动作');
+  assert.ok(!/useState<BatchPlan>\(\(\) => planBatch/.test(sheet), '计划要等用户选了动作才建');
+});
+
 test('回收站入口在设置的数据页里，不是新开一个底栏项', () => {
   const settings = read('src/screens/SettingsScreen.tsx');
   assert.ok(settings.includes("trash: '回收站'"), '回收站是设置里的一页');

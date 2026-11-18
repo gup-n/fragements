@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.28.0 / versionCode 77 |
+| 版本 | v0.28.1 / versionCode 78 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.28.0 待发（本文写作时刚通过全量断言，尚未打 tag）。上一版 v0.27.0 已由[CI 44311034819](https://github.com/gup-n/fragements/actions/runs/44311034819)构建并发布（26,237,522 字节，SHA-256 `503f9486…b619`，`draft=false`；经 ghfast.top 镜像整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.26.1（[CI 44308612456](https://github.com/gup-n/fragements/actions/runs/44308612456)，26,236,094 字节，SHA-256 `6766b40c…e9ed`）、v0.26.0（[CI 44304728622](https://github.com/gup-n/fragements/actions/runs/44304728622)，26,235,074 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,16 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.28.1：把 v0.28.0 的两条半截路补完
+
+- **「重新整理」有了入口**：审批端早就认识 `kind='retag'`（新建 + 归档旧篇），
+  但没有任何地方能发出这种提案 —— 现在阅读器第四个按钮走 `proposeRetag`，
+  一次请求同时要正文和标签（`suggestDocRewrite({ withTags: true })`）。
+- **批量先问做什么**：`DocBatchSheet` 打开先停一张选择页（整理正文 / 打标签），
+  原来一打开就默认跑「整理正文」，批量打标签等于不存在。
+- **勾选不再卡 5 篇**：`MAX_ASK_DOCUMENTS` 挪到按下「问」的那一刻判断 ——
+  勾选还要服务改标签、批量整理、删除，那边没有这个限制。
 
 ### v0.28.0：回收站、自己写文档、标签平铺、AI 只出建议
 
@@ -370,7 +380,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:backup` | 19 项通过 |
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
-| `npm run test:recycle` | **26 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
+| `npm run test:recycle` | **28 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
 | `npm run test:ui` | 40 项通过（真实控件/菜单/样式、间距 token、导航预算及回调保留） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.70 MiB；产物已删除，不供预览 |
@@ -427,7 +437,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 767 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1469 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1468 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1668 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 117 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 306 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
@@ -437,7 +447,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 384 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
 | `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 319 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
 | `src/components/ProposalSheet.tsx` [打开](<src/components/ProposalSheet.tsx>) | 238 | 审批面板：建议/原稿两页签、字数对比，三个出口（存为新文档/只存标签/放弃） |
-| `src/components/DocBatchSheet.tsx` [打开](<src/components/DocBatchSheet.tsx>) | 239 | 批量工作流：一篇篇过，每篇都要单独审批；跳过与失败分开计数 |
+| `src/components/DocBatchSheet.tsx` [打开](<src/components/DocBatchSheet.tsx>) | 288 | 批量工作流：一篇篇过，每篇都要单独审批；跳过与失败分开计数 |
 | `src/util/trash.ts` [打开](<src/util/trash.ts>) | 96 | 30 天口径、剩几天、分组与顶部那句话（纯函数） |
 | `src/util/docTags.ts` [打开](<src/util/docTags.ts>) | 96 | 标签命名规范化、去重、芯片色档、按标签筛（纯函数） |
 | `src/util/proposal.ts` [打开](<src/util/proposal.ts>) | 116 | 提案 payload 宽容读取、派生标题、字数对比（纯函数） |
@@ -537,7 +547,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/KnowledgeDraft.tsx` [打开](<src/components/KnowledgeDraft.tsx>) | 248 | 全部产出可审阅、稳定key、逐项授权与统一写入计数 |
 | `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 235 | 草稿单篇整页阅读/编辑与批准入口 |
 | `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1047 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
-| `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 736 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
+| `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 750 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
 | `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 611 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
 | `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 785 | 月总结单篇/缺口队列、原稿对照和确认保存 |

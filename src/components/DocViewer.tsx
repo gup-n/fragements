@@ -23,7 +23,7 @@ import {
 import { DocumentReader } from '../documents/readers';
 import { DocEditor } from './DocEditor';
 import { ProposalSheet } from './ProposalSheet';
-import { proposeRewrite, proposeTags } from '../documents/proposals';
+import { proposeRewrite, proposeTags, proposeRetag } from '../documents/proposals';
 import { normalizeTagName } from '../util/docTags';
 import { documentReadMode } from '../documents/readers/readerAvailability';
 
@@ -59,7 +59,7 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
   const [allTags, setAllTags] = useState<DocTag[]>([]);
   const [proposal, setProposal] = useState<DocProposal | null>(null);
   /** 正在等模型的那个动作。null = 没在等 */
-  const [aiBusy, setAiBusy] = useState<'polish' | 'condense' | 'tag' | null>(null);
+  const [aiBusy, setAiBusy] = useState<'polish' | 'condense' | 'tag' | 'retag' | null>(null);
   const [token, setToken] = useState('');
   const keyboardHeight = useKeyboardHeight();
   const alive = useRef(true);
@@ -203,13 +203,17 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
    * 这里**不写库**：接口回来之后只弹审批面板，用户点了才算数。
    * 出错时错误原样显示 —— 「优化失败」这四个字帮不上任何忙。
    */
-  async function runAi(mode: 'polish' | 'condense' | 'tag') {
+  async function runAi(mode: 'polish' | 'condense' | 'tag' | 'retag') {
     if (!doc || aiBusy || running) return;
     setArmedDelete(false);
     setMsg(null);
     setAiBusy(mode);
     try {
-      const next = mode === 'tag' ? await proposeTags(doc.id) : await proposeRewrite(doc.id, mode);
+      const next = mode === 'tag'
+        ? await proposeTags(doc.id)
+        : mode === 'retag'
+          ? await proposeRetag(doc.id)
+          : await proposeRewrite(doc.id, mode);
       if (alive.current) setProposal(next);
     } catch (e) {
       if (alive.current) setMsg({ kind: 'err', text: e instanceof Error ? e.message : '没有拿到建议' });
@@ -360,7 +364,17 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
                   busy={aiBusy === 'tag'}
                   disabled={busy !== 'idle' || !!aiBusy}
                 />
+                <Action
+                  label={aiBusy === 'retag' ? '正在整理…' : '重新整理'}
+                  icon="albums-outline"
+                  onPress={() => void runAi('retag')}
+                  busy={aiBusy === 'retag'}
+                  disabled={busy !== 'idle' || !!aiBusy || !doc.bodyMd.trim()}
+                />
               </View>
+              <Text style={styles.operationHint}>
+                「重新整理」会连着标签一起重做，并把这一篇移到归档段 —— 原稿内容仍然不变。
+              </Text>
 
               {armedDelete ? <Text style={styles.deleteWarning}>确认把「{doc.name}」移到回收站？30 天内可以在「设置 → 数据 → 回收站」里恢复，彻底删除之前原件和正文都还在。</Text> : null}
               <View style={styles.actions}>

@@ -21,18 +21,21 @@ export const DOC_EDIT_LABEL: Record<DocEditMode, string> = {
   condense: '精简',
 };
 
-function systemFor(mode: DocEditMode): string {
+function systemFor(mode: DocEditMode, withTags: boolean): string {
   const common = [
     '你在帮用户整理他自己写的一篇文档。',
-    '只做一件事：给出一版更好的正文。',
+    withTags ? '做两件事：给出一版更好的正文，再给它挑一组标签。' : '只做一件事：给出一版更好的正文。',
     '',
     '硬规则：',
     '1. **不许编造**。原文没有的事实、数字、人名一律不许加；拿不准就保留原话。',
     '2. 保留原文的 Markdown 结构（标题层级、列表、图片占位符 `![](…)` 原样留在原位置）。',
-    '3. 只输出 JSON，形如 {"title": "标题", "bodyMd": "正文", "note": "一句话说明改了什么"}。',
+    withTags
+      ? '3. 只输出 JSON，形如 {"title": "标题", "bodyMd": "正文", "tags": ["标签1"], "note": "一句话说明改了什么"}。'
+      : '3. 只输出 JSON，形如 {"title": "标题", "bodyMd": "正文", "note": "一句话说明改了什么"}。',
     '4. bodyMd 里不要出现 ``` 围栏，也不要写「以下是优化后的版本」这种话。',
     '5. title 不超过 24 字；原文标题已经够好就原样返回。',
-  ];
+    withTags ? '6. 标签最多 4 个，每个不超过 8 个字，是名词不是句子；从【已有标签】里能挑到就别造新的。' : '',
+  ].filter(Boolean);
   const modeRule =
     mode === 'condense'
       ? '这次的任务是**精简**：删掉重复的、跑题的、说了等于没说的内容，让篇幅明显变短，但每一条有效信息都要留下。'
@@ -56,24 +59,29 @@ export async function suggestDocRewrite(options: {
   config: AiConfig;
   doc: Document;
   mode: DocEditMode;
+  /** 重新整理：正文和标签一起给（一次请求，两份产出） */
+  withTags?: boolean;
+  /** 已有标签名，withTags 时作为候选 */
+  knownTags?: string[];
   onProgress?: (patch: ChatProgress) => void;
 }): Promise<DocProposalPayload> {
-  const { config, doc, mode, onProgress } = options;
+  const { config, doc, mode, withTags = false, knownTags = [], onProgress } = options;
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   const body = clipBody(doc.bodyMd ?? '');
   if (!body.text) throw new AiError('format', '这篇文档还没有正文，先准备好再让 AI 处理');
 
   const user = [
+    withTags && knownTags.length ? `【已有标签】${knownTags.slice(0, TAG_CANDIDATES).join('、')}` : '',
     `【标题】${doc.name}`,
     body.clipped ? `【正文】只贴了前 ${DOC_CHARS_BUDGET.toLocaleString()} 字（全文 ${doc.bodyMd.length.toLocaleString()} 字）` : '【正文】',
     '',
     body.text,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 
   const outcome = await requestChat(
     config,
     [
-      { role: 'system', content: systemFor(mode) },
+      { role: 'system', content: systemFor(mode, withTags) },
       { role: 'user', content: user },
     ],
     onProgress,
@@ -103,11 +111,20 @@ export async function suggestDocRewrite(options: {
     .filter(Boolean)
     .join(' ');
 
-  return {
+  const payload: DocProposalPayload = {
     bodyMd,
     title: typeof parsed.title === 'string' && parsed.title.trim() ? parsed.title.trim() : undefined,
     note: note || undefined,
   };
+  if (withTags) {
+    const tags = Array.isArray(parsed.tags)
+      ? parsed.tags.filter((t): t is string => typeof t === 'string')
+      : typeof parsed.tags === 'string'
+        ? parsed.tags.split(/[,，、\s]+/)
+        : [];
+    if (tags.length) payload.tags = tags;
+  }
+  return payload;
 }
 
 /**

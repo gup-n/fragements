@@ -26,7 +26,6 @@ import {
 } from '../util/docBatch';
 
 interface Props {
-  kind: ProposalKind;
   docs: { id: number; name: string }[];
   onClose: () => void;
   /** 每存下一篇都要让外面的列表重读一次 */
@@ -42,9 +41,17 @@ const STATE_LABEL: Record<BatchState, string> = {
   failed: '失败',
 };
 
-export function BatchSheet({ kind, docs, onClose, onChanged }: Props) {
+export function BatchSheet({ docs, onClose, onChanged }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
-  const [plan, setPlan] = useState<BatchPlan>(() => planBatch(kind, docs));
+  /*
+   * 先选做什么，再开始跑。
+   *
+   * 两个动作对模型的要求完全不同（一个重写正文、一个只挑标签），
+   * 合成一个按钮之后再让用户在里面选，等于多一次点击；而直接猜一个更糟 ——
+   * 猜错就要把已经花掉的十次调用扔掉。
+   */
+  const [kind, setKind] = useState<ProposalKind | null>(null);
+  const [plan, setPlan] = useState<BatchPlan | null>(null);
   const [proposal, setProposal] = useState<DocProposal | null>(null);
   const [original, setOriginal] = useState<Document | null>(null);
   const [error, setError] = useState('');
@@ -52,7 +59,7 @@ export function BatchSheet({ kind, docs, onClose, onChanged }: Props) {
   const running = useRef<number | null>(null);
   const alive = useRef(true);
   /** 最新一版进度。`advance` 里不能读 state —— 它拿到的是渲染那一刻的旧值 */
-  const planRef = useRef(plan);
+  const planRef = useRef<BatchPlan | null>(plan);
   planRef.current = plan;
 
   useEffect(() => {
@@ -60,38 +67,40 @@ export function BatchSheet({ kind, docs, onClose, onChanged }: Props) {
     return () => { alive.current = false; };
   }, []);
 
-  const advance = useCallback(async () => {
-    const item = nextBatchItem(planRef.current);
+  const advance = useCallback(async (currentKind: ProposalKind) => {
+    const current = planRef.current;
+    if (!current) return;
+    const item = nextBatchItem(current);
     if (!item || running.current !== null) return;
     running.current = item.documentId;
     setError('');
-    setPlan((prev) => patchBatchItem(prev, item.documentId, { state: 'running' }));
+    setPlan((prev) => (prev ? patchBatchItem(prev, item.documentId, { state: 'running' }) : prev));
 
     try {
       const doc = await repo.findDocument(item.documentId);
       if (!alive.current) return;
       if (!doc) throw new Error('这篇已经不在了');
       // 改一版必须有正文；没有就安静跳过 —— 这不是失败，没什么可修的
-      if (kind !== 'tag' && !doc.bodyMd.trim()) {
-        setPlan((prev) => patchBatchItem(prev, item.documentId, { state: 'skipped', note: '还没有正文' }));
+      if (currentKind !== 'tag' && !doc.bodyMd.trim()) {
+        setPlan((prev) => (prev ? patchBatchItem(prev, item.documentId, { state: 'skipped', note: '还没有正文' }) : prev));
         return;
       }
-      const next = kind === 'tag'
+      const next = currentKind === 'tag'
         ? await proposeTags(item.documentId)
         : await proposeRewrite(item.documentId, 'polish');
       if (!alive.current) return;
       setOriginal(doc);
       setProposal(next);
-      setPlan((prev) => patchBatchItem(prev, item.documentId, { state: 'review', proposalId: next.id }));
+      setPlan((prev) => (prev ? patchBatchItem(prev, item.documentId, { state: 'review', proposalId: next.id }) : prev));
     } catch (e) {
       if (!alive.current) return;
       const text = e instanceof Error ? e.message : '生成失败';
       setError(text);
-      setPlan((prev) => patchBatchItem(prev, item.documentId, { state: 'failed', note: text }));
+      setPlan((prev) => (prev ? patchBatchItem(prev, item.documentId, { state: 'failed', note: text }) : prev));
     } finally {
       running.current = null;
     }
-  }, [kind]);
+  }, []);
 
   /*
    * 唯一的推进点。
@@ -100,23 +109,21 @@ export function BatchSheet({ kind, docs, onClose, onChanged }: Props) {
    * `plan` 在依赖里是必须的 —— 每次有人被跳过/失败/存下，都要重新算一次下一篇。
    */
   useEffect(() => {
+    if (!kind || !plan) return;
     if (proposal) return;
     if (running.current !== null) return;
     if (!plan.items.some((item) => item.state === 'pending')) return;
-    void advance();
-  }, [advance, plan, proposal]);
+    void advance(kind);
+  }, [advance, kind, plan, proposal]);
 
   const decide = useCallback((decision: ProposalDecision) => {
-    const item = planRef.current.items.find((x) => x.state === 'review');
+    const item = planRef.current?.items.find((x) => x.state === 'review');
     if (item) {
       const note =
         decision.kind === 'saved'
           ? decision.docId ? `新文档 #${decision.docId}` : '只挂了标签'
           : decision.kind === 'rejected' ? '已放弃' : '先放着';
-      setPlan((prev) => patchBatchItem(prev, item.documentId, {
-        state: 'skipped',
-        note,
-      }));
+      setPlan((prev) => (prev ? patchBatchItem(prev, item.documentId, { state: 'skipped', note }) : prev));
       if (decision.kind === 'saved') onChanged();
     }
     setProposal(null);
@@ -129,6 +136,41 @@ export function BatchSheet({ kind, docs, onClose, onChanged }: Props) {
   }, [onClose]);
 
   if (proposal) return <ProposalSheet proposal={proposal} original={original} onDone={decide} />;
+
+  if (!kind || !plan) {
+    return (
+      <View style={styles.root} accessibilityViewIsModal>
+        <ScreenHeader title="批量处理" subtitle={`${docs.length} 篇`} backIcon="close" backLabel="关闭" onBack={onClose} />
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={styles.summary}>选一件事，然后一篇篇过。每篇都要你点一下才会存。</Text>
+          <Pressable
+            style={({ pressed }) => [styles.choice, pressed && { opacity: 0.8 }]}
+            onPress={() => { setPlan(planBatch('optimize', docs)); setKind('optimize'); }}
+            accessibilityRole="button"
+            accessibilityLabel="批量整理：每篇重写一版正文"
+          >
+            <Ionicons name="sparkles-outline" size={20} color={c.accentText} />
+            <View style={styles.choiceBody}>
+              <Text style={styles.choiceTitle}>整理正文</Text>
+              <Text style={styles.choiceHint}>每篇出一版更好的正文，存成新文档；原稿不动。没有正文的会跳过。</Text>
+            </View>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.choice, pressed && { opacity: 0.8 }]}
+            onPress={() => { setPlan(planBatch('tag', docs)); setKind('tag'); }}
+            accessibilityRole="button"
+            accessibilityLabel="批量打标签：每篇建议一组标签"
+          >
+            <Ionicons name="pricetags-outline" size={20} color={c.accentText} />
+            <View style={styles.choiceBody}>
+              <Text style={styles.choiceTitle}>打标签</Text>
+              <Text style={styles.choiceHint}>每篇建议一组标签，只动标签，不改正文。</Text>
+            </View>
+          </Pressable>
+        </ScrollView>
+      </View>
+    );
+  }
 
   const progress = batchProgress(plan);
   const done = !progress.open;
@@ -230,6 +272,13 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   rowName: { ...TYPE.compact, color: c.text },
   rowState: { marginTop: 2, ...TYPE.meta, color: c.text2 },
   hint: { ...TYPE.meta, color: c.text2 },
+  choice: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm, padding: SPACE.md,
+    borderRadius: metrics.cardRadius, backgroundColor: c.card, minHeight: 72,
+  },
+  choiceBody: { flex: 1, minWidth: 0 },
+  choiceTitle: { ...TYPE.title, color: c.text },
+  choiceHint: { marginTop: SPACE.xxs, ...TYPE.compact, color: c.text2 },
   footer: { paddingHorizontal: metrics.pagePadding, paddingVertical: SPACE.sm },
   primary: {
     minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius, backgroundColor: c.accent,

@@ -26,7 +26,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { DocTag, DocumentMeta, ProposalKind } from '../types';
+import type { DocTag, DocumentMeta } from '../types';
 import { MAX_ASK_DOCUMENTS } from '../types';
 import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { WEB_INPUT_RESET } from '../util/platformStyle';
@@ -131,7 +131,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   /** 写文档。`docId: null` = 新建 */
   const [editorFor, setEditorFor] = useState<{ docId: number | null } | null>(null);
   /** 批量 AI：一篇篇过 */
-  const [batchFor, setBatchFor] = useState<{ kind: ProposalKind; docs: { id: number; name: string }[] } | null>(null);
+  const [batchFor, setBatchFor] = useState<{ docs: { id: number; name: string }[] } | null>(null);
   /** 批量改标签的选标签面板 */
   const [tagPick, setTagPick] = useState(false);
   /** 批量删除的二次确认 */
@@ -688,7 +688,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             </Pressable>
             <Pressable
               style={({ pressed }) => [styles.batchPill, pressed && { opacity: 0.7 }]}
-              onPress={() => setBatchFor({ kind: 'optimize', docs: selectedDocs.map((d) => ({ id: d.id, name: d.name })) })}
+              onPress={() => setBatchFor({ docs: selectedDocs.map((d) => ({ id: d.id, name: d.name })) })}
               accessibilityRole="button"
               accessibilityLabel={`批量整理这 ${selectedCount} 篇`}
             >
@@ -780,7 +780,6 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
 
       {batchFor ? (
         <BatchSheet
-          kind={batchFor.kind}
           docs={batchFor.docs}
           /* 关掉就退出多选：批量走完还停在勾选态，用户会以为没生效 */
           onClose={() => { setBatchFor(null); exitSelect(); void refresh(); }}

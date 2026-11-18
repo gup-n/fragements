@@ -57,6 +57,29 @@ export async function proposeTags(
   return created;
 }
 
+/**
+ * 重新整理：**正文和标签一起重做**。
+ *
+ * 与「优化」的差别不只是 kind：它会把旧的那篇归档（`stage='archived'`），
+ * 因为用户的意思是「这一版取代上一版」，而不是「再存一个版本」。
+ * 但原稿仍然一个字不动 —— 归档只是从库里挪到归档段，随时能翻回来。
+ */
+export async function proposeRetag(
+  documentId: number,
+  onProgress?: (patch: ChatProgress) => void,
+): Promise<DocProposal> {
+  const config: AiConfig = await loadAiConfig();
+  const doc = await requireDoc(documentId);
+  const known = (await repo.listDocTags()).map((tag) => tag.name);
+  const payload = await suggestDocRewrite({
+    config, doc, mode: 'polish', withTags: true, knownTags: known, onProgress,
+  });
+  const id = await repo.insertProposal({ kind: 'retag', documentId, payload });
+  const created = await repo.findProposal(id);
+  if (!created) throw new Error('提案没有存下来，请再试一次');
+  return created;
+}
+
 export type ApproveChoice = 'newDoc' | 'tagsOnly';
 
 export interface ApproveResult {
