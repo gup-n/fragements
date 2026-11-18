@@ -26,16 +26,15 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { DocumentMeta } from '../types';
+import type { DocTag, DocumentMeta, ProposalKind } from '../types';
 import { MAX_ASK_DOCUMENTS } from '../types';
 import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
-import { deleteOriginal, pickDocumentFile } from '../db/docFiles';
+import { pickDocumentFile } from '../db/docFiles';
 import { importLocalFile } from '../documents/importLocal';
-import { dropViewCache } from '../documents/readers/viewCache';
 import { getMineruToken } from '../ai/mineru';
 import {
   CLOUD_SUPPORT_HINT,
@@ -62,6 +61,9 @@ import { CloudConfirmSheet, DocViewer } from '../components/DocViewer';
 import { IconButton } from '../components/IconButton';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
+import { DocEditor } from '../components/DocEditor';
+import { BatchSheet } from '../components/DocBatchSheet';
+import { filterDocsByTag, sortTags, tagChipText } from '../util/docTags';
 
 interface Props {
   /** 作为底栏 tab 常驻时不画返回箭头（多选态仍然要「取消」，那是页内状态） */
@@ -109,12 +111,31 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const [selectMode, setSelectMode] = useState(false);
   /** 多选底条实测高度：提示条要落在它上面，不能写死一个数（见 selectBar 的 onLayout） */
   const [barHeight, setBarHeight] = useState(0);
-  /** 勾选顺序无所谓，只用来算范围与上限 */
+  /**
+   * 勾选顺序无所谓，只用来算范围。
+   *
+   * v0.28 起勾选**不再限 5 篇**：上限是「一次能问几份」的约束，
+   * 而勾选现在还要服务改标签、批量整理、删除。把上限挪到按下「问」的那一刻判断。
+   */
   const [selected, setSelected] = useState<number[]>([]);
   /** 点了「问」但选中里有没准备好的：列出来让人决定，**不静默丢掉** */
   const [blocked, setBlocked] = useState<DocumentMeta[] | null>(null);
   /** 云解析确认卡。**重试同样要过这张卡** */
   const [cloudFor, setCloudFor] = useState<DocumentMeta | null>(null);
+
+  /* ---- v0.28：分类、写作、批量 ---- */
+  /** 平铺标签。文档页顶部那一行筛选来自它 */
+  const [tags, setTags] = useState<DocTag[]>([]);
+  /** 正在按哪个标签筛。null = 全部 */
+  const [tagFilter, setTagFilter] = useState<number | null>(null);
+  /** 写文档。`docId: null` = 新建 */
+  const [editorFor, setEditorFor] = useState<{ docId: number | null } | null>(null);
+  /** 批量 AI：一篇篇过 */
+  const [batchFor, setBatchFor] = useState<{ kind: ProposalKind; docs: { id: number; name: string }[] } | null>(null);
+  /** 批量改标签的选标签面板 */
+  const [tagPick, setTagPick] = useState(false);
+  /** 批量删除的二次确认 */
+  const [confirmMany, setConfirmMany] = useState(false);
 
   /** 当前 MinerU Token。空串 = 只能走轻量通道；确认卡里要用它决定精准能不能选 */
   const [token, setToken] = useState('');
@@ -150,8 +171,14 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
 
   const refresh = useCallback(async () => {
     try {
-      const list = await repo.listDocuments();
-      if (alive.current) setDocs(list);
+      // 标签一起读：文档卡上要显示它，筛选栏也要它。两次请求也不会更快
+      const [list, tagList] = await Promise.all([repo.listDocuments(), repo.listDocTags()]);
+      if (alive.current) {
+        setDocs(list);
+        setTags(sortTags(tagList));
+        // 筛着的标签被删光了：退回「全部」，否则列表会一直空着且没有解释
+        setTagFilter((prev) => (prev !== null && !tagList.some((t) => t.id === prev) ? null : prev));
+      }
     } catch (e) {
       if (alive.current) {
         setNotice({ kind: 'err', text: e instanceof Error ? e.message : '读取文档列表失败' });
@@ -264,17 +291,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   }
 
   function toggle(id: number) {
-    // 上限提示得在 updater 外面发：setState 的 updater 可能在严格模式下跑两次，
-    // 放在里面会连弹两个 Toast
-    if (selected.includes(id)) {
-      setSelected(selected.filter((x) => x !== id));
-      return;
-    }
-    if (selected.length >= MAX_ASK_DOCUMENTS) {
-      showToast(`最多同时问 ${MAX_ASK_DOCUMENTS} 份文档`);
-      return;
-    }
-    setSelected([...selected, id]);
+    setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   /** 多选里点「问」：先分清哪些没准备好，不能偷偷只问剩下的 */
@@ -282,6 +299,11 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     Keyboard.dismiss();
     const chosen = (docs ?? []).filter((d) => selected.includes(d.id));
     if (!chosen.length) return;
+    // 上限只在「问」这一步判断：勾选还服务改标签/整理/删除，那边没有这个约束
+    if (chosen.length > MAX_ASK_DOCUMENTS) {
+      showToast(`一次最多问 ${MAX_ASK_DOCUMENTS} 份，先去掉几份`);
+      return;
+    }
     const notReady = chosen.filter((d) => !isDocumentReady(d));
     if (notReady.length) {
       setBlocked(notReady);
@@ -311,45 +333,67 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     }
   }
 
+  /**
+   * 删除 = 移到回收站（v0.28）。
+   *
+   * **不再在这里删文件**：30 天内恢复要能看到图、能打开原件。
+   * 真删发生在设置 → 数据 → 回收站（彻底删除，或 30 天后自动清）。
+   *
+   * 指向这篇的会话徽标仍然要解掉：文档已经不在列表里了，徽标还指着它，
+   * 点进去就是一片空白 —— 用户会以为整理出来的内容丢了。
+   * 代价是恢复文档不会把徽标接回来，这一点在恢复的提示里如实说。
+   */
+  async function deleteDocs(list: DocumentMeta[]) {
+    if (!list.length) return;
+    let done = 0;
+    for (const doc of list) {
+      // 先停任务：迟到的结果不能写回一条正在被删的记录
+      cancelDocumentJob(doc.id);
+      try {
+        await repo.deleteDocument(doc.id);
+        await repo.clearAskSessionDocuments(doc.id);
+        dismissDocumentJob(doc.id);
+        done += 1;
+      } catch {
+        /* 单条失败不影响其余：下面按 done 的数量如实汇报 */
+      }
+    }
+    const ids = new Set(list.map((d) => d.id));
+    if (openDocId !== null && ids.has(openDocId)) setOpenDocId(null);
+    setSelected((prev) => prev.filter((id) => !ids.has(id)));
+    showToast(
+      done === list.length
+        ? list.length === 1
+          ? `已移到回收站：${list[0].name}`
+          : `${done} 篇已移到回收站`
+        : `${done} / ${list.length} 篇移到了回收站，其余没删成`,
+    );
+    await refresh();
+    setDocVersion((v) => v + 1);
+  }
+
   async function confirmDelete() {
     const target = pendingDelete;
     if (!target) return;
     setPendingDelete(null);
-    // 先停任务：迟到的结果不能写回一条正在被删的记录
-    cancelDocumentJob(target.id);
-
-    // 先删原件再删记录：反过来文件删不掉时记录已经没了，URI 也丢了
-    const cleaned = await deleteOriginal(target.fileUri);
-    if (!cleaned) {
-      // 用浮层提示而不是顶部 notice：删除失败时列表通常已经滚到这条上，
-      // 顶部那句话用户根本看不到
-      showToast('原文件没删掉（可能被别的应用占用），记录先留着，可以再删一次');
-      return;
-    }
-
-    // 原件没了，派生出来的解析缓存也没有意义了 —— 几 MB 的 JSON 不能留下
-    await dropViewCache(target.fileUri);
-
-    try {
-      await repo.deleteDocument(target.id);
-      // 指向这篇的会话徽标要一起解掉，否则历史里点进去是一片空白
-      await repo.clearAskSessionDocuments(target.id);
-      // 记录没了，任务快照也就没意义了，别让「已取消」留在列表上
-      dismissDocumentJob(target.id);
-      if (openDocId === target.id) setOpenDocId(null);
-      setSelected((prev) => prev.filter((id) => id !== target.id));
-      showToast(`已删除「${target.name}」`);
-      await refresh();
-      setDocVersion((v) => v + 1);
-    } catch (e) {
-      showToast(
-        `记录没删掉：${e instanceof Error ? e.message : '未知原因'}。原文件已经删了`,
-      );
-    }
+    await deleteDocs([target]);
   }
 
   const selectedCount = selected.length;
-  const covered = openDocId !== null || !!pendingDelete || !!cloudFor || !!blocked;
+  const covered =
+    openDocId !== null || !!pendingDelete || !!cloudFor || !!blocked ||
+    !!editorFor || !!batchFor || tagPick || confirmMany;
+
+  /*
+   * 列表的三种状态：检索结果 / 全部 / 按标签筛。
+   * 先按 stage 分两段 —— 归档的文档是「AI 重新整理之后让位的那一篇」，
+   * 混在库里会让人以为同一个标题有两份内容。
+   */
+  const source = hits ?? docs ?? [];
+  const picked = filterDocsByTag(source, tagFilter);
+  const libraryDocs = picked.filter((d) => d.stage !== 'archived');
+  const archivedDocs = picked.filter((d) => d.stage === 'archived');
+  const selectedDocs = (docs ?? []).filter((d) => selected.includes(d.id));
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (covered || !selectMode) return false;
@@ -364,20 +408,35 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     <View style={styles.root}>
       <View style={[styles.main, { paddingBottom: keyboardHeight }]} importantForAccessibility={covered ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={covered}>
       <ScreenHeader
-        title={selectMode ? '选择要问的文档' : '文档'}
-        subtitle={docs ? (selectMode ? `已选 ${selectedCount} / ${MAX_ASK_DOCUMENTS}` : `${docs.length} 篇`) : undefined}
+        title={selectMode ? '选择文档' : '文档'}
+        subtitle={docs ? (selectMode ? `已选 ${selectedCount} 篇` : `${libraryDocs.length} 篇`) : undefined}
         onBack={selectMode ? exitSelect : embedded ? undefined : onClose}
         right={
-          docs && docs.length > 0 && !isWeb ? (
-            <IconButton
-              name={selectMode ? 'close' : 'checkmark-circle-outline'}
-              color={c.text2}
-              onPress={selectMode ? exitSelect : enterSelect}
-              label={selectMode ? '取消' : '多选'}
-              accessibilityState={{ selected: selectMode }}
-              accessibilityLabel={selectMode ? '退出多选' : '多选去问'}
-            />
-          ) : undefined
+          selectMode ? (
+            <IconButton name="close" color={c.text2} onPress={exitSelect} label="取消" accessibilityState={{ selected: true }} accessibilityLabel="退出多选" />
+          ) : (
+            <View style={styles.headerActions}>
+              {!isWeb ? (
+                <IconButton
+                  name="create-outline"
+                  color={c.text2}
+                  onPress={() => { Keyboard.dismiss(); setEditorFor({ docId: null }); }}
+                  label="新建"
+                  accessibilityLabel="新建文档"
+                />
+              ) : null}
+              {docs && docs.length > 0 && !isWeb ? (
+                <IconButton
+                  name="checkmark-circle-outline"
+                  color={c.text2}
+                  onPress={enterSelect}
+                  label="多选"
+                  accessibilityState={{ selected: false }}
+                  accessibilityLabel="多选文档"
+                />
+              ) : null}
+            </View>
+          )
         }
       />
 
@@ -403,10 +462,46 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
         ) : null}
       </View>
 
+      {/*
+        标签栏是**平铺**的（用户 2026-11-18 定）：一行能滑的芯片，没有层级。
+        筛选在内存里做而不是再进一次库：文档列表已经带着标签，几百篇也就是一次 filter。
+      */}
+      {tags.length && !selectMode ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.tagBar}
+          contentContainerStyle={styles.tagBarContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Pressable
+            style={[styles.chip, tagFilter === null && styles.chipOn]}
+            onPress={() => setTagFilter(null)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: tagFilter === null }}
+            accessibilityLabel="看全部文档"
+          >
+            <Text style={[styles.chipText, tagFilter === null && styles.chipTextOn]}>全部</Text>
+          </Pressable>
+          {tags.map((tag) => (
+            <Pressable
+              key={tag.id}
+              style={[styles.chip, tagFilter === tag.id && styles.chipOn]}
+              onPress={() => setTagFilter(tagFilter === tag.id ? null : tag.id)}
+              accessibilityRole="button"
+              accessibilityState={{ selected: tagFilter === tag.id }}
+              accessibilityLabel={`只看 ${tag.name} 的文档`}
+            >
+              <Text style={[styles.chipText, tagFilter === tag.id && styles.chipTextOn]}>{tagChipText(tag)}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      ) : null}
+
       <FlatList
         style={styles.list}
         keyboardShouldPersistTaps="handled"
-        data={hits ?? docs ?? []}
+        data={libraryDocs}
         keyExtractor={(d) => String(d.id)}
         contentContainerStyle={[styles.listContent, selectMode && styles.listContentWithBar]}
         ItemSeparatorComponent={() => <View style={styles.sep} />}
@@ -418,22 +513,38 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
                 <Text style={styles.webText}>网页版不支持上传文档，请在手机上使用。</Text>
               </View>
             ) : (
-              <Pressable
-                style={({ pressed }) => [styles.uploadBtn, pressed && { opacity: 0.85 }]}
-                onPress={handlePick}
-                disabled={picking}
-                accessibilityRole="button"
-                accessibilityLabel="添加文档"
-              >
-                {picking ? (
-                  <ActivityIndicator size="small" color={c.onAccent} />
-                ) : (
-                  <>
-                    <Ionicons name="add" size={19} color={c.onAccent} />
-                    <Text style={styles.uploadText}>添加文件</Text>
-                  </>
-                )}
-              </Pressable>
+              /*
+               * 两个入口并排，因为它们是**两件不同的事**：
+               * 「添加文件」是手上已经有一个东西，「写一篇」是从零开始。
+               * 只留一个角标图标时，用户找不到「我自己写」这条路。
+               */
+              <View style={styles.entryRow}>
+                <Pressable
+                  style={({ pressed }) => [styles.uploadBtn, pressed && { opacity: 0.85 }]}
+                  onPress={handlePick}
+                  disabled={picking}
+                  accessibilityRole="button"
+                  accessibilityLabel="添加文件"
+                >
+                  {picking ? (
+                    <ActivityIndicator size="small" color={c.onAccent} />
+                  ) : (
+                    <>
+                      <Ionicons name="add" size={19} color={c.onAccent} />
+                      <Text style={styles.uploadText}>添加文件</Text>
+                    </>
+                  )}
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [styles.writeBtn, pressed && { opacity: 0.85 }]}
+                  onPress={() => { Keyboard.dismiss(); setEditorFor({ docId: null }); }}
+                  accessibilityRole="button"
+                  accessibilityLabel="自己写一篇文档"
+                >
+                  <Ionicons name="create-outline" size={17} color={c.text} />
+                  <Text style={styles.writeText}>写一篇</Text>
+                </Pressable>
+              </View>
             )}
 
             {/* 「添加只保存原件，不上传，也不会自动解析。」已删（用户 2026-11-15）：
@@ -454,6 +565,28 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             ) : null}
           </View>
         }
+        ListFooterComponent={
+          archivedDocs.length ? (
+            <View style={styles.archivedBlock}>
+              <Text style={styles.archivedTitle}>归档 {archivedDocs.length} 篇</Text>
+              <Text style={styles.archivedHint}>AI 重新整理之后旧的让位到这里，内容和标签都还在。</Text>
+              {archivedDocs.map((item) => (
+                <View key={item.id} style={styles.archivedRow}>
+                  <DocRow
+                    doc={item}
+                    selectMode={selectMode}
+                    selected={selected.includes(item.id)}
+                    onOpen={() => { Keyboard.dismiss(); setOpenDocId(item.id); }}
+                    onToggle={() => toggle(item.id)}
+                    onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
+                    onLocal={() => prepareMany([item])}
+                    onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
+                  />
+                </View>
+              ))}
+            </View>
+          ) : undefined
+        }
         ListEmptyComponent={
           docs === null ? (
             <View style={styles.loading}>
@@ -472,11 +605,17 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
               /* 原来这里两行在解释「搜什么、为什么搜不到」，压成一句 */
               body="正文还没准备的文档只有文件名能搜"
             />
+          ) : tagFilter !== null ? (
+            <EmptyState
+              icon="pricetag-outline"
+              title="这个标签下还没有文档"
+              body="在文档详情里可以给任何一篇加标签"
+            />
           ) : (
             <EmptyState
               icon="documents-outline"
-              title="先把文件存进来"
-              body="原文件留在本机；要读或要问时再决定本地提取还是上传"
+              title="先存一份文件，或者自己写一篇"
+              body="导入的原文件留在本机；自己写的文档直接进库，可以随时改"
             />
           )
         }
@@ -495,6 +634,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
       />
 
       {selectMode ? (
+        <>
         <View
           style={styles.selectBar}
           /*
@@ -507,29 +647,66 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
         >
           <View style={styles.selectInfo}>
             <Text style={styles.selectCount}>已选 {selectedCount} 份</Text>
-            <Text style={styles.selectHint}>只问这几份，不混入笔记和其它文档</Text>
+            <Text style={styles.selectHint}>可以问、改标签、批量整理或删除</Text>
           </View>          <Pressable
             style={({ pressed }) => [
               styles.askBtn,
-              !selectedCount && styles.askBtnOff,
+              (!selectedCount || selectedCount > MAX_ASK_DOCUMENTS) && styles.askBtnOff,
               pressed && { opacity: 0.85 },
             ]}
             onPress={askSelected}
-            disabled={!selectedCount}
+            disabled={!selectedCount || selectedCount > MAX_ASK_DOCUMENTS}
             accessibilityRole="button"
-            accessibilityState={{ disabled: !selectedCount }}
+            accessibilityState={{ disabled: !selectedCount || selectedCount > MAX_ASK_DOCUMENTS }}
             accessibilityLabel={`问这 ${selectedCount} 份文档`}
           >
             <Ionicons
               name="chatbubble-ellipses-outline"
               size={16}
-              color={selectedCount ? c.onAccent : c.text3}
+              color={selectedCount && selectedCount <= MAX_ASK_DOCUMENTS ? c.onAccent : c.text3}
             />
-            <Text style={[styles.askText, !selectedCount && styles.askTextOff]}>
-              问这 {selectedCount} 份
+            <Text style={[styles.askText, (!selectedCount || selectedCount > MAX_ASK_DOCUMENTS) && styles.askTextOff]}>
+              {selectedCount > MAX_ASK_DOCUMENTS ? `最多问 ${MAX_ASK_DOCUMENTS} 份` : `问这 ${selectedCount} 份`}
             </Text>
           </Pressable>
         </View>
+
+        {/*
+          第二排是批量动作。不挤进上面那一排：五个按钮平分一行，
+          每个只剩 60 宽，中文全要折行。破坏性的「删除」放最右。
+        */}
+        {selectedCount > 0 ? (
+          <View style={styles.batchRow}>
+            <Pressable
+              style={({ pressed }) => [styles.batchPill, pressed && { opacity: 0.7 }]}
+              onPress={() => setTagPick(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`给这 ${selectedCount} 篇改标签`}
+            >
+              <Ionicons name="pricetags-outline" size={14} color={c.text} />
+              <Text style={styles.batchText}>改标签</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.batchPill, pressed && { opacity: 0.7 }]}
+              onPress={() => setBatchFor({ kind: 'optimize', docs: selectedDocs.map((d) => ({ id: d.id, name: d.name })) })}
+              accessibilityRole="button"
+              accessibilityLabel={`批量整理这 ${selectedCount} 篇`}
+            >
+              <Ionicons name="sparkles-outline" size={14} color={c.text} />
+              <Text style={styles.batchText}>批量整理</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.batchPill, styles.batchDanger, pressed && { opacity: 0.7 }]}
+              onPress={() => setConfirmMany(true)}
+              accessibilityRole="button"
+              accessibilityLabel={`删除这 ${selectedCount} 篇`}
+            >
+              <Ionicons name="trash-outline" size={14} color={c.danger} />
+              <Text style={[styles.batchText, styles.batchDangerText]}>删除</Text>
+            </Pressable>
+          </View>
+        ) : null}
+        </>
       ) : null}
 
       </View>
@@ -585,6 +762,74 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             setDocVersion((v) => v + 1);
           }}
           onAsk={onAsk}
+        />
+      ) : null}
+
+      {editorFor ? (
+        <DocEditor
+          docId={editorFor.docId}
+          onClose={() => setEditorFor(null)}
+          onSaved={({ created }) => {
+            setEditorFor(null);
+            showToast(created ? '已存进文档库' : '已保存');
+            setDocVersion((v) => v + 1);
+            void refresh();
+          }}
+        />
+      ) : null}
+
+      {batchFor ? (
+        <BatchSheet
+          kind={batchFor.kind}
+          docs={batchFor.docs}
+          /* 关掉就退出多选：批量走完还停在勾选态，用户会以为没生效 */
+          onClose={() => { setBatchFor(null); exitSelect(); void refresh(); }}
+          onChanged={() => { void refresh(); setDocVersion((v) => v + 1); }}
+        />
+      ) : null}
+
+      {tagPick ? (
+        <TagPickSheet
+          tags={tags}
+          count={selectedCount}
+          onCancel={() => setTagPick(false)}
+          onApply={(ids, op) => {
+            const list = selectedDocs;
+            setTagPick(false);
+            void (async () => {
+              let done = 0;
+              for (const doc of list) {
+                const cur = doc.tags.map((t) => t.id);
+                const next = op === 'add'
+                  ? Array.from(new Set([...cur, ...ids]))
+                  : cur.filter((id) => !ids.includes(id));
+                try {
+                  await repo.setDocumentTags(doc.id, next);
+                  done += 1;
+                } catch {
+                  /* 一篇失败不影响其余 */
+                }
+              }
+              showToast(
+                `${done} 篇${op === 'add' ? '加上' : '去掉'}了标签`,
+              );
+              await refresh();
+              setDocVersion((v) => v + 1);
+            })();
+          }}
+        />
+      ) : null}
+
+      {confirmMany ? (
+        <ManyDeleteConfirm
+          count={selectedCount}
+          onCancel={() => setConfirmMany(false)}
+          onConfirm={() => {
+            const list = selectedDocs;
+            setConfirmMany(false);
+            exitSelect();
+            void deleteDocs(list);
+          }}
         />
       ) : null}
 
@@ -678,10 +923,29 @@ function DocRow({
             </Text>
           ) : null}
 
+          {doc.tags.length ? (
+            <View style={styles.docTags}>
+              {doc.tags.slice(0, 3).map((tag) => (
+                <View key={tag.id} style={styles.docTag}>
+                  <Text style={styles.docTagText}>{tag.name}</Text>
+                </View>
+              ))}
+              {doc.tags.length > 3 ? (
+                <Text style={styles.docTagMore}>+{doc.tags.length - 3}</Text>
+              ) : null}
+            </View>
+          ) : null}
+
           <View style={styles.metaRow}>
             <View style={styles.extBadge}>
               <Text style={styles.extText}>
-                {doc.origin === 'knowledge' ? '知识' : (doc.ext || 'file').slice(0, 4).toUpperCase()}
+                {doc.stage === 'archived'
+                  ? '归档'
+                  : doc.origin === 'authored'
+                    ? '手写'
+                    : doc.origin === 'knowledge'
+                      ? '知识'
+                      : (doc.ext || 'file').slice(0, 4).toUpperCase()}
               </Text>
             </View>
             <Text style={styles.meta}>
@@ -839,6 +1103,151 @@ function AskBlockedSheet({
   );
 }
 
+/**
+ * 批量改标签。
+ *
+ * 只给「加上」和「去掉」两种动作，**没有「替换成」**：
+ * 替换会把每篇文档原有的标签全部抹掉，而用户在选择面板里根本看不见
+ * 那些被抹掉的是什么。要「只留某一个」的场景，逐篇改更安全。
+ */
+function TagPickSheet({
+  tags,
+  count,
+  onCancel,
+  onApply,
+}: {
+  tags: DocTag[];
+  count: number;
+  onCancel: () => void;
+  onApply: (ids: number[], op: 'add' | 'remove') => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const [picked, setPicked] = useState<number[]>([]);
+  const live = useRef(onCancel);
+  live.current = onCancel;
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { live.current(); return true; });
+    return () => sub.remove();
+  }, []);
+
+  return (
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={styles.backdrop} onPress={onCancel} accessible={false} />
+      <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
+        <View style={styles.sheetHead}>
+          <View style={styles.sheetIcon}>
+            <Ionicons name="pricetags-outline" size={17} color={c.text2} />
+          </View>
+          <Text style={styles.sheetTitle}>给这 {count} 篇改标签</Text>
+        </View>
+
+        {tags.length ? (
+          <View style={styles.tagPickWrap}>
+            {tags.map((tag) => {
+              const on = picked.includes(tag.id);
+              return (
+                <Pressable
+                  key={tag.id}
+                  style={[styles.chip, on && styles.chipOn]}
+                  onPress={() => setPicked((prev) => (on ? prev.filter((id) => id !== tag.id) : [...prev, tag.id]))}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: on }}
+                  accessibilityLabel={tag.name}
+                >
+                  <Text style={[styles.chipText, on && styles.chipTextOn]}>{tag.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.sheetHint}>
+            还没有任何标签。在文档详情里可以新建，新建完这里就能选。
+          </Text>
+        )}
+
+        <View style={styles.sheetActions}>
+          <Pressable
+            style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
+            onPress={onCancel}
+          >
+            <Text style={styles.cancelText}>取消</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.cancelBtn, !picked.length && styles.btnOff, pressed && { opacity: 0.8 }]}
+            onPress={() => onApply(picked, 'remove')}
+            disabled={!picked.length}
+            accessibilityState={{ disabled: !picked.length }}
+          >
+            <Text style={styles.cancelText}>去掉</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [styles.startBtn, !picked.length && styles.btnOff, pressed && { opacity: 0.85 }]}
+            onPress={() => onApply(picked, 'add')}
+            disabled={!picked.length}
+            accessibilityState={{ disabled: !picked.length }}
+          >
+            <Text style={styles.startText}>都加上</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
+/** 批量删除确认。**真的只是移到回收站**，文案不能吓人，也不能含糊 */
+function ManyDeleteConfirm({
+  count,
+  onCancel,
+  onConfirm,
+}: {
+  count: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const live = useRef(onCancel);
+  live.current = onCancel;
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { live.current(); return true; });
+    return () => sub.remove();
+  }, []);
+
+  return (
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={styles.backdrop} onPress={onCancel} accessible={false} />
+      <View style={styles.sheet}>
+        <View style={styles.sheetContent}>
+          <View style={styles.sheetHead}>
+            <View style={[styles.sheetIcon, styles.sheetIconDanger]}>
+              <Ionicons name="trash-outline" size={17} color={c.danger} />
+            </View>
+            <Text style={styles.sheetTitle}>把 {count} 篇移到回收站？</Text>
+          </View>
+          <Text style={styles.sheetHint}>
+            30 天内都能在「设置 → 数据 → 回收站」里恢复。彻底删除之前，原件和已准备的正文都还在。
+          </Text>
+          <View style={styles.sheetActions}>
+            <Pressable
+              style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={onCancel}
+            >
+              <Text style={styles.cancelText}>取消</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
+              onPress={onConfirm}
+            >
+              <Text style={styles.deleteText}>移到回收站</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 /** 删除确认。删掉的是 App 内的副本和已准备的正文，不影响手机里原来那个文件 */
 function DeleteConfirm({
   doc,
@@ -869,14 +1278,15 @@ function DeleteConfirm({
           <View style={[styles.sheetIcon, styles.sheetIconDanger]}>
             <Ionicons name="trash-outline" size={17} color={c.danger} />
           </View>
-          <Text style={styles.sheetTitle}>删除这篇文档？</Text>
+          <Text style={styles.sheetTitle}>移到回收站？</Text>
         </View>
 
         <Text style={styles.fileName}>
           {doc.name}
         </Text>
         <Text style={styles.sheetHint}>
-          会删掉 App 里的原件副本和已准备的正文；手机里原来那个文件不受影响。
+          会移到回收站，30 天内都能在「设置 → 数据 → 回收站」里恢复。
+          彻底删除之前，App 里的原件副本和已准备的正文都还在；手机里原来那个文件始终不受影响。
         </Text>
 
         <View style={styles.sheetActions}>
@@ -890,7 +1300,7 @@ function DeleteConfirm({
             style={({ pressed }) => [styles.deleteBtn, pressed && { opacity: 0.85 }]}
             onPress={onConfirm}
           >
-            <Text style={styles.deleteText}>删除</Text>
+            <Text style={styles.deleteText}>移到回收站</Text>
           </Pressable>
         </View>
       </ScrollView>
@@ -908,6 +1318,50 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   sep: { height: SPACE.xs },
   loading: { paddingTop: SPACE.xl, alignItems: 'center' },
   uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.xs },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
+  /** 两个入口并排：主按钮占大头，「写一篇」是次级 */
+  entryRow: { flexDirection: 'row', alignItems: 'stretch', gap: SPACE.xs },
+  writeBtn: {
+    flexGrow: 0, flexBasis: 104, minHeight: metrics.controlHeight, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.card,
+  },
+  writeText: { ...TYPE.body, color: c.text, fontWeight: '600' },
+  /* ---- 标签栏（平铺） ---- */
+  tagBar: { flexGrow: 0, marginTop: SPACE.xxs },
+  tagBarContent: { paddingHorizontal: metrics.pagePadding, gap: SPACE.xs, alignItems: 'center' },
+  chip: {
+    minHeight: 32, paddingHorizontal: SPACE.sm, borderRadius: R.pill, backgroundColor: c.hairSoft,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  /** 选中换底色，不描边 —— 与全项目一致 */
+  chipOn: { backgroundColor: c.accentBg },
+  chipText: { ...TYPE.label, color: c.text2 },
+  chipTextOn: { color: c.accentText, fontWeight: '600' },
+  tagPickWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.md },
+  /* ---- 卡片上的标签 ---- */
+  docTags: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: SPACE.xs, marginTop: 3 },
+  docTag: { backgroundColor: c.accentBg, borderRadius: R.pill, paddingHorizontal: 6 },
+  docTagText: { ...TYPE.caption, color: c.accentText },
+  docTagMore: { ...TYPE.caption, color: c.text3 },
+  /* ---- 归档段 ---- */
+  archivedBlock: { marginTop: SPACE.lg, gap: SPACE.xs },
+  archivedTitle: { ...TYPE.label, color: c.text2, fontWeight: '600' },
+  archivedHint: { ...TYPE.meta, color: c.text3 },
+  archivedRow: { opacity: 0.92 },
+  /* ---- 批量动作 ---- */
+  batchRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs,
+    paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.sm, backgroundColor: c.page,
+  },
+  batchPill: {
+    flexGrow: 1, flexBasis: 90, minHeight: 40, flexDirection: 'row', alignItems: 'center',
+    justifyContent: 'center', gap: 5, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft,
+  },
+  batchText: { ...TYPE.label, color: c.text },
+  batchDanger: { backgroundColor: c.dangerBg },
+  batchDangerText: { color: c.danger },
+  btnOff: { backgroundColor: c.hairSoft },
   /** 主操作按钮：48 是触控下限。原来写 44，比同一页所有按钮都矮一截 */
   uploadBtn: {
     minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,

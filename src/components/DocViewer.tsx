@@ -3,17 +3,16 @@
  * 阅读、准备、问答索引相互独立。打开页面不提取、不上传；云解析每次重新确认。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Document, DocumentMeta } from '../types';
-import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
+import type { DocProposal, DocTag, Document, DocumentMeta } from '../types';
+import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
 import { ScreenHeader } from './ScreenHeader';
 import type { IoniconName } from './IconButton';
 import { useKeyboardHeight } from '../util/keyboard';
 import { repo } from '../db/repo';
-import { deleteOriginal, openOriginal } from '../db/docFiles';
-import { dropViewCache } from '../documents/readers/viewCache';
+import { openOriginal } from '../db/docFiles';
 import { MAX_FILE_LABEL, PRO_MAX_FILE_LABEL, PRO_MAX_PAGES, getMineruToken } from '../ai/mineru';
 import { planForDoc, localReaderLimitNote, sizeText } from '../util/docSupport';
 import { isDocumentReady, notReadyReason, supportsLocalDocument } from '../documents/formats';
@@ -22,6 +21,10 @@ import {
   prepareDocumentCloud, prepareDocumentLocal, useDocumentJob,
 } from '../documents/jobs';
 import { DocumentReader } from '../documents/readers';
+import { DocEditor } from './DocEditor';
+import { ProposalSheet } from './ProposalSheet';
+import { proposeRewrite, proposeTags } from '../documents/proposals';
+import { normalizeTagName } from '../util/docTags';
 import { documentReadMode } from '../documents/readers/readerAvailability';
 
 interface Props {
@@ -50,6 +53,13 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [cloudAsk, setCloudAsk] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  /* ---- v0.28：编辑、标签、AI 提案 ---- */
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [tagSheet, setTagSheet] = useState(false);
+  const [allTags, setAllTags] = useState<DocTag[]>([]);
+  const [proposal, setProposal] = useState<DocProposal | null>(null);
+  /** 正在等模型的那个动作。null = 没在等 */
+  const [aiBusy, setAiBusy] = useState<'polish' | 'condense' | 'tag' | null>(null);
   const [token, setToken] = useState('');
   const keyboardHeight = useKeyboardHeight();
   const alive = useRef(true);
@@ -85,6 +95,10 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
     setActionsOpen(false);
     setArmedDelete(false);
     setMsg(null);
+    setEditorOpen(false);
+    setTagSheet(false);
+    setProposal(null);
+    setAiBusy(null);
   }, [docId]);
   useEffect(() => { void load(); }, [load, reloadKey]);
   useEffect(() => {
@@ -102,11 +116,14 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
   }, [jobKey]);
 
   const attemptClose = useCallback(() => {
+    if (proposal) { setProposal(null); return; }
+    if (editorOpen) { setEditorOpen(false); return; }
+    if (tagSheet) { setTagSheet(false); return; }
     if (cloudAsk) { setCloudAsk(false); return; }
     if (armedDelete) { setArmedDelete(false); return; }
     if (actionsOpen) { setActionsOpen(false); return; }
     onClose();
-  }, [armedDelete, cloudAsk, actionsOpen, onClose]);
+  }, [armedDelete, cloudAsk, actionsOpen, editorOpen, onClose, proposal, tagSheet]);
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { attemptClose(); return true; });
     return () => sub.remove();
@@ -150,16 +167,10 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
     setBusy('deleting');
     setMsg(null);
     cancelDocumentJob(doc.id);
-    // 原件仍先删除；失败保留记录以便重试，不丢掉URI。
-    const cleaned = await deleteOriginal(doc.fileUri);
-    if (cleaned) await dropViewCache(doc.fileUri);
-    if (!cleaned) {
-      if (alive.current) {
-        setMsg({ kind: 'err', text: '原文件没删掉（可能被其它应用占用），记录先留着，可以重试' });
-        setBusy('idle');
-      }
-      return;
-    }
+    /*
+     * v0.28 起删除只是**移到回收站**：不删原件、不删正文。
+     * 30 天内恢复要能打开原件、要能看到图。真删在设置的回收站里做。
+     */
     try {
       await repo.deleteDocument(doc.id);
       await repo.clearAskSessionDocuments(doc.id);
@@ -168,9 +179,42 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
       onClose();
     } catch (e) {
       if (alive.current) {
-        setMsg({ kind: 'err', text: `删除未完成：${e instanceof Error ? e.message : '未知原因'}。原文件已经删了` });
+        setMsg({ kind: 'err', text: `没删成：${e instanceof Error ? e.message : '未知原因'}` });
         setBusy('idle');
       }
+    }
+  }
+
+  /** 打开标签面板前先把全部标签读出来 */
+  async function openTags() {
+    setArmedDelete(false);
+    setMsg(null);
+    try {
+      setAllTags(await repo.listDocTags());
+      setTagSheet(true);
+    } catch (e) {
+      setMsg({ kind: 'err', text: e instanceof Error ? e.message : '读取标签失败' });
+    }
+  }
+
+  /**
+   * 让 AI 出建议。
+   *
+   * 这里**不写库**：接口回来之后只弹审批面板，用户点了才算数。
+   * 出错时错误原样显示 —— 「优化失败」这四个字帮不上任何忙。
+   */
+  async function runAi(mode: 'polish' | 'condense' | 'tag') {
+    if (!doc || aiBusy || running) return;
+    setArmedDelete(false);
+    setMsg(null);
+    setAiBusy(mode);
+    try {
+      const next = mode === 'tag' ? await proposeTags(doc.id) : await proposeRewrite(doc.id, mode);
+      if (alive.current) setProposal(next);
+    } catch (e) {
+      if (alive.current) setMsg({ kind: 'err', text: e instanceof Error ? e.message : '没有拿到建议' });
+    } finally {
+      if (alive.current) setAiBusy(null);
     }
   }
 
@@ -211,6 +255,29 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
           backIcon="close" backLabel="关闭文档" onBack={attemptClose}
         />
         <Text style={styles.documentStatus} accessibilityLiveRegion="polite">{statusLine(doc, jobText)}</Text>
+
+        {/*
+          标签在正文上方：它是「这篇属于哪一类」，先看清楚再读。
+          平铺（用户 2026-11-18 定），一排芯片，没有层级。
+        */}
+        <View style={styles.tagRow}>
+          {doc.tags.map((tag) => (
+            <View key={tag.id} style={styles.docTagChip}>
+              <Text style={styles.docTagChipText}>{tag.name}</Text>
+            </View>
+          ))}
+          <Pressable
+            style={({ pressed }) => [styles.tagEdit, pressed && { opacity: 0.7 }]}
+            onPress={() => void openTags()}
+            hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+            accessibilityRole="button"
+            accessibilityLabel={doc.tags.length ? '改这篇的标签' : '给这篇加标签'}
+          >
+            <Ionicons name="pricetag-outline" size={13} color={c.text2} />
+            <Text style={styles.tagEditText}>{doc.tags.length ? '改标签' : '加标签'}</Text>
+          </Pressable>
+        </View>
+
         {loadError ? <Text style={styles.warnLine}>刷新失败：{loadError}。仍显示上次读取的内容。</Text> : null}
         {canRead ? (
           <View style={styles.readerWrap}>
@@ -257,7 +324,45 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
                 </View>
               ) : null}
               {limitNote ? <Text style={styles.operationHint}>{limitNote}</Text> : null}
-              {armedDelete ? <Text style={styles.deleteWarning}>确认删除「{doc.name}」？App 内的原件副本、正文和索引会删除，无法在这里撤回。手机上原来的文件不受影响。</Text> : null}
+
+              {/*
+                用户权限最高：任何一篇都能自己改（含导入的原件与 AI 产出的那篇）。
+                改的是这一篇本身；AI 那条路一律「新建一篇」，两条路不能混。
+              */}
+              <View style={styles.actions}>
+                <Action label="编辑正文" icon="create-outline" onPress={() => { setActionsOpen(false); setEditorOpen(true); }} disabled={busy !== 'idle'} />
+                <Action label="改标签" icon="pricetags-outline" onPress={() => void openTags()} disabled={busy !== 'idle'} />
+              </View>
+
+              <Text style={styles.operationTitle}>让 AI 出一版</Text>
+              <Text style={styles.operationHint}>
+                建议先给你看，你点了才存。存下来是一篇新文档，这一篇一个字都不会变。
+              </Text>
+              <View style={styles.actions}>
+                <Action
+                  label={aiBusy === 'polish' ? '正在生成…' : '优化'}
+                  icon="sparkles-outline"
+                  onPress={() => void runAi('polish')}
+                  busy={aiBusy === 'polish'}
+                  disabled={busy !== 'idle' || !!aiBusy || !doc.bodyMd.trim()}
+                />
+                <Action
+                  label={aiBusy === 'condense' ? '正在生成…' : '精简'}
+                  icon="contract-outline"
+                  onPress={() => void runAi('condense')}
+                  busy={aiBusy === 'condense'}
+                  disabled={busy !== 'idle' || !!aiBusy || !doc.bodyMd.trim()}
+                />
+                <Action
+                  label={aiBusy === 'tag' ? '正在生成…' : '打标签'}
+                  icon="pricetags-outline"
+                  onPress={() => void runAi('tag')}
+                  busy={aiBusy === 'tag'}
+                  disabled={busy !== 'idle' || !!aiBusy}
+                />
+              </View>
+
+              {armedDelete ? <Text style={styles.deleteWarning}>确认把「{doc.name}」移到回收站？30 天内可以在「设置 → 数据 → 回收站」里恢复，彻底删除之前原件和正文都还在。</Text> : null}
               <View style={styles.actions}>
                 {armedDelete ? <Action label="取消删除" onPress={() => setArmedDelete(false)} disabled={busy !== 'idle'} /> : null}
                 <Action label={armedDelete ? '确认删除' : '删除文档'} icon="trash-outline" onPress={() => void remove()} tone="danger" busy={busy === 'deleting'} disabled={busy !== 'idle'} />
@@ -284,6 +389,60 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
         </View>
       </View>
       {cloudAsk ? <CloudConfirmSheet doc={doc} defaultChannel={plan.channel === 'pro' ? 'pro' : 'lite'} hasToken={!!token.trim()} onCancel={() => setCloudAsk(false)} onConfirm={startCloud} /> : null}
+
+      {editorOpen ? (
+        <DocEditor
+          docId={doc.id}
+          onClose={() => setEditorOpen(false)}
+          onSaved={() => {
+            setEditorOpen(false);
+            setMsg({ kind: 'ok', text: '已保存' });
+            void load();
+            onChanged();
+          }}
+        />
+      ) : null}
+
+      {tagSheet ? (
+        <DocTagSheet
+          allTags={allTags}
+          current={doc.tags}
+          onCancel={() => setTagSheet(false)}
+          onApply={async (ids) => {
+            setTagSheet(false);
+            try {
+              await repo.setDocumentTags(doc.id, ids);
+              await load();
+              onChanged();
+              setMsg({ kind: 'ok', text: '标签已更新' });
+            } catch (e) {
+              setMsg({ kind: 'err', text: e instanceof Error ? e.message : '标签没改成' });
+            }
+          }}
+        />
+      ) : null}
+
+      {proposal ? (
+        <ProposalSheet
+          proposal={proposal}
+          original={doc}
+          onDone={(decision) => {
+            setProposal(null);
+            if (decision.kind === 'saved') {
+              setMsg({
+                kind: 'ok',
+                text: decision.docId
+                  ? '已存为新文档，原稿没有改动'
+                  : `已挂上标签：${decision.tags.join('、') || '（无）'}`,
+              });
+              void load();
+              onChanged();
+            } else if (decision.kind === 'rejected') {
+              setMsg({ kind: 'ok', text: '已放弃，库里什么都没改' });
+            }
+          }}
+        />
+      ) : null}
     </View>
   );
 }
@@ -378,11 +537,150 @@ export function CloudConfirmSheet({ doc, defaultChannel, hasToken, onCancel, onC
   );
 }
 
+/**
+ * 改这一篇的标签。
+ *
+ * 打勾即生效的那一版（`setDocumentTags` 是整体替换）：
+ * 用户看得见每一个勾，所以「替换」在这里没有歧义；
+ * 批量改标签那边就不能这么做 —— 那些文档原有的标签他看不见。
+ *
+ * 新建标签也在这里：「想给这篇加一个还没有的标签」是最常见的一步，
+ * 让用户退回文档列表去建反而绕。
+ */
+function DocTagSheet({
+  allTags,
+  current,
+  onCancel,
+  onApply,
+}: {
+  allTags: DocTag[];
+  current: DocTag[];
+  onCancel: () => void;
+  onApply: (ids: number[]) => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const [tags, setTags] = useState<DocTag[]>(allTags);
+  const [picked, setPicked] = useState<number[]>(current.map((t) => t.id));
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const live = useRef(onCancel);
+  live.current = onCancel;
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { live.current(); return true; });
+    return () => sub.remove();
+  }, []);
+
+  async function create() {
+    const clean = normalizeTagName(name);
+    if (!clean || busy) return;
+    setBusy(true);
+    setErr('');
+    try {
+      const tag = await repo.createDocTag(clean, 'approved');
+      setTags((prev) => (prev.some((t) => t.id === tag.id) ? prev : [...prev, tag]));
+      setPicked((prev) => (prev.includes(tag.id) ? prev : [...prev, tag.id]));
+      setName('');
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : '建标签失败');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={styles.backdrop} onPress={onCancel} accessible={false} />
+      <ScrollView style={styles.sheet} contentContainerStyle={styles.sheetContent} keyboardShouldPersistTaps="handled">
+        <Text style={styles.sheetTitle} accessibilityRole="header">标签</Text>
+        <Text style={styles.sheetHint}>一篇可以有多个标签；取消打勾就是摘掉。</Text>
+
+        {tags.length ? (
+          <View style={styles.tagPickWrap}>
+            {tags.map((tag) => {
+              const on = picked.includes(tag.id);
+              return (
+                <Pressable
+                  key={tag.id}
+                  style={[styles.chip, on && styles.chipOn]}
+                  onPress={() => setPicked((prev) => (on ? prev.filter((id) => id !== tag.id) : [...prev, tag.id]))}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: on }}
+                  accessibilityLabel={tag.name}
+                >
+                  <Text style={[styles.chipText, on && styles.chipTextOn]}>{tag.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={styles.sheetHint}>还没有任何标签，在下面建一个。</Text>
+        )}
+
+        <View style={styles.tagInputRow}>
+          <TextInput
+            value={name}
+            onChangeText={setName}
+            placeholder="新标签名"
+            placeholderTextColor={c.text3}
+            style={styles.tagInput}
+            accessibilityLabel="新标签名"
+            selectionColor={c.selection}
+            returnKeyType="done"
+            onSubmitEditing={() => void create()}
+            maxLength={12}
+          />
+          <Pressable
+            style={({ pressed }) => [styles.tagAddBtn, pressed && { opacity: 0.8 }]}
+            onPress={() => void create()}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="新建并勾上这个标签"
+          >
+            <Text style={styles.tagAddBtnText}>{busy ? '…' : '新建'}</Text>
+          </Pressable>
+        </View>
+
+        {err ? <Text style={styles.failText}>{err}</Text> : null}
+
+        <View style={styles.sheetActions}>
+          <Action label="取消" onPress={onCancel} />
+          <Action label={`保存 ${picked.length} 个标签`} tone="primary" onPress={() => onApply(picked)} />
+        </View>
+      </ScrollView>
+    </View>
+  );
+}
+
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   main: { flex: 1 },
   readerWrap: { flex: 1 },
   documentStatus: { ...TYPE.label, color: c.text2, paddingHorizontal: metrics.pagePadding, paddingTop: SPACE.xs, paddingBottom: SPACE.xxs },
+  tagRow: {
+    flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6,
+    paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xs,
+  },
+  docTagChip: { backgroundColor: c.accentBg, borderRadius: R.pill, paddingHorizontal: SPACE.sm, paddingVertical: 2 },
+  docTagChipText: { ...TYPE.caption, color: c.accentText },
+  tagEdit: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: 28, paddingHorizontal: 6 },
+  tagEditText: { ...TYPE.caption, color: c.text2 },
+  tagPickWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs, marginTop: SPACE.sm },
+  chip: { minHeight: 32, paddingHorizontal: SPACE.sm, borderRadius: R.pill, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },
+  chipOn: { backgroundColor: c.accentBg },
+  chipText: { ...TYPE.label, color: c.text2 },
+  chipTextOn: { color: c.accentText, fontWeight: '600' },
+  tagInputRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.sm },
+  tagInput: {
+    flex: 1, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.hairSoft, ...TYPE.compact, color: c.text,
+  },
+  tagAddBtn: {
+    minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center',
+  },
+  tagAddBtnText: { ...TYPE.label, color: c.text },
   stateContent: { flexGrow: 1, padding: SPACE.md },
   stateBox: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: SPACE.xl, gap: SPACE.sm },
   stateTitle: { ...TYPE.heading, color: c.text, textAlign: 'center' },

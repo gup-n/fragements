@@ -103,7 +103,11 @@ test('web 侧四个方法都在，并且用同一个 JS 口径', () => {
   for (const name of ['totalFragments', 'listFragmentsPage', 'dayCounts', 'monthCounts']) {
     assert.ok(web.includes(`async ${name}(`), `web 仓库缺 ${name}（桌面编译校验会挂）`);
   }
-  assert.ok(web.includes('countByMonth(load().fragments)'), '月份分组复用 util/digest.countByMonth，不另写一套');
+  // v0.28 起只数没进回收站的：口径仍是 util/digest.countByMonth 那一份
+  assert.ok(
+    web.includes('countByMonth(liveFragments(load()))'),
+    '月份分组复用 util/digest.countByMonth，且只数没进回收站的',
+  );
   assert.ok(web.includes('dayKey(f.createdAt)'), '天分组复用 util/date.dayKey');
 });
 

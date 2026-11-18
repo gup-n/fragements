@@ -2,6 +2,8 @@ import type { Repo } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
+  DocProposal,
+  DocTag,
   Document,
   DocumentChunk,
   DocumentMeta,
@@ -10,10 +12,14 @@ import type {
   Note,
   QaScope,
   Todo,
+  TrashEntry,
+  TrashKind,
+  TrashRef,
 } from '../types';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
+import { normalizeTagName } from '../util/docTags';
 import { removeImageToken, resolvePendingTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
@@ -37,6 +43,16 @@ interface WebDb {
   documents: Document[];
   /** v0.12：文档切片。web 侧不建 FTS，检索直接扫 text */
   documentChunks: DocumentChunk[];
+  /**
+   * v0.28 回收站。web 侧不像 SQLite 那样有一列 `deleted_at` 可加 ——
+   * 这几个数组本来就存在 localStorage 里，硬塞一个字段等于改公开类型。
+   * 所以只在库里记「谁被删了、什么时候删的」，读取时统一走 `isTrashed`。
+   */
+  trash: { kind: TrashKind; id: number; at: number }[];
+  docTags: DocTag[];
+  /** 文档 ↔ 标签。native 是 `doc_tag_links` 表 */
+  docTagLinks: { documentId: number; tagId: number }[];
+  docProposals: DocProposal[];
 }
 
 function empty(): WebDb {
@@ -49,7 +65,84 @@ function empty(): WebDb {
     askSessions: [],
     documents: [],
     documentChunks: [],
+    trash: [],
+    docTags: [],
+    docTagLinks: [],
+    docProposals: [],
   };
+}
+
+/** 这一条是不是在回收站里。**所有列表查询都要过它**，与 native 的 `deleted_at IS NULL` 同口径 */
+function trashedAt(d: WebDb, kind: TrashKind, id: number): number | null {
+  return d.trash.find((t) => t.kind === kind && t.id === id)?.at ?? null;
+}
+
+function isTrashed(d: WebDb, kind: TrashKind, id: number): boolean {
+  return trashedAt(d, kind, id) !== null;
+}
+
+/** 没进回收站的碎片（含已合并的）。导出与备份要用全量 */
+function liveFragments(d: WebDb): Fragment[] {
+  return d.fragments.filter((f) => !isTrashed(d, 'fragment', f.id));
+}
+
+
+/** 彻底删除一批条目（web 侧）。与 native 的 purgeRefs 同口径 */
+function purgeIn(d: WebDb, keys: Set<string>): string[] {
+  const files: string[] = [];
+  const hit = (kind: TrashKind, id: number) => keys.has(`${kind}:${id}`);
+
+  for (const f of d.fragments) {
+    if (!hit('fragment', f.id)) continue;
+    for (const img of f.images) files.push(img.path);
+  }
+  d.fragments = d.fragments.filter((f) => !hit('fragment', f.id));
+
+  const goneDocs = new Set(d.documents.filter((x) => hit('document', x.id)).map((x) => x.id));
+  for (const doc of d.documents) if (hit('document', doc.id) && doc.fileUri) files.push(doc.fileUri);
+  d.documents = d.documents.filter((x) => !hit('document', x.id));
+  d.documentChunks = d.documentChunks.filter((c) => !goneDocs.has(c.documentId));
+  d.docTagLinks = d.docTagLinks.filter((l) => !goneDocs.has(l.documentId));
+  if (goneDocs.size) {
+    for (const s of d.askSessions) {
+      const ids = (s.documentIds ?? []).filter((id) => !goneDocs.has(id));
+      s.documentIds = ids;
+      s.documentId = ids.length ? ids[0] : null;
+    }
+  }
+
+  d.askSessions = d.askSessions.filter((s) => !hit('ask_session', s.id));
+  d.trash = d.trash.filter((t) => !keys.has(`${t.kind}:${t.id}`));
+  return files;
+}
+
+/** 时间轴上看得见的：没合并、也没进回收站 */
+function active(d: WebDb): Fragment[] {
+  return liveFragments(d).filter((f) => f.mergedInto === null);
+}
+
+function liveDocuments(d: WebDb): Document[] {
+  return d.documents.filter((doc) => !isTrashed(d, 'document', doc.id));
+}
+
+function liveSessions(d: WebDb): AskSession[] {
+  return d.askSessions.filter((s) => !isTrashed(d, 'ask_session', s.id));
+}
+
+/**
+ * 给一批文档补上标签。只取 approved：AI 提的、用户还没点头的不参与分类
+ * （与 native 的 attachDocTags 同口径）。
+ */
+function withTags(d: WebDb, docs: Document[]): Document[] {
+  const byDoc = new Map<number, DocTag[]>();
+  for (const link of d.docTagLinks) {
+    const tag = d.docTags.find((t) => t.id === link.tagId);
+    if (!tag || tag.state !== 'approved') continue;
+    const bucket = byDoc.get(link.documentId) ?? [];
+    bucket.push({ ...tag, count: 0 });
+    byDoc.set(link.documentId, bucket);
+  }
+  return docs.map((doc) => ({ ...doc, tags: byDoc.get(doc.id) ?? [] }));
 }
 
 /** 已完成待办保留上限，与 native 版保持一致 */
@@ -192,9 +285,10 @@ function insertFragmentIn(
   return fragment;
 }
 
-function active(d: WebDb) {
+function activeOld(d: WebDb) {
   return d.fragments.filter((f) => f.mergedInto === null);
 }
+
 
 export const repo: Repo = {
   async init() {
@@ -228,6 +322,9 @@ export const repo: Repo = {
             chunkCount: content.chunks.length,
             contentSource: content.source,
             origin: 'knowledge',
+            originId: null,
+            stage: 'library',
+            tags: [],
             excerpt: doc.excerpt,
             createdAt: now,
             updatedAt: now,
@@ -295,15 +392,15 @@ export const repo: Repo = {
   },
 
   async listAllFragments() {
-    return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+    return [...liveFragments(load())].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
   },
 
   async totalFragments() {
-    return load().fragments.length;
+    return liveFragments(load()).length;
   },
 
   async listFragmentsPage(offset: number, limit: number) {
-    return [...load().fragments]
+    return [...liveFragments(load())]
       .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
       .slice(offset, offset + limit);
   },
@@ -311,7 +408,7 @@ export const repo: Repo = {
   async dayCounts() {
     // 没有 SQL，就在 JS 里数一遍；口径与 native 的 strftime(…,'localtime') 一致
     const buckets = new Map<string, { count: number; chars: number }>();
-    for (const f of load().fragments) {
+    for (const f of liveFragments(load())) {
       const key = dayKey(f.createdAt);
       const row = buckets.get(key) ?? { count: 0, chars: 0 };
       row.count += 1;
@@ -324,11 +421,11 @@ export const repo: Repo = {
   },
 
   async monthCounts() {
-    return countByMonth(load().fragments);
+    return countByMonth(liveFragments(load()));
   },
 
   async listFragments(limit = 500) {
-    return [...load().fragments]
+    return [...liveFragments(load())]
       .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
       .slice(0, limit);
   },
@@ -336,18 +433,18 @@ export const repo: Repo = {
   async findFragmentsByIds(ids) {
     if (!ids.length) return [];
     const want = new Set(ids);
-    return load().fragments.filter((f) => want.has(f.id));
+    return liveFragments(load()).filter((f) => want.has(f.id));
   },
 
   async listFragmentsBetween(from: number, to: number) {
-    return load()
-      .fragments.filter((f) => f.createdAt >= from && f.createdAt < to)
+    return liveFragments(load())
+      .filter((f) => f.createdAt >= from && f.createdAt < to)
       .sort((a, b) => a.createdAt - b.createdAt);
   },
 
   async listFragmentsByIds(ids: number[]) {
     const set = new Set(ids);
-    const byId = new Map(load().fragments.filter((f) => set.has(f.id)).map((f) => [f.id, f]));
+    const byId = new Map(liveFragments(load()).filter((f) => set.has(f.id)).map((f) => [f.id, f]));
     return ids.map((id) => byId.get(id)).filter((f): f is Fragment => !!f);
   },
 
@@ -450,17 +547,17 @@ export const repo: Repo = {
   },
 
   async deleteFragment(id) {
+    // 软删：只记「谁、什么时候」。文件与配图行都不动，30 天内恢复还看得见图。
+    // 并进它的那几条仍然落回未整理 —— 理由同 repo.native.ts
     return writeAtomically((d) => {
-      const gone = d.fragments.find((x) => x.id === id);
-      d.fragments = d.fragments.filter((x) => x.id !== id);
-      // 并进它的那几条落回未整理，否则会变成「指向不存在的 id + status=merged」的孤儿
-      d.fragments.forEach((x) => {
+      d.trash.push({ kind: 'fragment', id, at: Date.now() });
+      for (const x of d.fragments) {
         if (x.mergedInto === id) {
           x.mergedInto = null;
           x.status = 'inbox';
         }
-      });
-      return (gone?.images ?? []).map((i) => i.path);
+      }
+      return [];
     });
   },
 
@@ -707,13 +804,13 @@ export const repo: Repo = {
   },
 
   async listAskSessions(includeArchived = false) {
-    return load()
-      .askSessions.filter((s) => includeArchived || !s.archived)
+    return liveSessions(load())
+      .filter((s) => includeArchived || !s.archived)
       .sort((a, b) => b.updatedAt - a.updatedAt);
   },
 
   async findAskSession(id) {
-    return load().askSessions.find((s) => s.id === id) ?? null;
+    return liveSessions(load()).find((s) => s.id === id) ?? null;
   },
 
   async saveAskSession(input) {
@@ -780,15 +877,15 @@ export const repo: Repo = {
   },
 
   async deleteAskSession(id) {
-    const d = load();
-    d.askSessions = d.askSessions.filter((s) => s.id !== id);
-    persist();
+    writeAtomically((d) => {
+      d.trash.push({ kind: 'ask_session', id, at: Date.now() });
+    });
   },
 
   async listDocuments() {
     // 与 native 一致：列表不返回正文
-    return load()
-      .documents.slice()
+    const d = load();
+    return withTags(d, liveDocuments(d))
       .sort((a, b) => b.updatedAt - a.updatedAt)
       .map(({ bodyMd, ...meta }) => meta as DocumentMeta);
   },
@@ -796,9 +893,8 @@ export const repo: Repo = {
   /** 标题、摘要、正文三处都查；与 native 同一口径，只是这里本来就在内存里 */
   async searchDocuments(query, limit = 50) {
     const q = query.trim().toLowerCase();
-    const all = load()
-      .documents.slice()
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    const db = load();
+    const all = withTags(db, liveDocuments(db)).sort((a, b) => b.updatedAt - a.updatedAt);
     const hit = !q
       ? all
       : all.filter(
@@ -812,8 +908,8 @@ export const repo: Repo = {
 
   async findDocument(id) {
     const d = load();
-    const hit = d.documents.find((x) => x.id === id);
-    return hit ? { ...hit } : null;
+    const hit = liveDocuments(d).find((x) => x.id === id);
+    return hit ? { ...withTags(d, [hit])[0] } : null;
   },
 
   async insertDocument(input) {
@@ -836,6 +932,9 @@ export const repo: Repo = {
       chunkCount: 0,
       contentSource: null,
       origin: input.origin ?? 'file',
+      originId: input.originId ?? null,
+      stage: input.stage ?? 'library',
+      tags: [],
       excerpt: input.excerpt ?? '',
       createdAt: now,
       updatedAt: now,
@@ -848,6 +947,7 @@ export const repo: Repo = {
     const d = load();
     const doc = d.documents.find((x) => x.id === id);
     if (!doc) return;
+    if (patch.name !== undefined) doc.name = patch.name.trim() || '未命名文档';
     if (patch.bodyMd !== undefined) {
       doc.bodyMd = patch.bodyMd;
       doc.charCount = patch.bodyMd.length;
@@ -872,10 +972,10 @@ export const repo: Repo = {
   },
 
   async deleteDocument(id) {
-    const d = load();
-    d.documents = d.documents.filter((x) => x.id !== id);
-    d.documentChunks = d.documentChunks.filter((c) => c.documentId !== id);
-    persist();
+    // 软删：切片留着（可重建的投影），检索路径会按 liveDocuments 过滤掉它
+    writeAtomically((d) => {
+      d.trash.push({ kind: 'document', id, at: Date.now() });
+    });
   },
 
   async replaceDocumentContent(id, content, expectedRevision) {
@@ -924,7 +1024,7 @@ export const repo: Repo = {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
     const d = load();
-    const revisions = new Map(d.documents.map((x) => [x.id, x.contentRevision]));
+    const revisions = new Map(liveDocuments(d).map((x) => [x.id, x.contentRevision]));
     return d.documentChunks
       .filter(
         (c) =>
@@ -933,6 +1033,166 @@ export const repo: Repo = {
           c.text.toLowerCase().includes(needle),
       )
       .slice(0, limit);
+  },
+
+  /* ---------------- 回收站（v0.28） ---------------- */
+
+  async listTrash() {
+    const d = load();
+    const entries: TrashEntry[] = d.trash.map((item) => {
+      const at = item.at;
+      if (item.kind === 'fragment') {
+        const f = d.fragments.find((x) => x.id === item.id);
+        const text = f?.content ?? '';
+        const first = text.split('\n').map((line) => line.trim()).find((line) => !!line) ?? '';
+        return {
+          kind: 'fragment', id: item.id, deletedAt: at,
+          title: first ? (first.length > 60 ? `${first.slice(0, 60)}…` : first) : '（无正文的碎片）',
+          detail: `${text.length} 字`,
+          files: (f?.images ?? []).map((i) => i.path),
+        };
+      }
+      if (item.kind === 'document') {
+        const doc = d.documents.find((x) => x.id === item.id);
+        return {
+          kind: 'document', id: item.id, deletedAt: at,
+          title: (doc?.name ?? '').trim() || '（未命名文档）',
+          detail: (doc?.charCount ?? 0) > 0 ? `${doc!.charCount} 字` : '没有正文',
+          files: doc?.fileUri ? [doc.fileUri] : [],
+        };
+      }
+      const s = d.askSessions.find((x) => x.id === item.id);
+      const turns = s?.turns?.length ?? 0;
+      return {
+        kind: 'ask_session', id: item.id, deletedAt: at,
+        title: (s?.title ?? '').trim() || '（未命名会话）',
+        detail: turns > 0 ? `${turns} 轮对话` : '空会话',
+        files: [],
+      };
+    });
+    return entries.sort((a, b) => b.deletedAt - a.deletedAt || b.id - a.id);
+  },
+
+  async trashCount() {
+    return load().trash.length;
+  },
+
+  async restoreTrash(refs) {
+    if (!refs.length) return 0;
+    return writeAtomically((d) => {
+      const keys = new Set(refs.map((r) => `${r.kind}:${r.id}`));
+      const before = d.trash.length;
+      d.trash = d.trash.filter((t) => !keys.has(`${t.kind}:${t.id}`));
+      return before - d.trash.length;
+    });
+  },
+
+  async purgeTrash(refs) {
+    if (!refs.length) return [];
+    return writeAtomically((d) => purgeIn(d, new Set(refs.map((r) => `${r.kind}:${r.id}`))));
+  },
+
+  async purgeExpiredTrash(before) {
+    return writeAtomically((d) => {
+      const expired = new Set(d.trash.filter((t) => t.at < before).map((t) => `${t.kind}:${t.id}`));
+      return purgeIn(d, expired);
+    });
+  },
+
+  /* ---------------- 文档标签（v0.28，平铺） ---------------- */
+
+  async listDocTags() {
+    const d = load();
+    const counts = new Map<number, number>();
+    for (const link of d.docTagLinks) {
+      const doc = liveDocuments(d).find((x) => x.id === link.documentId);
+      if (!doc || doc.stage !== 'library') continue;
+      counts.set(link.tagId, (counts.get(link.tagId) ?? 0) + 1);
+    }
+    return d.docTags
+      .map((tag) => ({ ...tag, count: counts.get(tag.id) ?? 0 }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, 'zh'));
+  },
+
+  async createDocTag(name, state = 'approved') {
+    const clean = normalizeTagName(name);
+    if (!clean) throw new Error('标签名不能为空');
+    return writeAtomically((d) => {
+      const existing = d.docTags.find((t) => t.name === clean);
+      if (existing) return { ...existing };
+      const tag: DocTag = { id: nextId(d), name: clean, state, createdAt: Date.now(), count: 0 };
+      d.docTags.push(tag);
+      return { ...tag };
+    });
+  },
+
+  async deleteDocTag(id) {
+    writeAtomically((d) => {
+      d.docTags = d.docTags.filter((t) => t.id !== id);
+      d.docTagLinks = d.docTagLinks.filter((l) => l.tagId !== id);
+    });
+  },
+
+  async setDocumentTags(documentId, tagIds) {
+    const want = Array.from(new Set(tagIds.filter((n) => Number.isFinite(n))));
+    writeAtomically((d) => {
+      d.docTagLinks = d.docTagLinks.filter((l) => l.documentId !== documentId || want.includes(l.tagId));
+      for (const tagId of want) {
+        if (!d.docTagLinks.some((l) => l.documentId === documentId && l.tagId === tagId)) {
+          d.docTagLinks.push({ documentId, tagId });
+        }
+      }
+    });
+  },
+
+  async setDocumentStage(id, stage) {
+    writeAtomically((d) => {
+      const doc = d.documents.find((x) => x.id === id);
+      if (doc) {
+        doc.stage = stage;
+        doc.updatedAt = Date.now();
+      }
+    });
+  },
+
+  /* ---------------- AI 提案（v0.28） ---------------- */
+
+  async insertProposal(input) {
+    return writeAtomically((d) => {
+      const id = nextId(d);
+      d.docProposals.push({
+        id,
+        kind: input.kind,
+        documentId: input.documentId,
+        payload: input.payload,
+        state: 'pending',
+        createdAt: Date.now(),
+        decidedAt: null,
+      });
+      return id;
+    });
+  },
+
+  async listProposals(state) {
+    return load()
+      .docProposals.filter((p) => !state || p.state === state)
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((p) => ({ ...p, payload: { ...p.payload } }));
+  },
+
+  async findProposal(id) {
+    const hit = load().docProposals.find((p) => p.id === id);
+    return hit ? { ...hit, payload: { ...hit.payload } } : null;
+  },
+
+  async decideProposal(id, state) {
+    writeAtomically((d) => {
+      const p = d.docProposals.find((x) => x.id === id);
+      if (p) {
+        p.state = state;
+        p.decidedAt = Date.now();
+      }
+    });
   },
 
   async getSetting(key) {
@@ -947,10 +1207,11 @@ export const repo: Repo = {
 
   async stats() {
     const d = load();
+    const live = liveFragments(d);
     return {
-      total: d.fragments.length,
+      total: live.length,
       // 「还没整理」= 从没进过某次整理并落库；口径和 native 版一致
-      pending: d.fragments.filter((f) => f.organizedAt === null && f.mergedInto === null).length,
+      pending: live.filter((f) => f.organizedAt === null && f.mergedInto === null).length,
       // 被合并掉的待办不算「未完成」，和 native 版口径保持一致
       todoOpen: d.todos.filter((t) => !t.done && t.mergedInto === null).length,
     };

@@ -4,6 +4,8 @@ import { parseTags } from './types';
 import { DONE_TODO_KEEP } from '../types';
 import type {
   AskSession,
+  DocProposal,
+  DocTag,
   Document,
   DocumentChunk,
   DocumentContentInput,
@@ -18,8 +20,12 @@ import type {
   QaScope,
   QaTurn,
   Todo,
+  TrashEntry,
+  TrashRef,
 } from '../types';
 import { normalizeQaScope } from '../util/qaScope';
+import { normalizeTagName } from '../util/docTags';
+import { parseProposalPayload, serializeProposalPayload } from '../util/proposal';
 import { planToggle } from '../util/todoTree';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
 import { removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
@@ -357,6 +363,57 @@ const MIGRATIONS: string[] = [
       FROM fragments
      WHERE image_path IS NOT NULL AND image_path <> '';
   `,
+  // v17：回收站、个人文档、平铺标签、AI 提案（v0.28）。
+  //
+  //     回收站**不建 trash 表**，三张表各加一列 `deleted_at`：
+  //     设计稿里提过「payload 存整行 JSON」的方案，但那张表本身就是第二份真相 ——
+  //     恢复时要把关联的图片行、切片行一起搬回来，漏一行就是一条半个碎片。
+  //     加一列之后，「看不见」只有一处判据（`deleted_at IS NULL`），
+  //     恢复就是把它置空，文件也不用挪（磁盘上的配图和原件 30 天内不动）。
+  //
+  //     代价是**所有列表查询都要补这个条件** —— 这是这次改动唯一的系统性风险，
+  //     所以 `scripts/assert_recycle.cjs` 会逐条扫源码把它钉住。
+  //
+  //     文档标签是平铺的（用户 2026-11-18 定）。名字 UNIQUE：
+  //     两个「工作」用户分不出来。`state` 让 AI 提的新标签先挂着等确认。
+  //
+  //     `stage` 只有 library / archived，**没有 draft**：新写的文档自动入库，
+  //     草稿是它默认挂的标签，不是另一块存放区。
+  `
+  ALTER TABLE fragments ADD COLUMN deleted_at INTEGER;
+  ALTER TABLE documents ADD COLUMN deleted_at INTEGER;
+  ALTER TABLE ask_sessions ADD COLUMN deleted_at INTEGER;
+  CREATE INDEX IF NOT EXISTS idx_fragments_live ON fragments(deleted_at, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_documents_live ON documents(deleted_at, updated_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_ask_sessions_live ON ask_sessions(deleted_at, updated_at DESC);
+
+  ALTER TABLE documents ADD COLUMN origin_id INTEGER;
+  ALTER TABLE documents ADD COLUMN stage TEXT NOT NULL DEFAULT 'library';
+
+  CREATE TABLE IF NOT EXISTS doc_tags (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL UNIQUE,
+    state      TEXT    NOT NULL DEFAULT 'approved',
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS doc_tag_links (
+    document_id INTEGER NOT NULL,
+    tag_id      INTEGER NOT NULL,
+    PRIMARY KEY (document_id, tag_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_doc_tag_links_tag ON doc_tag_links(tag_id);
+
+  CREATE TABLE IF NOT EXISTS doc_proposals (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind        TEXT    NOT NULL,
+    document_id INTEGER,
+    payload     TEXT    NOT NULL,
+    state       TEXT    NOT NULL DEFAULT 'pending',
+    created_at  INTEGER NOT NULL,
+    decided_at  INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_doc_proposals_state ON doc_proposals(state, created_at DESC);
+  `,
 ];
 
 function migrate(d: SQLite.SQLiteDatabase) {
@@ -602,6 +659,8 @@ interface DocumentRow {
   chunk_count: number;
   content_source: string | null;
   origin: string | null;
+  origin_id: number | null;
+  stage: string | null;
   excerpt: string | null;
   created_at: number;
   updated_at: number;
@@ -626,6 +685,10 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
     // 迁移前的老行没有这两列（值为 null）：一律当「导入的原件、没有摘要」，
     // 而不是当知识文档 —— 反过来会让所有老文档的卡片都变成空摘要
     origin: (r.origin as DocumentMeta['origin']) ?? 'file',
+    originId: r.origin_id ?? null,
+    stage: (r.stage as DocumentMeta['stage']) ?? 'library',
+    // 标签由 attachDocTags 一次补齐：列表几十篇逐篇查链接就是几十次往返
+    tags: [],
     excerpt: r.excerpt ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -634,6 +697,46 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
 
 function toDocument(r: DocumentRow): Document {
   return { ...toDocumentMeta(r), bodyMd: r.body_md ?? '' };
+}
+
+/**
+ * 给一批文档补上标签（v0.28）。
+ *
+ * 一次 IN 查完再在内存里归组：列表里几十篇逐篇查链接就是几十次往返，
+ * 而文档页每次拿到任务进度都会重读一次列表。
+ *
+ * 只取 `approved`：AI 提的、用户还没点头的标签不该参与分类 ——
+ * 拿它筛会筛出一批用户从没创建过的分类。待确认的标签在文档详情里显示。
+ */
+function attachDocTags(d: SQLite.SQLiteDatabase, metas: DocumentMeta[]): DocumentMeta[] {
+  if (!metas.length) return metas;
+  const byDoc = new Map<number, DocumentMeta['tags']>();
+  const ids = metas.map((m) => m.id);
+  for (let i = 0; i < ids.length; i += 400) {
+    const slice = ids.slice(i, i + 400);
+    const ph = slice.map(() => '?').join(',');
+    const rows = d.getAllSync<{ document_id: number; id: number; name: string; state: string; created_at: number }>(
+      `SELECT l.document_id AS document_id, t.id AS id, t.name AS name,
+              t.state AS state, t.created_at AS created_at
+         FROM doc_tag_links l
+         JOIN doc_tags t ON t.id = l.tag_id
+        WHERE l.document_id IN (${ph}) AND t.state = 'approved'
+        ORDER BY t.name`,
+      slice,
+    );
+    for (const row of rows) {
+      const bucket = byDoc.get(row.document_id) ?? [];
+      bucket.push({
+        id: row.id,
+        name: row.name,
+        state: row.state === 'pending' ? 'pending' : 'approved',
+        createdAt: row.created_at,
+        count: 0,
+      });
+      byDoc.set(row.document_id, bucket);
+    }
+  }
+  return metas.map((meta) => ({ ...meta, tags: byDoc.get(meta.id) ?? [] }));
 }
 
 /** 切片行 → 领域对象。locator_json 坏掉时给一个空定位，不要整条丢弃 */
@@ -687,6 +790,7 @@ function indexFragment(
  * 统一从这里读一遍现状，比让每个调用点自己拼更不容易错。
  */
 function reindexFragment(d: SQLite.SQLiteDatabase, id: number) {
+  /* trash:ok 按 id 读一行，是恢复之后再建索引的唯一入口；这一步必须先能读到已删的行 */
   const row = d.getFirstSync<FragmentRow>('SELECT * FROM fragments WHERE id = ?', [id]);
   if (!row) return;
   indexFragment(d, id, row.content, parseTags(row.tags), row.project, storedImageTexts(d, id));
@@ -703,7 +807,7 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
       const rows = d.getAllSync<FragmentRow>(
         `SELECT f.*, bm25(fragment_fts) AS rank FROM fragment_fts
            JOIN fragments f ON f.id = fragment_fts.rowid
-          WHERE fragment_fts MATCH ? AND f.merged_into IS NULL
+          WHERE fragment_fts MATCH ? AND f.merged_into IS NULL AND f.deleted_at IS NULL
           ORDER BY rank
           LIMIT ?`,
         [match, limit],
@@ -718,7 +822,7 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
   if (!like) return [];
   const rows = d.getAllSync<FragmentRow>(
     `SELECT f.* FROM fragments f
-      WHERE f.merged_into IS NULL
+      WHERE f.merged_into IS NULL AND f.deleted_at IS NULL
         AND (f.content LIKE ? ESCAPE '\\' OR f.project LIKE ? ESCAPE '\\'
           OR EXISTS (SELECT 1 FROM fragment_images i WHERE i.fragment_id = f.id AND i.text LIKE ? ESCAPE '\\'))
       ORDER BY f.created_at DESC, f.id DESC`,
@@ -750,7 +854,7 @@ function rebuildIndex(d: SQLite.SQLiteDatabase): number {
   let indexed = 0;
   for (;;) {
     const rows = d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments ORDER BY id ASC LIMIT 200 OFFSET ?',
+      'SELECT * FROM fragments WHERE deleted_at IS NULL ORDER BY id ASC LIMIT 200 OFFSET ?',
       [offset],
     );
     if (!rows.length) break;
@@ -776,7 +880,9 @@ const SEARCH_PROJECTION_VERSION = '2';
 
 /** 条数与投影版本都一致才可复用；不改变数据库 schema 或历史原文。 */
 function ensureSearchIndex(d: SQLite.SQLiteDatabase) {
-  const total = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments')?.n ?? 0;
+  // 条数只数「在时间轴上看得见的」：回收站里的碎片不进索引，
+  // 用全表条数去比会让每次启动都以为索引缺了东西，白重建一遍
+  const total = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragments WHERE deleted_at IS NULL')?.n ?? 0;
   const indexed = d.getFirstSync<{ n: number }>('SELECT COUNT(*) AS n FROM fragment_fts')?.n ?? 0;
   const projection = d.getFirstSync<{ value: string }>('SELECT value FROM settings WHERE key = ?', [SEARCH_PROJECTION_KEY])?.value;
   if (total !== indexed || projection !== SEARCH_PROJECTION_VERSION) rebuildIndex(d);
@@ -790,6 +896,7 @@ function countOf(d: SQLite.SQLiteDatabase, sql: string, params: (string | number
 function replaceDocumentContentIn(
   d: SQLite.SQLiteDatabase, id: number, content: DocumentContentInput, expectedRevision: number,
 ): boolean {
+  /* trash:ok 按 id 读版本号，写入前必须先看到这一行（含刚恢复的） */
   const cur = d.getFirstSync<{ content_revision: number }>(
     'SELECT content_revision FROM documents WHERE id = ?', [id],
   );
@@ -815,6 +922,135 @@ function replaceDocumentContentIn(
     ]);
   });
   return true;
+}
+
+/**
+ * 彻底删除一批条目。**唯一不可逆的一段**，恢复不走这里。
+ *
+ * 调用方已经开好事务（`purgeTrash` 与 `purgeExpiredTrash` 共用这一份）：
+ * 两处各写一遍的话，30 天自动清掉的那些迟早会漏删切片或配图行。
+ *
+ * 返回要删的文件名。repo 不碰文件系统 —— 删文件失败不该让数据库回滚。
+ */
+function purgeRefs(d: SQLite.SQLiteDatabase, refs: TrashRef[]): string[] {
+  const files: string[] = [];
+  const idsOf = (kind: TrashRef['kind']) =>
+    refs.filter((r) => r.kind === kind).map((r) => r.id).filter((n) => Number.isFinite(n));
+
+  for (let i = 0, list = idsOf('fragment'); i < list.length; i += 400) {
+    const slice = list.slice(i, i + 400);
+    const ph = slice.map(() => '?').join(',');
+    for (const row of d.getAllSync<{ path: string }>(
+      `SELECT path FROM fragment_images WHERE fragment_id IN (${ph})`,
+      slice,
+    )) files.push(row.path);
+    d.runSync(`DELETE FROM fragment_images WHERE fragment_id IN (${ph})`, slice);
+    for (const id of slice) d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
+    d.runSync(`DELETE FROM fragments WHERE id IN (${ph})`, slice);
+  }
+
+  const docIds = idsOf('document');
+  for (const id of docIds) {
+    // 切片与 FTS 一起删：只删主记录会留下孤儿切片，
+    // searchDocumentChunks 明明限定了 documentIds 却仍能搜到已删文档的段落
+    for (const row of d.getAllSync<{ id: number }>('SELECT id FROM document_chunks WHERE document_id = ?', [id])) {
+      d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
+    }
+    d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
+    /* trash:ok 真删的时候才取原件路径，这一行读的正是要删的那条 */
+    const uri = d.getFirstSync<{ file_uri: string | null }>('SELECT file_uri FROM documents WHERE id = ?', [id])?.file_uri;
+    if (uri) files.push(uri);
+    d.runSync('DELETE FROM doc_tag_links WHERE document_id = ?', [id]);
+    d.runSync('DELETE FROM documents WHERE id = ?', [id]);
+  }
+  if (docIds.length) detachSessionsFromDocs(d, docIds);
+
+  const sessionIds = idsOf('ask_session');
+  for (let i = 0; i < sessionIds.length; i += 400) {
+    const slice = sessionIds.slice(i, i + 400);
+    const ph = slice.map(() => '?').join(',');
+    d.runSync(`DELETE FROM ask_sessions WHERE id IN (${ph})`, slice);
+  }
+  return files;
+}
+
+/**
+ * 一篇（或几篇）文档被删了，会话上指向它们的 id 要摘掉。
+ *
+ * 只清 `document_id` 的话，一次整理三篇、其中一篇被删，徽标还会说「3 篇」，
+ * 点进去有一篇打不开。摘完一篇不剩就把两列一起置空。
+ *
+ * 回收站的软删**不**调它：文档还在库里，恢复之后会话徽标应该照旧。
+ * 只有 `purgeRefs`（真删）才需要把关联打断。
+ */
+function detachSessionsFromDocs(d: SQLite.SQLiteDatabase, documentIds: number[]) {
+  const gone = new Set(documentIds);
+  /* trash:ok 回收站里的会话同样要摘掉指向已删文档的 id，不能只处理在用的那些 */
+  const rows = d.getAllSync<{ id: number; document_ids: string | null }>(
+    'SELECT id, document_ids FROM ask_sessions WHERE document_ids IS NOT NULL',
+  );
+  for (const row of rows) {
+    const ids = parseJson(row.document_ids, []);
+    if (!Array.isArray(ids) || !ids.some((x) => typeof x === 'number' && gone.has(x))) continue;
+    const next = ids.filter((x): x is number => typeof x === 'number' && !gone.has(x));
+    d.runSync('UPDATE ask_sessions SET document_id = ?, document_ids = ? WHERE id = ?', [
+      next.length ? next[0] : null,
+      next.length ? JSON.stringify(next) : null,
+      row.id,
+    ]);
+  }
+  for (const id of documentIds) {
+    d.runSync('UPDATE ask_sessions SET document_id = NULL WHERE document_id = ?', [id]);
+  }
+}
+
+/** 回收站里那一行标题：碎片取第一行，其余用原标题 */function trashTitle(kind: TrashRef['kind'], raw: string, extra: string): string {
+  if (kind === 'fragment') {
+    const first = raw.split('\n').map((line) => line.trim()).find((line) => !!line) ?? '';
+    const flat = first.replace(/\s+/g, ' ');
+    return flat ? (flat.length > 60 ? `${flat.slice(0, 60)}…` : flat) : '（无正文的碎片）';
+  }
+  const text = raw.trim();
+  if (text) return text;
+  return kind === 'document' ? '（未命名文档）' : '（未命名会话）';
+}
+
+function trashDetail(kind: TrashRef['kind'], num: number, turns: number): string {
+  if (kind === 'fragment') return `${num} 字`;
+  if (kind === 'document') return num > 0 ? `${num} 字` : '没有正文';
+  return turns > 0 ? `${turns} 轮对话` : '空会话';
+}
+
+function toDocTag(row: { id: number; name: string; state: string; created_at: number; n?: number }): DocTag {
+  return {
+    id: row.id,
+    name: row.name,
+    state: row.state === 'pending' ? 'pending' : 'approved',
+    createdAt: row.created_at,
+    count: row.n ?? 0,
+  };
+}
+
+interface ProposalRow {
+  id: number;
+  kind: string;
+  document_id: number | null;
+  payload: string;
+  state: string;
+  created_at: number;
+  decided_at: number | null;
+}
+
+function toProposal(r: ProposalRow): DocProposal {
+  return {
+    id: r.id,
+    kind: (['optimize', 'tag', 'retag', 'batch'].includes(r.kind) ? r.kind : 'optimize') as DocProposal['kind'],
+    documentId: r.document_id,
+    payload: parseProposalPayload(r.payload),
+    state: r.state === 'approved' || r.state === 'rejected' ? r.state : 'pending',
+    createdAt: r.created_at,
+    decidedAt: r.decided_at,
+  };
 }
 
 export const repo: Repo = {
@@ -867,6 +1103,7 @@ export const repo: Repo = {
           d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids]);
         }
         if (input.sessionId !== null) {
+          /* trash:ok 按 id 读会话；下面那句注释说的就是「已删的会话不能被迟到的提交复活」 */
           const session = d.getFirstSync<{ document_id: number | null; document_ids: string | null; source_ids: string | null }>(
             'SELECT document_id, document_ids, source_ids FROM ask_sessions WHERE id = ?', [input.sessionId],
           );
@@ -875,7 +1112,9 @@ export const repo: Repo = {
             const ids = positiveIds([
               ...positiveIds(parseJson(session.document_ids, [])), session.document_id,
               ...receipt.documents.map((doc) => doc.id),
-            ]).filter((id) => !!d.getFirstSync('SELECT id FROM documents WHERE id = ?', [id]));
+            ]).filter((id) => !!d.getFirstSync(
+              'SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL', [id],
+            ));
             const sources = positiveIds([...positiveIds(parseJson(session.source_ids, [])), ...sourceIds]);
             if (ids.length) {
               d.runSync('UPDATE ask_sessions SET document_id = ?, document_ids = ?, source_ids = ? WHERE id = ?',
@@ -895,18 +1134,18 @@ export const repo: Repo = {
   async listAllFragments() {
     const d = db();
     return attachImages(d, d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC',
+      'SELECT * FROM fragments WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC',
     ).map(toFragment));
   },
 
   async totalFragments() {
-    return countOf(db(), 'SELECT COUNT(*) AS n FROM fragments');
+    return countOf(db(), 'SELECT COUNT(*) AS n FROM fragments WHERE deleted_at IS NULL');
   },
 
   async listFragmentsPage(offset, limit) {
     const d = db();
     const rows = d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',
+      'SELECT * FROM fragments WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',
       [limit, offset],
     );
     return attachImages(d, rows.map(toFragment));
@@ -929,6 +1168,7 @@ export const repo: Repo = {
               COUNT(*) AS n,
               SUM(LENGTH(content)) AS c
          FROM fragments
+        WHERE deleted_at IS NULL
         GROUP BY day
         ORDER BY day`,
     );
@@ -940,6 +1180,7 @@ export const repo: Repo = {
       `SELECT strftime('%Y-%m', created_at / 1000, 'unixepoch', 'localtime') AS month,
               COUNT(*) AS n
          FROM fragments
+        WHERE deleted_at IS NULL
         GROUP BY month
         ORDER BY month DESC`,
     );
@@ -949,7 +1190,7 @@ export const repo: Repo = {
   async listFragments(limit = 500) {
     const d = db();
     const rows = d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC LIMIT ?',
+      'SELECT * FROM fragments WHERE deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT ?',
       [limit],
     );
     return attachImages(d, rows.map(toFragment));
@@ -961,7 +1202,7 @@ export const repo: Repo = {
     // 一次查完：ids 是「当初那批」，可能几十条，逐条查就是几十次往返
     const marks = ids.map(() => '?').join(',');
     const rows = d.getAllSync<FragmentRow>(
-      `SELECT * FROM fragments WHERE id IN (${marks})`,
+      `SELECT * FROM fragments WHERE id IN (${marks}) AND deleted_at IS NULL`,
       ids,
     );
     return attachImages(d, rows.map(toFragment));
@@ -970,7 +1211,7 @@ export const repo: Repo = {
   async listFragmentsBetween(from, to) {
     const d = db();
     const rows = d.getAllSync<FragmentRow>(
-      'SELECT * FROM fragments WHERE created_at >= ? AND created_at < ? ORDER BY created_at ASC',
+      'SELECT * FROM fragments WHERE created_at >= ? AND created_at < ? AND deleted_at IS NULL ORDER BY created_at ASC',
       [from, to],
     );
     return attachImages(d, rows.map(toFragment));
@@ -987,7 +1228,7 @@ export const repo: Repo = {
       const slice = list.slice(i, i + CHUNK);
       const ph = slice.map(() => '?').join(',');
       const rows = db().getAllSync<FragmentRow>(
-        `SELECT * FROM fragments WHERE id IN (${ph})`,
+        `SELECT * FROM fragments WHERE id IN (${ph}) AND deleted_at IS NULL`,
         slice,
       );
       for (const r of rows) byId.set(r.id, toFragment(r));
@@ -1052,6 +1293,7 @@ export const repo: Repo = {
     const d = db();
     const added: FragmentImage[] = [];
     d.withTransactionSync(() => {
+      /* trash:ok 按 id 读，判断这条碎片还在不在（加图要先确认它还活着） */
       if (!d.getFirstSync('SELECT id FROM fragments WHERE id = ?', [fragmentId])) throw new Error('这条碎片已经不存在');
       const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragment_images WHERE fragment_id = ?', [fragmentId]);
       if (total + images.length > 9 || images.some((img) => !img.path)) throw new Error('一条碎片最多9张有效配图');
@@ -1095,6 +1337,7 @@ export const repo: Repo = {
         'SELECT fragment_id, path FROM fragment_images WHERE id = ?', [imageId],
       );
       if (!mine) return;
+      /* trash:ok 按 id 读，删一张图要顺带把正文里的图片占位符去掉 */
       const fragment = d.getFirstSync<{ content: string }>('SELECT content FROM fragments WHERE id = ?', [mine.fragment_id]);
       d.runSync('DELETE FROM fragment_images WHERE id = ?', [imageId]);
       if (fragment) d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [removeImageToken(fragment.content, imageId), mine.fragment_id]);
@@ -1124,31 +1367,32 @@ export const repo: Repo = {
     }
   },
 
+  /*
+   * 删除 = 移到回收站（v0.28）。
+   *
+   * 不再删行、不再删文件：
+   * - 行留着，「恢复」就是 `deleted_at = NULL`；
+   * - 配图文件留着，30 天内恢复还看得见图；真删发生在 `purgeTrash`。
+   *
+   * 索引行要删：FTS 是投影，留着会让「索引条数 = 碎片条数」这条自检永远不等，
+   * 每次启动都白重建一遍。恢复时用 `reindexFragment` 补回来。
+   *
+   * 并进它的那几条仍然落回未整理：软删之后它们指向的目标虽然还在库里，
+   * 但已经不在时间轴上 —— 留着 `merged_into` 就是「看不见、也没法重新整理」。
+   * 这一条与恢复不冲突：恢复回来的是这条碎片本身，合并关系不回来。
+   */
   async deleteFragment(id) {
     const d = db();
-    // 先取配图名：删完这些行就再也查不到文件在哪了，图会永远占着空间
-    const paths = d
-      .getAllSync<{ path: string }>('SELECT path FROM fragment_images WHERE fragment_id = ?', [id])
-      .map((r) => r.path);
-    d.execSync('BEGIN');
-    try {
-      d.runSync('DELETE FROM fragment_images WHERE fragment_id = ?', [id]);
+    d.withTransactionSync(() => {
       d.runSync('DELETE FROM fragment_fts WHERE rowid = ?', [id]);
-      d.runSync('DELETE FROM fragments WHERE id = ?', [id]);
-      /*
-       * 原来并进它的那几条落回未整理 —— 留着 merged_into 指向一个不存在的 id，
-       * 再加 status='merged'，它们就既不在时间轴上、也不会被重新整理，等于凭空消失
-       */
+      d.runSync('UPDATE fragments SET deleted_at = ? WHERE id = ?', [Date.now(), id]);
       d.runSync(
         "UPDATE fragments SET merged_into = NULL, status = 'inbox' WHERE merged_into = ?",
         [id],
       );
-      d.execSync('COMMIT');
-    } catch (e) {
-      d.execSync('ROLLBACK');
-      throw e;
-    }
-    return paths;
+    });
+    // 软删不动磁盘上的配图，调用方不需要删任何文件
+    return [];
   },
 
   async applyTags(id, labels, project) {
@@ -1173,7 +1417,7 @@ export const repo: Repo = {
     const d = db();
     return {
       indexed: countOf(d, 'SELECT COUNT(*) AS n FROM fragment_fts'),
-      total: countOf(d, 'SELECT COUNT(*) AS n FROM fragments'),
+      total: countOf(d, 'SELECT COUNT(*) AS n FROM fragments WHERE deleted_at IS NULL'),
     };
   },
 
@@ -1182,7 +1426,7 @@ export const repo: Repo = {
     // 只抽够长的碎片：太短的话取不出两段，测了也说明不了什么
     const rows = d.getAllSync<{ id: number; content: string }>(
       `SELECT id, content FROM fragments
-        WHERE merged_into IS NULL AND length(content) >= 14
+        WHERE merged_into IS NULL AND deleted_at IS NULL AND length(content) >= 14
         ORDER BY id DESC LIMIT ?`,
       [samples],
     );
@@ -1404,16 +1648,19 @@ export const repo: Repo = {
   async listAskSessions(includeArchived = false) {
     const rows = includeArchived
       ? db().getAllSync<AskSessionRow>(
-          'SELECT * FROM ask_sessions ORDER BY updated_at DESC',
+          'SELECT * FROM ask_sessions WHERE deleted_at IS NULL ORDER BY updated_at DESC',
         )
       : db().getAllSync<AskSessionRow>(
-          'SELECT * FROM ask_sessions WHERE archived = 0 ORDER BY updated_at DESC',
+          'SELECT * FROM ask_sessions WHERE archived = 0 AND deleted_at IS NULL ORDER BY updated_at DESC',
         );
     return rows.map(toAskSession);
   },
 
   async findAskSession(id) {
-    const row = db().getFirstSync<AskSessionRow>('SELECT * FROM ask_sessions WHERE id = ?', [id]);
+    const row = db().getFirstSync<AskSessionRow>(
+      'SELECT * FROM ask_sessions WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
     return row ? toAskSession(row) : null;
   },
 
@@ -1487,8 +1734,9 @@ export const repo: Repo = {
     );
   },
 
+  /** 删除会话 = 进回收站（v0.28）。轮次全文都还在，30 天内恢复就是原样 */
   async deleteAskSession(id) {
-    db().runSync('DELETE FROM ask_sessions WHERE id = ?', [id]);
+    db().runSync('UPDATE ask_sessions SET deleted_at = ? WHERE id = ?', [Date.now(), id]);
   },
 
   async listDocuments() {
@@ -1496,10 +1744,10 @@ export const repo: Repo = {
     const rows = db().getAllSync<DocumentRow>(
       `SELECT id, name, ext, size, file_uri, pages, char_count, state, error,
               content_revision, indexed_revision, chunk_count, content_source,
-              origin, excerpt, created_at, updated_at
-         FROM documents ORDER BY updated_at DESC`,
+              origin, origin_id, stage, excerpt, created_at, updated_at
+         FROM documents WHERE deleted_at IS NULL ORDER BY updated_at DESC`,
     );
-    return rows.map((r) => toDocumentMeta(r));
+    return attachDocTags(db(), rows.map((r) => toDocumentMeta(r)));
   },
 
   /**
@@ -1514,41 +1762,46 @@ export const repo: Repo = {
     const q = query.trim();
     const cols = `id, name, ext, size, file_uri, pages, char_count, state, error,
               content_revision, indexed_revision, chunk_count, content_source,
-              origin, excerpt, created_at, updated_at`;
+              origin, origin_id, stage, excerpt, created_at, updated_at`;
     // 空查询不与 LIKE '%%' 混在一起：那样索引用不上，几万篇文档时会明显卡
     if (!q) {
-      return db()
+      const all = db()
         .getAllSync<DocumentRow>(
-          `SELECT ${cols} FROM documents ORDER BY updated_at DESC LIMIT ?`,
+          `SELECT ${cols} FROM documents WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT ?`,
           [limit],
         )
         .map((r) => toDocumentMeta(r));
+      return attachDocTags(db(), all);
     }
     const like = `%${q.replace(/[%_]/g, (m) => `\\${m}`)}%`;
     const rows = db().getAllSync<DocumentRow>(
-      `SELECT id, name, ext, size, file_uri, pages, char_count, state, error,
-              content_revision, indexed_revision, chunk_count, content_source,
-              origin, excerpt, created_at, updated_at
+      `SELECT ${cols}
          FROM documents
-        WHERE name LIKE ? ESCAPE '\\' OR excerpt LIKE ? ESCAPE '\\' OR body_md LIKE ? ESCAPE '\\'
+        WHERE deleted_at IS NULL
+          AND (name LIKE ? ESCAPE '\\' OR excerpt LIKE ? ESCAPE '\\' OR body_md LIKE ? ESCAPE '\\')
         ORDER BY updated_at DESC
         LIMIT ?`,
       [like, like, like, limit],
     );
-    return rows.map((r) => toDocumentMeta(r));
+    return attachDocTags(db(), rows.map((r) => toDocumentMeta(r)));
   },
 
   async findDocument(id) {
-    const row = db().getFirstSync<DocumentRow>('SELECT * FROM documents WHERE id = ?', [id]);
-    return row ? toDocument(row) : null;
+    const row = db().getFirstSync<DocumentRow>(
+      'SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL',
+      [id],
+    );
+    if (!row) return null;
+    const meta = attachDocTags(db(), [toDocumentMeta(row)])[0];
+    return { ...meta, bodyMd: row.body_md ?? '' };
   },
 
   async insertDocument(input) {
     const now = Date.now();
     const res = db().runSync(
       `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error,
-                              origin, excerpt, created_at, updated_at)
-       VALUES (?, ?, ?, ?, '', NULL, 0, ?, NULL, ?, ?, ?, ?)`,
+                              origin, origin_id, stage, excerpt, created_at, updated_at)
+       VALUES (?, ?, ?, ?, '', NULL, 0, ?, NULL, ?, ?, ?, ?, ?, ?)`,
       [
         input.name,
         input.ext,
@@ -1556,6 +1809,8 @@ export const repo: Repo = {
         input.fileUri,
         input.state,
         input.origin ?? 'file',
+        input.originId ?? null,
+        input.stage ?? 'library',
         input.excerpt ?? '',
         now,
         now,
@@ -1567,6 +1822,10 @@ export const repo: Repo = {
   async updateDocument(id, patch) {
     const sets: string[] = [];
     const params: (string | number | null)[] = [];
+    if (patch.name !== undefined) {
+      sets.push('name = ?');
+      params.push(patch.name.trim() || '未命名文档');
+    }
     if (patch.bodyMd !== undefined) {
       sets.push('body_md = ?', 'char_count = ?');
       params.push(patch.bodyMd, patch.bodyMd.length);
@@ -1594,43 +1853,221 @@ export const repo: Repo = {
   },
 
   async clearAskSessionDocuments(documentId) {
-    /*
-     * 一篇文档被删了，会话上的 document_ids 里也要把它摘掉 ——
-     * 只清 document_id 的话，一篇三篇里有文档被删，徽标还会说「3 篇」，
-     * 点进去有一篇打不开。摘完一篇不剩就把两列一起置空。
-     */
-    const rows = db().getAllSync<{ id: number; document_ids: string | null }>(
-      'SELECT id, document_ids FROM ask_sessions WHERE document_ids IS NOT NULL',
-    );
-    for (const row of rows) {
-      const ids = parseJson(row.document_ids, []);
-      if (!Array.isArray(ids) || !ids.includes(documentId)) continue;
-      const next = ids.filter((x): x is number => typeof x === 'number' && x !== documentId);
-      db().runSync('UPDATE ask_sessions SET document_id = ?, document_ids = ? WHERE id = ?', [
-        next.length ? next[0] : null,
-        next.length ? JSON.stringify(next) : null,
-        row.id,
-      ]);
-    }
-    db().runSync('UPDATE ask_sessions SET document_id = NULL WHERE document_id = ?', [documentId]);
+    detachSessionsFromDocs(db(), [documentId]);
   },
 
+  /*
+   * 删除 = 移到回收站（v0.28）。切片与 FTS **留着**：
+   * 它们是可重建的投影，留着恢复之后立刻能问；而检索时那条 SQL 会 join
+   * `documents` 并加上 `deleted_at IS NULL`，所以回收站里的文档搜不出来。
+   * 真删（含切片与原件文件）在 `purgeTrash`。
+   */
   async deleteDocument(id) {
-    // 切片和 FTS 必须一起删：只删主记录会留下孤儿切片，
-    // searchDocumentChunks 明明限定了 documentIds 却仍能搜到已删文档的段落。
-    // 放在一个事务里，避免删一半中断后留下不一致。
+    db().runSync('UPDATE documents SET deleted_at = ? WHERE id = ?', [Date.now(), id]);
+  },
+
+  /* ---------------- 回收站（v0.28） ---------------- */
+
+  async listTrash() {
+    const d = db();
+    const rows = d.getAllSync<{
+      kind: string; id: number; deleted_at: number; title: string | null; num: number | null; extra: string | null;
+    }>(
+      // 三类混在一起查，因为它们对用户来说是同一件事：「我刚删的、还没彻底没」。
+      // 三条分别查再拼，排序就得在 JS 里再做一遍，而且「最近删的那条」会算错。
+      `SELECT 'fragment' AS kind, id AS id, deleted_at AS deleted_at,
+              substr(content, 1, 200) AS title, length(content) AS num, '' AS extra
+         FROM fragments WHERE deleted_at IS NOT NULL
+       UNION ALL
+       SELECT 'document', id, deleted_at, name, char_count, COALESCE(file_uri, '')
+         FROM documents WHERE deleted_at IS NOT NULL
+       UNION ALL
+       SELECT 'ask_session', id, deleted_at, COALESCE(title, ''), length(turns_json), turns_json
+         FROM ask_sessions WHERE deleted_at IS NOT NULL
+       ORDER BY deleted_at DESC, id DESC`,
+    );
+    if (!rows.length) return [];
+
+    // 彻底删除时要一起删的文件。恢复不需要它们 —— 软删没动过磁盘
+    const imageFiles = new Map<number, string[]>();
+    const fragmentIds = rows.filter((r) => r.kind === 'fragment').map((r) => r.id);
+    for (let i = 0; i < fragmentIds.length; i += 400) {
+      const slice = fragmentIds.slice(i, i + 400);
+      const ph = slice.map(() => '?').join(',');
+      for (const row of d.getAllSync<{ fragment_id: number; path: string }>(
+        `SELECT fragment_id, path FROM fragment_images WHERE fragment_id IN (${ph})`,
+        slice,
+      )) {
+        const bucket = imageFiles.get(row.fragment_id) ?? [];
+        bucket.push(row.path);
+        imageFiles.set(row.fragment_id, bucket);
+      }
+    }
+
+    return rows.map((row): TrashEntry => {
+      const kind = (row.kind === 'document' ? 'document' : row.kind === 'ask_session' ? 'ask_session' : 'fragment');
+      const extra = row.extra ?? '';
+      const parsed = parseJson(extra, []);
+      const turns = kind === 'ask_session' && Array.isArray(parsed) ? parsed.length : 0;
+      return {
+        kind,
+        id: row.id,
+        title: trashTitle(kind, row.title ?? '', extra),
+        detail: trashDetail(kind, row.num ?? 0, turns),
+        deletedAt: row.deleted_at,
+        files: kind === 'fragment' ? imageFiles.get(row.id) ?? [] : kind === 'document' && extra ? [extra] : [],
+      };
+    });
+  },
+
+  async trashCount() {
+    const d = db();
+    // trash:ok 这三个数就是回收站里的条数，本来就要数 deleted_at 非空的
+    return countOf(d, `SELECT (SELECT COUNT(*) FROM fragments WHERE deleted_at IS NOT NULL)
+        + (SELECT COUNT(*) FROM documents WHERE deleted_at IS NOT NULL)
+        + (SELECT COUNT(*) FROM ask_sessions WHERE deleted_at IS NOT NULL) AS n`);
+  },
+
+  async restoreTrash(refs) {
+    if (!refs.length) return 0;
+    const d = db();
+    let restored = 0;
+    d.withTransactionSync(() => {
+      for (const [kind, table] of [
+        ['fragment', 'fragments'],
+        ['document', 'documents'],
+        ['ask_session', 'ask_sessions'],
+      ] as const) {
+        const ids = refs.filter((r) => r.kind === kind).map((r) => r.id).filter((n) => Number.isFinite(n));
+        for (let i = 0; i < ids.length; i += 400) {
+          const slice = ids.slice(i, i + 400);
+          const ph = slice.map(() => '?').join(',');
+          // trash:ok 恢复的动作就是把 deleted_at 置空，条件必须是「非空」才叫恢复
+          const res = d.runSync(
+            `UPDATE ${table} SET deleted_at = NULL WHERE id IN (${ph}) AND deleted_at IS NOT NULL`,
+            slice,
+          );
+          restored += res.changes;
+          // 软删时删掉了索引行，恢复要补回来，否则搜不到刚找回的内容
+          if (kind === 'fragment') for (const id of slice) reindexFragment(d, id);
+        }
+      }
+    });
+    return restored;
+  },
+
+  async purgeTrash(refs) {
+    if (!refs.length) return [];
+    const d = db();
+    let files: string[] = [];
+    d.withTransactionSync(() => { files = purgeRefs(d, refs); });
+    return files;
+  },
+
+  async purgeExpiredTrash(before) {
+    const d = db();
+    const refs = d.getAllSync<TrashRef>(
+      `SELECT 'fragment' AS kind, id FROM fragments WHERE deleted_at IS NOT NULL AND deleted_at < ?
+       UNION ALL SELECT 'document', id FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < ?
+       UNION ALL SELECT 'ask_session', id FROM ask_sessions WHERE deleted_at IS NOT NULL AND deleted_at < ?`,
+      [before, before, before],
+    );
+    if (!refs.length) return [];
+    let files: string[] = [];
+    d.withTransactionSync(() => { files = purgeRefs(d, refs); });
+    return files;
+  },
+
+  /* ---------------- 文档标签（v0.28，平铺） ---------------- */
+
+  async listDocTags() {
+    /*
+     * count 只数「在库里」的文档：归档的与回收站里的不算。
+     * 否则一个标签会永远挂着 3，点进去只有 1 篇，用户会以为内容丢了。
+     */
+    const rows = db().getAllSync<{ id: number; name: string; state: string; created_at: number; n: number }>(
+      `SELECT t.id AS id, t.name AS name, t.state AS state, t.created_at AS created_at,
+              (SELECT COUNT(*) FROM doc_tag_links l
+                 JOIN documents d ON d.id = l.document_id
+                WHERE l.tag_id = t.id AND d.deleted_at IS NULL AND d.stage = 'library') AS n
+         FROM doc_tags t
+        ORDER BY n DESC, t.name`,
+    );
+    return rows.map(toDocTag);
+  },
+
+  async createDocTag(name, state = 'approved') {
+    const clean = normalizeTagName(name);
+    if (!clean) throw new Error('标签名不能为空');
+    const d = db();
+    const existing = d.getFirstSync<{ id: number; name: string; state: string; created_at: number }>(
+      'SELECT id, name, state, created_at FROM doc_tags WHERE name = ?',
+      [clean],
+    );
+    // 重名直接把已有那条返回：用户第二次输入「工作」要的就是那个「工作」
+    if (existing) return toDocTag({ ...existing, n: 0 });
+    const res = d.runSync(
+      'INSERT INTO doc_tags (name, state, created_at) VALUES (?, ?, ?)',
+      [clean, state, Date.now()],
+    );
+    return { id: Number(res.lastInsertRowId), name: clean, state, createdAt: Date.now(), count: 0 };
+  },
+
+  async deleteDocTag(id) {
     const d = db();
     d.withTransactionSync(() => {
-      const ids = d.getAllSync<{ id: number }>(
-        'SELECT id FROM document_chunks WHERE document_id = ?',
-        [id],
-      );
-      for (const row of ids) {
-        d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
-      }
-      d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
-      d.runSync('DELETE FROM documents WHERE id = ?', [id]);
+      d.runSync('DELETE FROM doc_tag_links WHERE tag_id = ?', [id]);
+      d.runSync('DELETE FROM doc_tags WHERE id = ?', [id]);
     });
+  },
+
+  async setDocumentTags(documentId, tagIds) {
+    const d = db();
+    const want = Array.from(new Set(tagIds.filter((n) => Number.isFinite(n))));
+    d.withTransactionSync(() => {
+      const have = d.getAllSync<{ tag_id: number }>(
+        'SELECT tag_id FROM doc_tag_links WHERE document_id = ?',
+        [documentId],
+      ).map((r) => r.tag_id);
+      const keep = new Set(want);
+      for (const tagId of have) {
+        if (!keep.has(tagId)) d.runSync('DELETE FROM doc_tag_links WHERE document_id = ? AND tag_id = ?', [documentId, tagId]);
+      }
+      for (const tagId of want) {
+        if (have.includes(tagId)) continue;
+        d.runSync('INSERT OR IGNORE INTO doc_tag_links (document_id, tag_id) VALUES (?, ?)', [documentId, tagId]);
+      }
+    });
+  },
+
+  async setDocumentStage(id, stage) {
+    db().runSync('UPDATE documents SET stage = ?, updated_at = ? WHERE id = ?', [stage, Date.now(), id]);
+  },
+
+  /* ---------------- AI 提案（v0.28） ---------------- */
+
+  async insertProposal(input) {
+    const res = db().runSync(
+      'INSERT INTO doc_proposals (kind, document_id, payload, state, created_at) VALUES (?, ?, ?, ?, ?)',
+      [input.kind, input.documentId, serializeProposalPayload(input.payload), 'pending', Date.now()],
+    );
+    return Number(res.lastInsertRowId);
+  },
+
+  async listProposals(state) {
+    const rows = state
+      ? db().getAllSync<ProposalRow>('SELECT * FROM doc_proposals WHERE state = ? ORDER BY created_at DESC', [state])
+      : db().getAllSync<ProposalRow>('SELECT * FROM doc_proposals ORDER BY created_at DESC');
+    return rows.map(toProposal);
+  },
+
+  async findProposal(id) {
+    const row = db().getFirstSync<ProposalRow>('SELECT * FROM doc_proposals WHERE id = ?', [id]);
+    return row ? toProposal(row) : null;
+  },
+
+  async decideProposal(id, state) {
+    db().runSync('UPDATE doc_proposals SET state = ?, decided_at = ? WHERE id = ?', [state, Date.now(), id]);
   },
 
   async replaceDocumentContent(id, content, expectedRevision) {
@@ -1652,7 +2089,7 @@ export const repo: Repo = {
       `SELECT c.* FROM document_chunks c
          JOIN documents d
            ON d.id = c.document_id AND d.content_revision = c.content_revision
-        WHERE c.document_id = ?
+        WHERE c.document_id = ? AND d.deleted_at IS NULL
         ORDER BY c.ordinal ASC`,
       [documentId],
     );
@@ -1682,6 +2119,7 @@ export const repo: Repo = {
                ON d.id = c.document_id AND d.content_revision = c.content_revision
             WHERE document_chunks_fts MATCH ?
               AND c.document_id IN (${ids})
+              AND d.deleted_at IS NULL
             ORDER BY rank
             LIMIT ?`,
           [match, limit],
@@ -1705,7 +2143,7 @@ export const repo: Repo = {
       `SELECT c.* FROM document_chunks c
          JOIN documents d
            ON d.id = c.document_id AND d.content_revision = c.content_revision
-        WHERE c.document_id IN (${ids}) AND c.text LIKE ? ESCAPE '\\'
+        WHERE c.document_id IN (${ids}) AND c.text LIKE ? ESCAPE '\\' AND d.deleted_at IS NULL
         ORDER BY c.document_id, c.ordinal
         LIMIT ?`,
       [like, limit],
@@ -1727,11 +2165,12 @@ export const repo: Repo = {
 
   async stats() {
     const d = db();
-    const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragments');
+    // 回收站里的不算数：设置页那个「总条数」要和时间轴上数得出来的对得上
+    const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragments WHERE deleted_at IS NULL');
     // 「还没整理」= 从没进过某次整理并落库。不是 status：v0.7 之后没人改它了
     const pending = countOf(
       d,
-      'SELECT COUNT(*) AS n FROM fragments WHERE organized_at IS NULL AND merged_into IS NULL',
+      'SELECT COUNT(*) AS n FROM fragments WHERE organized_at IS NULL AND merged_into IS NULL AND deleted_at IS NULL',
     );
     // 被合并掉的待办还在表里（只是隐藏了），不能算进「未完成」
     const todoOpen = countOf(
@@ -1748,6 +2187,7 @@ export const repo: Repo = {
     return createBackup({
       appVersion,
       counts: {
+        /* trash:ok 备份装的是整个库，回收站里的行也在包里；这里要的是真实行数 */
         fragments: countOf(d, 'SELECT COUNT(*) AS n FROM fragments'),
         images: countOf(d, 'SELECT COUNT(*) AS n FROM fragment_images'),
         documents: countOf(d, 'SELECT COUNT(*) AS n FROM documents'),

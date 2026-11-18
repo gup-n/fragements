@@ -770,13 +770,15 @@ CREATE VIRTUAL TABLE document_chunks_fts USING fts5(text, tokenize = 'unicode61'
 `organize_sessions(finished, updated_at DESC)`、`ask_sessions(archived, updated_at DESC)`、
 `documents(updated_at DESC)`、`document_chunks(document_id, content_revision, ordinal)`。
 
-迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v16。**
+迁移机制：`PRAGMA user_version` 记录已执行到第几条，`MIGRATIONS` 数组只追加不修改。**当前到 v17。**
 v6 做三件事：`DROP TABLE knowledge_cards`、`DROP TABLE ask_logs`、建 `fragment_fts` 与 `organize_sessions`。
 v7 给 `todos` 加 `done_at`，用 `created_at` 回填旧完成项，并物理清理超过 5 条的旧完成项。
 v8 建 `ask_sessions`：会话正文与引用快照一起存，历史重开不依赖当时的检索结果。
 v9 建 `documents`：文档列表与解析结果。
 v10 把文档做成工作区：`documents` 加 `content_revision` / `indexed_revision` / `chunk_count` / `content_source`，
 建 `document_chunks` 与 `document_chunks_fts`，`ask_sessions` 加 `scope_json`。
+v17（v0.28）加软删与分类：`fragments` / `documents` / `ask_sessions` 各加 `deleted_at`，
+`documents` 加 `origin_id` / `stage`，建 `doc_tags` / `doc_tag_links` / `doc_proposals`。详见 §9.1。
 
 **v10 为什么不给旧文档自动建索引**：建索引要跑分词、切片、写 FTS，属于用户点「准备资料」的动作。
 借迁移之名做掉，等于用户升级完发现几十篇文档同时开始吃 CPU，而且不知道是谁在动。
@@ -1351,6 +1353,80 @@ util/         纯函数：草稿收敛、装箱、分词、日期、图片标记
 **新增一类「会让内容消失」的操作**（真删、合并、归档），必须做成看得见的按钮、
 默认不勾，并且在 `Repo` 层留一条恢复路径。**只在界面上把默认值设成 false 不算数。**
 
+## 9.1 回收站、个人文档、标签与 AI 提案（v0.28）
+
+### 9.1.1 一张表三处软删
+
+删除不再 `DELETE`，只写 `deleted_at`。**恢复 = 置空，彻底删除才删行与文件。**
+
+| 对象 | 列 | 软删时**不动**的东西 | 恢复时要做的事 |
+|---|---|---|---|
+| 碎片 | `fragments.deleted_at` | 行、配图行、配图文件 | 重建 FTS 行（`reindexFragment`） |
+| 文档 | `documents.deleted_at` | 行、正文、切片、FTS、原件文件 | 无（切片还在，直接能问） |
+| 会话 | `ask_sessions.deleted_at` | 行、轮次全文 | 无 |
+
+**唯一判据是 `deleted_at IS NULL`**，所以每一条列表查询都要带上它。
+`scripts/assert_recycle.cjs` 逐条扫 SQL：带 `FROM/JOIN fragments|documents|ask_sessions`
+的语句必须满足下列之一 —— 有 `deleted_at IS NULL`（或 `IS NOT NULL`，回收站正要看它）、
+是 `DELETE FROM`（彻底删除）、或语句前 400 字内有 `trash:ok` 并写明理由（按 id 读一行的内部动作）。
+
+FTS 行在软删时就删掉、恢复时补回：它是投影，不是数据。留着会让
+「索引条数 = 碎片条数」这条启动自检永远不等，每次启动都白重建一遍索引。
+
+### 9.1.2 30 天
+
+`TRASH_KEEP_DAYS = 30`。**不存「还剩几天」**，只存 `deleted_at` —— 存下来就得有人每天改它，
+而 App 不是每天都开的东西。剩几天由 `util/trash.trashDaysLeft` 现算（向上取整、过期夹到 0）。
+
+清理在启动时（不 await，不阻塞首屏）和打开回收站时各跑一次，
+文件删除只有 `db/trashFiles.deleteTrashFile` 一份实现。
+
+### 9.1.3 文档从哪来、在哪
+
+```
+origin: 'file' | 'knowledge' | 'authored'
+stage:  'library' | 'archived'
+```
+
+- `file` 导入的原件（有 `file_uri`）；`knowledge` AI 产出的（无原件，`origin_id` 指回原稿）；
+  `authored` 用户自己写的（无原件，正文在 `body_md`）。
+- **没有 `draft` 段**：新建文档直接入库（用户 2026-11-18 定的「自动入库」），
+  「草稿」是它出生时挂的标签，不是另一块存放区。
+- `archived` 只由「重新整理」产生：旧的那篇让位，内容和标签都还在，列表末尾单列一段。
+
+新建与编辑正文**必须**走 `contentFromText` → `replaceDocumentContent`：
+绕过去就会出现「有正文、没切片」的文档，问答永远说资料里没有。
+三步（插记录 / 写正文与切片 / 挂默认标签）只在 `documents/authored.ts` 一处。
+
+### 9.1.4 标签是平铺的
+
+`doc_tags(id, name UNIQUE, state, created_at)` + `doc_tag_links(document_id, tag_id)`。
+
+- 名字 UNIQUE：两个「工作」用户分不出来；
+- 颜色由名字稳定算出（`tagTone`），不存颜色；
+- `state='pending'` 目前**没有写入路径**（AI 的标签要用户点头才建行），
+  读的时候过滤它，是给「别处导进来的待确认标签」留的门；
+- `count` 只数**在库里**的文档：归档的与回收站里的不算，否则标签会永远挂着不实的数字。
+
+### 9.1.5 AI 提案：唯一能写业务表的地方
+
+`doc_proposals(id, kind, document_id, payload, state, created_at, decided_at)`。
+`kind ∈ optimize | tag | retag | batch`，`state ∈ pending | approved | rejected`。
+
+```
+ai/docEdit.ts          只调模型、返回 payload —— **不 import 数据库**
+   ↓
+documents/proposals.ts payload → documents / doc_tag_links（唯一入口）
+   ↓
+components/ProposalSheet  建议 / 原稿两页签 + 三个出口
+```
+
+- **放弃不写库**，只留一条 `rejected` 审计；
+- 优化 / 重新整理都只**新建一篇**（`origin='knowledge'` + `originId`），原稿一个字不动；
+- `finish_reason='length'` 时**不返回半篇**：截断的正文存下来之后没人分得清它和原稿的差别；
+- 批量（`util/docBatch`）一次只推进一篇，每篇都要单独审批；没正文的**安静跳过**（不是失败），
+  收尾必须把跳过与失败的条数说出来。
+
 ## 10. 开发进度
 
 **逐版本的改动、根因与被推翻的判断，全部在 [CHANGELOG.md](./CHANGELOG.md)。** 本节只记当前状态和已知限制。
@@ -1366,7 +1442,7 @@ util/         纯函数：草稿收敛、装箱、分词、日期、图片标记
 - [x] 待办（v0.15 重做）：回顾页、完成标记、**两层子项与勾选级联**、新建 / 编辑 / 多选合并（可撤回）
 - [x] **整理并进「问」**（v0.16）：一句话发起整理碎片 / 整理待办 / 写月小结；产出先审阅可改，通过才写文档；知识文档带摘要与全文检索
 - [x] Markdown 导出（时间轴 + 待办 + 标签索引）与**导入**（判重 + 预览确认）、AI 配置与连接测试
-- [x] SQLite 迁移到 v9（`todos.done_at` / `ask_sessions` / `documents`）、FTS5 索引与重建入口
+- [x] SQLite 迁移到 v17（含 v0.28 的软删、文档标签与 AI 提案）、FTS5 索引与重建入口
 - [x] **搜索命中**（v0.10.0）：正文描底色、每条「N 处」、详情页逐处跳转（段落实测 y）
 - [x] **文档库**（v0.10.0）：上传 / 原文件留存 / MinerU 轻量解析 / 阅读 / 重新解析 / 删除
 - [x] **精准解析通道**（v0.11.0）：Token、200 MB / 200 页、doc/ppt/xls；支持矩阵收敛到 `util/docSupport.ts`

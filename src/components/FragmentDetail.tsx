@@ -473,11 +473,11 @@ export function FragmentDetail({
         <View style={styles.editFoot}>
           <Pressable onPress={remove} style={styles.deleteButton} accessibilityRole="button" disabled={saving || addingImage}>
             <Text style={styles.deleteText}>
-              {armedDelete ? '再点一次确认删除' : '删除这条碎片'}
+              {armedDelete ? '再点一次，移进回收站' : '删除这条碎片'}
             </Text>
           </Pressable>
           <Text style={styles.editHint}>
-            {armedImage ? '点「确认删除」才会真删' : '「加图」插在光标处'}
+            {armedImage ? '点「确认删除」才会真删' : armedDelete ? '30 天内在设置的回收站里能找回' : '「加图」插在光标处'}
           </Text>
         </View>
 

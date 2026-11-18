@@ -1007,7 +1007,7 @@ export function AskScreen({
       }
       setDeleteSession(null);
       await loadHistory();
-      showToast('会话已删除');
+      showToast('会话已移到回收站');
     } catch {
       showToast('删除失败，再试一次');
     } finally {
@@ -1604,9 +1604,9 @@ export function AskScreen({
         <View style={styles.dialogOverlay} accessibilityViewIsModal>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setDeleteSession(null)} accessibilityRole="button" accessibilityLabel="取消删除会话" />
           <View style={styles.dialog}>
-            <Text style={styles.dialogTitle} accessibilityRole="header">删除这个会话？</Text>
+            <Text style={styles.dialogTitle} accessibilityRole="header">把这个会话移到回收站？</Text>
             <Text style={styles.dialogBody}>
-              「{deleteSession.title}」的问答记录会从历史里移除，无法恢复。
+              「{deleteSession.title}」会从历史里消失，30 天内在「设置 → 数据 → 回收站」里还能找回。
               已写入的文档、待办和碎片副本不受影响。
             </Text>
             <View style={styles.dialogActions}>
@@ -1615,7 +1615,7 @@ export function AskScreen({
               </Pressable>
               <Pressable style={styles.controlButton} onPress={confirmDeleteSession} disabled={working === 'delete'} accessibilityRole="button" accessibilityState={{ disabled: working === 'delete', busy: working === 'delete' }}>
                 <Text style={styles.danger}>
-                  {working === 'delete' ? '删除中…' : '删除'}
+                  {working === 'delete' ? '正在移…' : '移到回收站'}
                 </Text>
               </Pressable>
             </View>

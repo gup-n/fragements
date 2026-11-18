@@ -44,6 +44,7 @@ import { looksBinary } from '../util/mdParse';
 import { ImportSheet } from '../components/ImportSheet';
 import { APP_VERSION } from '../version';
 import { ScreenHeader } from '../components/ScreenHeader';
+import { TrashPane } from '../components/TrashPane';
 import { ChoiceChip } from '../components/ChoiceChip';
 import { useKeyboardHeight } from '../util/keyboard';
 import { UpdateSheet } from '../components/UpdateSheet';
@@ -95,13 +96,14 @@ const EFFORT_LABEL: Record<ReasoningEffort, string> = {
  * - `data`       数据：条数、索引、导入导出（将来云端也放这里）
  * - `about`      关于：版本、更新、仓库、包名
  */
-type Pane = 'root' | 'config' | 'appearance' | 'data' | 'about';
+type Pane = 'root' | 'config' | 'appearance' | 'data' | 'trash' | 'about';
 
 const PANE_TITLE: Record<Pane, string> = {
   root: '设置',
   config: '配置',
   appearance: '外观',
   data: '数据',
+  trash: '回收站',
   about: '关于',
 };
 
@@ -195,6 +197,21 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
   const [probe, setProbe] = useState<SearchProbe | null>(null);
   /** 非空时弹导入确认页。选完文件先看预览，确认了才写库 */
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  /**
+   * 回收站里有多少条。**只在数据页读一次**：
+   * 它是「有没有东西等我处理」的提示，不需要实时 —— 每次进数据页刷新就够了。
+   */
+  const [trashCount, setTrashCount] = useState(0);
+
+  useEffect(() => {
+    if (pane !== 'data') return;
+    let cancelled = false;
+    repo
+      .trashCount()
+      .then((n) => { if (!cancelled) setTrashCount(n); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [pane, stats.total]);
 
   useEffect(() => {
     (async () => {
@@ -961,8 +978,26 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
       ) : null}
 
       {/* ---------------- 数据 ---------------- */}
+      {pane === 'trash' ? (
+        <TrashPane onChanged={onChanged} />
+      ) : null}
+
       {pane === 'data' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+          {/*
+            回收站放在数据页最上面：删完东西想找回，第一反应是「数据」，
+            而不是先点进某个子页再往下翻。
+          */}
+          <View style={styles.cardTight}>
+            <MenuRow
+              icon="trash-outline"
+              label="回收站"
+              value={trashCount > 0 ? `${trashCount} 条待处理` : '空'}
+              onPress={() => setPane('trash')}
+              last
+            />
+          </View>
+
           <GroupTitle text="现在有多少" />
           <View style={styles.card}>
             <View style={styles.statRow}>

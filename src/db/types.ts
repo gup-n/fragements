@@ -1,5 +1,9 @@
 import type {
   AskSession,
+  DocProposal,
+  DocProposalPayload,
+  DocStage,
+  DocTag,
   Document,
   DocumentChunk,
   DocumentContentInput,
@@ -7,9 +11,12 @@ import type {
   Fragment,
   FragmentSource,
   Note,
+  ProposalKind,
   QaScope,
   QaTurn,
   Todo,
+  TrashEntry,
+  TrashRef,
 } from '../types';
 import type { BackupCounts, BackupManifest } from '../util/backupPlan';
 import type { DayCount } from '../util/calendar';
@@ -168,7 +175,16 @@ export interface Repo {
   /** 删掉一张图，返回它的文件名（调用方负责删文件）；这张图不存在返回 null */
   deleteFragmentImage(imageId: number): Promise<string | null>;
   updateFragmentContent(id: number, content: string): Promise<void>;
-  /** 删除。返回被删掉的那几条配图文件名，调用方负责删文件（空数组 = 没有图） */
+  /**
+   * 删除 = **移到回收站**（v0.28），不是物理删。
+   *
+   * 返回空数组是常态：软删不动磁盘上的配图，30 天内恢复还看得见图。
+   * 真正删文件发生在 `purgeTrash` / `purgeExpiredTrash`。
+   *
+   * 为什么改签名而没换名字：所有调用点要的语义就是「这条不要了」，
+   * 改叫 `trashFragment` 会让每个调用点都得判断「到底删不删文件」——
+   * 而这件事从今天起只有回收站管。
+   */
   deleteFragment(id: number): Promise<string[]>;
   applyTags(id: number, labels: string[], project: string | null): Promise<void>;
 
@@ -283,7 +299,31 @@ export interface Repo {
     documentIds: number[],
     sourceIds?: number[],
   ): Promise<void>;
+  /** 删除会话。**进回收站**（v0.28） */
   deleteAskSession(id: number): Promise<void>;
+
+  /* ---- 回收站（v0.28） ---- */
+  /**
+   * 回收站里的全部条目，按删除时间倒序 —— 三类对象混在一起，
+   * 因为它们对用户来说是同一件事：「我刚删的、还没彻底没」。
+   */
+  listTrash(): Promise<TrashEntry[]>;
+  /** 回收站条数。设置页那一行要显示它，不必把三条 SELECT 的正文都读出来 */
+  trashCount(): Promise<number>;
+  /** 批量恢复。返回真的恢复了几条（已经不在回收站的、已被彻底删的不计入） */
+  restoreTrash(refs: TrashRef[]): Promise<number>;
+  /**
+   * 批量彻底删除。返回要删的文件名，调用方负责删文件 —— repo 不碰文件系统。
+   *
+   * 这是唯一不可逆的删除。界面上必须先二次确认，并且说清「图片和原件也会没」。
+   */
+  purgeTrash(refs: TrashRef[]): Promise<string[]>;
+  /**
+   * 30 天到期清理，App 启动时跑一次。
+   * `before` 是截止时间戳（毫秒）：`deleted_at < before` 的才清。
+   * 同样返回文件名，交调用方删。
+   */
+  purgeExpiredTrash(before: number): Promise<string[]>;
 
   /* ---- 文档（v0.10.0） ---- */
   /** 列表，按更新时间倒序。**不含正文** —— 文档的 Markdown 可能几十万字 */
@@ -307,6 +347,9 @@ export interface Repo {
     fileUri: string | null;
     state: DocumentMeta['state'];
     origin?: DocumentMeta['origin'];
+    /** 派生文档的来源文档 id（优化/重新整理之后新写的那篇要用） */
+    originId?: number | null;
+    stage?: DocStage;
     excerpt?: string;
   }): Promise<number>;
   /**
@@ -316,6 +359,8 @@ export interface Repo {
   updateDocument(
     id: number,
     patch: {
+      /** 改标题。用户权限最高：任何一篇都能改名（含导入的原件） */
+      name?: string;
       bodyMd?: string;
       excerpt?: string;
       pages?: number | null;
@@ -323,7 +368,7 @@ export interface Repo {
       error?: string | null;
     },
   ): Promise<void>;
-  /** 删除文档记录。原文件由调用方删，repo 不碰文件系统 */
+  /** 删除文档记录。**进回收站**（v0.28），原件留在磁盘上等 30 天后才真删 */
   deleteDocument(id: number): Promise<void>;
   /**
    * 文档被删之后，把指向它的会话标记解开。
@@ -357,6 +402,45 @@ export interface Repo {
    * 只返回就绪且索引版本等于内容版本的切片。
    */
   searchDocumentChunks(query: string, documentIds: number[], limit?: number): Promise<DocumentChunk[]>;
+
+  /* ---- 文档标签（v0.28，平铺） ---- */
+  /**
+   * 全部标签，按「挂着几篇」倒序、同名按名字。
+   *
+   * `count` 只算**在库里**的文档：归档的与回收站里的不计数 ——
+   * 否则一个标签会永远挂着 3，点进去只有 1 篇，用户会以为内容丢了。
+   */
+  listDocTags(): Promise<DocTag[]>;
+  /**
+   * 新建标签。**重名不报错，直接把已有的那条返回** ——
+   * 用户第二次输入「工作」时想要的就是那个「工作」，弹一句「已存在」只会让人再点一次。
+   *
+   * `state` 只给 AI 用：AI 提议的新标签传 `'pending'`，用户点过才算数。
+   */
+  createDocTag(name: string, state?: 'approved' | 'pending'): Promise<DocTag>;
+  /** 删标签。只删标签本身与挂链，文档一篇都不动 */
+  deleteDocTag(id: number): Promise<void>;
+  /** 一篇文档挂哪些标签。**整体替换**（多选改标签也是它），传空数组 = 全摘掉 */
+  setDocumentTags(documentId: number, tagIds: number[]): Promise<void>;
+
+  /* ---- 个人文档（v0.28） ---- */
+  /*
+   * 没有 `createAuthoredDoc` 这个方法。
+   *
+   * 「新建一篇自己写的文档」= `insertDocument({origin:'authored'})` +
+   * `replaceDocumentContent(切好的正文)` + `setDocumentTags([草稿])`，
+   * 三步都在 `documents/authored.ts` 里，一个事务都不缺。
+   * 在 repo 上再包一层的话，那三步的顺序会出现两份实现 —— 而顺序错了
+   * 会留下「正文有了但切片没有」的文档，问答永远说「资料里没有」。
+   */
+  /** 换一段：library / archived。归档是「AI 重新整理后旧的让位」，可查可恢复 */
+  setDocumentStage(id: number, stage: DocStage): Promise<void>;
+
+  /* ---- AI 提案（v0.28） ---- */
+  insertProposal(input: { kind: ProposalKind; documentId: number | null; payload: DocProposalPayload }): Promise<number>;
+  listProposals(state?: DocProposal['state']): Promise<DocProposal[]>;
+  findProposal(id: number): Promise<DocProposal | null>;
+  decideProposal(id: number, state: 'approved' | 'rejected'): Promise<void>;
 
   getSetting(key: string): Promise<string | null>;
   setSetting(key: string, value: string): Promise<void>;

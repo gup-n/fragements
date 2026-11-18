@@ -30,6 +30,7 @@ import { TabBar, type MainTab } from './src/components/TabBar';
 import { useKeyboardHeight } from './src/util/keyboard';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
+import { runTrashCleanup } from './src/db/trashFiles';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
 import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
 import { describeImage } from './src/ai/vision';
@@ -98,6 +99,14 @@ export default function App() {
          * 库还没开就去扫，只会报错然后静默跳过 —— 那界面会一直显示「解析中」。
          */
         await initDocumentJobs();
+        /*
+         * 回收站里超过 30 天的条目，启动时清一次（v0.28）。
+         *
+         * 不 await：清的文件可能很多（几百张配图），启动不该等它。
+         * 放在库就绪之后、不阻塞首屏 —— 清理失败也只是晚一天，
+         * 而它删的是「用户 30 天前就不要了」的东西。
+         */
+        void runTrashCleanup();
       } catch (e) {
         console.warn('[fragments] 初始化失败', e);
       } finally {
@@ -698,7 +707,11 @@ function Shell({ booted }: { booted: boolean }) {
 
   const handleDelete = useCallback(
     async (id: number) => {
-      // 先把文件名捞回来，删完这些行就再也找不到图了 —— 会一直占着空间
+      /*
+       * v0.28 起删除只是**移到回收站**：不再动磁盘上的配图。
+       * `deleteFragment` 仍然返回文件名（契约没变），但软删一律返回空数组 ——
+       * 真删在设置的回收站里做，那里会把文件名收好一起删掉。
+       */
       const paths = await repo.deleteFragment(id);
       for (const path of paths) await removeFragmentImage(path);
       await reload();

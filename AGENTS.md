@@ -108,7 +108,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 ## 5. 存储、历史兼容与配图
 
 - [Repo接口](<src/db/types.ts>)、[Native实现](<src/db/repo.native.ts>)和[Web实现](<src/db/repo.web.ts>)必须同步。Web驱动服务编译/内存测试，不证明原生SQLite迁移、文件或事务故障已验。
-- **16段已发布迁移不改写，旧id/字段/原件路径不随清理删除。** 数据库结构仍v16；原生迁移事务和完整恢复点尚需专门故障验收，不能拿Git分支代替。
+- **17段已发布迁移不改写，旧id/字段/原件路径不随清理删除。** 数据库结构为v17（v0.28 加软删、`stage`/`origin_id`、`doc_tags`/`doc_tag_links`/`doc_proposals`）；原生迁移事务和完整恢复点尚需专门故障验收，不能拿Git分支代替。
 - 保留旧 `tags`、`nature`、旧会话指针等兼容字段。标签不是实体，不建标签表或恢复管理UI；清理导入标签时 `cleanTag` 保留显示大小写，`normalizeTag` 只作比较键，统一去重逻辑。
 - v16已把单图列迁入 `fragment_images`；旧 `image_path` / `image_text` 列不删。每张图有独立id、路径、ordinal和文字状态，忙碌/失败集合的键是**配图id**。
 - `text === null` 表示未读，空串表示已读但无字；两者不能混。自动读图只在需要材料时发生，保存图片不触发模型。读图应串行、守预算，失败和剩余数量如实报告。
@@ -136,6 +136,32 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **系统分享的 json 有两个形状**：v0.25 起是 `files: [{file, name}]`，之前是单个 `file`/`name`。读的时候两条都要认 —— 升级前分享、升级后才打开 App 的机器上，磁盘里躺的是旧形状。`disk`（安全名）只用来删文件，`name`（原名）才入库。
 - **分享的幂等键在读的时候就推进了**（`share_last_at`），所以「读到了」不等于「存进去了」。一份都没存成功时必须 `rewindIncomingShare(prevAt)` 退回去，否则文件还在私有目录、界面什么都没有 —— 静默丢内容。已经存进去一部分时不许退（会让那部分再进一遍）。
 - **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。
+
+- **删除一律是软删**（v0.28）。`deleteFragment` / `deleteDocument` / `deleteAskSession`
+  只写 `deleted_at`，**不删行、不删文件** —— 30 天内恢复要能看到图、能打开原件。
+  真删只有一条路：`purgeRefs`（`purgeTrash` / `purgeExpiredTrash` 共用它）。
+- **每一条列表查询都要带 `deleted_at IS NULL`**，这是软删唯一的系统性风险：
+  漏一条不会有任何报错，界面上只是删掉的东西又冒出来一条。
+  `npm run test:recycle` 逐条扫 SQL 来钉它：例外只有两类 —— `DELETE FROM`，
+  或者语句前 400 字内有 `trash:ok` 并写清理由（针对「按 id 读一行」这类必须能看到已删行的内部动作，
+  比如 `reindexFragment`）。加例外前先问自己「真的不能只读没删的吗」。
+- **FTS 行在软删时就要删掉**，恢复时 `reindexFragment` 补回。它是投影不是数据：
+  留着会让启动自检「索引条数 = 碎片条数」永远不等，每次启动白重建一遍索引。
+- **文档的 `stage` 只有 `library` / `archived`，没有 `draft`**。用户 2026-11-18 定的是
+  「新建文档自动入库」；草稿是出生时挂的标签（`DEFAULT_DOC_TAG`），不是另一块存放区。
+  留一个没有写入路径的枚举值，只会让「这篇在哪」多一条分支。
+- **写正文必须走 `contentFromText` → `replaceDocumentContent`**（`documents/authored.ts` 一处）。
+  绕过去会留下一篇「有标题、没正文、问答永远说资料里没有」的文档，而这种错在界面上看起来完全正常。
+- **AI 层不碰数据库**这条在 v0.28 有断言（`ai/docEdit.ts` 不许 import `db/`）。
+  AI 产物一律走 `doc_proposals` → `documents/proposals.approveProposal`；
+  **放弃不写业务表**，只留一条 `rejected` 审计。优化/重新整理只新建一篇，原稿一个字不动。
+- **撞到输出上限（`finish_reason='length'`）不返回半篇**。截断的正文存成新文档之后，
+  没人分得清它和原稿的差别 —— 宁可报错让人重试。
+- **批量是一篇篇过**（`util/docBatch`）：一次只有一个 `running`，每篇都停在 `review` 等用户点。
+  没正文的**安静跳过**（不是失败），但收尾那句必须把跳过与失败都数出来，
+  否则用户会以为全都处理了。
+- **状态是 `DocStage` / `TrashKind` / `ProposalKind` 这些联合类型，别再散成字符串**。
+  新增一种回收对象或提案类型时，改类型、加迁移、补 `assert_recycle` 三件事一起做。
 
 ## 6. 搜索与Markdown文字迁出
 

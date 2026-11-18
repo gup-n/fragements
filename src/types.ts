@@ -307,14 +307,97 @@ export type DocumentContentSource = 'text' | 'markdown' | 'pdf' | 'excel' | 'min
  * 一篇文档从哪来。
  *
  * `file` = 用户导入的原件（有 file_uri，读的时候要么本地读、要么云解析）；
- * `knowledge` = AI 整理碎片产出、经用户审阅后写入的知识文档（**没有原件**）。
+ * `knowledge` = AI 整理碎片产出、经用户审阅后写入的知识文档（**没有原件**）；
+ * `authored` = 用户自己在文档页里写的（v0.28）。
  *
  * 为什么必须有这个字段，而不是「file_uri 为空就当知识」：
  * 导入的原件被用户清掉之后 file_uri 也会变空，那时它是「原件没了但正文还在」，
  * 和「本来就是整理出来的」是两件事 —— 前者要提示重新导入，后者要显示来源会话。
  * 用一个字段同时表达两种状态，最后一定是两处判据对不上。
+ *
+ * 为什么 `authored` 是**扩这一列**而不是新加一列 `source`：
+ * 设计稿里提过加 `source = upload | authored | derived`，但那与 `origin` 是同一个问题
+ * （「这行从哪来」）的两个答案，`knowledge` 就等于 `derived`。两列并存之后，
+ * 「这不是原件」要判两次，迟早有一次只判了一边（v0.23 删掉 465 行就是这个原因）。
+ * `knowledge` + `originId` 已经能表达「由哪篇派生的」，不需要第三个名字。
  */
-export type DocumentOrigin = 'file' | 'knowledge';
+export type DocumentOrigin = 'file' | 'knowledge' | 'authored';
+
+/**
+ * 文档放在哪一段。
+ *
+ * 只有两段：`library`（在库里）与 `archived`（AI 重新整理后旧的被换下来，可查可恢复）。
+ *
+ * **没有 `draft`**：用户 2026-11-18 定的是「自动入库」—— 新建的文档直接进库，
+ * 草稿是它默认挂的标签（`DEFAULT_DOC_TAG`），不是另一块存放区。
+ * 留一个永远不会被写入的枚举值，只会让「这篇在哪」多一条分支。
+ */
+export type DocStage = 'library' | 'archived';
+
+/**
+ * 文档标签（v0.28）。**平铺，没有父子**。
+ *
+ * 用户 2026-11-18 定的是平铺。真要做分类/子分类，那是另一张带 `parent_id` 的表，
+ * 和「标签」是两个概念，混在一起会两头都不讨好（设计稿第七节）。
+ *
+ * `pending` 只出现在 AI 新建的标签上：AI 可以提议新标签，但要用户点一下才算数。
+ */
+export interface DocTag {
+  id: number;
+  name: string;
+  state: 'approved' | 'pending';
+  createdAt: number;
+  /** 还挂着几篇文档（不算归档与回收站里的）。标签栏按它排序，也用它显示条数 */
+  count: number;
+}
+
+/** 回收站里的三种东西。三种都只是「原表那一行加了 deleted_at」 */
+export type TrashKind = 'fragment' | 'document' | 'ask_session';
+
+export interface TrashRef {
+  kind: TrashKind;
+  id: number;
+}
+
+export interface TrashEntry extends TrashRef {
+  /** 一行能认出来的字：碎片首行 / 文档名 / 会话标题 */
+  title: string;
+  /** 量化信息：「128 字」「12 页」「8 轮」 */
+  detail: string;
+  deletedAt: number;
+  /** 彻底删除时要一起删掉的文件名。恢复不需要它 —— 软删没动文件 */
+  files: string[];
+}
+
+export type ProposalKind = 'optimize' | 'tag' | 'retag' | 'batch';
+
+/**
+ * 一条 AI 提案的内容。
+ *
+ * **提案不存应用结果**：通过之后真正写进 `documents` / `doc_tag_links`，
+ * 提案只留审计（设计稿第二节）。否则「这篇文档是哪个提案生成的」会有两套答案。
+ */
+export interface DocProposalPayload {
+  /** optimize / retag：建议正文 */
+  bodyMd?: string;
+  /** optimize / retag：建议标题；不填就沿用原题 */
+  title?: string;
+  /** tag / retag：建议挂上的标签名（不存在的会先建成 pending） */
+  tags?: string[];
+  /** 一句话说明模型为什么这么改，审批时要显示 */
+  note?: string;
+}
+
+export interface DocProposal {
+  id: number;
+  kind: ProposalKind;
+  /** batch 时为 null，明细在 util/docBatch 的进度里 */
+  documentId: number | null;
+  payload: DocProposalPayload;
+  state: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+  decidedAt: number | null;
+}
 
 export interface DocumentMeta {
   id: number;
@@ -331,6 +414,14 @@ export interface DocumentMeta {
   chunkCount: number;
   contentSource: DocumentContentSource | null;
   origin: DocumentOrigin;
+  /**
+   * `knowledge` 文档是从哪篇文档派生的（AI 优化/重新整理的来源）。
+   * null = 不是派生出来的。原稿一个字都不动，只靠这一列指回去。
+   */
+  originId: number | null;
+  stage: DocStage;
+  /** 挂着的标签（平铺）。列表接口一起带出来，免得每行再查一次 */
+  tags: DocTag[];
   /**
    * 列表里那一行摘要。**正文不进列表接口**（可能几十万字），
    * 所以摘要必须在写入时就算好存下来；现算等于每次打开文档页把全文读一遍。
