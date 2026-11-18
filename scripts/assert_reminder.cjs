@@ -24,7 +24,7 @@ const { test } = suite;
 
 const pure = createLoader();
 const plan = pure.load('src/util/digestReminder.ts');
-const { REMIND_GAP_MS, nextRemindAt, planDigestReminder, reminderBody } = plan;
+const { REMIND_GAP_MS, nextRemindAt, planDigestReminder, reminderBody, reminderWhenLabel } = plan;
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
@@ -115,6 +115,12 @@ test('欠好几个月时，正文说最近那个月，再补一句总共几个�
   );
 });
 
+test('「下次提醒」的写法：本地时间的月日与时刻', () => {
+  assert.equal(reminderWhenLabel(new Date(2026, 10, 18, 20, 0).getTime()), '11 月 18 日 20:00');
+  // 补零：8:05 不能写成 8:5
+  assert.equal(reminderWhenLabel(new Date(2026, 11, 1, 8, 5).getTime()), '12 月 1 日 08:05');
+});
+
 test('通知用固定 id + 定时触发，重复调用只换内容不叠条', () => {
   const src = read('src/digestReminder.ts');
   assert.ok(/export const DIGEST_ID = '.+'/.test(src), '必须有一个固定的通知 id');
@@ -145,7 +151,7 @@ test('权限与通道：先要权限再落库，失败把开关弹回去', () =>
 test('数据一变就对一次，点通知落到回顾页', () => {
   const app = read('App.tsx');
   assert.ok(app.includes('void syncDigestReminder(list, noteList)'), 'reload 之后要对齐（写到 reload 里）');
-  assert.ok(app.includes('onReminderChange={() => void syncDigestReminder(fragments, notes)}'), '开关切换也要对齐');
+  assert.ok(app.includes('onReminderChange={() => syncDigestReminder(fragments, notes)}'), '开关切换也要对齐（并且要把 Promise 交出去，让设置页能等它排完）');
   assert.ok(app.includes('watchDigestReminder(') && app.includes("setRoute('review')"), '点通知要落到回顾页');
   // 落到回顾页还不够：那条通知说的是「该写月总结了」，停在待办等于指错了地方
   assert.ok(
@@ -160,6 +166,24 @@ test('数据一变就对一次，点通知落到回顾页', () => {
   );
   const watcher = read('src/digestReminder.ts');
   assert.ok(watcher.includes('getLastNotificationResponseAsync'), '冷启动那一次点击要单独捞');
+});
+
+test('系统里没了权限要说出原因，不能让开关看着还开着', () => {
+  const settings = read('src/screens/SettingsScreen.tsx');
+  assert.ok(settings.includes('isQuickRecordBlocked'), '常驻入口也要查（两个开关是同一类问题）');
+  assert.ok(settings.includes('digestReminderState'), '提醒要同时拿到 on 与 blocked 两个事实');
+  assert.ok(settings.includes('系统里没有通知权限'), '要有一句人话解释去哪儿开');
+  assert.ok(
+    /\{remindMsg[\s\S]{0,1200}系统里没有通知权限/.test(settings),
+    '这句话要落在「通知」那张卡里，而不是飘到别的分区',
+  );
+
+  const quick = read('src/quickRecord.ts');
+  assert.ok(quick.includes('export async function isQuickRecordBlocked'), '状态判断放模块里，不放界面里');
+
+  const perm = read('src/util/notifyPerm.ts');
+  assert.ok(perm.includes('export async function hasNotifyPermission'), '「到底有没有权限」只查一次，只有一份');
+  assert.ok(perm.includes('return null'), '查不出来时返回 null，别让界面报假警');
 });
 
 test('通知权限的判断只有一份实现', () => {

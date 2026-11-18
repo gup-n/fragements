@@ -368,7 +368,9 @@
 | 通道 | `digest-reminder`，`AndroidImportance.DEFAULT`（要出声、要弹，否则不叫提醒） |
 | 顺序 | **先要权限再落库**：反过来会出现「开关显示开着、其实永远发不出来」，那种状态用户查不出来 |
 | 内容 | 「2026 年 10 月有 14 条碎片，还没写小结」；欠多个月时补一句「一共 2 个月欠着」 |
-| 点击 | 固定 id + `watchDigestReminder`：监听 + 冷启动捞一次（`getLastNotificationResponseAsync`），和「记一条」各认各的 `kind` |
+| 点击 | 固定 id + `watchDigestReminder`：监听 + 冷启动捞一次（`getLastNotificationResponseAsync`），和「记一条」各认各的 `kind`；落到回顾页时带 `focusTab: 'note'`，直接停在「小结」而不是默认的「待办」 |
+| 权限失配 | 用户去系统设置关掉通知后，App 里的开关仍显示「开启」。设置页读 `digestReminderState().blocked` 把原因写出来；共同判断在 `util/notifyPerm.hasNotifyPermission`（返回 `null` = 查不出来，此时不说话） |
+| 可见性 | 设置页显示「下次提醒：11 月 18 日 20:00」（`reminderWhenLabel`，本地时间）；没有欠账时说明「现在没有欠着的小结」。`syncDigestReminder` 返回排定的时刻，界面据此显示 —— 这条提醒在响之前没有别的可见效果 |
 
 **为什么不是「月底那天提醒」**：月底提醒很容易空转 —— 用户 29 号已经写完，30 号那条就是噪音；
 整月没打开 App 时那条也排不进去。看欠账则天然只在有账时响。

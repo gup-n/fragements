@@ -25,7 +25,7 @@ import * as Notifications from 'expo-notifications';
 import { repo } from './db/repo';
 import { missingDigests } from './util/digest';
 import { planDigestReminder, reminderBody } from './util/digestReminder';
-import { ensureNotifyPermission } from './util/notifyPerm';
+import { ensureNotifyPermission, hasNotifyPermission } from './util/notifyPerm';
 import type { Fragment, Note } from './types';
 
 /** 固定 id：同时只有一条，重排就是换内容 */
@@ -76,6 +76,37 @@ async function cancelReminder(): Promise<void> {
   }
 }
 
+/** 设置页要看到的两个事实：开关开着吗；开着但系统里没权限吗 */
+export interface ReminderState {
+  on: boolean;
+  /** 开关开着、但系统里已经把通知关掉了 —— 这条提醒其实发不出来 */
+  blocked: boolean;
+  /** 已经排定的触发时刻（0 = 还没排，比如目前没有欠账） */
+  at: number;
+}
+
+/**
+ * 读状态。
+ *
+ * 为什么要单独查权限：用户可能在系统设置里把通知关掉，而在 App 里那个开关**还显示开着**。
+ * 那种状态用户是查不出来的 —— 他只会觉得「提醒坏了」。设置页拿到 `blocked` 就把话说明白，
+ * 而不是假装一切正常。
+ */
+export async function digestReminderState(): Promise<ReminderState> {
+  if (!enabled) return { on: false, blocked: false, at: 0 };
+  let on = false;
+  let at = 0;
+  try {
+    on = (await repo.getSetting(SETTING_KEY)) === '1';
+    at = Number(await repo.getSetting(AT_KEY)) || 0;
+  } catch {
+    on = false;
+  }
+  if (!on) return { on: false, blocked: false, at: 0 };
+  // 查不到权限（null）就不吓唬人：这句话只在**确定**没权限时才算数
+  return { on: true, blocked: (await hasNotifyPermission()) === false, at };
+}
+
 /**
  * 打开/关闭提醒。
  *
@@ -112,8 +143,8 @@ export async function syncDigestReminder(
   fragments: Fragment[],
   notes: Note[],
   now = Date.now(),
-): Promise<void> {
-  if (!enabled) return;
+): Promise<number> {
+  if (!enabled) return 0;
 
   let on = false;
   let storedAt = 0;
@@ -121,10 +152,10 @@ export async function syncDigestReminder(
     on = (await repo.getSetting(SETTING_KEY)) === '1';
     storedAt = Number(await repo.getSetting(AT_KEY)) || 0;
   } catch {
-    return;
+    return 0;
   }
   // 开关关着、也从没排过：连算都不用算（省掉一次全量扫描）
-  if (!on && storedAt === 0) return;
+  if (!on && storedAt === 0) return 0;
 
   const plan = planDigestReminder({
     enabled: on,
@@ -132,17 +163,19 @@ export async function syncDigestReminder(
     storedAt,
     now,
   });
-  if (plan.action === 'keep') return;
+  // 返回值是「现在排在哪一刻」，0 = 没排。设置页拿它显示「下次提醒：…」——
+  // 这条提醒在响之前没有任何可见效果，用户只能靠这个数字确认它排上了。
+  if (plan.action === 'keep') return storedAt;
 
   try {
     if (plan.action === 'cancel') {
       await cancelReminder();
-      return;
+      return 0;
     }
 
     await ensureChannel();
     // 权限可能被用户在系统里关掉了：这时不排，也不记时刻，下次进来还会再试
-    if (!(await ensureNotifyPermission()).ok) return;
+    if (!(await ensureNotifyPermission()).ok) return 0;
 
     await Notifications.scheduleNotificationAsync({
       identifier: DIGEST_ID,
@@ -159,8 +192,10 @@ export async function syncDigestReminder(
       },
     });
     await repo.setSetting(AT_KEY, String(plan.at));
+    return plan.at;
   } catch {
     /* 排不上就等下一次数据变化；不因为一条提醒把保存流程弄出错误 */
+    return 0;
   }
 }
 

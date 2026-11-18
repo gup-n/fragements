@@ -18,7 +18,7 @@
  * 不另存一张表 —— 少一个状态就少一处不一致。
  */
 import type { Backlog } from './digest';
-import { periodLabel } from './date';
+import { formatTime, periodLabel } from './date';
 
 /** 两次提醒之间至少隔 3 天 */
 export const REMIND_GAP_MS = 3 * 24 * 60 * 60 * 1000;
@@ -77,6 +77,17 @@ export function planDigestReminder(input: {
     fragments: latest.count,
     months: backlog.total,
   };
+}
+
+/**
+ * 「11 月 18 日 20:00」—— 设置页用它告诉用户下次什么时候响。
+ *
+ * 这条提醒在响之前**没有任何可见效果**，用户很难判断它到底排上没排上。
+ * 把时刻写出来，他至少能确认「App 记住了这件事」。
+ */
+export function reminderWhenLabel(at: number): string {
+  const d = new Date(at);
+  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${formatTime(at)}`;
 }
 
 /**

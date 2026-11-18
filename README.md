@@ -6,13 +6,13 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.25.0 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.25.0/fragments-v0.25.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.25.0)。26,220,134 字节，SHA-256 `65ce5a9650b0ab2a576e833f63cae0ab235fc316a1dce9eef1be602d4ba25c80`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致。同批可回退：[v0.24.2](https://github.com/gup-n/fragements/releases/download/v0.24.2/fragments-v0.24.2.apk)（26,206,774 字节，SHA-256 `f76bfa761db42fea91bcbba10291b1be6ef623101337bcfc19fde7e505baf200`）、[v0.24.1](https://github.com/gup-n/fragements/releases/download/v0.24.1/fragments-v0.24.1.apk)（26,206,058 字节）。这一批补的是「用户已经做过一次动作、App 却没接住」：有月份的小结没写时晚上 8 点提醒一次（点开落到回顾页的「小结」），相册一次选多张图的分享不再全丢；顺手发现 `test:ui` 的断言**失败也退出 0**，等于那组检查从来没拦过东西。**真机仍未实测**。
+**v0.25.1 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.25.1/fragments-v0.25.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.25.1)。26,220,466 字节，SHA-256 `acfdfd0943d1c8898a7c4bc6b9cb81a66b7a5a53d7b6b0ad32200e7b57a11edb`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致。同批可回退：[v0.25.0](https://github.com/gup-n/fragements/releases/download/v0.25.0/fragments-v0.25.0.apk)（26,220,134 字节，SHA-256 `65ce5a9650b0ab2a576e833f63cae0ab235fc316a1dce9eef1be602d4ba25c80`）、[v0.24.2](https://github.com/gup-n/fragements/releases/download/v0.24.2/fragments-v0.24.2.apk)（26,206,774 字节）。v0.25 这一批补的是「用户已经做过一次动作、App 却没接住」：有月份的小结没写时晚上 8 点提醒一次（点开落到回顾页的「小结」），相册一次选多张图的分享不再全丢；v0.25.1 修的是那条提醒的标题（不再说「这个月」）与落点。顺手发现 `test:ui` 的断言**失败也退出 0**，等于那组检查从来没拦过东西。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.25.1（versionCode 71） |
+| 当前版本 | v0.25.2（versionCode 72） |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

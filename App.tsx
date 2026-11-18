@@ -652,7 +652,7 @@ function Shell({ booted }: { booted: boolean }) {
                    * 开关一拨就要立刻重排那条通知，所以这里传的是「用当前数据对齐一次」。
                    * 传 reload 不行：Reload 之后数据没变，重排的时机就错过了。
                    */
-                  onReminderChange={() => void syncDigestReminder(fragments, notes)}
+                  onReminderChange={() => syncDigestReminder(fragments, notes)}
                 />
               )}
               {route === 'review' && (

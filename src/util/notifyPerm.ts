@@ -25,3 +25,17 @@ export async function ensureNotifyPermission(): Promise<NotifyPerm> {
     return { ok: false, reason: e instanceof Error ? e.message : '问不到通知权限' };
   }
 }
+
+/**
+ * 现在到底有没有通知权限。`null` = 查不出来。
+ *
+ * 和 `ensureNotifyPermission` 分工：那个会**当场弹窗要权限**，只在用户主动打开开关时用；
+ * 这个只查不问，用来判断「开关开着但系统里已经关掉了」——设置页要能把这件事说出来。
+ */
+export async function hasNotifyPermission(): Promise<boolean | null> {
+  try {
+    return (await Notifications.getPermissionsAsync()).status === 'granted';
+  } catch {
+    return null;
+  }
+}

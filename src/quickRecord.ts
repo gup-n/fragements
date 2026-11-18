@@ -23,7 +23,7 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { repo } from './db/repo';
-import { ensureNotifyPermission } from './util/notifyPerm';
+import { ensureNotifyPermission, hasNotifyPermission } from './util/notifyPerm';
 
 /** 固定 id：同一时间只有一条，重复调用不会叠出一排 */
 export const QUICK_ID = 'fragments-quick-record';
@@ -41,6 +41,22 @@ export async function isQuickRecordEnabled(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * 开关开着、但系统里已经把通知关掉了。
+ *
+ * 常驻通知和提醒一样，用户去系统设置里关一次权限，App 里那个开关还显示「开启」——
+ * 那种状态只能靠设置页说出来，否则用户只会觉得「这个入口坏了」。
+ */
+export async function isQuickRecordBlocked(): Promise<boolean> {
+  if (!enabled) return false;
+  try {
+    if ((await repo.getSetting(SETTING_KEY)) !== '1') return false;
+  } catch {
+    return false;
+  }
+  return (await hasNotifyPermission()) === false;
 }
 
 export async function setQuickRecordEnabled(on: boolean): Promise<QuickResult> {

@@ -15,8 +15,9 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, ReasoningEffort } from '../types';
 import type { BackupManifest } from '../util/backupPlan';
 import { humanBytes } from '../util/backupPlan';
-import { isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
-import { isDigestReminderEnabled, setDigestReminderEnabled } from '../digestReminder';
+import { isQuickRecordBlocked, isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
+import { digestReminderState, setDigestReminderEnabled } from '../digestReminder';
+import { reminderWhenLabel } from '../util/digestReminder';
 import type { SearchProbe } from '../db/types';
 import {
   R,
@@ -72,7 +73,7 @@ interface Props {
    * 设置页只拿到 `fragments`，拿不到 notes。放在这里传一个回调，
    * 比让设置页自己再读一遍库干净。
    */
-  onReminderChange?: () => void;
+  onReminderChange?: () => void | Promise<unknown>;
 }
 
 const EFFORT_LABEL: Record<ReasoningEffort, string> = {
@@ -144,6 +145,16 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
   const [remindOn, setRemindOn] = useState(false);
   const [remindMsg, setRemindMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /**
+   * 开关开着、但系统里已经把通知关掉了。
+   *
+   * 两个开关共用一行提示：用户去系统设置里关一次权限，App 里那两行还都显示「开启」，
+   * 之后再也没响过 —— 他只会觉得「这个功能坏了」。状态要在这里说出来。
+   */
+  const [quickBlocked, setQuickBlocked] = useState(false);
+  const [remindBlocked, setRemindBlocked] = useState(false);
+  /** 已经排定的提醒时刻（0 = 还没排）。这条提醒在响之前没有别的可见效果 */
+  const [remindAt, setRemindAt] = useState(0);
+  /**
    * 选好但还没确认的备份包。
    *
    * 恢复会覆盖当前数据库，所以必须先把它「是什么」摆出来（哪天的、
@@ -209,7 +220,11 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
       setIndexState(await repo.searchIndexStats());
       setProbe(await repo.selfTestSearch(5));
       setQuickOn(await isQuickRecordEnabled());
-      setRemindOn(await isDigestReminderEnabled());
+      setQuickBlocked(await isQuickRecordBlocked());
+      const remind = await digestReminderState();
+      setRemindOn(remind.on);
+      setRemindBlocked(remind.blocked);
+      setRemindAt(remind.at);
     })();
   }, []);
 
@@ -476,6 +491,7 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
     setQuickOn(next);
     setQuickMsg(null);
     const res = await setQuickRecordEnabled(next);
+    setQuickBlocked(await isQuickRecordBlocked());
     if (!res.ok) {
       setQuickOn(!next);
       setQuickMsg({ kind: 'err', text: res.reason });
@@ -499,10 +515,15 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
     const res = await setDigestReminderEnabled(next);
     if (!res.ok) {
       setRemindOn(!next);
+      setRemindBlocked((await digestReminderState()).blocked);
       setRemindMsg({ kind: 'err', text: res.reason });
       return;
     }
-    onReminderChange?.();
+    // 等 App 真的排完再读状态：不然「下次提醒」会停在 0，用户以为没排上
+    await onReminderChange?.();
+    const state = await digestReminderState();
+    setRemindBlocked(state.blocked);
+    setRemindAt(state.at);
     setRemindMsg({
       kind: 'ok',
       text: next ? '有月份的小结没写时，晚上 8 点提醒一次' : '已关掉',
@@ -1111,6 +1132,23 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
                 {remindMsg.text}
               </Text>
             )}
+            {/*
+              开关在 App 里，权限在系统里：用户去系统设置关一次通知，这里两行还都写着「开启」。
+              不说出来的话，他只会以为是这功能坏了 —— 而这句解释是唯一能找到原因的地方。
+            */}
+            {remindOn && remindAt > 0 && !remindBlocked ? (
+              <Text style={[styles.msg, styles.msgMuted]}>下次提醒：{reminderWhenLabel(remindAt)}</Text>
+            ) : null}
+            {remindOn && !remindBlocked && remindAt === 0 ? (
+              <Text style={[styles.msg, styles.msgMuted]}>
+                现在没有欠着的小结，所以还不会提醒；等有月份没写时自动排上。
+              </Text>
+            ) : null}
+            {(quickOn && quickBlocked) || (remindOn && remindBlocked) ? (
+              <Text style={[styles.msg, styles.msgErr]}>
+                系统里没有通知权限，开着的那条发不出来。到系统设置 → 应用 → 碎片 → 通知里打开。
+              </Text>
+            ) : null}
           </View>
         </ScrollView>
       ) : null}
@@ -1441,6 +1479,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   solidBtnText: { ...TYPE.label, color: c.onAccent },
 
   msg: { ...TYPE.compact, marginTop: SPACE.sm },
+  /** 「下次提醒」这种纯信息行：不是成功也不是失败，别用绿/红 */
+  msgMuted: { color: c.text3 },
   msgOk: { color: c.tealText },
   msgErr: { color: c.danger },
 
