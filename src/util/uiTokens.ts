@@ -91,8 +91,8 @@ function buildType(factor: number): Record<TypeKey, TypeRole> {
  * 而每个工厂照旧写 `...TYPE.body`。
  *
  * 代价是它不纯：读 TYPE 的地方必须在**重新渲染之后**才拿到新值。
- * 所以改档位一定要走 `applyTypeScale`（先改这里、再 setState），
- * 别在渲染过程中调 `setTypeScale`。
+ * 所以改档位一定是「先 `setTypeScale`，再 setState」（见 App 的 `changeTypeScale`），
+ * 顺序反了第一帧还是旧字号；也不要在渲染过程中调它。
  */
 export let TYPE = buildType(1);
 
