@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.26.0 / versionCode 74 |
+| 版本 | v0.26.1 / versionCode 75 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.26.0 已由[CI 44304728622](https://github.com/gup-n/fragements/actions/runs/44304728622)构建并发布（26,235,074 字节，SHA-256 `02763df3…d790`，`draft=false`，分段下载拼接后字节数与资产一致、文件头为 `PK`）。可回退：v0.25.3（[CI 44207941354](https://github.com/gup-n/fragements/actions/runs/44207941354)，26,225,738 字节，SHA-256 `5cd1fa39…94e7`）、v0.25.2（[CI 44207287545](https://github.com/gup-n/fragements/actions/runs/44207287545)，26,224,674 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,15 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.26.1：搜索不能只看第一页
+
+v0.26.0 的副作用，发布后自己查出来的：首页搜索原来是在内存里 `includes` 全量数组，
+换成按页读之后窗口只剩 200 条 —— 搜更早的词会得到「找到 0 条」。
+
+现在两路合并（`util/paging.mergeWindowHits`）：窗口内的命中（快、能兜住 FTS 分不出的单字/emoji）
++ `repo.searchFragments(q, 200)` 的整库命中，按 id 去重。防抖 150ms、清空词要清掉旧命中、
+检索失败时只显示本地命中而不是说「搜不到」。
 
 ### v0.26.0：大库分页、四档字号、历史抽屉
 
@@ -362,7 +371,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/digestReminder.ts` | 224 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1961 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1989 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1866 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 160 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
@@ -504,7 +513,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/color.ts` [打开](<src/util/color.ts>) | 23 | 唯一一份 `withAlpha`：三位/六位十六进制、alpha 夹紧；PDF 高亮与毛玻璃共用 |
 | `src/util/platformStyle.ts` [打开](<src/util/platformStyle.ts>) | 14 | `WEB_INPUT_RESET`：web 上 TextInput 的 outline 复位，全库只此一处 `any` |
 | `src/util/digest.ts` [打开](<src/util/digest.ts>) | 152 | 月总结缺口与历史小结分组，组内不重排；缺口只吃「每月条数」（`countByMonth` / SQL 聚合） |
-| `src/util/paging.ts` [打开](<src/util/paging.ts>) | 46 | 首页分页的纯判据：页大小、按 id 去重接页、还剩多少条（夹到 0） |
+| `src/util/paging.ts` [打开](<src/util/paging.ts>) | 64 | 首页分页的纯判据：页大小、按 id 去重接页、窗口命中与整库命中的合并、还剩多少条（夹到 0） |
 | `src/util/todoTree.ts` [打开](<src/util/todoTree.ts>) | 125 | 父子树、唯一完成级联计划与展开 |
 | `src/util/qaScope.ts` [打开](<src/util/qaScope.ts>) | 70 | 记录/文档范围规范化、身份与比较 |
 | `src/util/qaNote.ts` [打开](<src/util/qaNote.ts>) | 20 | 历史纪要文本包装工具，不是恢复旧整理产物入口 |
@@ -538,7 +547,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 636 | 38项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
-| `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 133 | 9项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载 |
+| `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 155 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 

@@ -35,6 +35,24 @@ export function appendPage(current: Fragment[], page: Fragment[]): Fragment[] {
 }
 
 /**
+ * 把「窗口内的命中」和「整库的命中」合起来。
+ *
+ * v0.26 把首页的碎片换成按页加载之后，搜索框原本是**在内存里过滤那个数组**的 ——
+ * 于是搜一个三个月前的词会得到「找到 0 条」，而那条碎片明明在库里。
+ * 这就是 ROADMAP 里当初写着「只给时间轴分页会让搜索变成谎话」的那件事。
+ *
+ * 现在两路都走：窗口内的（快、能立刻出结果、含 `includes` 这种 FTS 分不出的短词）
+ * 加上整库检索回来的（`repo.searchFragments`），按 id 去重。
+ * 顺序不动本地那一段 —— 用户在输入框里看着列表一条条减少，位置跳动比少几条更烦。
+ */
+export function mergeWindowHits(local: Fragment[], remote: Fragment[]): Fragment[] {
+  if (!remote.length) return local;
+  const seen = new Set(local.map((f) => f.id));
+  const extra = remote.filter((f) => !seen.has(f.id));
+  return extra.length ? local.concat(extra) : local;
+}
+
+/**
  * 还没读进来的条数（底栏那句「还有 N 条更早的」）。
  *
  * 用总数减已加载 —— 不拿「这一页是不是满的」反推：满了不代表还有，

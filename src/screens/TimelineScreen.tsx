@@ -31,8 +31,9 @@ import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
 import { fragmentSearchText, imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { imageToken, removeToken, stripImageTokens } from '../util/inlineImages';
-import { olderCount } from '../util/paging';
+import { mergeWindowHits, olderCount } from '../util/paging';
 import { fragmentImageUri } from '../db/fragmentImages';
+import { repo } from '../db/repo';
 
 /**
  * 时间轴上混着两种东西：碎片和周期总结。
@@ -355,14 +356,41 @@ export function TimelineScreen({
    * 只搜「看得见的东西」。以前还搜 tags，但标签已经不在界面上显示了 ——
    * 靠一个看不见的字段命中，用户只会觉得「搜到了什么？哪儿呢」。
    */
+  /*
+   * 搜索：窗口内命中的 + **整库**检索回来的。
+   *
+   * v0.26 之前首页拿着全量数组，`includes` 一遍就等于整库搜索；换成按页读之后
+   * 只搜窗口就会变成「搜不到三个月前的词，还写着找到 0 条」——
+   * 那是这个版本最容易犯、也最难被自己发现的错。
+   * FTS 分不出 1 个字或 emoji，所以本地那一路留着，两路按 id 合并。
+   */
+  const [dbHits, setDbHits] = useState<Fragment[] | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setDbHits(null);
+      return;
+    }
+    let alive = true;
+    // 150ms：打字过程里不必每敲一个字就查一次库，但也不能等太久
+    const timer = setTimeout(() => {
+      repo
+        .searchFragments(q, 200)
+        .then((list) => { if (alive) setDbHits(list); })
+        // 检索失败就只说本地命中的那些，别把「库搜不了」说成「搜不到」
+        .catch(() => { if (alive) setDbHits(null); });
+    }, 150);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [query]);
+
   const visibleFragments = useMemo(() => {
     const base = filter ? fragments.filter((f) => f.project === filter.value) : fragments;
     const q = query.trim().toLowerCase();
     if (!q) return base;
-    return base.filter(
-      (f) => fragmentSearchText(f).toLowerCase().includes(q),
-    );
-  }, [fragments, query, filter]);
+    const local = base.filter((f) => fragmentSearchText(f).toLowerCase().includes(q));
+    const remote = (dbHits ?? []).filter((f) => !filter || f.project === filter.value);
+    return mergeWindowHits(local, remote);
+  }, [fragments, query, filter, dbHits]);
 
   /**
    * 分区。

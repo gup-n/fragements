@@ -28,7 +28,7 @@ const { test } = suite;
 
 const pure = createLoader();
 const paging = pure.load('src/util/paging.ts');
-const { PAGE_SIZE, appendPage, olderCount } = paging;
+const { PAGE_SIZE, appendPage, mergeWindowHits, olderCount } = paging;
 
 const frag = (id, createdAt = 1) => ({
   id, content: `f${id}`, createdAt, source: 'app', status: 'inbox',
@@ -62,6 +62,28 @@ test('还有多少更早的：总数减已加载，绝不出现负数', () => {
   assert.equal(olderCount(500, 200), 300);
   assert.equal(olderCount(200, 200), 0, '刚好读完');
   assert.equal(olderCount(200, 201), 0, '并发删除让总数变小，也不能说「还有 -1 条」');
+});
+
+/*
+ * 搜索必须还是「整库」的。
+ *
+ * v0.26 把首页的碎片换成一窗之后，搜索框原来那行 `includes` 只在这个窗口里过滤 ——
+ * 搜三个月前的词会得到「找到 0 条」，而那条碎片明明在库里。
+ * 这正好是 ROADMAP 当初写下的那三条「分页会让它默默算错」之一。
+ */
+test('搜索两路合并：窗口内命中 + 整库检索，按 id 去重', () => {
+  const local = [frag(5), frag(3)];
+  const remote = [frag(3), frag(1)]; // 3 两边都有
+  const merged = mergeWindowHits(local, remote);
+  assert.deepEqual(merged.map((f) => f.id), [5, 3, 1], '本地那段顺序不动，只把缺的接在后面');
+  assert.equal(mergeWindowHits(local, []), local, '整库没命中时原样返回');
+  assert.equal(mergeWindowHits(local, [frag(5), frag(3)]), local, '全是重复的也原样返回');
+
+  const timeline = read('src/screens/TimelineScreen.tsx');
+  assert.ok(/repo\s*\.\s*searchFragments\(/.test(timeline), '要问库，不是在内存里过滤那一窗');
+  assert.ok(timeline.includes('mergeWindowHits(local, remote)'), '两路结果必须合并');
+  assert.ok(timeline.includes('setDbHits(null)'), '清空搜索词要清掉上一次的库命中');
+  assert.ok(/clearTimeout\(timer\)/.test(timeline), '防抖要能取消，否则打完字还在查上一串');
 });
 
 test('SQL 的分组口径必须带 localtime，且与 JS 的 dayKey/monthKey 对齐', () => {

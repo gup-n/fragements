@@ -125,6 +125,9 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **SQL 的分组必须带 `'localtime'`**：`created_at` 是毫秒时间戳，`strftime('%Y-%m-%d', created_at/1000, 'unixepoch', 'localtime')`。
   少了它，UTC+8 的夜里记的东西会被算到前一天/前一月 —— 日历上「今天明明记了」却没有点，
   而桌面时区跑断言看不出来。改这里要同步 web 侧（它用同一个 `dayKey` / `countByMonth`）。
+- **首页搜索必须同时问库**（`repo.searchFragments`），不能只过滤已加载的那一窗。
+  v0.26.0 就栽在这里：`includes` 一窗 = 搜不到更早的记录，界面还很确定地说「找到 0 条」。
+  两路合并的判据在 `util/paging.mergeWindowHits`。
 - **`onLoadDay` 这类回调必须 `useCallback`**。日历把它当 effect 依赖，每次 render 换新函数
   就会「读到 → setState → 重渲染 → 再读」，日历一打开就不停发查询。
 - **`TYPE` 是会变的导出**（v0.26 字号档位）。它现在等于「当前档位下的一套字号」，
