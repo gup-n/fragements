@@ -178,6 +178,10 @@ test('系统里没了权限要说出原因，不能让开关看着还开着', ()
     '这句话要落在「通知」那张卡里，而不是飘到别的分区',
   );
 
+  // 过去的那一刻不能叫「下次」：响过之后设置页要说的是「已经提醒过」
+  assert.ok(settings.includes('remindAt > Date.now()'), '只在时刻还在未来时写「下次提醒」');
+  assert.ok(settings.includes('已经提醒过一次'), '响过了要说清 3 天冷却，而不是把昨天写成「下次」');
+
   const quick = read('src/quickRecord.ts');
   assert.ok(quick.includes('export async function isQuickRecordBlocked'), '状态判断放模块里，不放界面里');
 

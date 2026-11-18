@@ -118,6 +118,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - 正文配图标记仅走[inlineImages](<src/util/inlineImages.ts>)：光标插入、pending键换id、去重与删除标记。模型材料、检索、文字导出剥离定位语法；原图与图片文字不是同一数据。
 - 历史SQL清空字段沿用 `NULL` 字面量，不把已踩过坑的UPDATE改回绑定null；不拿驱动返回的 `changed === 0` 判失败。刷新与实际提交状态分别处理。
 - **系统分享的 json 有两个形状**：v0.25 起是 `files: [{file, name}]`，之前是单个 `file`/`name`。读的时候两条都要认 —— 升级前分享、升级后才打开 App 的机器上，磁盘里躺的是旧形状。`disk`（安全名）只用来删文件，`name`（原名）才入库。
+- **分享的幂等键在读的时候就推进了**（`share_last_at`），所以「读到了」不等于「存进去了」。一份都没存成功时必须 `rewindIncomingShare(prevAt)` 退回去，否则文件还在私有目录、界面什么都没有 —— 静默丢内容。已经存进去一部分时不许退（会让那部分再进一遍）。
 - **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。
 
 ## 6. 搜索与Markdown文字迁出

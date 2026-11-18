@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.25.2 / versionCode 72 |
+| 版本 | v0.25.3 / versionCode 73 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.25.1 已由[CI 44205956805](https://github.com/gup-n/fragements/actions/runs/44205956805)构建并发布（26,220,466 字节，SHA-256 `acfdfd09…1edb`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.25.0（[CI 44025589732](https://github.com/gup-n/fragements/actions/runs/44025589732)，26,220,134 字节，SHA-256 `65ce5a96…5c80`）、v0.24.2（[CI 43881231804](https://github.com/gup-n/fragements/actions/runs/43881231804)，26,206,774 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,16 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.25.3：分享失败不再静默丢内容；设置页不说「昨天是下次」
+
+- `takeIncomingShare` 读的时候就把幂等键推到最新，于是**导入失败也被记住**，那条分享再也读不到。
+  现在 `IncomingShare.prevAt` + `rewindIncomingShare`：只在 `consumed === 0`（一份都没存成功）时退回键，
+  下次启动重来；部分成功不退（重复比丢失轻，但能不重复就别重复）。
+- 设置页原来把 `digest_reminder_at`（上次排定时刻）一律写成「下次提醒」，响过之后会显示**过去**的时刻。
+  现在按 `planDigestReminder` 的三个分支分三种说法：未来 / 已经提醒过（3 天冷却）/ 从没排上。
+
+`test:ui` 37 → 38（分享失败回退），`test:reminder` 13 项（过去时刻不能叫「下次」）。
 
 ### v0.25.2：权限失配与「下次提醒」
 
@@ -316,9 +326,9 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 749 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 764 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 141 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
-| `src/shareInbox.ts` | 155 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件列表，用时间戳做幂等键只消费一次；`files[]` 与旧版单文件 json 都认；每个文件各自判 mime / 扩展名 |
+| `src/shareInbox.ts` | 177 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件列表，用时间戳做幂等键只消费一次（失败可退回 `prevAt`）；`files[]` 与旧版单文件 json 都认；每个文件各自判 mime / 扩展名 |
 | `src/digestReminder.ts` | 224 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
@@ -329,7 +339,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 678 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1015 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1611 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1620 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 283 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 50 | 无颜色TYPE/SPACE、装饰边线与显式outline判据；底栏不再靠它算槽宽 |
@@ -494,8 +504,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 831 | 问页意图、草稿与输出兼容 |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1871 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 403 | 两轴外观、真实对比度、PDF与阅读器契约 |
-| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 621 | 37项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
-| `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 222 | 11项：提醒时刻、不重排、3天冷却、账清就撤、正文口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 636 | 38项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
+| `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 226 | 11项：提醒时刻、不重排、3天冷却、账清就撤、正文口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 

@@ -33,7 +33,7 @@ import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
 import { syncDigestReminder, watchDigestReminder } from './src/digestReminder';
-import { dropIncomingFile, takeIncomingShare } from './src/shareInbox';
+import { dropIncomingFile, rewindIncomingShare, takeIncomingShare, type IncomingShare } from './src/shareInbox';
 
 /**
  * 路由就是底栏上的那五个页面，没有第六个。
@@ -472,9 +472,20 @@ function Shell({ booted }: { booted: boolean }) {
     let alive = true;
 
     const take = async () => {
+      /**
+       * 这次分享读到的东西，和「真的存进去了几份」。
+       *
+       * 两者都为了失败时能退：`takeIncomingShare` 在读的时候就把幂等键推到最新
+       * （不然同一条会被反复弹出），但如果一份都没存成功，那这次分享就等于丢了 ——
+       * 文件还躺在私有目录里，界面上什么都没有。这时把键退回去，下次启动还能再来一次。
+       */
+      let inc: IncomingShare | null = null;
+      let consumed = 0;
       try {
-        const inc = await takeIncomingShare();
-        if (!inc || !alive) return;
+        const share = await takeIncomingShare();
+        if (!share || !alive) return;
+        // 留一份给 catch：失败且一份都没存下去时要拿它退幂等键
+        inc = share;
 
         /*
          * 一次分享里可能有好几个文件（相册多选、文件管理器多选）。分两路走：
@@ -482,14 +493,15 @@ function Shell({ booted }: { booted: boolean }) {
          * - 文档 → 一份一条进文档库（各自能读、能云解析，合成一条反而不好找）
          * 只有文字时才拼进输入框。
          */
-        const images = inc.files.filter((f) => f.kind === 'image');
-        const docs = inc.files.filter((f) => f.kind !== 'image');
+        const images = share.files.filter((f) => f.kind === 'image');
+        const docs = share.files.filter((f) => f.kind !== 'image');
         const notices: string[] = [];
 
         if (images.length) {
-          await handleAdd(inc.text, images.map((f, i) => ({ key: `p${inc.at}-${i}`, uri: f.uri })));
+          await handleAdd(share.text, images.map((f, i) => ({ key: `p${share.at}-${i}`, uri: f.uri })));
           // 内容已经进了碎片目录，中转那份留着只会让「每分享一次多存一份」
           for (const image of images) await dropIncomingFile(image.disk);
+          consumed += images.length;
           if (!alive) return;
           notices.push(
             images.length > 1 ? `已把分享的 ${images.length} 张图存成一条碎片` : '已把分享的图片存成一条碎片',
@@ -508,6 +520,7 @@ function Shell({ booted }: { booted: boolean }) {
           const saved = await importLocalFile({ uri: doc.uri, name: doc.name });
           // 每成功一份就清一份：中途失败时，已经入库的那些不会在下次重试里再来一遍
           await dropIncomingFile(doc.disk);
+          consumed += 1;
           savedDocs.push(saved.name);
         }
         if (savedDocs.length) {
@@ -518,13 +531,13 @@ function Shell({ booted }: { booted: boolean }) {
           );
         }
 
-        if (!inc.files.length) {
-          if (!inc.text.trim()) {
+        if (!share.files.length) {
+          if (!share.text.trim()) {
             setWriteNotice('这次分享里没有可保存的内容');
             return;
           }
           // 拼在已有草稿后面：用户可能已经写了一半，直接覆盖等于把他的话删了
-          setDraft((prev) => (prev.trim() ? `${prev}\n${inc.text}` : inc.text));
+          setDraft((prev) => (prev.trim() ? `${prev}\n${share.text}` : share.text));
           setRoute('timeline');
           setWriteNotice('已把分享的文字放进输入框，确认后再发布');
           return;
@@ -535,6 +548,8 @@ function Shell({ booted }: { booted: boolean }) {
         setRoute(savedDocs.length && !images.length ? 'docs' : 'timeline');
         setWriteNotice(notices.join('；'));
       } catch (e) {
+        // 一份都没存进去 = 这次分享整体丢了，退回幂等键让下次启动重来
+        if (inc && consumed === 0) await rewindIncomingShare(inc.prevAt);
         if (alive) {
           setWriteNotice(e instanceof Error ? `没接住这次分享：${e.message}` : '没接住这次分享');
         }

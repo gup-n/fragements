@@ -36,6 +36,14 @@ export interface IncomingFile {
 
 export interface IncomingShare {
   at: number;
+  /**
+   * 消费前那个幂等键的值。
+   *
+   * 读取时就把键推进到 `at`（否则同一条会被反复弹出），但如果后面**一份文件都没处理成功**，
+   * 必须把它退回来，否则这次分享就永远读不到了 —— 文件还在私有目录里，界面上却什么都没有，
+   * 那是「静默丢内容」，比重复一条严重得多。见 `rewindIncomingShare`。
+   */
+  prevAt: number;
   mime: string;
   /** 分享时带的文字（微信分享图片常带一句描述，也可能为空） */
   text: string;
@@ -131,7 +139,21 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
     if (legacy) files.push(legacy);
   }
 
-  return { at, mime, text, files };
+  return { at, prevAt: last, mime, text, files };
+}
+
+/**
+ * 把幂等键退回消费前的位置。
+ *
+ * **只在「一份都没处理成功」时调**：全都失败说明这次分享等于丢了，下次启动要能重来一次；
+ * 已经存进去一部分时退回去会让那部分再进一遍（重复比丢失好，但能不重复就别重复）。
+ */
+export async function rewindIncomingShare(prevAt: number): Promise<void> {
+  try {
+    await repo.setSetting(LAST_KEY, String(prevAt));
+  } catch {
+    /* 退不回去最多丢这一条；不因为记不上键把错误盖成别的 */
+  }
 }
 
 /**

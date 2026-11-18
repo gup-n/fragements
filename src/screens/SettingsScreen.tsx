@@ -1136,8 +1136,17 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
               开关在 App 里，权限在系统里：用户去系统设置关一次通知，这里两行还都写着「开启」。
               不说出来的话，他只会以为是这功能坏了 —— 而这句解释是唯一能找到原因的地方。
             */}
-            {remindOn && remindAt > 0 && !remindBlocked ? (
+            {/*
+              三种状态要分开说，不能把过去那一刻当「下次」：
+              排在未来 → 下次是几号；已经响过了 → 说明 3 天冷却；从没排上 → 说明为什么没排。
+            */}
+            {remindOn && !remindBlocked && remindAt > Date.now() ? (
               <Text style={[styles.msg, styles.msgMuted]}>下次提醒：{reminderWhenLabel(remindAt)}</Text>
+            ) : null}
+            {remindOn && !remindBlocked && remindAt > 0 && remindAt <= Date.now() ? (
+              <Text style={[styles.msg, styles.msgMuted]}>
+                已经提醒过一次（{reminderWhenLabel(remindAt)}）；小结还没写的话，3 天后会再提醒。
+              </Text>
             ) : null}
             {remindOn && !remindBlocked && remindAt === 0 ? (
               <Text style={[styles.msg, styles.msgMuted]}>

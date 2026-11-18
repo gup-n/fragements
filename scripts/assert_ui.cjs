@@ -462,6 +462,21 @@ test('分享进来的文件进文档库，中转副本用完就删', () => {
 });
 
 /*
+ * 幂等键在读的时候就推进到最新（否则同一条会被反复弹出），代价是**失败也会被记住**。
+ * 一份都没存下去时必须退回来：文件还躺在私有目录里，界面上什么都没有，那是静默丢内容。
+ */
+test('分享一份都没存下去时，退回幂等键让下次能重来', () => {
+  const fs = require('node:fs');
+  const app = fs.readFileSync('App.tsx', 'utf8');
+  const inbox = fs.readFileSync('src/shareInbox.ts', 'utf8');
+  assert.ok(inbox.includes('prevAt: number'), '要记住消费前的键');
+  assert.ok(inbox.includes('prevAt: last'), '返回时要带上它');
+  assert.ok(inbox.includes('export async function rewindIncomingShare'), '要有一个退回去的入口');
+  assert.ok(app.includes('consumed === 0') && app.includes('rewindIncomingShare(inc.prevAt)'), '只在「一份都没成功」时退');
+  assert.ok(app.includes('consumed += 1') || app.includes('consumed += images.length'), '每成功一份要计数，否则分不清「全失败」和「部分成功」');
+});
+
+/*
  * 多选分享（相册里一次选三张图）走的是 ACTION_SEND_MULTIPLE，和单选是两种 intent。
  * 只接单选时那些图会**全部丢掉**，而且没有任何提示 —— 这类问题只能在源码层面钉。
  */
