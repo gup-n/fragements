@@ -20,7 +20,7 @@ import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
 import { normalizeTagName } from '../util/docTags';
-import { removeImageToken, resolvePendingTokens } from '../util/inlineImages';
+import { docImageNames, removeImageToken, resolvePendingTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 import { dayKey } from '../util/date';
@@ -99,7 +99,12 @@ function purgeIn(d: WebDb, keys: Set<string>): string[] {
   d.fragments = d.fragments.filter((f) => !hit('fragment', f.id));
 
   const goneDocs = new Set(d.documents.filter((x) => hit('document', x.id)).map((x) => x.id));
-  for (const doc of d.documents) if (hit('document', doc.id) && doc.fileUri) files.push(doc.fileUri);
+  for (const doc of d.documents) {
+    if (!hit('document', doc.id)) continue;
+    if (doc.fileUri) files.push(doc.fileUri);
+    // 内嵌图只有文件名、没有行 —— 正文一删就再也找不到它们
+    for (const name of docImageNames(doc.bodyMd)) files.push(name);
+  }
   d.documents = d.documents.filter((x) => !hit('document', x.id));
   d.documentChunks = d.documentChunks.filter((c) => !goneDocs.has(c.documentId));
   d.docTagLinks = d.docTagLinks.filter((l) => !goneDocs.has(l.documentId));

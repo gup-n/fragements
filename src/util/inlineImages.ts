@@ -18,12 +18,49 @@ import type { Fragment } from '../types';
 /** 整行只有一个图片标记。行内混排不支持 —— 图片是块级的东西，挤在句子里反而更乱 */
 const BLOCK_RE = /^!\[[^\]]*\]\(img:(\d+)\)$/;
 
+/**
+ * 文档内嵌图（v0.29）：`![](doc-img:<文件名>)`。
+ *
+ * 为什么不复用 `img:<id>`：那个 id 指向 `fragment_images` 表的行，
+ * 而文档里没有这张表。硬套上去要么查不到（图消失），要么得为文档另建一张
+ * 「文档图片」表 —— 而它需要的字段和配图表一模一样。
+ * 这里直接存文件名：文件仍然落在 `fragment-images/` 目录里，
+ * 备份、清理、换机全都不用另写一套。
+ *
+ * 两种标记必须能分开认：`img:12` 是库里的一行，`doc-img:abc.jpg` 是一个文件。
+ */
+const DOC_BLOCK_RE = /^!\[[^\]]*\]\(doc-img:([^)\s]+)\)$/;
+const DOC_ANY_RE = /!\[[^\]]*\]\(doc-img:([^)\s]+)\)/g;
+
 /** 任意位置的标记（含待发的 `p` 形式），用于剥离与计数 */
 const ANY_RE = /!\[[^\]]*\]\(img:(?:p?\d+)\)/g;
 
 /** 生成标记。`key` 是配图 id 或 `p1` 这种待发键 */
 export function imageToken(key: number | string): string {
   return `![](img:${key})`;
+}
+
+/** 生成文档内嵌图的标记 */
+export function docImageToken(name: string): string {
+  return `![](doc-img:${name})`;
+}
+
+/** 这一行是文档内嵌图时返回文件名，否则 null */
+export function docImageNameOfLine(line: string): string | null {
+  const m = line.trim().match(DOC_BLOCK_RE);
+  return m ? m[1] : null;
+}
+
+/**
+ * 正文里引用了哪些内嵌图文件（去重前保留顺序）。
+ *
+ * 彻底删除文档时用它把文件一起删掉 —— 这些文件没有数据库行指着它们，
+ * 只要正文没了就再也没人知道它们存在。
+ */
+export function docImageNames(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(DOC_ANY_RE)) out.push(m[1]);
+  return out;
 }
 
 /** 这一行是图片标记时返回配图 id，否则 null */

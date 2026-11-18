@@ -1408,6 +1408,18 @@ stage:  'library' | 'archived'
   读的时候过滤它，是给「别处导进来的待确认标签」留的门；
 - `count` 只数**在库里**的文档：归档的与回收站里的不算，否则标签会永远挂着不实的数字。
 
+### 9.1.4b 文档内嵌图（v0.29）
+
+正文里一行 `![](doc-img:<文件名>)`，文件存在 `fragment-images/`（与碎片配图同目录）。
+
+- **不复用 `img:<id>`**：那个 id 指向 `fragment_images` 的行，文档没有这张表；
+  另建一张「文档图片」表的字段会和它一模一样，收益只有「能按 id 引用」。
+- **文件只被正文引用**：没有数据库行指着它们，所以彻底删除文档时
+  必须先读 `body_md` 扫出文件名再删行（`purgeRefs` / `purgeIn`）。
+- 渲染：`mdBlocks.ImageBlock` 是联合类型（`{id}` 或 `{file}`），
+  `NoteBody` 用 `imageUri` / `fileUri` 两个回调分别换 uri；拿不到就整块跳过。
+- 点开大图只对碎片配图生效（文档内嵌图还没有全屏页）。
+
 ### 9.1.5 AI 提案：唯一能写业务表的地方
 
 `doc_proposals(id, kind, document_id, payload, state, created_at, decided_at)`。

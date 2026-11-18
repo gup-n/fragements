@@ -28,7 +28,7 @@ import { normalizeTagName } from '../util/docTags';
 import { parseProposalPayload, serializeProposalPayload } from '../util/proposal';
 import { planToggle } from '../util/todoTree';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
-import { removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
+import { docImageNames, removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 import {
@@ -957,9 +957,16 @@ function purgeRefs(d: SQLite.SQLiteDatabase, refs: TrashRef[]): string[] {
       d.runSync('DELETE FROM document_chunks_fts WHERE rowid = ?', [row.id]);
     }
     d.runSync('DELETE FROM document_chunks WHERE document_id = ?', [id]);
-    /* trash:ok 真删的时候才取原件路径，这一行读的正是要删的那条 */
-    const uri = d.getFirstSync<{ file_uri: string | null }>('SELECT file_uri FROM documents WHERE id = ?', [id])?.file_uri;
-    if (uri) files.push(uri);
+    /* trash:ok 真删的时候才取原件路径与正文，这一行读的正是要删的那条 */
+    const row = d.getFirstSync<{ file_uri: string | null; body_md: string }>(
+      'SELECT file_uri, body_md FROM documents WHERE id = ?', [id],
+    );
+    if (row?.file_uri) files.push(row.file_uri);
+    /*
+     * 文档内嵌图（v0.29）没有数据库行指着它们，只在正文里留了文件名。
+     * 正文一删就再也没人知道这些文件存在 —— 所以必须在删行之前扫出来。
+     */
+    if (row?.body_md) for (const name of docImageNames(row.body_md)) files.push(name);
     d.runSync('DELETE FROM doc_tag_links WHERE document_id = ?', [id]);
     d.runSync('DELETE FROM documents WHERE id = ?', [id]);
   }

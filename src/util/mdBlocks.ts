@@ -16,7 +16,7 @@ import { visualLen } from './text';
  */
 
 import type { QaCiteKind } from '../types';
-import { imageIdOfLine } from './inlineImages';
+import { docImageNameOfLine, imageIdOfLine } from './inlineImages';
 
 /**
  * 引用标记的来源种类：F = 碎片、N = 小结、T = 待办、W = 网络资料。
@@ -89,10 +89,11 @@ export interface CodeBlock {
  * 只带 id 不带路径：路径要经过文件层拼，解析层是纯函数，碰不到文件系统。
  * 渲染层拿到 id 自己去找 URI，找不到就整块跳过。
  */
-export interface ImageBlock {
-  kind: 'image';
-  id: number;
-}
+export type ImageBlock =
+  /** 碎片配图：id 指向 `fragment_images` 的一行，渲染时由调用方换成 uri */
+  | { kind: 'image'; id: number }
+  /** 文档内嵌图（v0.29）：直接给文件名，同样由调用方换 uri */
+  | { kind: 'image'; file: string };
 
 export type Block = TextBlock | TableBlock | CodeBlock | ImageBlock | { kind: 'hr' };
 
@@ -370,6 +371,11 @@ export function parseBlocks(text: string, opts?: { literalCitations?: boolean })
     const pic = imageIdOfLine(line);
     if (pic !== null) {
       blocks.push({ kind: 'image', id: pic });
+      continue;
+    }
+    const picFile = docImageNameOfLine(line);
+    if (picFile) {
+      blocks.push({ kind: 'image', file: picFile });
       continue;
     }
 

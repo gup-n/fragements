@@ -32,6 +32,8 @@ const trash = pure.load('src/util/trash.ts');
 const docTags = pure.load('src/util/docTags.ts');
 const proposal = pure.load('src/util/proposal.ts');
 const batch = pure.load('src/util/docBatch.ts');
+const inline = pure.load('src/util/inlineImages.ts');
+const md = pure.load('src/util/mdBlocks.ts');
 
 /* ------------------------------------------------------------------ */
 /* 一、源码扫描：每条查询都要带软删过滤                                  */
@@ -390,6 +392,43 @@ test('批量先问做什么：整理正文 / 打标签', () => {
   assert.ok(sheet.includes("planBatch('tag'"), '要有「打标签」这条路');
   assert.ok(sheet.includes('const [kind, setKind] = useState<ProposalKind | null>(null)'), '没选之前不许自己猜一个动作');
   assert.ok(!/useState<BatchPlan>\(\(\) => planBatch/.test(sheet), '计划要等用户选了动作才建');
+});
+
+test('文档内嵌图与碎片配图分开认，谁也不吞谁', () => {
+  // 碎片的 `img:12` 指向一张配图行；文档的 `doc-img:名` 只是一个文件。
+  // 认错一边的后果是「图消失」或「模板串显示成正文」
+  assert.equal(inline.docImageNameOfLine('![](img:12)'), null);
+  assert.equal(inline.imageIdOfLine('![](doc-img:abc.jpg)'), null);
+  assert.equal(inline.docImageNameOfLine('![](doc-img:abc.jpg)'), 'abc.jpg');
+  assert.equal(inline.imageIdOfLine('![](img:12)'), 12);
+  assert.equal(inline.docImageToken('abc.jpg'), '![](doc-img:abc.jpg)');
+  assert.equal(inline.docImageNameOfLine('前面有字 ![](doc-img:abc.jpg)'), null, '行内混排不认，图是块级的');
+});
+
+test('文档内嵌图能被解析成图片块，而不是一段乱码', () => {
+  const blocks = md.parseBlocks('第一段\n\n![](doc-img:a.jpg)\n\n第二段');
+  const kinds = blocks.map((b) => b.kind);
+  assert.ok(kinds.includes('image'), '图片行要变成 image 块');
+  const pic = blocks.find((b) => b.kind === 'image');
+  assert.equal(pic.file, 'a.jpg', '文件名要原样带出来，交给渲染层拼 uri');
+  assert.ok(!blocks.some((b) => b.kind === 'p' && b.segs.some((seg) => seg.text.includes('doc-img'))), '不许把标记当正文显示');
+});
+
+test('彻底删除文档时要连内嵌图一起删', () => {
+  for (const file of ['src/db/repo.native.ts', 'src/db/repo.web.ts']) {
+    const text = read(file);
+    assert.ok(text.includes('docImageNames('), `${file} 的彻底删除没扫正文里的内嵌图 —— 那些文件会永远留在手机上`);
+  }
+  // 删行之前必须先读到正文，反过来就什么都读不到了
+  const native = read('src/db/repo.native.ts');
+  const scanAt = native.indexOf('docImageNames(row.body_md)');
+  const dropAt = native.indexOf('DELETE FROM documents WHERE id = ?', scanAt);
+  assert.ok(scanAt > 0 && dropAt > scanAt, '先扫正文再删行');
+});
+
+test('摘要里不许出现图片标记', () => {
+  const util = read('src/util/knowledgeDoc.ts');
+  assert.ok(util.includes('doc-img:'), 'excerptOf 要连同文档内嵌图一起去掉');
 });
 
 test('回收站入口在设置的数据页里，不是新开一个底栏项', () => {

@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.28.1 / versionCode 78 |
+| 版本 | v0.29.0 / versionCode 79 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.28.0 待发（本文写作时刚通过全量断言，尚未打 tag）。上一版 v0.27.0 已由[CI 44311034819](https://github.com/gup-n/fragements/actions/runs/44311034819)构建并发布（26,237,522 字节，SHA-256 `503f9486…b619`，`draft=false`；经 ghfast.top 镜像整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.26.1（[CI 44308612456](https://github.com/gup-n/fragements/actions/runs/44308612456)，26,236,094 字节，SHA-256 `6766b40c…e9ed`）、v0.26.0（[CI 44304728622](https://github.com/gup-n/fragements/actions/runs/44304728622)，26,235,074 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,16 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.29.0：文档内嵌图
+
+- 标记 `![](doc-img:<文件名>)`，文件仍放 `fragment-images/` —— 备份、换机、单文件删除都不用改。
+- `mdBlocks.ImageBlock` 变成联合类型（`id` 或 `file`），`NoteBody` 用 `fileUri` 回调渲染第二种；
+  `TextReader` 传 `fragmentImageUri`。
+- **内嵌图没有数据库行**：彻底删除文档要扫正文把文件名删掉（`purgeRefs` / `purgeIn`），
+  断言钉住「先扫后删」。
+- 编辑器在光标处插（`onSelectionChange` 记位置），没拿过光标就接末尾。
+- 没做：点开大图（只有配图 id 有全屏页）。
 
 ### v0.28.1：把 v0.28.0 的两条半截路补完
 
@@ -380,7 +390,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:backup` | 19 项通过 |
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
-| `npm run test:recycle` | **28 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
+| `npm run test:recycle` | **32 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
 | `npm run test:ui` | 40 项通过（真实控件/菜单/样式、间距 token、导航预算及回调保留） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.70 MiB；产物已删除，不供预览 |
@@ -444,7 +454,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 117 | 无颜色 TYPE/SPACE、四档字号倍数与 `setTypeScale`、装饰边线与显式 outline 判据 |
 | `src/types.ts` [打开](<src/types.ts>) | 476 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
-| `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 384 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
+| `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 456 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
 | `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 319 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
 | `src/components/ProposalSheet.tsx` [打开](<src/components/ProposalSheet.tsx>) | 238 | 审批面板：建议/原稿两页签、字数对比，三个出口（存为新文档/只存标签/放弃） |
 | `src/components/DocBatchSheet.tsx` [打开](<src/components/DocBatchSheet.tsx>) | 288 | 批量工作流：一篇篇过，每篇都要单独审批；跳过与失败分开计数 |
@@ -458,8 +468,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `src/db/types.ts` [打开](<src/db/types.ts>) | 498 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2222 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1241 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2229 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1246 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
@@ -500,7 +510,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/organize/run.ts` [打开](<src/organize/run.ts>) | 157 | 可注入真实执行器，固定来源、pending批次、检查点与代次防迟到 |
 | `src/organize/useOrganize.ts` [打开](<src/organize/useOrganize.ts>) | 394 | Ask控制器：发起/改稿/原源重试/批准/暂停/保存/恢复/放弃 |
 | `src/util/askIntent.ts` [打开](<src/util/askIntent.ts>) | 148 | 月总结/待办/整理/问答路由、草稿输入分流与气泡显示判据 |
-| `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 352 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
+| `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 355 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
 | `src/util/batch.ts` [打开](<src/util/batch.ts>) | 61 | 条数/字数装箱与批次数边界，至少保留一条材料 |
 
 ### 4.5 文档、PDF与其它阅读器
@@ -526,7 +536,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/documents/readers/workbookCache.ts` [打开](<src/documents/readers/workbookCache.ts>) | 39 | 按fileUri+size的单槽内存缓存 |
 | `src/documents/readers/viewCache.ts` [打开](<src/documents/readers/viewCache.ts>) | 128 | 磁盘视图缓存，损坏当缓存未命中 |
 | `src/documents/readers/sheetWindow.ts` [打开](<src/documents/readers/sheetWindow.ts>) | 96 | 列窗口、偏移与占位计算 |
-| `src/documents/readers/TextReader.tsx` [打开](<src/documents/readers/TextReader.tsx>) | 201 | TXT/Markdown/快照的分块虚拟化与字面查找，当前命中非颜色标识 |
+| `src/documents/readers/TextReader.tsx` [打开](<src/documents/readers/TextReader.tsx>) | 204 | TXT/Markdown/快照的分块虚拟化与字面查找，当前命中非颜色标识 |
 | `src/documents/readers/textBlocks.ts` [打开](<src/documents/readers/textBlocks.ts>) | 92 | 正文分块，保留代码围栏与连续表格 |
 | `src/documents/readers/SearchBar.tsx` [打开](<src/documents/readers/SearchBar.tsx>) | 121 | 48dp查找/清除/前后命中，busy与disabled分开 |
 | `src/documents/readers/markdownSearch.ts` [打开](<src/documents/readers/markdownSearch.ts>) | 30 | 与NoteBody一致的可见Markdown块命中计数 |
@@ -548,7 +558,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 235 | 草稿单篇整页阅读/编辑与批准入口 |
 | `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1047 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
 | `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 750 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
-| `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 611 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
+| `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 622 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
 | `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 785 | 月总结单篇/缺口队列、原稿对照和确认保存 |
 | `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 512 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
@@ -569,11 +579,11 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `src/util/fragmentText.ts` [打开](<src/util/fragmentText.ts>) | 81 | 材料文字、可见检索投影、配图文字与状态判据 |
 | `src/util/backupPlan.ts` | 219 | 备份清单的纯函数：文件名、manifest、恢复前校验（拿错包 / 版本更新 / 缺库）、路径过滤、SQLite 文件头、体积文案与上限 |
-| `src/util/inlineImages.ts` [打开](<src/util/inlineImages.ts>) | 99 | 图片定位标记、待发键替换、删除和无定位图判定 |
+| `src/util/inlineImages.ts` [打开](<src/util/inlineImages.ts>) | 136 | 图片定位标记、待发键替换、删除和无定位图判定 |
 | `src/util/pendingImages.ts` [打开](<src/util/pendingImages.ts>) | 52 | 按图id选择未读图片、保持顺序与读图预算 |
 | `src/util/tokenize.ts` [打开](<src/util/tokenize.ts>) | 165 | 中文bigram/FTS查询与旧标签规范化兼容工具 |
 | `src/util/highlight.ts` [打开](<src/util/highlight.ts>) | 55 | 唯一字面命中findHits/countHits |
-| `src/util/mdBlocks.ts` [打开](<src/util/mdBlocks.ts>) | 487 | Markdown、表格、代码、引用与图片块解析 |
+| `src/util/mdBlocks.ts` [打开](<src/util/mdBlocks.ts>) | 493 | Markdown、表格、代码、引用与图片块解析 |
 | `src/util/text.ts` [打开](<src/util/text.ts>) | 62 | 文本规范化、包含判断与截取 |
 | `src/util/date.ts` [打开](<src/util/date.ts>) | 188 | 日/月等历史日期键、标签与月末锚点 |
 | `src/util/calendar.ts` [打开](<src/util/calendar.ts>) | 97 | 回顾日历的纯日期网格：固定42格、周一开头、翻月跨年、本地时区解析；`DayCount` 是日历的唯一输入 |

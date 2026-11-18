@@ -20,6 +20,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
+import * as ImagePicker from 'expo-image-picker';
 import type { DocTag } from '../types';
 import { R, SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { WEB_INPUT_RESET } from '../util/platformStyle';
@@ -28,6 +29,8 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { repo } from '../db/repo';
 import { AUTHORED_TITLE_MAX, createAuthoredDoc, saveDocBody, renameDoc } from '../documents/authored';
 import { DEFAULT_DOC_TAG, normalizeTagName } from '../util/docTags';
+import { docImageToken } from '../util/inlineImages';
+import { saveFragmentImage } from '../db/fragmentImages';
 
 interface Props {
   /** null = 新建；有值 = 编辑这一篇 */
@@ -51,6 +54,9 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [dirty, setDirty] = useState(false);
+  /** 光标位置。插图要插在光标处，插到末尾就得让人自己拖回去 */
+  const [cursor, setCursor] = useState<number | null>(null);
+  const [imageBusy, setImageBusy] = useState(false);
   /** 写了没保存就想退出：先在页脚问一句，不弹系统框 */
   const [askDiscard, setAskDiscard] = useState(false);
   const alive = useRef(true);
@@ -123,6 +129,55 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
     } catch (e) {
       if (alive.current) setError(e instanceof Error ? e.message : '建标签失败');
     }
+  }
+
+  /**
+   * 插一张图。
+   *
+   * 图存进 `fragment-images/`（和碎片配图同一个目录），正文里留一行
+   * `![](doc-img:文件名)`。这样做的好处是备份不用改：那个目录本来就在包里。
+   *
+   * 代价是这些文件**没有数据库行指着它们** —— 彻底删除文档时要扫正文把它们删掉，
+   * 那一处在 `db/repo.*.purgeRefs/purgeIn`。
+   */
+  async function addImage() {
+    if (imageBusy) return;
+    setImageBusy(true);
+    setError('');
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setError('没有相册权限，去系统设置里允许「碎片」访问照片');
+        return;
+      }
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsMultipleSelection: false,
+        quality: 0.9,
+      });
+      if (picked.canceled || !picked.assets?.length) return;
+      const name = await saveFragmentImage(picked.assets[0].uri);
+      if (!alive.current) return;
+      insertText(`\n${docImageToken(name)}\n`);
+    } catch (e) {
+      if (alive.current) setError(e instanceof Error ? e.message : '这张图没能存进来');
+    } finally {
+      if (alive.current) setImageBusy(false);
+    }
+  }
+
+  /** 在光标处插一段；没拿过光标就接在末尾 —— 总比什么都不做强 */
+  function insertText(block: string) {
+    const at = cursor === null ? body.length : Math.min(cursor, body.length);
+    // 前后各留一个换行：图片标记必须独占一行才会被识别成图片块
+    const before = body.slice(0, at);
+    const after = body.slice(at);
+    const head = before && !before.endsWith('\n') ? `${before}\n` : before;
+    const tail = after && !after.startsWith('\n') ? `\n${after}` : after;
+    const next = `${head}${block}${tail}`;
+    setBody(next);
+    setCursor(head.length + block.length);
+    touch();
   }
 
   async function save() {
@@ -209,6 +264,7 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
             <TextInput
               value={body}
               onChangeText={(text) => { setBody(text); touch(); }}
+              onSelectionChange={(e) => setCursor(e.nativeEvent.selection.start)}
               placeholder="正文。可以用 # 标题、- 列表、> 引用，和平时记东西一样。"
               placeholderTextColor={c.text3}
               style={styles.bodyInput}
@@ -218,7 +274,20 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
               selectionColor={c.selection}
             />
 
-            <Text style={styles.count}>{chars.toLocaleString()} 字</Text>
+            <View style={styles.toolRow}>
+              <Text style={styles.count}>{chars.toLocaleString()} 字</Text>
+              <Pressable
+                style={({ pressed }) => [styles.toolBtn, pressed && { opacity: 0.7 }]}
+                onPress={() => void addImage()}
+                disabled={imageBusy}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: imageBusy, busy: imageBusy }}
+                accessibilityLabel="在光标处插入一张图"
+              >
+                <Ionicons name="image-outline" size={15} color={c.text2} />
+                <Text style={styles.toolText}>{imageBusy ? '正在存图…' : '插一张图'}</Text>
+              </Pressable>
+            </View>
 
             <Text style={styles.label}>标签</Text>
             <View style={styles.tagWrap}>
@@ -335,6 +404,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingTop: SPACE.xs, paddingBottom: SPACE.xs, ...WEB_INPUT_RESET,
   },
   count: { ...TYPE.meta, color: c.text2, fontVariant: ['tabular-nums'] },
+  toolRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 },
+  toolBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, minHeight: 36, paddingHorizontal: SPACE.xs },
+  toolText: { ...TYPE.label, color: c.text2 },
   label: { ...TYPE.label, color: c.text2, fontWeight: '600' },
   tagWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.xs },
   tag: {

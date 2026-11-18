@@ -9,6 +9,7 @@ import type { Document } from '../../types';
 import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import { NoteBody } from '../../components/NoteBody';
+import { fragmentImageUri } from '../../db/fragmentImages';
 import { findHits } from '../../util/highlight';
 import { SearchBar } from './SearchBar';
 import { readDocText } from './readerFiles';
@@ -175,6 +176,8 @@ export function TextReader({ document: doc, mode, text: providedText, notice }: 
                 <NoteBody
                   text={item.text} variant="reading" selectable literalCitations highlight={q || undefined}
                   activeHit={index === currentBlock ? currentInBlock : undefined}
+                  /* 文档内嵌图：文件与碎片配图同目录，直接用同一个 uri 函数 */
+                  fileUri={fragmentImageUri}
                 />
               ) : <Text style={styles.body} selectable>{plain(item)}</Text>}
             </View>

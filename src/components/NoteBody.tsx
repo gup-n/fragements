@@ -58,7 +58,8 @@ type Group =
   | { type: 'text'; blocks: TextBlock[] }
   | { type: 'table'; block: TableBlock }
   | { type: 'code'; text: string }
-  | { type: 'image'; id: number }
+  /** `id` = 碎片配图行；`file` = 文档内嵌图的文件名（两者只会有一个） */
+  | { type: 'image'; id?: number; file?: string }
   | { type: 'hr' };
 
 function group(blocks: Block[]): Group[] {
@@ -81,7 +82,7 @@ function group(blocks: Block[]): Group[] {
       out.push({ type: 'code', text: b.text });
     } else if (b.kind === 'image') {
       flush();
-      out.push({ type: 'image', id: b.id });
+      out.push({ type: 'image', ...('id' in b ? { id: b.id } : { file: b.file }) });
     } else if (b.kind === 'hr') {
       flush();
       out.push({ type: 'hr' });
@@ -331,6 +332,13 @@ interface Props {
    * 不画一个空格子：那会让用户以为内容丢了。
    */
   imageUri?: (id: number) => string | null;
+  /**
+   * 文档内嵌图 `![](doc-img:名字)` 去哪拿（v0.29）。
+   *
+   * 与 `imageUri` 分开是因为来源不同：前者查 `fragment_images` 的行，
+   * 后者只是一个文件名。合成一个回调会让文档渲染去查碎片表。
+   */
+  fileUri?: (name: string) => string | null;
   /** 点正文里的图。碎片详情用它进全屏看图 */
   onImagePress?: (id: number) => void;
 }
@@ -349,6 +357,7 @@ export function NoteBody({
   onBlockLayout,
   literalCitations,
   imageUri,
+  fileUri,
   onImagePress,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
@@ -446,12 +455,14 @@ export function NoteBody({
   );
 
   /** 正文里的图。拿不到 uri 就不画（见 `imageUri` 的约定） */
-  const imageView = (id: number, key: React.Key) => {
-    const uri = imageUri?.(id);
+  const imageView = (source: { id?: number; file?: string }, key: React.Key) => {
+    const uri = typeof source.id === 'number' ? imageUri?.(source.id) : source.file ? fileUri?.(source.file) : null;
     if (!uri) return null;
+    // 只有碎片配图能进全屏看图；文档内嵌图还没有那个页面，点了不许什么都不发生
+    const press = typeof source.id === 'number' && onImagePress ? () => onImagePress(source.id as number) : undefined;
     return (
       <View key={key} style={styles.imageBox}>
-        <InlineImage uri={uri} onPress={onImagePress ? () => onImagePress(id) : undefined} />
+        <InlineImage uri={uri} onPress={press} />
       </View>
     );
   };
@@ -514,7 +525,7 @@ export function NoteBody({
           if (b.kind === 'image') {
             return (
               <View key={bi} onLayout={measure}>
-                {imageView(b.id, bi)}
+                {imageView('id' in b ? { id: b.id } : { file: b.file }, bi)}
               </View>
             );
           }
@@ -537,7 +548,7 @@ export function NoteBody({
         if (g.type === 'table') return tableView(g.block, gi);
         if (g.type === 'hr') return <View key={gi} style={styles.hr} />;
         if (g.type === 'code') return codeView(g.text, gi);
-        if (g.type === 'image') return imageView(g.id, gi);
+        if (g.type === 'image') return imageView(g, gi);
 
         return (
           <Text key={gi} style={[styles.root, reading && styles.rootReading, style, mutedStyle]} selectable={selectable}>

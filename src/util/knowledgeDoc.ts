@@ -186,6 +186,9 @@ export function clipTitle(title: string): string {
  */
 export function excerptOf(bodyMd: string, max = EXCERPT_MAX): string {
   const flat = bodyMd
+    // 图片标记（碎片的 `img:12` 与文档的 `doc-img:名`）在列表里就是一串乱码，
+    // 先整行去掉 —— 摘要是给人扫一眼的，不是原文的一部分
+    .replace(/^!\[[^\]]*\]\((?:img:|doc-img:)[^)]*\)$/gm, '')
     .split('\n')
     .filter((line) => !/^\s*\|?[\s:|-]+\|?\s*$/.test(line) || line.trim() === '')
     .join('\n')
