@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.26.1 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.26.1/fragments-v0.26.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.26.1)。26,236,094 字节，SHA-256 `6766b40c5e9fb3e8ab3bf976259bc40b31c8911f263e04a0e7eb8fa15fcce9ed`，`draft=false`。同批可回退：[v0.26.0](https://github.com/gup-n/fragements/releases/download/v0.26.0/fragments-v0.26.0.apk)（26,235,074 字节，SHA-256 `02763df3bbfdb96a6a8c9be9bd282a9ee9b8a7327421d514979d5b4fef03d790`）。v0.26 把首页改成按页读 + 三条 SQL 聚合，v0.26.1 补上「搜索也要问库」（否则只搜得到第一页）。**真机仍未实测**。
+**v0.27.0 已构建并发布。** [下载 APK（约 26.2 MB）](https://github.com/gup-n/fragements/releases/download/v0.27.0/fragments-v0.27.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.27.0)。26,237,522 字节，SHA-256 `503f9486e871ea310b4a26fee08d59e3b257a77515339c98a8f11721f043b619`，`draft=false`。同批可回退：[v0.26.1](https://github.com/gup-n/fragements/releases/download/v0.26.1/fragments-v0.26.1.apk)（26,236,094 字节，SHA-256 `6766b40c5e9fb3e8ab3bf976259bc40b31c8911f263e04a0e7eb8fa15fcce9ed`）、[v0.26.0](https://github.com/gup-n/fragements/releases/download/v0.26.0/fragments-v0.26.0.apk)（26,235,074 字节）。v0.27 修的是「写下的空行被吃掉」，另外让日历按字数加深、能展开、写出当天字数，时间轴页头加了字数，底栏文档与回顾换位，待办的「哪天做」改成「截止日期」。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
