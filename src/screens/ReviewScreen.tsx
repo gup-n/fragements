@@ -49,9 +49,21 @@ interface Props {
   onChanged?: () => void | Promise<void>;
   /** 全部碎片。日历用它标出「哪天记过东西」，也是点开某天后的明细来源 */
   fragments?: Fragment[];
+  /**
+   * 进来时落在哪个 tab（v0.25.1）。
+   *
+   * 只由「小结提醒」的通知点进来时给：那条通知说的是「该写月总结了」，
+   * 落在这页却停在待办，用户还得自己找一下。`focusSignal` 是配套的——
+   * 已经在回顾页时 focusTab 的值没变，只有信号变了才会再触发一次。
+   */
+  focusTab?: ReviewTab;
+  focusSignal?: number;
 }
 
-type Tab = 'todo' | 'calendar' | 'note';
+/** 三个 tab。导出是因为 App 要传 `focusTab`，不导出就得在那边再抄一份字面量 */
+export type ReviewTab = 'todo' | 'calendar' | 'note';
+
+type Tab = ReviewTab;
 
 /** 编辑层的目标。`todo` 为 null 表示新建，`parentId` 表示加到哪条下面 */
 interface EditorTarget {
@@ -78,9 +90,25 @@ function marksText(m: DayMarks): string {
   return bits.length ? bits.join(' · ') : '这天没有内容';
 }
 
-export function ReviewScreen({ embedded = false, onClose, onChanged, onOpenSettings, fragments = [] }: Props) {
+export function ReviewScreen({
+  embedded = false,
+  onClose,
+  onChanged,
+  onOpenSettings,
+  fragments = [],
+  focusTab,
+  focusSignal,
+}: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const [tab, setTab] = useState<Tab>('todo');
+  /*
+   * 从提醒点进来时直接落到「小结」。放在这里而不是初始化值：
+   * 页面在底栏里常驻，从通知回来时它可能早就挂载过了。
+   */
+  useEffect(() => {
+    if (!focusTab) return;
+    setTab(focusTab);
+  }, [focusTab, focusSignal]);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   /** 被合并掉的待办。合并是隐藏不是删除，这里必须有入口，否则就是数据黑洞 */

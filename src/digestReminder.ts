@@ -147,7 +147,8 @@ export async function syncDigestReminder(
     await Notifications.scheduleNotificationAsync({
       identifier: DIGEST_ID,
       content: {
-        title: '这个月的小结还没写',
+        // 标题不写「这个月」：欠的可能是三个月前那个月，正文里才说具体是哪一个
+        title: '该写月总结了',
         body: reminderBody(plan),
         data: { kind: 'digest-reminder' },
       },

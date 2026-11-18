@@ -20,7 +20,7 @@ import { repo } from './src/db/repo';
 import { importLocalFile } from './src/documents/importLocal';
 import { TimelineScreen } from './src/screens/TimelineScreen';
 import { SettingsScreen } from './src/screens/SettingsScreen';
-import { ReviewScreen } from './src/screens/ReviewScreen';
+import { ReviewScreen, type ReviewTab } from './src/screens/ReviewScreen';
 import { AskScreen } from './src/screens/AskScreen';
 import { DocsScreen } from './src/screens/DocsScreen';
 import { TabBar, type MainTab } from './src/components/TabBar';
@@ -236,13 +236,26 @@ function Shell({ booted }: { booted: boolean }) {
     };
   }, []);
 
+  /**
+   * 提醒点进来时，回顾页要落在「小结」而不是「待办」。
+   *
+   * 通知说的是「该写月总结了」，落在这页却停在待办，用户还得自己找一下。
+   * 带一个自增信号：回顾页常驻在底栏里，只传 tab 的话值没变、effect 不会重跑。
+   */
+  const [reviewFocus, setReviewFocus] = useState<{ tab: ReviewTab; signal: number } | null>(null);
+  const reviewFocusSeq = useRef(0);
+
   /*
    * 小结提醒点进来要落到「回顾」——那里才写着欠了哪几个月。
    * 和「记一条」的监听各认各的 kind，两条通知互不抢。
    */
   useEffect(() => {
     if (isWeb) return;
-    return watchDigestReminder(() => setRoute('review'));
+    return watchDigestReminder(() => {
+      reviewFocusSeq.current += 1;
+      setReviewFocus({ tab: 'note', signal: reviewFocusSeq.current });
+      setRoute('review');
+    });
   }, []);
 
   /*
@@ -643,7 +656,14 @@ function Shell({ booted }: { booted: boolean }) {
                 />
               )}
               {route === 'review' && (
-                <ReviewScreen embedded fragments={fragments} onChanged={reload} onOpenSettings={() => setRoute('settings')} />
+                <ReviewScreen
+                  embedded
+                  fragments={fragments}
+                  onChanged={reload}
+                  onOpenSettings={() => setRoute('settings')}
+                  focusTab={reviewFocus?.tab}
+                  focusSignal={reviewFocus?.signal}
+                />
               )}
               {route === 'docs' && (
                 <DocsScreen

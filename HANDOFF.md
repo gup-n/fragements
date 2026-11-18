@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.25.0 / versionCode 70 |
+| 版本 | v0.25.1 / versionCode 71 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.24.2 已由[CI 43881231804](https://github.com/gup-n/fragements/actions/runs/43881231804)构建并发布（26,206,774 字节，SHA-256 `f76bfa76…f200`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.24.1（[CI 43878966762](https://github.com/gup-n/fragements/actions/runs/43878966762)，26,206,058 字节）、v0.24.0（[CI 43877650378](https://github.com/gup-n/fragements/actions/runs/43877650378)，26,205,166 字节）。真机均未验 |
+| 发布状态 | v0.25.0 已由[CI 44025589732](https://github.com/gup-n/fragements/actions/runs/44025589732)构建并发布（26,220,134 字节，SHA-256 `65ce5a96…5c80`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.24.2（[CI 43881231804](https://github.com/gup-n/fragements/actions/runs/43881231804)，26,206,774 字节）、v0.24.1（[CI 43878966762](https://github.com/gup-n/fragements/actions/runs/43878966762)，26,206,058 字节）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
@@ -23,6 +23,17 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.25.1：提醒的标题与落点
+
+v0.25.0 发完就发现那条通知有两处「说 A 做 B」，都只影响它：
+
+- 标题原写「这个月的小结还没写」，而欠的可能是三个月前那个月（正文里写着具体月份）。
+  改成 `该写月总结了`，用词跟着回顾页的「写月总结」按钮走。
+- 点进来停在「待办」（回顾页默认 tab）。现在带 `focusTab: 'note'`；因为页面常驻底栏，
+  配一个自增 `focusSignal`，否则值没变、effect 不重跑。
+
+`test:reminder` 补三条：带 `tab: 'note'`、回顾页声明 `focusTab`、**真的 `setTab(focusTab)`**。
 
 ### v0.25.0：有欠账才提醒一次，相册多选不再全丢
 
@@ -296,10 +307,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 729 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 749 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 125 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 155 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件列表，用时间戳做幂等键只消费一次；`files[]` 与旧版单文件 json 都认；每个文件各自判 mime / 扩展名 |
-| `src/digestReminder.ts` | 188 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
+| `src/digestReminder.ts` | 189 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 91 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 27 | 通知权限只有一份判断与一句话文案，两个通知入口共用 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 1892 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
@@ -307,7 +318,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 650 | 待办/日历/小结三个tab，日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 678 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1015 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
 | `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1571 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 97 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
@@ -475,7 +486,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1871 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 403 | 两轴外观、真实对比度、PDF与阅读器契约 |
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 621 | 37项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
-| `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 187 | 11项：提醒时刻、不重排、3天冷却、账清就撤、正文口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
+| `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 198 | 11项：提醒时刻、不重排、3天冷却、账清就撤、正文口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 

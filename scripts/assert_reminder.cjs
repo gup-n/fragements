@@ -146,7 +146,18 @@ test('数据一变就对一次，点通知落到回顾页', () => {
   const app = read('App.tsx');
   assert.ok(app.includes('void syncDigestReminder(list, noteList)'), 'reload 之后要对齐（写到 reload 里）');
   assert.ok(app.includes('onReminderChange={() => void syncDigestReminder(fragments, notes)}'), '开关切换也要对齐');
-  assert.ok(app.includes("watchDigestReminder(() => setRoute('review'))"), '点通知要落到回顾页');
+  assert.ok(app.includes('watchDigestReminder(') && app.includes("setRoute('review')"), '点通知要落到回顾页');
+  // 落到回顾页还不够：那条通知说的是「该写月总结了」，停在待办等于指错了地方
+  assert.ok(
+    app.includes("setReviewFocus({ tab: 'note', signal: reviewFocusSeq.current })"),
+    '点通知要落到「小结」tab，而不是停在待办',
+  );
+  const review = read('src/screens/ReviewScreen.tsx');
+  assert.ok(review.includes('focusTab?: ReviewTab'), '回顾页要接得住这个 tab');
+  assert.ok(
+    /if \(!focusTab\) return;\s*setTab\(focusTab\);/.test(review),
+    '接住了要真的切过去（只声明 props 不切 tab 等于没接）',
+  );
   const watcher = read('src/digestReminder.ts');
   assert.ok(watcher.includes('getLastNotificationResponseAsync'), '冷启动那一次点击要单独捞');
 });
