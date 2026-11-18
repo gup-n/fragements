@@ -12,7 +12,7 @@
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.25.3 / versionCode 73 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.25.1 已由[CI 44205956805](https://github.com/gup-n/fragements/actions/runs/44205956805)构建并发布（26,220,466 字节，SHA-256 `acfdfd09…1edb`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.25.0（[CI 44025589732](https://github.com/gup-n/fragements/actions/runs/44025589732)，26,220,134 字节，SHA-256 `65ce5a96…5c80`）、v0.24.2（[CI 43881231804](https://github.com/gup-n/fragements/actions/runs/43881231804)，26,206,774 字节）。真机均未验 |
+| 发布状态 | v0.25.3 已由[CI 44207941354](https://github.com/gup-n/fragements/actions/runs/44207941354)构建并发布（26,225,738 字节，SHA-256 `5cd1fa39…94e7`，`draft=false`，跟随重定向后 HTTP 200 且 Content-Length 与资产一致）。可回退：v0.25.2（[CI 44207287545](https://github.com/gup-n/fragements/actions/runs/44207287545)，26,224,674 字节，SHA-256 `7695dadc…a3f0`）、v0.25.1（[CI 44205956805](https://github.com/gup-n/fragements/actions/runs/44205956805)，26,220,466 字节，SHA-256 `acfdfd09…1edb`）。真机均未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有16段结构迁移；无账号、后端、同步 |
