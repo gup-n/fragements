@@ -150,8 +150,9 @@ test('权限与通道：先要权限再落库，失败把开关弹回去', () =>
 
 test('数据一变就对一次，点通知落到回顾页', () => {
   const app = read('App.tsx');
-  assert.ok(app.includes('void syncDigestReminder(list, noteList)'), 'reload 之后要对齐（写到 reload 里）');
-  assert.ok(app.includes('onReminderChange={() => syncDigestReminder(fragments, notes)}'), '开关切换也要对齐（并且要把 Promise 交出去，让设置页能等它排完）');
+  // v0.26：判据的输入从「全部碎片」换成「每月条数」—— 大库下不再为了排一条提醒读全表
+  assert.ok(app.includes('void syncDigestReminder(monthCounts, noteList)'), 'reload 之后要对齐（写到 reload 里）');
+  assert.ok(app.includes('onReminderChange={() => syncDigestReminder(months, notes)}'), '开关切换也要对齐（并且要把 Promise 交出去，让设置页能等它排完）');
   assert.ok(app.includes('watchDigestReminder(') && app.includes("setRoute('review')"), '点通知要落到回顾页');
   // 落到回顾页还不够：那条通知说的是「该写月总结了」，停在待办等于指错了地方
   assert.ok(

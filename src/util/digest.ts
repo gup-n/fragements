@@ -75,8 +75,45 @@ export interface Backlog {
   total: number;
 }
 
+/**
+ * 「每个月有几条碎片」。
+ *
+ * 这个形状是**判断的输入**，不是顺手算出来的中间值：`missingDigests` 只要
+ * 每月条数就能决定欠不欠，而拿到每月条数不需要把几千条碎片读进内存 ——
+ * native 侧一条 `GROUP BY strftime('%Y-%m', …)` 就够（v0.26）。
+ */
+export interface MonthCount {
+  /** 2026-10 */
+  month: string;
+  count: number;
+}
+
+/**
+ * 从碎片数组里按月数一遍。
+ *
+ * 只有两处该用它：web 版仓库（没有 SQL）与断言。native 走 SQL 聚合 ——
+ * 两条路的结果必须一致，所以「哪个月」永远由 `monthKey` 定义，
+ * 不许在 SQL 里另写一套本地时区换算。
+ */
+export function countByMonth(fragments: Fragment[]): MonthCount[] {
+  const buckets = new Map<string, number>();
+  for (const f of fragments) {
+    const key = monthKey(f.createdAt);
+    buckets.set(key, (buckets.get(key) ?? 0) + 1);
+  }
+  return Array.from(buckets, ([month, count]) => ({ month, count })).sort((a, b) =>
+    a.month < b.month ? 1 : a.month > b.month ? -1 : 0,
+  );
+}
+
+/**
+ * 欠着哪几个月的小结。
+ *
+ * 入参是**每月条数**而不是碎片数组：大库（几千条）不该为了回答「欠几个月」
+ * 把全文都读进内存。数一遍的逻辑只留在 `countByMonth` 和 native 的 SQL 里。
+ */
 export function missingDigests(
-  fragments: Fragment[],
+  months: MonthCount[],
   notes: Note[],
   limit = 6,
   now = Date.now(),
@@ -88,17 +125,14 @@ export function missingDigests(
   );
   const buckets = new Map<string, MissingDigest>();
 
-  for (const f of fragments) {
-    const period = monthKey(f.createdAt);
-    if (covered.has(period)) continue;
-    const range = periodRange(period);
+  for (const m of months) {
+    if (!m.count) continue;
+    if (covered.has(m.month)) continue;
+    const range = periodRange(m.month);
     if (!range) continue;
     // 本月还没结束就不列 —— 写出来是半截，月份一过它又会重新出现
     if (range.to > now) continue;
-
-    const hit = buckets.get(period);
-    if (hit) hit.count += 1;
-    else buckets.set(period, { period, count: 1, at: range.to - 1 });
+    buckets.set(m.month, { period: m.month, count: m.count, at: range.to - 1 });
   }
 
   const all = Array.from(buckets.values()).sort((a, b) => b.at - a.at);

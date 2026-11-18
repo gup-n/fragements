@@ -12,6 +12,8 @@ import type {
   Todo,
 } from '../types';
 import type { BackupCounts, BackupManifest } from '../util/backupPlan';
+import type { DayCount } from '../util/calendar';
+import type { MonthCount } from '../util/digest';
 
 /** 完整备份的结果。`bytes` 是**压缩后**的体积，界面显示这个数字 */
 export interface BackupResult {
@@ -102,6 +104,30 @@ export interface Repo {
   listFragments(limit?: number): Promise<Fragment[]>;
   /** 完整读取，不受首页窗口上限影响；导出不能用 listFragments 默认值。 */
   listAllFragments(): Promise<Fragment[]>;
+
+  /*
+   * 下面四个是「大库」的那一半（v0.26）。
+   *
+   * 以前首页 `listAllFragments()` 把整库读进内存，日历和「欠几个月小结」
+   * 再在这个数组上各扫一遍 —— 几千条时启动要等，切页也要顿。
+   * 现在：
+   * - 列表按页读（`listFragmentsPage`），首屏只要一页；
+   * - 要计数的地方走聚合（`totalFragments` / `dayCounts` / `monthCounts`），
+   *   不再为了画 42 个点把全文捞出来。
+   *
+   * **口径必须一致**：`day` 用 `dayKey`、`month` 用 `monthKey`，都是本地时区。
+   * SQL 里靠 `'localtime'` 对齐，web 侧靠同一个 JS 函数 —— 两边算出来的数
+   * 必须能互相替换（断言在 `test:docs`/`test:todos` 里守着）。
+   */
+
+  /** 碎片总条数（含已合并的行，与列表口径一致） */
+  totalFragments(): Promise<number>;
+  /** 按时间倒序取一页。`offset` 从 0 起，首页「加载更早的」用它 */
+  listFragmentsPage(offset: number, limit: number): Promise<Fragment[]>;
+  /** 每天几条碎片（本地时区）。日历只用它画点，点开某天才去读正文 */
+  dayCounts(): Promise<DayCount[]>;
+  /** 每月几条碎片（本地时区）。「欠着几个月小结」只用它判断 */
+  monthCounts(): Promise<MonthCount[]>;
   /** 内容、切片、待办与幂等凭据一次提交；同 draftId/key 重试不复制。 */
   commitDraft(input: DraftCommitInput): Promise<DraftCommitReceipt>;
   /**

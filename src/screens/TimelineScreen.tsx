@@ -31,6 +31,7 @@ import { shortPreview } from '../util/text';
 import { useKeyboardHeight } from '../util/keyboard';
 import { fragmentSearchText, imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { imageToken, removeToken, stripImageTokens } from '../util/inlineImages';
+import { olderCount } from '../util/paging';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -152,6 +153,16 @@ interface Props {
    * 用户点了通知却停在原地，等于入口是坏的。所以用一个自增值当信号。
    */
   focusSignal?: number;
+  /**
+   * 库里一共多少条碎片（v0.26）。
+   *
+   * `fragments` 从这一版起只是**已加载的一窗**，不是全部；「还有多少更早的」
+   * 只能拿总数减，不能拿「这一页满没满」反推。
+   */
+  total?: number;
+  /** 正在读更早那一页。按钮据此变成「读取中…」并禁用 */
+  loadingOlder?: boolean;
+  onLoadOlder?: () => void;
   /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
   /** 读图失败的原因（配图 id → 一句话）。必须能就地重试 */
@@ -181,6 +192,9 @@ export function TimelineScreen({
   onDeleteNote,
   onOpenAsk,
   focusSignal,
+  total = 0,
+  loadingOlder = false,
+  onLoadOlder,
   imageBusy,
   imageFail,
   onReparseImage,
@@ -323,6 +337,15 @@ export function TimelineScreen({
   const searching = query.trim().length > 0;
   /** 有筛选或有搜索 → 结果要全摊开，命中的东西藏在折叠里等于没筛到 */
   const narrowed = searching || filter !== null;
+  /*
+   * 还有多少更早的。
+   *
+   * 搜索时不显示：搜索是**整库**的（FTS），结果里本来就没有「更早的」这个概念，
+   * 再挂一句「还有 380 条」会让人以为搜漏了。
+   * 按事项筛选不一样 —— 它只在已加载的这一窗里筛，所以必须说出来，
+   * 同时保留补页的入口（否则用户会以为这个事项只有两条）。
+   */
+  const older = searching ? 0 : olderCount(total, fragments.length);
   const todayKey = dayKey(Date.now());
 
   /**
@@ -1257,7 +1280,36 @@ export function TimelineScreen({
                 </SwipeRow>
               );
             }}
-            ListFooterComponent={<View style={{ height: 12 }} />}
+            /*
+             * 底栏：还有更早的记录时给一个按钮，否则只留 12 的收尾留白。
+             *
+             * 是**主动动作**而不是滚到底自动拉：自动加载会让「往下翻几条」
+             * 变成一次不可控的读库，而用户往下翻通常只想看最近的。
+             */
+            ListFooterComponent={
+              <>
+                {filter && older > 0 ? (
+                  <Text style={styles.olderHint}>
+                    按事项筛选只在已加载的 {fragments.length} 条里进行，更早的还没读进来。
+                  </Text>
+                ) : null}
+                {older > 0 || loadingOlder ? (
+                  <Pressable
+                    style={({ pressed }) => [[styles.olderBtn, pressed && !loadingOlder && { backgroundColor: c.accentBg }], styles.touchTarget]}
+                    onPress={onLoadOlder}
+                    disabled={loadingOlder}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: loadingOlder }}
+                    accessibilityLabel={loadingOlder ? '正在读取更早的碎片' : `加载更早的 ${older} 条`}
+                  >
+                    <Text style={styles.olderText}>
+                      {loadingOlder ? '读取中…' : `加载更早的 ${older} 条`}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                <View style={{ height: 12 }} />
+              </>
+            }
           />
         )}
 
@@ -1581,6 +1633,23 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
 
   listContent: { paddingBottom: SPACE.xs },
+  /** 「加载更早的」：列表最后一行，和空屏一样低调，不抢记录的注意力 */
+  olderBtn: {
+    marginHorizontal: SPACE.md,
+    marginTop: SPACE.md,
+    marginBottom: SPACE.lg,
+    paddingVertical: SPACE.sm,
+    alignItems: 'center',
+    borderRadius: metrics.buttonRadius,
+  },
+  olderText: { ...TYPE.compact, color: c.accentText },
+  /** 筛选中才出现的一句解释：不写就等于让人以为「这个事项只有两条」 */
+  olderHint: {
+    ...TYPE.meta,
+    color: c.text3,
+    marginHorizontal: SPACE.md,
+    marginTop: SPACE.md,
+  },
   // 收起态是两行（日期 + 一条预览），所以 header 从 row 改成 column
   sectionHeader: {
     paddingHorizontal: SPACE.md,

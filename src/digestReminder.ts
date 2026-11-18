@@ -23,10 +23,10 @@
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { repo } from './db/repo';
-import { missingDigests } from './util/digest';
+import { missingDigests, type MonthCount } from './util/digest';
 import { planDigestReminder, reminderBody } from './util/digestReminder';
 import { ensureNotifyPermission, hasNotifyPermission } from './util/notifyPerm';
-import type { Fragment, Note } from './types';
+import type { Note } from './types';
 
 /** 固定 id：同时只有一条，重排就是换内容 */
 export const DIGEST_ID = 'fragments-digest-reminder';
@@ -140,7 +140,7 @@ export async function setDigestReminderEnabled(on: boolean): Promise<ReminderRes
  * 全程静默 —— 排不上一条提醒，不该让启动流程或一次保存失败。
  */
 export async function syncDigestReminder(
-  fragments: Fragment[],
+  months: MonthCount[],
   notes: Note[],
   now = Date.now(),
 ): Promise<number> {
@@ -159,7 +159,7 @@ export async function syncDigestReminder(
 
   const plan = planDigestReminder({
     enabled: on,
-    backlog: missingDigests(fragments, notes, 1, now),
+    backlog: missingDigests(months, notes, 1, now),
     storedAt,
     now,
   });

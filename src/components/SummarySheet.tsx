@@ -157,18 +157,23 @@ export function SummarySheet({ onClose, onSaved, initialPeriod, onOpenSettings }
     };
   }, [phase, period]);
 
-  // 缺口清单：打开面板时算一次。碎片上限给得宽，是因为它要覆盖所有历史月份，
-  // 而这里只做一次全表扫描，几百毫秒就能出结果。
+  /*
+   * 缺口清单：打开面板时算一次。
+   *
+   * 原来这里读的是 `listFragments(4000)` —— 一个猜的上限。超过 4000 条之后，
+   * 更早的月份会静默消失，用户以为「那几个月没记过」。v0.26 改成问仓库要
+   * 每月条数：一条 GROUP BY，跟库多大没关系。
+   */
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const [all, notes] = await Promise.all([
-          repo.listFragments(4000),
+        const [months, notes] = await Promise.all([
+          repo.monthCounts(),
           repo.listNotes(500),
         ]);
         if (!alive) return;
-        setBacklog(missingDigests(all, notes, RECENT_COUNT).items);
+        setBacklog(missingDigests(months, notes, RECENT_COUNT).items);
       } catch {
         /* 缺口算不出来不影响单篇生成 */
       }

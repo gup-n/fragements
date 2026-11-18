@@ -351,7 +351,7 @@ test('日历的「展开其余」能点开，小结入口说出待补月份', ()
   assert.ok(source.includes('dayFrag.slice(0, DAY_FRAG_LIMIT)'), '展开后要真的多列几条');
   // 旧文案是「还有 N 条，去时间轴看」—— 说完不给入口，等于没有功能
   assert.ok(!/[\u8fd8\u6709]\s*\{dayFrag\.length/.test(source), '不能再写一句话指一个点不到的地方');
-  assert.ok(source.includes('missingDigests(fragments, notes'), '待补月份要用 util/digest 的判据');
+  assert.ok(source.includes('missingDigests(months, notes'), '待补月份要用 util/digest 的判据（v0.26 起输入是每月条数，不是全量碎片）');
   assert.ok(source.includes('个月还没写'), '小结入口要说出待补月份数');
 });
 

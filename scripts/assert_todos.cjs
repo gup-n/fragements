@@ -291,7 +291,7 @@ const SEP = new Date(2026, 8, 15, 9).getTime();
 
 check('缺口清单按月给出，跳过还没结束的当月', () => {
   const fragments = [frag(1, OCT), frag(2, OCT), frag(3, NOW)];
-  const { items, total } = digest.missingDigests(fragments, [], 10, NOW);
+  const { items, total } = digest.missingDigests(digest.countByMonth(fragments), [], 10, NOW);
   eq(total, 1, '只有 10 月这一个缺口');
   eq(items[0].period, '2026-10', '周期键');
   eq(items[0].count, 2, '当月两条碎片');
@@ -300,7 +300,7 @@ check('缺口清单按月给出，跳过还没结束的当月', () => {
 check('已经有月总结的月份不出现', () => {
   const fragments = [frag(1, SEP), frag(2, OCT)];
   const notes = [note(1, 'monthly', '2026-09')];
-  const { items } = digest.missingDigests(fragments, notes, 10, NOW);
+  const { items } = digest.missingDigests(digest.countByMonth(fragments), notes, 10, NOW);
   eq(items.length, 1, '只剩 10 月');
   eq(items[0].period, '2026-10', '9 月已被总结覆盖');
 });
@@ -311,7 +311,7 @@ check('旧的日小结填不掉月的缺口', () => {
   // 会被误认为「10 月已经写过」—— 用户会看到缺口凭空少一个
   const fragments = [frag(1, OCT)];
   const notes = [note(1, 'daily', '2026-10-15')];
-  const { items, total } = digest.missingDigests(fragments, notes, 10, NOW);
+  const { items, total } = digest.missingDigests(digest.countByMonth(fragments), notes, 10, NOW);
   eq(total, 1, '10 月仍然是缺口');
   eq(items[0].period, '2026-10', '周期键');
 });
@@ -322,7 +322,7 @@ check('按时间倒序，最多给 limit 条', () => {
     frag(2, new Date(2026, 7, 1).getTime()),
     frag(3, SEP),
   ];
-  const { items, total } = digest.missingDigests(fragments, [], 2, NOW);
+  const { items, total } = digest.missingDigests(digest.countByMonth(fragments), [], 2, NOW);
   eq(total, 3, '一共三个缺口');
   eq(items.length, 2, '只给两条');
   eq(items[0].period, '2026-09', '最近的在最前');

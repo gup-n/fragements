@@ -47,6 +47,25 @@ function eq(actual, expected, msg) {
   }
 }
 
+/*
+ * 历史抽屉搬成组件（v0.26）。
+ *
+ * 拆的时候最容易顺手改掉的是三件事，而它们都不是「风格问题」：
+ * 挂载条件、压暗层能不能接点击、操作簿开着时读屏还能不能读到抽屉。
+ */
+check('历史抽屉：挂载看 mounted，压暗层不接点击，操作簿开着时对读屏隐藏', () => {
+  const page = fs.readFileSync('src/screens/AskScreen.tsx', 'utf8');
+  const panel = fs.readFileSync('src/components/AskHistoryPanel.tsx', 'utf8');
+
+  assert(page.includes('<AskHistoryPanel'), '页面要用这个组件，而不是自己拼一份');
+  assert(!page.includes('title="历史会话"'), '页头跟着搬走了，页面里不该再有第二份');
+  assert(panel.includes('if (!mounted) return null'), '卸载看 mounted（关掉之后还要播退场动画）');
+  assert(panel.includes('pointerEvents="none"'), '压暗层不能接点击，否则抽屉滑出时下面那页点不动');
+  assert(panel.includes('accessibilityElementsHidden={sheetVisible}'), '操作簿开着时抽屉要对读屏隐藏');
+  assert(page.includes('panHandlers={closePan.panHandlers}'), '往右推回去的手势仍由页面持有');
+  assert(panel.includes('Animated.AnimatedInterpolation<number>'), '位移/透明度是插值节点，组件只负责画');
+});
+
 fs.rmSync(outDir, { recursive: true, force: true });
 
 const tscArgs = [

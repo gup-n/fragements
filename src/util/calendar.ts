@@ -23,6 +23,19 @@ export interface CalendarCell {
   inMonth: boolean;
 }
 
+/**
+ * 「这一天有几条碎片」。
+ *
+ * 日历的格子上只画点，画点只需要个数 —— 42 个格子各筛一遍全部碎片是纯浪费。
+ * v0.26 起这个数由 SQL 一条 `GROUP BY` 给出，`count` 的含义与
+ * 「在碎片数组里数一遍」完全一致（同一个本地时区口径）。
+ */
+export interface DayCount {
+  /** YYYY-MM-DD，和 `dayKey` 同一个格式 */
+  day: string;
+  count: number;
+}
+
 export interface MonthRef {
   year: number;
   /** 1–12 */

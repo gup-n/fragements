@@ -191,7 +191,10 @@ test('几何契约有真实48dp控件槽，墨水边线更明确而非缩小触�
   const a = appearance();
   for (const name of ['DEFAULT_METRICS', 'INK_METRICS']) {
     const metrics = a[name];
-    assert.deepEqual(Object.keys(metrics).sort(), ['cardRadius', 'buttonRadius', 'strokeWidth', 'controlHeight', 'pagePadding', 'outline'].sort());
+    // typeScale 是 v0.26 加的**缓存键**：它让样式工厂的 memo 在档位变化时失效，
+    // 不是几何参数。这里钉住它默认是 1（标准档），免得有人拿它当圆角用
+    assert.deepEqual(Object.keys(metrics).sort(), ['cardRadius', 'buttonRadius', 'strokeWidth', 'controlHeight', 'pagePadding', 'outline', 'typeScale'].sort());
+    assert.equal(metrics.typeScale, 1);
     for (const value of Object.values(metrics)) assert.ok(Number.isFinite(value) && value >= 0);
     assert.ok(metrics.controlHeight >= 48);
     assert.ok(metrics.strokeWidth >= 1);
@@ -201,6 +204,47 @@ test('几何契约有真实48dp控件槽，墨水边线更明确而非缩小触�
   assert.ok(a.INK_METRICS.cardRadius <= a.DEFAULT_METRICS.cardRadius);
   assert.ok(a.INK_METRICS.buttonRadius <= a.DEFAULT_METRICS.buttonRadius);
   assert.ok(a.INK_METRICS.strokeWidth >= a.DEFAULT_METRICS.strokeWidth);
+});
+
+/*
+ * 字号档位（v0.26）。
+ *
+ * 这件事的可验部分只有三样：倍数递增而不过分、行高跟着字号一起放大、
+ * 标准档与原值完全一致（不能因为「加了个功能」让默认界面悄悄变样）。
+ * 真机上的换行、卡片高度、被截断的标题，只有装包才看得见。
+ */
+test('字号档位：递增、行高同步、标准档等于原值', () => {
+  const ui = loader.load('src/util/uiTokens.ts');
+  const order = ['small', 'normal', 'large', 'xlarge'];
+  const factors = order.map((k) => ui.TYPE_SCALE_FACTOR[k]);
+  assert.ok(factors.every((f) => f > 0), '倍数必须为正');
+  for (let i = 1; i < factors.length; i++) assert.ok(factors[i] > factors[i - 1], '档位必须一档比一档大');
+  assert.equal(factors[order.indexOf('normal')], 1, '标准档就是 1 —— 默认界面不能因为加档位而变样');
+  assert.ok(factors[factors.length - 1] <= 1.3, '最大档再大就会把两列布局挤断');
+
+  const base = { ...ui.TYPE };
+  ui.setTypeScale('normal');
+  assert.deepEqual({ ...ui.TYPE }, base, '标准档必须与原值逐项相同');
+
+  ui.setTypeScale('xlarge');
+  for (const role of Object.keys(base)) {
+    assert.equal(ui.TYPE[role].fontSize, Math.round(base[role].fontSize * ui.TYPE_SCALE_FACTOR.xlarge), `${role} 字号要按倍数放大`);
+    assert.equal(ui.TYPE[role].lineHeight, Math.round(base[role].lineHeight * ui.TYPE_SCALE_FACTOR.xlarge), `${role} 行高也要放大（只放大字会挤成一块）`);
+    assert.equal(ui.TYPE[role].fontWeight, base[role].fontWeight, '字重不随档位变');
+  }
+  // 收尾：断言之间不能互相污染，后面的用例还在标准档上
+  ui.setTypeScale('normal');
+  assert.deepEqual({ ...ui.TYPE }, base);
+  assert.equal(ui.normalizeTypeScale('huge'), 'normal', '不认识的档位回落到标准');
+
+  // 接线：设置页给四档，App 读设置、先改 TYPE 再改 state
+  const settings = readSource('src/screens/SettingsScreen.tsx');
+  assert.ok(settings.includes('setTypeScale(choice)'), '设置页要能拨档位');
+  const app = readSource('App.tsx');
+  assert.ok(app.includes('normalizeTypeScale(await repo.getSetting(K_TYPE_SCALE))'), '启动要读回来');
+  const applyAt = app.indexOf('setTypeScale(scale);');
+  const stateAt = app.indexOf('setTypeScaleState(scale);');
+  assert.ok(applyAt > 0 && stateAt > applyAt, '先改 TYPE 再改 state，否则第一帧还是旧字号');
 });
 
 test('模式与风格各有完整、非空的中文标签', () => {

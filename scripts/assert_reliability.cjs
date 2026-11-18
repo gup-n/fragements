@@ -1690,7 +1690,9 @@ function preferenceHarness(setSetting) {
   let mode = 'system';
   let style = 'default';
   const bindings = {
-    K_THEME: 'ui_theme', useCallback: (fn) => fn, preferenceQueue, preferenceVersions,
+    // v0.26 起字号也是一条外观偏好（它有自己的保存失败提示）
+    K_THEME: 'ui_theme', K_TYPE_SCALE: 'ui_type_scale',
+    useCallback: (fn) => fn, preferenceQueue, preferenceVersions,
     repo: { setSetting },
     setPreferenceErrors: (value) => { errors = typeof value === 'function' ? value(errors) : value; },
     setMode: (value) => { mode = value; }, setStyle: (value) => { style = value; },

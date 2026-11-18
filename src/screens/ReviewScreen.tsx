@@ -12,8 +12,11 @@ import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator'
  *
  * 数据仍然一次取齐（待办 + 小结 + 已合并），因为三个 tab 都靠 `reload()`
  * 保持一致；分开取会让「刚勾完的待办在另一个 tab 里还是旧状态」。
- * 碎片由上层传进来（`fragments`）—— 日历要看「哪天记了东西」，
- * 这一页原来不持有碎片，是这一版唯一新增的数据依赖。
+ *
+ * 碎片**不再整库传进来**（v0.26）。日历只需要「哪天有几条」（`days`），
+ * 缺口只需要「每月有几条」（`months`），点开某一天才去读那天的正文
+ * （`onLoadDay`）。首页的大库分页就是被这一条撑开的：以前这三件事都靠
+ * 上层那一个全量数组，数组一截断，日历和缺口就跟着错。
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
@@ -22,8 +25,8 @@ import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
-import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle } from '../util/digest';
-import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type MonthRef } from '../util/calendar';
+import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle, type MonthCount } from '../util/digest';
+import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type DayCount, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
 import { shortPreview } from '../util/text';
 import { NoteBody } from '../components/NoteBody';
@@ -47,8 +50,15 @@ interface Props {
   onOpenSettings?: () => void;
   /** 数据变了（新存了一条总结、改动了待办），通知上层刷新时间轴 */
   onChanged?: () => void | Promise<void>;
-  /** 全部碎片。日历用它标出「哪天记过东西」，也是点开某天后的明细来源 */
-  fragments?: Fragment[];
+  /** 每天几条碎片（本地时区）。日历的格子只画点，不读正文 */
+  days?: DayCount[];
+  /** 每月几条碎片（本地时区）。「欠着几个月小结」只用它判断 */
+  months?: MonthCount[];
+  /**
+   * 读某一整天的碎片。日历点开某天时才调 ——
+   * 大库（几千条）下不可能把全量碎片传进来只为展开一天。
+   */
+  onLoadDay?: (day: string) => Promise<Fragment[]>;
   /**
    * 进来时落在哪个 tab（v0.25.1）。
    *
@@ -95,7 +105,9 @@ export function ReviewScreen({
   onClose,
   onChanged,
   onOpenSettings,
-  fragments = [],
+  days = [],
+  months = [],
+  onLoadDay,
   focusTab,
   focusSignal,
 }: Props) {
@@ -169,8 +181,8 @@ export function ReviewScreen({
    * 原来只数了总数，点进去却停在本月（本月通常一条碎片都没有）。
    */
   const backlog = useMemo(
-    () => missingDigests(fragments, notes, 3),
-    [fragments, notes],
+    () => missingDigests(months, notes, 3),
+    [months, notes],
   );
 
   return (
@@ -219,7 +231,8 @@ export function ReviewScreen({
         <CalendarTab
           todos={todos}
           notes={notes}
-          fragments={fragments}
+          days={days}
+          onLoadDay={onLoadDay}
           onToggle={async (todo) => {
             await repo.toggleTodo(todo.id, !todo.done);
             await reload();
@@ -347,13 +360,15 @@ export function ReviewScreen({
 function CalendarTab({
   todos,
   notes,
-  fragments,
+  days,
+  onLoadDay,
   onToggle,
   onOpenEditor,
 }: {
   todos: Todo[];
   notes: Note[];
-  fragments: Fragment[];
+  days: DayCount[];
+  onLoadDay?: (day: string) => Promise<Fragment[]>;
   onToggle: (todo: Todo) => Promise<void>;
   onOpenEditor: (todo: Todo) => void;
 }) {
@@ -387,12 +402,13 @@ function CalendarTab({
       row[field] += 1;
       map.set(key, row);
     };
-    for (const f of fragments) bump(dayKey(f.createdAt), 'frags');
+    // 碎片条数来自 SQL 聚合（`days`），不再在这里数一遍数组
+    for (const d of days) map.set(d.day, { frags: d.count, todos: 0, notes: 0 });
     // 已完成的不再标红：日历是「还要做什么」，不是「做过什么」
     for (const t of todos) if (t.dueAt && !t.done && t.mergedInto === null) bump(t.dueAt, 'todos');
     for (const n of notes) bump(dayKey(periodAnchor(n.period) ?? n.createdAt), 'notes');
     return map;
-  }, [fragments, todos, notes]);
+  }, [days, todos, notes]);
 
   /** 本月合计：记录条数、记了几天、还有几件到期。日历下面那一行 */
   const monthStat = useMemo(() => {
@@ -416,7 +432,27 @@ function CalendarTab({
 
   const dayTs = keyToTs(picked);
   const dayTodo = useMemo(() => todos.filter((t) => t.dueAt === picked && t.mergedInto === null), [todos, picked]);
-  const dayFrag = useMemo(() => fragments.filter((f) => dayKey(f.createdAt) === picked), [fragments, picked]);
+  /*
+   * 选中那天的碎片：点开才读。
+   *
+   * 头部的「N 条记录」用 `days` 里的数（立刻就有），列表用读回来的正文。
+   * 两者分开是为了不让「读的那一下」把数字闪成 0 —— 用户会以为那天没记东西。
+   */
+  const pickedFrags = byDay.get(picked)?.frags ?? 0;
+  const [dayFrag, setDayFrag] = useState<Fragment[]>([]);
+  useEffect(() => {
+    let alive = true;
+    if (!onLoadDay) {
+      setDayFrag([]);
+      return () => { alive = false; };
+    }
+    setDayFrag([]);
+    void onLoadDay(picked)
+      .then((list) => { if (alive) setDayFrag(list); })
+      // 读不出来就只说「这天没有记录」，不编一个错误占着明细区
+      .catch(() => { if (alive) setDayFrag([]); });
+    return () => { alive = false; };
+  }, [picked, onLoadDay]);
   const dayNote = useMemo(
     () => notes.filter((n) => dayKey(periodAnchor(n.period) ?? n.createdAt) === picked),
     [notes, picked],
@@ -504,7 +540,7 @@ function CalendarTab({
       <View style={styles.dayPanel}>
         <View style={styles.dayHead}>
           <Text style={styles.dayTitle}>{daySubLabel(dayTs)}</Text>
-          <Text style={styles.dayCount}>{marksText({ frags: dayFrag.length, todos: dayTodo.length, notes: dayNote.length })}</Text>
+          <Text style={styles.dayCount}>{marksText({ frags: pickedFrags, todos: dayTodo.length, notes: dayNote.length })}</Text>
         </View>
 
         {dayTodo.map((todo) => (
@@ -569,7 +605,7 @@ function CalendarTab({
           </View>
         ) : null}
 
-        {dayTodo.length === 0 && dayFrag.length === 0 && dayNote.length === 0 ? (
+        {dayTodo.length === 0 && pickedFrags === 0 && dayNote.length === 0 ? (
           <Text style={styles.dayEmpty}>这天没有记录，也没有到期的待办。</Text>
         ) : null}
       </View>

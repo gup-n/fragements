@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import type { Fragment, ReasoningEffort } from '../types';
+import type { ReasoningEffort } from '../types';
 import type { BackupManifest } from '../util/backupPlan';
 import { humanBytes } from '../util/backupPlan';
 import { isQuickRecordBlocked, isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
@@ -26,6 +26,7 @@ import {
   surfaceStroke,
   THEME_MODE_LABEL,
   THEME_STYLE_LABEL,
+  TYPE_SCALE_LABEL,
   useTheme,
   useThemedStyles,
   type Palette,
@@ -62,16 +63,14 @@ import { IconButton, type IoniconName } from '../components/IconButton';
 interface Props {
   /** 作为底栏 tab 常驻时不画返回箭头（子页仍然要能回菜单） */
   embedded?: boolean;
-  fragments: Fragment[];
   onClose?: () => void;
   /** 导入会新增碎片，得让 App 重新拉一遍时间轴 */
   onChanged: () => void;
   /**
    * 通知类开关拨完之后，让 App 拿当前数据对齐那条通知。
    *
-   * 为什么要回到 App 做：对齐要知道「哪些月还没写」，那是整个库的数据，
-   * 设置页只拿到 `fragments`，拿不到 notes。放在这里传一个回调，
-   * 比让设置页自己再读一遍库干净。
+   * 为什么要回到 App 做：对齐要知道「哪些月还没写」，而 App 手上已经有
+   * 每次 reload 都取的每月条数与 notes。设置页只负责拨开关，不碰判据。
    */
   onReminderChange?: () => void | Promise<unknown>;
 }
@@ -106,9 +105,9 @@ const PANE_TITLE: Record<Pane, string> = {
   about: '关于',
 };
 
-export function SettingsScreen({ embedded = false, fragments, onClose, onChanged, onReminderChange }: Props) {
+export function SettingsScreen({ embedded = false, onClose, onChanged, onReminderChange }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
-  const { mode, setMode, style: themeStyle, setStyle, saveError } = useTheme();
+  const { mode, setMode, style: themeStyle, setStyle, typeScale, setTypeScale, saveError } = useTheme();
   const keyboardHeight = useKeyboardHeight();
   /** 当前在哪一层。`root` 是模块菜单，其余是子页 */
   const [pane, setPane] = useState<Pane>('root');
@@ -938,6 +937,20 @@ export function SettingsScreen({ embedded = false, fragments, onClose, onChanged
             <View style={styles.chipRow} accessibilityLabel="界面风格">
               {(['default', 'ink'] as const).map((choice) => (
                 <ChoiceChip key={choice} label={THEME_STYLE_LABEL[choice]} selected={themeStyle === choice} onPress={() => setStyle(choice)} />
+              ))}
+            </View>
+          </View>
+
+          {/*
+            字号（v0.26）。只放大文字与行高，不动间距与控件高度 ——
+            间距是「格子」，字号是「格子里的字」；一起放大会把所有一屏能放下的东西
+            挤掉，而用户要的只是看清。
+          */}
+          <GroupTitle text="字号" />
+          <View style={styles.card}>
+            <View style={styles.chipRow} accessibilityLabel="字号">
+              {(['small', 'normal', 'large', 'xlarge'] as const).map((choice) => (
+                <ChoiceChip key={choice} label={TYPE_SCALE_LABEL[choice]} selected={typeScale === choice} onPress={() => setTypeScale(choice)} />
               ))}
             </View>
           </View>

@@ -51,6 +51,15 @@ export interface ThemeMetrics {
    * 圆角一改就静默失效。
    */
   outline: number;
+  /**
+   * 字号档位的倍数（v0.26）。**它不是几何参数，是缓存键。**
+   *
+   * 字号本身在 `TYPE` 里（模块级当前档位），40 多个样式工厂照旧 `...TYPE.body`。
+   * 这个字段存在的唯一理由：`useThemedStyles` 的 memo 依赖 metrics，
+   * 档位一变、metrics 换一个对象，整页样式才会重建 —— 否则用户拨了档位，
+   * 界面要等到下一次切页才变。
+   */
+  typeScale: number;
 }
 
 /**
@@ -241,6 +250,7 @@ export const INK_DARK: Palette = {
 };
 
 export const DEFAULT_METRICS: ThemeMetrics = {
+  typeScale: 1,
   // 20/14：DeepSeek 那套圆角的量级。方一点会显旧，再圆就成药丸了
   cardRadius: 20,
   buttonRadius: 14,
@@ -272,12 +282,25 @@ export function normalizeThemeStyle(raw: unknown): ThemeStyle {
   return raw === 'ink' ? 'ink' : 'default';
 }
 
-export function resolveAppearance(mode: ThemeMode, style: ThemeStyle, systemDark: boolean) {
+/**
+ * 算出这一屏的颜色与几何。
+ *
+ * `typeScale` 只是被带进 metrics（见 `ThemeMetrics.typeScale`）——
+ * 颜色和圆角不随字号变，但样式工厂的 memo 需要它变。
+ */
+export function resolveAppearance(
+  mode: ThemeMode,
+  style: ThemeStyle,
+  systemDark: boolean,
+  typeScale = 1,
+) {
   const dark = mode === 'dark' || (mode === 'system' && systemDark);
   const ink = style === 'ink';
+  const base = ink ? INK_METRICS : DEFAULT_METRICS;
   return {
     dark,
     c: ink ? (dark ? INK_DARK : INK_LIGHT) : (dark ? DARK : LIGHT),
-    metrics: ink ? INK_METRICS : DEFAULT_METRICS,
+    // 同一档位复用同一个对象：memo 依赖比对的是引用，不该每次 render 都新建
+    metrics: base.typeScale === typeScale ? base : { ...base, typeScale },
   };
 }

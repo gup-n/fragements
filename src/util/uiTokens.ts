@@ -1,5 +1,9 @@
 /** Shared UI roles. Pure, color-free tokens: importing them never freezes a theme. */
+import type { TextStyle } from 'react-native';
 import type { ThemeMetrics } from './appearance';
+
+/** 字号档位。用户可选的四种，倍数在 `TYPE_SCALE_FACTOR` */
+export type TypeScale = 'small' | 'normal' | 'large' | 'xlarge';
 
 export const SPACE = {
   xxs: 4, xs: 8, sm: 12, md: 16, lg: 20, xl: 24, xxl: 32,
@@ -17,7 +21,23 @@ export const SPACE = {
  * - `compact` 14/21：列表行、摘要、图片状态这类「次要正文」。
  *   比 body 紧一档，但不像 meta 那样读到 12 号。
  */
-export const TYPE = {
+/** 字号档位的倍数。1 = 标准；小/大/特大只动字号与行高，不动间距 */
+export const TYPE_SCALE_FACTOR: Record<TypeScale, number> = {
+  small: 0.9,
+  normal: 1,
+  large: 1.1,
+  xlarge: 1.22,
+};
+
+export const TYPE_SCALE_LABEL: Record<TypeScale, string> = {
+  small: '小', normal: '标准', large: '大', xlarge: '特大',
+};
+
+export function normalizeTypeScale(raw: unknown): TypeScale {
+  return raw === 'small' || raw === 'large' || raw === 'xlarge' ? raw : 'normal';
+}
+
+const BASE_TYPE = {
   display: { fontSize: 28, lineHeight: 40, fontWeight: '700' },
   heading: { fontSize: 22, lineHeight: 30, fontWeight: '700' },
   /** 卡片标题 */
@@ -33,6 +53,53 @@ export const TYPE = {
   meta: { fontSize: 12, lineHeight: 18, fontWeight: '400' },
   caption: { fontSize: 11, lineHeight: 16, fontWeight: '500' },
 } as const;
+
+export type TypeRole = {
+  fontSize: number;
+  lineHeight: number;
+  fontWeight: TextStyle['fontWeight'];
+};
+export type TypeKey = keyof typeof BASE_TYPE;
+
+/**
+ * 按倍数缩放一套字号。
+ *
+ * **行高跟着字号一起放大**：只放大字号会让中文行与行挤成一块，
+ * 而「看得清但读不动」比「小一点」更糟。取整是为了让同一屏里的
+ * 字高差保持在整数像素上（半像素在 Android 上会被拉成 1 或 0）。
+ */
+function buildType(factor: number): Record<TypeKey, TypeRole> {
+  const out = {} as Record<TypeKey, TypeRole>;
+  for (const key of Object.keys(BASE_TYPE) as TypeKey[]) {
+    const base = BASE_TYPE[key];
+    out[key] = {
+      fontSize: Math.round(base.fontSize * factor),
+      lineHeight: Math.round(base.lineHeight * factor),
+      fontWeight: base.fontWeight,
+    };
+  }
+  return out;
+}
+
+/**
+ * 字号角色。**这是一个会变的导出**（v0.26）。
+ *
+ * 为什么不是「传给每个样式工厂的参数」：40 多个 `makeStyles(c, metrics)` 全都
+ * 在函数体里 `...TYPE.body`，加一个参数就要改 40 多个签名、还要逐个记得用。
+ * 改成「模块级当前档位 + 让 `metrics` 带上档位值」——
+ * `useThemedStyles` 的 memo 以 metrics 为依赖，档位一变整页样式全部重建，
+ * 而每个工厂照旧写 `...TYPE.body`。
+ *
+ * 代价是它不纯：读 TYPE 的地方必须在**重新渲染之后**才拿到新值。
+ * 所以改档位一定要走 `applyTypeScale`（先改这里、再 setState），
+ * 别在渲染过程中调 `setTypeScale`。
+ */
+export let TYPE = buildType(1);
+
+/** 改当前档位。只在设置页/启动读设置时调，且必须先于包含它的那次渲染 */
+export function setTypeScale(scale: TypeScale): void {
+  TYPE = buildType(TYPE_SCALE_FACTOR[scale]);
+}
 
 /**
  * Decoration stays quiet on ordinary screens, definite on monochrome controls.

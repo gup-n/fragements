@@ -35,6 +35,7 @@ type Route = MainTab; // 五个页面即底栏五项，只此一处定义
 | `npm run test:appearance` | 两轴主题、对比度与PDF协议 |
 | `npm run test:backup` | 新备份清单与路径等纯判据 |
 | `npm run test:reminder` | 小结提醒的时刻、不重排、冷却、撤销与正文本 |
+| `npm run test:paging` | 页大小、去重接页、剩余条数、SQL 的 localtime 口径、别处不再依赖全量数组 |
 | `npm run test:ui` | 语义排版、窄屏导航、控件与原事件保留、分享契约、空屏只有一份 |
 | `npm run check:docs` | 版本、文件行数、路径/链接、提示词等 |
 | `npm test` | 以上检查的串行聚合 |
@@ -117,6 +118,18 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - App持有记录正文、待发图片、唯一待发键；它们跨页面/风格保留，但当前没有进程重启恢复承诺。不要和整理工作区的持久化混为一谈。
 - 正文配图标记仅走[inlineImages](<src/util/inlineImages.ts>)：光标插入、pending键换id、去重与删除标记。模型材料、检索、文字导出剥离定位语法；原图与图片文字不是同一数据。
 - 历史SQL清空字段沿用 `NULL` 字面量，不把已踩过坑的UPDATE改回绑定null；不拿驱动返回的 `changed === 0` 判失败。刷新与实际提交状态分别处理。
+- **`fragments` 不再是「全部」**（v0.26 起）。它是首页已加载的一窗（首屏 200 条，往下补）。
+  「一共有多少」「哪天有几条」「每月有几条」一律走 `totalFragments` / `dayCounts` /
+  `monthCounts` 三个聚合；**不许**在任何页面里对 `fragments` 做 `filter(...).length` 当统计用。
+  导出/备份是例外 —— 那是「把东西完整拿走」，继续用 `listAllFragments()`。
+- **SQL 的分组必须带 `'localtime'`**：`created_at` 是毫秒时间戳，`strftime('%Y-%m-%d', created_at/1000, 'unixepoch', 'localtime')`。
+  少了它，UTC+8 的夜里记的东西会被算到前一天/前一月 —— 日历上「今天明明记了」却没有点，
+  而桌面时区跑断言看不出来。改这里要同步 web 侧（它用同一个 `dayKey` / `countByMonth`）。
+- **`onLoadDay` 这类回调必须 `useCallback`**。日历把它当 effect 依赖，每次 render 换新函数
+  就会「读到 → setState → 重渲染 → 再读」，日历一打开就不停发查询。
+- **`TYPE` 是会变的导出**（v0.26 字号档位）。它现在等于「当前档位下的一套字号」，
+  改档位必须先 `setTypeScale(scale)` 再 `setTypeScaleState(scale)`，顺序反了第一帧还是旧字号。
+  不要在模块顶层把 `TYPE.body` 存进常量（那时读到的是标准档，之后永远不变）。
 - **系统分享的 json 有两个形状**：v0.25 起是 `files: [{file, name}]`，之前是单个 `file`/`name`。读的时候两条都要认 —— 升级前分享、升级后才打开 App 的机器上，磁盘里躺的是旧形状。`disk`（安全名）只用来删文件，`name`（原名）才入库。
 - **分享的幂等键在读的时候就推进了**（`share_last_at`），所以「读到了」不等于「存进去了」。一份都没存成功时必须 `rewindIncomingShare(prevAt)` 退回去，否则文件还在私有目录、界面什么都没有 —— 静默丢内容。已经存进去一部分时不许退（会让那部分再进一遍）。
 - **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。

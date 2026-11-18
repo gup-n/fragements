@@ -17,6 +17,8 @@ import { dedupeTags, tokenizeText } from '../util/tokenize';
 import { removeImageToken, resolvePendingTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
+import { dayKey } from '../util/date';
+import { countByMonth } from '../util/digest';
 
 /**
  * localStorage 存储适配，仅供桌面端编译校验；真机走 SQLite。
@@ -294,6 +296,32 @@ export const repo: Repo = {
 
   async listAllFragments() {
     return [...load().fragments].sort((a, b) => b.createdAt - a.createdAt || b.id - a.id);
+  },
+
+  async totalFragments() {
+    return load().fragments.length;
+  },
+
+  async listFragmentsPage(offset: number, limit: number) {
+    return [...load().fragments]
+      .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id)
+      .slice(offset, offset + limit);
+  },
+
+  async dayCounts() {
+    // 没有 SQL，就在 JS 里数一遍；口径与 native 的 strftime(…,'localtime') 一致
+    const buckets = new Map<string, number>();
+    for (const f of load().fragments) {
+      const key = dayKey(f.createdAt);
+      buckets.set(key, (buckets.get(key) ?? 0) + 1);
+    }
+    return Array.from(buckets, ([day, count]) => ({ day, count })).sort((a, b) =>
+      a.day < b.day ? -1 : a.day > b.day ? 1 : 0,
+    );
+  },
+
+  async monthCounts() {
+    return countByMonth(load().fragments);
   },
 
   async listFragments(limit = 500) {

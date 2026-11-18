@@ -79,6 +79,11 @@ jobs:
       - name: 小结提醒断言
         run: npm run test:reminder
 
+      # 大库分页：截断之后最危险的不是「少几条」，而是别处还把它当全量
+      # （日历少点、缺口少几个月、月总结按 4000 条截断）。这条守着那些判据。
+      - name: 大库分页与聚合断言
+        run: npm run test:paging
+
       - name: UI排版与窄屏布局断言
         run: npm run test:ui
 

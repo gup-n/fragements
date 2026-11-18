@@ -61,9 +61,8 @@ import { DraftDocPage } from '../components/DraftDocPage';
 import { SummarySheet } from '../components/SummarySheet';
 import { DocViewer } from '../components/DocViewer';
 import { normalizeQaScope } from '../util/qaScope';
-import { dayKey, formatTime } from '../util/date';
+import { dayKey } from '../util/date';
 import { useKeyboardHeight } from '../util/keyboard';
-import { plainPreview } from '../util/askText';
 import { ReasoningFold } from '../components/ReasoningFold';
 import { ReasoningStream } from '../components/ReasoningStream';
 import { ScreenHeader } from '../components/ScreenHeader';
@@ -72,7 +71,7 @@ import { CitationSheet } from '../components/CitationSheet';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { TurnAnswer, makeTurnStyles } from '../components/TurnAnswer';
-import { AskHistoryRow } from '../components/AskHistoryRow';
+import { AskHistoryPanel } from '../components/AskHistoryPanel';
 
 interface Props {
   /**
@@ -121,10 +120,6 @@ const WEB_KEY = 'qa.web';
  * 但它是这一页最高频的两个开关，点不准比看着大更糟。四周补 7 回到 48。
  */
 const TOGGLE_SLOP = { top: 7, bottom: 7, left: 4, right: 4 };
-
-
-
-
 /**
  * 解析打开页面时带进来的范围。
  *
@@ -731,8 +726,6 @@ export function AskScreen({
     setReasoning(''); setOpenReasoningKey(null); setReceived(0); setElapsed(0);
     setContext(null); setTimeout(scrollToEnd, 120);
   }
-
-
   async function toggleThinking() {
     const next = !thinkingOn;
     setThinkingOn(next);
@@ -962,10 +955,6 @@ export function AskScreen({
   async function approveDraft(key: string | null) {
     await organize.approve(key);
   }
-
-
-
-
   /**
    * 从历史会话重新整理。
    *
@@ -1458,84 +1447,28 @@ export function AskScreen({
 
       {/* ---------------- 历史会话（右滑拉出来的抽屉） ---------------- */}
 
-      {/* 抽屉推出来时把下面的问答页压暗，眼睛才知道「上面这一层」 */}
-      {historyMounted ? (
-        <Animated.View pointerEvents="none" style={[styles.scrim, { opacity: dimOpacity }]} />
-      ) : null}
-
-      {historyMounted ? (
-        <Animated.View
-          style={[styles.historyPage, { transform: [{ translateX: historyX }] }]}
-          accessibilityViewIsModal
-          accessibilityElementsHidden={sheetVisible}
-          importantForAccessibility={sheetVisible ? 'no-hide-descendants' : 'auto'}
-          {...closePan.panHandlers}
-        >
-          <ScreenHeader
-            title="历史会话"
-            subtitle={`${sessions.filter((s) => !s.archived).length} 个会话`}
-            onBack={() => setHistoryOpen(false)}
-            right={
-              <IconButton
-                name="add"
-                size={21}
-                tone="soft"
-                onPress={newSession}
-                accessibilityLabel="新建会话"
-              />
-            }
-          />
-
-          {historyLoading ? (
-            <View style={styles.historyLoading}>
-              <ActivityIndicator size="small" color={c.text3} />
-              <Text style={styles.thinkingText}>正在读历史…</Text>
-            </View>
-          ) : (
-            <ScrollView contentContainerStyle={styles.historyContent}>
-              {history.groups.length === 0 && history.archived.length === 0 ? (
-                <EmptyState
-                  icon="time-outline"
-                  title="还没有历史会话"
-                  body="问过的问题会自动留在这里。"
-                />
-              ) : null}
-
-              {history.groups.map(([label, list]) => (
-                <View key={label}>
-                  <Text style={styles.histGroupTitle}>{label}</Text>
-                  {list.map((one) => (
-                    <AskHistoryRow
-                      key={one.id}
-                      session={one}
-                      active={sessionId === one.id}
-                      onOpen={loadSession}
-                      onOpenDocs={(s) => void openSessionDocs(s)}
-                      onManage={setActionSession}
-                    />
-                  ))}
-                </View>
-              ))}
-
-              {history.archived.length > 0 ? (
-                <View>
-                  <Text style={styles.histGroupTitle}>已归档 · {history.archived.length}</Text>
-                  {history.archived.map((one) => (
-                    <AskHistoryRow
-                      key={one.id}
-                      session={one}
-                      active={sessionId === one.id}
-                      onOpen={loadSession}
-                      onOpenDocs={(s) => void openSessionDocs(s)}
-                      onManage={setActionSession}
-                    />
-                  ))}
-                </View>
-              ) : null}
-            </ScrollView>
-          )}
-        </Animated.View>
-      ) : null}
+      {/*
+        外壳、压暗层、页头、分组搬到 `components/AskHistoryPanel`（v0.26）。
+        这里只交代「这一层该显示什么」，不再自己拼 JSX ——
+        它和聊天流之间没有任何共享状态，混在一个 1900 行的文件里只是难找。
+      */}
+      <AskHistoryPanel
+        mounted={historyMounted}
+        sheetVisible={sheetVisible}
+        translateX={historyX}
+        dimOpacity={dimOpacity}
+        panHandlers={closePan.panHandlers}
+        openCount={sessions.filter((s) => !s.archived).length}
+        loading={historyLoading}
+        groups={history.groups}
+        archived={history.archived}
+        activeId={sessionId}
+        onClose={() => setHistoryOpen(false)}
+        onNewSession={newSession}
+        onOpen={loadSession}
+        onOpenDocs={(one) => void openSessionDocs(one)}
+        onManage={setActionSession}
+      />
 
       {/* ---------------- 会话操作 ---------------- */}
       {actionSession ? (
@@ -1909,11 +1842,6 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.hairSoft,
   },
   sendOn: { backgroundColor: c.accent },
-  scrim: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
-  historyPage: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.page },
-  historyContent: { paddingHorizontal: metrics.pagePadding, paddingBottom: SPACE.xxl },
-  historyLoading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs, paddingTop: SPACE.xxl },
-  histGroupTitle: { ...TYPE.label, color: c.text2, marginTop: SPACE.xl, marginBottom: SPACE.xs },
   sheetOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'flex-end', backgroundColor: c.scrim },
   /** 底部面板：白底 + 上圆角就够分层了，上沿那条线是多余的 */
   sheet: {

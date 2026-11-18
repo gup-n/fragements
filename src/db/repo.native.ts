@@ -899,6 +899,47 @@ export const repo: Repo = {
     ).map(toFragment));
   },
 
+  async totalFragments() {
+    return countOf(db(), 'SELECT COUNT(*) AS n FROM fragments');
+  },
+
+  async listFragmentsPage(offset, limit) {
+    const d = db();
+    const rows = d.getAllSync<FragmentRow>(
+      'SELECT * FROM fragments ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',
+      [limit, offset],
+    );
+    return attachImages(d, rows.map(toFragment));
+  },
+
+  /*
+   * 聚合查询的两个口径说明（改了这里就要同步 web 侧，否则两端对不上）：
+   * - `created_at` 是毫秒时间戳，先除 1000 再交给 `unixepoch`；
+   * - `'localtime'` 必不可少。不带它 SQLite 按 UTC 分组，UTC+8 的夜里
+   *   记的东西会被算到前一天/前一月 —— 日历上「今天明明记了」却没有点。
+   */
+  async dayCounts() {
+    const rows = db().getAllSync<{ day: string; n: number }>(
+      `SELECT strftime('%Y-%m-%d', created_at / 1000, 'unixepoch', 'localtime') AS day,
+              COUNT(*) AS n
+         FROM fragments
+        GROUP BY day
+        ORDER BY day`,
+    );
+    return rows.map((r) => ({ day: r.day, count: r.n }));
+  },
+
+  async monthCounts() {
+    const rows = db().getAllSync<{ month: string; n: number }>(
+      `SELECT strftime('%Y-%m', created_at / 1000, 'unixepoch', 'localtime') AS month,
+              COUNT(*) AS n
+         FROM fragments
+        GROUP BY month
+        ORDER BY month DESC`,
+    );
+    return rows.map((r) => ({ month: r.month, count: r.n }));
+  },
+
   async listFragments(limit = 500) {
     const d = db();
     const rows = d.getAllSync<FragmentRow>(

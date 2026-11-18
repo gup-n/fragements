@@ -8,6 +8,8 @@ import { UpdateSheet } from './src/components/UpdateSheet';
 import {
   normalizeThemeMode,
   normalizeThemeStyle,
+  normalizeTypeScale,
+  setTypeScale,
   SPACE,
   ThemeProvider,
   useTheme,
@@ -15,6 +17,7 @@ import {
   type Palette,
   type ThemeMode,
   type ThemeStyle,
+  type TypeScale,
 } from './src/theme';
 import { repo } from './src/db/repo';
 import { importLocalFile } from './src/documents/importLocal';
@@ -34,6 +37,12 @@ import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
 import { syncDigestReminder, watchDigestReminder } from './src/digestReminder';
 import { dropIncomingFile, rewindIncomingShare, takeIncomingShare, type IncomingShare } from './src/shareInbox';
+import { PAGE_SIZE, appendPage } from './src/util/paging';
+import { keyToTs, type DayCount } from './src/util/calendar';
+import type { MonthCount } from './src/util/digest';
+
+/** 一天的毫秒数。只用来把「某一天」换算成 `[from, to)` —— 夏令时地区也不会有 23/25 小时的问题，因为按本地日界算是 CalendarTab 的事 */
+const DAY_MS = 24 * 3600 * 1000;
 
 /**
  * 路由就是底栏上的那五个页面，没有第六个。
@@ -50,6 +59,8 @@ const isWeb = Platform.OS === 'web';
 
 /** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
 const K_THEME = 'ui_theme';
+/** 字号档位（v0.26）。和明暗/风格一样是一条设置，不是每次进设置页才读 */
+const K_TYPE_SCALE = 'ui_type_scale';
 
 /**
  * 外层只做两件事：把库打开、把外观偏好读出来，然后把整棵树包进 ThemeProvider。
@@ -61,6 +72,7 @@ export default function App() {
   const system = useColorScheme();
   const [mode, setMode] = useState<ThemeMode>('system');
   const [style, setStyle] = useState<ThemeStyle>('default');
+  const [typeScale, setTypeScaleState] = useState<TypeScale>('normal');
   const [preferenceErrors, setPreferenceErrors] = useState<Record<string, string>>({});
   const preferenceQueue = useRef<Promise<void>>(Promise.resolve());
   const preferenceVersions = useRef<Record<string, number>>({});
@@ -72,6 +84,13 @@ export default function App() {
         await repo.init();
         setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
         setStyle(normalizeThemeStyle(await repo.getSetting('ui_style')));
+        /*
+         * 字号要**先改模块里的 TYPE 再改 state**：样式工厂在渲染时读 TYPE，
+         * 反过来的话第一帧还是旧字号，要等下一次重渲染才跳一下。
+         */
+        const scale = normalizeTypeScale(await repo.getSetting(K_TYPE_SCALE));
+        setTypeScale(scale);
+        setTypeScaleState(scale);
         /*
          * 文档任务服务必须在库就绪之后启动：它启动时要扫一遍
          * `state = 'parsing'` 但没有对应任务的记录，把它们标成「上次没跑完」。
@@ -98,7 +117,10 @@ export default function App() {
         }
       } catch {
         if (preferenceVersions.current[key] === version) {
-          setPreferenceErrors((previous) => ({ ...previous, [key]: key === K_THEME ? '明暗模式' : '界面风格' }));
+          setPreferenceErrors((previous) => ({
+            ...previous,
+            [key]: key === K_THEME ? '明暗模式' : key === K_TYPE_SCALE ? '字号' : '界面风格',
+          }));
         }
       }
     });
@@ -111,13 +133,28 @@ export default function App() {
     setStyle(next);
     persistPreference('ui_style', next);
   }, [persistPreference]);
+  const changeTypeScale = useCallback((next: TypeScale) => {
+    // 顺序不能反：先让 TYPE 变成新的一套，再触发渲染
+    setTypeScale(next);
+    setTypeScaleState(next);
+    persistPreference(K_TYPE_SCALE, next);
+  }, [persistPreference]);
   const saveError = Object.keys(preferenceErrors).length
     ? `本次外观已应用，但${Object.values(preferenceErrors).join('、')}未能保存；请重试选择`
     : null;
 
   return (
     <SafeAreaProvider>
-      <ThemeProvider mode={mode} style={style} systemDark={system === 'dark'} onChangeMode={changeMode} onChangeStyle={changeStyle} saveError={saveError}>
+      <ThemeProvider
+        mode={mode}
+        style={style}
+        typeScale={typeScale}
+        systemDark={system === 'dark'}
+        onChangeMode={changeMode}
+        onChangeStyle={changeStyle}
+        onChangeTypeScale={changeTypeScale}
+        saveError={saveError}
+      >
         <Shell booted={booted} />
       </ThemeProvider>
     </SafeAreaProvider>
@@ -178,7 +215,22 @@ function Shell({ booted }: { booted: boolean }) {
   }, []);
   /** 键盘抬起时底栏要让位：它占的那 52dp 正好是输入法的位置 */
   const keyboardHeight = useKeyboardHeight();
+  /**
+   * 已加载的那一窗碎片（v0.26）。
+   *
+   * **不再等于「全部」**：首屏只读 `PAGE_SIZE` 条，往下翻时再补。
+   * 任何「数一数一共有多少」的需求都不该在这里数 —— 走 `days` / `months` /
+   * `total` 那三个聚合结果（它们跟库多大没关系）。
+   */
   const [fragments, setFragments] = useState<Fragment[]>([]);
+  /** 库里一共多少条。分页的判据，来自 `COUNT(*)` */
+  const [fragmentTotal, setFragmentTotal] = useState(0);
+  /** 正在读更早那一页。按钮据此变成「读取中…」，也防止连点 */
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  /** 每天几条（本地时区）。日历只用它画点 */
+  const [days, setDays] = useState<DayCount[]>([]);
+  /** 每月几条（本地时区）。「欠着几个月小结」只用它判断 */
+  const [months, setMonths] = useState<MonthCount[]>([]);
   /** 周期总结，时间轴按 period 把它们插回对应日期 */
   const [notes, setNotes] = useState<Note[]>([]);
   /** 已完成待办对应的碎片 id，用来打「已完成」标记 */
@@ -288,22 +340,71 @@ function Shell({ booted }: { booted: boolean }) {
   const reloadGeneration = useRef(0);
   const reload = useCallback(async () => {
     const generation = ++reloadGeneration.current;
-    const [list, noteList, done] = await Promise.all([
-      repo.listAllFragments(),
+    /*
+     * 只读第一页 + 三个聚合。顺序无所谓，并行发出去：
+     * 计数类查询在几千条时是毫秒级，慢的一直是「把所有正文捞上来」这一步。
+     */
+    const [list, noteList, done, dayCounts, monthCounts, total] = await Promise.all([
+      repo.listFragmentsPage(0, PAGE_SIZE),
       repo.listNotes(120),
       repo.listDoneTodoSourceIds(),
+      repo.dayCounts(),
+      repo.monthCounts(),
+      repo.totalFragments(),
     ]);
     if (reloadGeneration.current !== generation) return;
     setFragments(list);
     setNotes(noteList);
     setDoneIds(new Set(done));
+    setDays(dayCounts);
+    setMonths(monthCounts);
+    setFragmentTotal(total);
     /*
      * 数据一变就对一次「小结提醒」：新记的碎片可能让某个空月份变成有账，
      * 写完一篇小结又可能把账清掉。放在这里而不是单开一个 effect，
      * 是因为它要的就是「这一次 reload 之后的数据」，多一个状态只会多一处同步问题。
      */
-    void syncDigestReminder(list, noteList);
+    void syncDigestReminder(monthCounts, noteList);
   }, []);
+
+  /**
+   * 读某一整天的碎片（日历点开某天）。
+   *
+   * **必须 useCallback**：日月历拿它当 effect 依赖，每次 render 换一个新的函数
+   * 就会「读到 → setState → 重渲染 → 再读」，日历一打开就不停发查询。
+   */
+  const loadDay = useCallback(
+    (day: string) => {
+      const from = keyToTs(day);
+      return repo.listFragmentsBetween(from, from + DAY_MS);
+    },
+    [],
+  );
+
+  /**
+   * 往下补一页。
+   *
+   * `offset` 用「已加载条数」，而不是页码 —— 去重后条数可能与读到的条数不一致，
+   * 用页码会跳过几条。并发写入造成重叠时由 `appendPage` 按 id 去掉。
+   *
+   * 读失败不清空、不弹错误：用户只是想要更早的记录，手里已有的不该受影响；
+   * 按钮回到可点状态，再按一次就是重试。
+   */
+  const loadOlder = useCallback(async () => {
+    if (loadingOlder) return;
+    setLoadingOlder(true);
+    const generation = reloadGeneration.current;
+    try {
+      const page = await repo.listFragmentsPage(fragments.length, PAGE_SIZE);
+      // 读的过程中数据被整体重载过：这一页的 offset 基于旧状态，直接丢掉
+      if (reloadGeneration.current !== generation) return;
+      setFragments((prev) => appendPage(prev, page));
+    } catch {
+      /* 静默：再按一次就是重试 */
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [fragments.length, loadingOlder]);
 
   useEffect(() => {
     if (!booted) return;
@@ -656,24 +757,28 @@ function Shell({ booted }: { booted: boolean }) {
                     setRoute('ask');
                   }}
                   focusSignal={quickTap}
+                  total={fragmentTotal}
+                  loadingOlder={loadingOlder}
+                  onLoadOlder={() => void loadOlder()}
                 />
               )}
               {route === 'settings' && (
                 <SettingsScreen
                   embedded
-                  fragments={fragments}
                   onChanged={reload}
                   /*
                    * 开关一拨就要立刻重排那条通知，所以这里传的是「用当前数据对齐一次」。
                    * 传 reload 不行：Reload 之后数据没变，重排的时机就错过了。
                    */
-                  onReminderChange={() => syncDigestReminder(fragments, notes)}
+                  onReminderChange={() => syncDigestReminder(months, notes)}
                 />
               )}
               {route === 'review' && (
                 <ReviewScreen
                   embedded
-                  fragments={fragments}
+                  days={days}
+                  months={months}
+                  onLoadDay={loadDay}
                   onChanged={reload}
                   onOpenSettings={() => setRoute('settings')}
                   focusTab={reviewFocus?.tab}
