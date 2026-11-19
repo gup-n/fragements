@@ -39,7 +39,7 @@ import { daySubLabel, formatTime, monthKey, periodLabel } from '../util/date';
 import { findHits } from '../util/highlight';
 import { useKeyboardHeight } from '../util/keyboard';
 import { imageStateOf, imageTextsOf } from '../util/fragmentText';
-import { imageToken, looseImages, removeImageToken } from '../util/inlineImages';
+import { imageToken, looseImages, stripImageTokens } from '../util/inlineImages';
 import { fragmentImageUri } from '../db/fragmentImages';
 
 /**
@@ -78,6 +78,13 @@ interface Props {
   ) => Promise<{ id: number; path: string }[]>;
   /** 删掉一张图（同时删文件） */
   onRemoveImage: (imageId: number) => Promise<void>;
+  /**
+   * 把这条**再存一份**（含图）。返回新碎片的 id。
+   *
+   * 和长按「复制」不是一回事：那个走系统剪贴板，只能带走文字；
+   * 这个是把图也复制一份存进库里（用户 2026-11-19 要的就是这个）。
+   */
+  onDuplicate: (fragment: Fragment) => Promise<number>;
 }
 
 export function FragmentDetail({
@@ -94,6 +101,7 @@ export function FragmentDetail({
   onReparseImage,
   onAddImages,
   onRemoveImage,
+  onDuplicate,
 }: Props) {
   const { c, styles } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
@@ -119,16 +127,24 @@ export function FragmentDetail({
   const [toast, setToast] = useState('');
   /** 待二次确认删除的那张图。图删掉就找不回来了，不能一步到位 */
   const [armedImage, setArmedImage] = useState<number | null>(null);
-  /** 编辑态光标位置。插图要插在光标处，而不是一律追加到末尾 */
-  const [sel, setSel] = useState({ start: 0, end: 0 });
+  /** 正在复制（含图要复制文件，不是瞬时的） */
+  const [duplicating, setDuplicating] = useState(false);
 
   const fragment = items[current] ?? items[initialIndex];
 
   const startEdit = useCallback(() => {
     if (!fragment) return;
-    setDraft(fragment.content);
-    // 光标默认在末尾：改一段长文时人通常是接着往下写的
-    setSel({ start: fragment.content.length, end: fragment.content.length });
+    /*
+     * 正文进编辑器之前先把图片标记剥掉（用户 2026-11-19 提的）。
+     *
+     * `![](img:12)` 里的 12 是配图行的 id，不是「第几张」。留在文本框里只有一个结果：
+     * 用户看到一串看不懂的东西，还以为自己加过 13 张图。
+     * 配图本来就有上面那条缩略图带（加图、删图都在那儿），正文不该再管它。
+     *
+     * 保存时按当前图片重新拼回去（见 `save`），所以删掉的图不会再留一个空标记 ——
+     * 以前那种「图删完了正文里还剩一堆 img」的碎片，改一次就干净了。
+     */
+    setDraft(stripImageTokens(fragment.content).trim());
     setArmedDelete(false);
     setArmedImage(null);
     setEditing(true);
@@ -246,22 +262,64 @@ export function FragmentDetail({
     [fragment, hitBlocks, hitTotal, shownHit, reduceMotion],
   );
 
+  /**
+   * 保存 = 正文 + 当前配图的标记。
+   *
+   * 标记按配图的顺序接在正文末尾，一条一行 —— 正文里不再由用户维护图片位置。
+   * 代价是：本来插在段落中间的图，改过一次之后会落到文末。
+   * 换来的是「编辑器里永远看不到 `img:12`」以及「删掉的图不会留下空标记」，
+   * 而这两件正是用户 2026-11-19 提的问题。碎片本来也是「一段话 + 几张图」的东西。
+   */
+  function composeContent(text: string, images: FragmentImage[]): string {
+    const tokens = images.map((img) => imageToken(img.id)).join('\n');
+    if (!tokens) return text;
+    return text ? `${text}\n\n${tokens}` : tokens;
+  }
+
   async function save() {
     if (!fragment || saving) return;
     const text = draft.trim();
-    // 清空等于删掉内容，不给它这个机会 —— 要删请走显式的删除
-    if (!text || text === fragment.content) {
+    // 清空等于删掉内容，不给它这个机会 —— 要删请走显式的删除。
+    // 「没字但有图」是合法的：那条碎片仍然由图片构成
+    if (!text && !fragment.images.length) {
+      stopEdit();
+      return;
+    }
+    const next = composeContent(text, fragment.images);
+    // 只动图片顺序也会变：原来 mid-text 的标记被挪到末尾，这次要真的写回去
+    if (next === fragment.content) {
       stopEdit();
       return;
     }
     setSaving(true);
     try {
-      await onSave(fragment.id, text);
+      await onSave(fragment.id, next);
       stopEdit();
     } catch (e) {
       setToast(e instanceof Error ? `保存失败：${e.message}` : '保存失败，正文仍在编辑器里');
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * 复制一条（含图）。
+   *
+   * 复制完**不跳过去**：用户多半是想「留住这一版再改」，留在原地继续看更顺；
+   * 提示里说清新的一条在哪儿（时间轴最上面），不让人自己找。
+   */
+  async function duplicate() {
+    if (!fragment || duplicating) return;
+    setDuplicating(true);
+    try {
+      await onDuplicate(fragment);
+      setToast(fragment.images.length
+        ? `已复制成新的一条（含 ${fragment.images.length} 张图），在时间轴最上面`
+        : '已复制成新的一条，在时间轴最上面');
+    } catch (e) {
+      setToast(e instanceof Error ? `没复制成：${e.message}` : '没复制成');
+    } finally {
+      setDuplicating(false);
     }
   }
 
@@ -313,15 +371,13 @@ export function FragmentDetail({
           res.assets.map((a) => a.uri),
         );
         /*
-         * 编辑态加图 = 在光标处留一行定位标记，图就长在这一段文字中间；
-         * 阅读态加图没有光标可依，图落到正文上方的「未定位」区。
+         * 加图只往配图带里加，正文一个字都不动（v0.30.1 起）。
+         * 正文里的位置由保存时统一拼出来，用户不用、也管不了那些标记。
          */
-        if (editing && added.length) insertTokens(added.map((a) => a.id));
         setToast(
-          editing
-            ? `加了 ${res.assets.length} 张图，插在光标处`
-            : // 不读字了，别再说「正在读」—— 那句话会一直停在那里不被兑现
-              `加了 ${res.assets.length} 张图，整理或提问时会读图里的字`,
+          `加了 ${res.assets.length} 张图` +
+            // 不读字了，别再说「正在读」—— 那句话会一直停在那里不被兑现
+            (editing ? '，保存后排在正文末尾' : '，整理或提问时会读图里的字'),
         );
       } finally {
         setAddingImage(false);
@@ -331,19 +387,6 @@ export function FragmentDetail({
     }
   }
 
-  /** 在光标处插一行 `![](img:id)`。多张时按顺序各占一行 */
-  function insertTokens(ids: number[]) {
-    const at = Math.min(sel.start, draft.length);
-    const before = draft.slice(0, at);
-    const after = draft.slice(at);
-    const block = ids.map((id) => imageToken(id)).join('\n');
-    const lead = before && !before.endsWith('\n') ? '\n' : '';
-    const tail = after && !after.startsWith('\n') ? '\n' : '';
-    const next = `${before}${lead}${block}${tail}${after}`;
-    setDraft(next);
-    setSel({ start: at + lead.length + block.length, end: at + lead.length + block.length });
-  }
-
   async function removeImage(image: FragmentImage) {
     if (armedImage !== image.id) {
       setArmedImage(image.id);
@@ -351,8 +394,10 @@ export function FragmentDetail({
     }
     setArmedImage(null);
     await onRemoveImage(image.id);
-    // 正文里指向它的那一行也要去掉，否则会留一条看不见的标记
-    if (editing) setDraft((prev) => removeImageToken(prev, image.id));
+    /*
+     * 不用再动 draft：编辑框里本来就没有图片标记，
+     * 保存时按 `fragment.images` 重新拼（这一批里已经没有它了）。
+     */
     // 删掉的那张不在序列里了，全屏看图的下标要跟着收
     setViewer(null);
   }
@@ -385,7 +430,8 @@ export function FragmentDetail({
   ) : null;
 
   if (editing) {
-    const canSave = draft.trim().length > 0 && !saving && !addingImage;
+    // 纯图碎片没有可写的文字，但它还有图 —— 那种情况也要能保存（比如删掉一张之后再存一次）
+    const canSave = (draft.trim().length > 0 || images.length > 0) && !saving && !addingImage;
     return (
       <View style={[styles.root, { paddingBottom: keyboardHeight }]} accessibilityViewIsModal>
         <ScreenHeader
@@ -457,7 +503,6 @@ export function FragmentDetail({
         <TextInput
           value={draft}
           onChangeText={setDraft}
-          onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
           style={styles.editInput}
           multiline
           autoFocus
@@ -477,7 +522,7 @@ export function FragmentDetail({
             </Text>
           </Pressable>
           <Text style={styles.editHint}>
-            {armedImage ? '点「确认删除」才会真删' : armedDelete ? '30 天内在设置的回收站里能找回' : '「加图」插在光标处'}
+            {armedImage ? '点「确认删除」才会真删' : armedDelete ? '30 天内在设置的回收站里能找回' : '图片在正文末尾，按顺序排'}
           </Text>
         </View>
 
@@ -507,7 +552,20 @@ export function FragmentDetail({
         title={daySubLabel(fragment.createdAt)}
         subtitle={`${formatTime(fragment.createdAt)}${items.length > 1 ? ` · ${current + 1} / ${items.length}` : ''}`}
         backIcon="close" backLabel="关闭碎片" onBack={onClose}
-        right={<IconButton name="create-outline" label="编辑" tone="soft" onPress={startEdit} accessibilityLabel="编辑这条碎片" />}
+        right={
+          <View style={styles.headActions}>
+            <IconButton
+              name={duplicating ? 'hourglass-outline' : 'copy-outline'}
+              label="复制"
+              tone="soft"
+              onPress={() => void duplicate()}
+              disabled={duplicating}
+              accessibilityState={{ disabled: duplicating, busy: duplicating }}
+              accessibilityLabel="复制成新的一条（连同图片）"
+            />
+            <IconButton name="create-outline" label="编辑" tone="soft" onPress={startEdit} accessibilityLabel="编辑这条碎片" />
+          </View>
+        }
       />
 
       {/*
@@ -962,6 +1020,8 @@ function Page({
 }
 
 const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
+  /** 页头右上：复制 + 编辑两个图标，间距一档，别贴在一起 */
+  headActions: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   root: { position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, backgroundColor: c.page },
   main: { flex: 1 },
   editBtn: { minWidth: 64, minHeight: metrics.controlHeight, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs, borderRadius: metrics.buttonRadius, alignItems: 'center', justifyContent: 'center', borderWidth: surfaceStroke(metrics), borderColor: c.hair },

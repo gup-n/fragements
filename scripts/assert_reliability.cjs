@@ -68,6 +68,8 @@ function addHarness(overrides = {}) {
     },
     removeFragmentImage: async (file) => { calls.removed.push(file); },
     resolvePendingTokens: loader.load('src/util/inlineImages.ts').resolvePendingTokens,
+    // v0.31：新建碎片时会先摘掉「指向别的碎片」的图片标记，桩要跟着给
+    stripStoredImageTokens: loader.load('src/util/inlineImages.ts').stripStoredImageTokens,
     loadAiConfig: async () => { calls.ai++; throw new Error('保存不应请求 AI 配置'); },
     describeImage: async () => { calls.ai++; throw new Error('保存不应触发 OCR'); },
     repo: {

@@ -690,6 +690,61 @@ test('首页冷启动不抢键盘，只有通知点进来才聚焦', () => {
   assert.ok(timeline.includes('const seenSignal = useRef(0)'), 'ref 初值必须是 0，冷启动那一次才不会被吞掉');
 });
 
+test('自己写的文档不说「原文件已不在」，也不摆灰掉的云解析', () => {
+  /*
+   * v0.30 之前 `fileDocument = doc.origin !== 'knowledge'` —— 等于把「自己写的」
+   * 也算成「有原文件」，于是它头上挂着「原文件已不在手机上」，
+   * 菜单里还摆着灰掉的「打开原件 / 云解析 / 重新准备」（用户 2026-11-19 提的）。
+   */
+  const viewer = parseSource('src/components/DocViewer.tsx').getText();
+  assert.ok(viewer.includes("const fileDocument = doc.origin === 'file'"), '「有原文件」只认 file');
+  assert.ok(viewer.includes("const authored = doc.origin === 'authored'"), '自己写的是第三种身份');
+  assert.ok(
+    !viewer.includes("doc.origin !== 'knowledge'"),
+    '把 authored 也算成有原文件的那个判据不许回来',
+  );
+  // 「打开原件」和「准备」两组动作都只挂在有原文件的分支上
+  const openAt = viewer.indexOf('label="打开原件"');
+  assert.ok(openAt > 0, '打开原件要留着（给导入的原件）');
+  assert.ok(
+    viewer.lastIndexOf('{fileDocument ?', openAt) > viewer.lastIndexOf('{authored ?', openAt),
+    '打开原件必须挂在 fileDocument 分支里',
+  );
+  const groupAt = viewer.indexOf('{fileDocument ? (');
+  const groupEnd = viewer.indexOf(') : null}', groupAt);
+  assert.ok(groupAt > 0 && groupEnd > groupAt, '找不到「准备」那一组');
+  const group = viewer.slice(groupAt, groupEnd);
+  assert.ok(group.includes('本地准备') && group.includes('云解析'), '本地准备 / 云解析只在有原文件时出现');
+  assert.ok(
+    viewer.includes('{fileDocument ? <Action label="打开原件"'),
+    '打开原件同样只给有原文件的那种',
+  );
+
+  // 正文快照的提示同理：只有导入的原件才谈得上「原文件不在」
+  const reader = parseSource('src/documents/readers/DocumentReader.tsx').getText();
+  assert.ok(reader.includes("doc.origin !== 'file'"), '快照提示的判据要按来源分');
+  assert.ok(
+    !reader.includes("doc.origin === 'knowledge' ? undefined"),
+    '只把 knowledge 排除在外的那版判据不许回来',
+  );
+});
+
+test('文档行不再常驻删除按钮：左滑露出删除，长按弹菜单', () => {
+  const docs = parseSource('src/screens/DocsScreen.tsx').getText();
+  const rowAt = docs.indexOf('function DocRow(');
+  const rowEnd = docs.indexOf('function DocMenuSheet', rowAt);
+  assert.ok(rowAt > 0 && rowEnd > rowAt, 'DocRow 与菜单都要在');
+  const row = docs.slice(rowAt, rowEnd);
+  assert.ok(!row.includes('name="trash-outline"'), '卡片上不许再常驻垃圾桶（用户 2026-11-19）');
+  assert.ok(row.includes('<SwipeRow'), '改成一行的滑动手势');
+  assert.ok(row.includes("label: '删除'"), '左滑露出的就是删除');
+  assert.ok(row.includes('onLongPress={selectMode ? undefined : onMenu}'), '长按要能弹菜单');
+  assert.ok(docs.includes('function DocMenuSheet'), '菜单本身要有');
+  for (const needle of ['编辑正文', '移到回收站']) {
+    assert.ok(docs.includes(needle), `菜单里缺少「${needle}」`);
+  }
+});
+
 if (require.main === module) {
   suite.run().then(({ failed }) => { process.exitCode = failed ? 1 : 0; }).catch((error) => {
     console.error(error && error.stack ? error.stack : error);

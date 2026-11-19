@@ -62,6 +62,7 @@ import { IconButton } from '../components/IconButton';
 import { Toast } from '../components/Toast';
 import { EmptyState } from '../components/EmptyState';
 import { DocEditor } from '../components/DocEditor';
+import { SwipeRow } from '../components/SwipeRow';
 import { BatchSheet } from '../components/DocBatchSheet';
 import { filterDocsByTag, sortTags, tagChipText } from '../util/docTags';
 
@@ -136,6 +137,10 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const [tagPick, setTagPick] = useState(false);
   /** 批量删除的二次确认 */
   const [confirmMany, setConfirmMany] = useState(false);
+  /** 正滑开着的那一行。父级统一持有，保证同时只开一行 */
+  const [openRow, setOpenRow] = useState<number | null>(null);
+  /** 长按菜单（右键菜单）针对的那一篇 */
+  const [menuFor, setMenuFor] = useState<DocumentMeta | null>(null);
 
   /** 当前 MinerU Token。空串 = 只能走轻量通道；确认卡里要用它决定精准能不能选 */
   const [token, setToken] = useState('');
@@ -382,7 +387,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   const selectedCount = selected.length;
   const covered =
     openDocId !== null || !!pendingDelete || !!cloudFor || !!blocked ||
-    !!editorFor || !!batchFor || tagPick || confirmMany;
+    !!editorFor || !!batchFor || tagPick || confirmMany || !!menuFor;
 
   /*
    * 列表的三种状态：检索结果 / 全部 / 按标签筛。
@@ -575,8 +580,11 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
                     doc={item}
                     selectMode={selectMode}
                     selected={selected.includes(item.id)}
+                    swipeOpen={openRow === item.id}
+                    onSwipe={(open) => setOpenRow(open ? item.id : null)}
                     onOpen={() => { Keyboard.dismiss(); setOpenDocId(item.id); }}
                     onToggle={() => toggle(item.id)}
+                    onMenu={() => { Keyboard.dismiss(); setMenuFor(item); }}
                     onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
                     onLocal={() => prepareMany([item])}
                     onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
@@ -623,8 +631,11 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             doc={item}
             selectMode={selectMode}
             selected={selected.includes(item.id)}
+            swipeOpen={openRow === item.id}
+            onSwipe={(open) => setOpenRow(open ? item.id : null)}
             onOpen={() => { Keyboard.dismiss(); setOpenDocId(item.id); }}
             onToggle={() => toggle(item.id)}
+            onMenu={() => { Keyboard.dismiss(); setMenuFor(item); }}
             onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
             onLocal={() => prepareMany([item])}
             onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
@@ -818,6 +829,23 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
         />
       ) : null}
 
+      {menuFor ? (
+        <DocMenuSheet
+          doc={menuFor}
+          onClose={() => setMenuFor(null)}
+          onEdit={() => {
+            const target = menuFor;
+            setMenuFor(null);
+            setEditorFor({ docId: target.id });
+          }}
+          onDelete={() => {
+            const target = menuFor;
+            setMenuFor(null);
+            setPendingDelete(target);
+          }}
+        />
+      ) : null}
+
       {confirmMany ? (
         <ManyDeleteConfirm
           count={selectedCount}
@@ -848,8 +876,11 @@ function DocRow({
   doc,
   selectMode,
   selected,
+  swipeOpen,
+  onSwipe,
   onOpen,
   onToggle,
+  onMenu,
   onDelete,
   onLocal,
   onCloud,
@@ -857,8 +888,13 @@ function DocRow({
   doc: DocumentMeta;
   selectMode: boolean;
   selected: boolean;
+  /** 这一行是不是正滑开着。父级统一持有，保证同时只开一行 */
+  swipeOpen: boolean;
+  onSwipe: (open: boolean) => void;
   onOpen: () => void;
   onToggle: () => void;
+  /** 长按 = 右键菜单（编辑正文 / 移到回收站） */
+  onMenu: () => void;
   onDelete: () => void;
   onLocal: () => void;
   onCloud: () => void;
@@ -899,15 +935,42 @@ function DocRow({
   }
 
   return (
-    <View style={[styles.card, selected && styles.cardSelected]}>
+    /*
+     * 左滑露出「删除」，长按弹菜单（用户 2026-11-19 提的）。
+     *
+     * 原来右侧常驻一个垃圾桶：它每一次都占着一条边，而删文档一年也用不了几次；
+     * 更重要的是，卡片右边那一列被按钮占住之后，标题和摘要的可用宽度一直少一截。
+     * 现在常态下右侧是空的，删和改都收到手势里。
+     *
+     * 长按菜单是给「不知道能左滑」的人的第二条路，也是读屏用户唯一能走通的那条。
+     */
+    <SwipeRow
+      open={swipeOpen ? 'right' : null}
+      onOpen={() => onSwipe(true)}
+      onClose={() => onSwipe(false)}
+      onPress={selectMode ? onToggle : onOpen}
+      onLongPress={selectMode ? undefined : onMenu}
+      rightAction={{
+        label: '删除',
+        icon: 'trash-outline',
+        bg: c.danger,
+        fg: c.onDanger,
+        // 先收起操作区再弹确认：取消之后不该留一条敞开的红条
+        onPress: () => { onSwipe(false); onDelete(); },
+      }}
+      surface={c.card}
+      style={[styles.card, selected && styles.cardSelected]}
+      pressedStyle={styles.cardPressed}
+      role={selectMode ? 'checkbox' : 'button'}
+      checked={selected}
+      label={
+        selectMode
+          ? `${selected ? '取消选择' : '选择'} ${doc.name}`
+          : `打开 ${doc.name}。长按可删除或编辑`
+      }
+    >
       <View style={styles.cardTop}>
-        <Pressable
-          style={({ pressed }) => [styles.cardMain, pressed && styles.cardPressed]}
-          onPress={selectMode ? onToggle : onOpen}
-          accessibilityRole={selectMode ? 'checkbox' : 'button'}
-          accessibilityState={selectMode ? { checked: selected } : undefined}
-          accessibilityLabel={selectMode ? `${selected ? '取消选择' : '选择'} ${doc.name}` : `打开 ${doc.name}`}
-        >
+        <View style={styles.cardMain}>
           <View style={styles.titleRow}>
             <Text style={styles.name} numberOfLines={2}>
               {doc.name}
@@ -975,37 +1038,29 @@ function DocRow({
               {limitNote}
             </Text>
           ) : null}
-        </Pressable>
+        </View>
 
+        {/*
+          多选态右边只放一枚**看得见但不吃点击**的勾：整行本来就是开关，
+          再套一个可点的勾，在 RN Web 上点一下会同时切换两次。
+        */}
         {selectMode ? (
-          <View style={styles.side}>
-            <IconButton
+          <View style={styles.side} pointerEvents="none">
+            <Ionicons
               name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+              size={22}
               color={selected ? c.accent : c.text3}
-              onPress={onToggle}
-              accessibilityState={{ checked: selected, selected }}
-              accessibilityLabel={selected ? `取消选择 ${doc.name}` : `选择 ${doc.name}`}
             />
           </View>
-        ) : (
-          <View style={styles.side}>
-            <IconButton
-              name="trash-outline"
-              size={17}
-              color={c.text3}
-              onPress={onDelete}
-              label="删除"
-              accessibilityLabel={`删除 ${doc.name}`}
-            />
-          </View>
-        )}
+        ) : null}
       </View>
 
       {action ? (
         <View style={styles.cardActions}>
           <Pressable
             style={({ pressed }) => [styles.pill, pressed && { opacity: 0.7 }]}
-            onPress={action.run}
+            // 这枚按钮嵌在「整行」的可点区域里：不拦住冒泡的话，点它会连文档一起打开
+            onPress={(e) => { e?.stopPropagation?.(); action.run(); }}
             hitSlop={PILL_SLOP}
             accessibilityRole="button"
             accessibilityLabel={`${action.label} ${doc.name}`}
@@ -1015,7 +1070,7 @@ function DocRow({
           </Pressable>
         </View>
       ) : null}
-    </View>
+    </SwipeRow>
   );
 }
 
@@ -1189,6 +1244,82 @@ function TagPickSheet({
           </Pressable>
         </View>
       </ScrollView>
+    </View>
+  );
+}
+
+/**
+ * 长按文档弹出来的菜单 —— 手机上的「右键菜单」。
+ *
+ * 为什么要有它：左滑能露出删除，但**没滑过的人不知道有这回事**，
+ * 读屏用户更是根本滑不出来（滑动手势被列表占用）。
+ * 菜单里只放两件事：改正文、移到回收站。改标签在阅读器里已经有入口，不在这里重复。
+ */
+function DocMenuSheet({
+  doc,
+  onClose,
+  onEdit,
+  onDelete,
+}: {
+  doc: DocumentMeta;
+  onClose: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  const { c, styles } = useThemedStyles(makeStyles);
+  const live = useRef(onClose);
+  live.current = onClose;
+
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => { live.current(); return true; });
+    return () => sub.remove();
+  }, []);
+
+  return (
+    <View style={styles.overlay} accessibilityViewIsModal>
+      <Pressable style={styles.backdrop} onPress={onClose} accessible={false} />
+      <View style={styles.sheet}>
+        <View style={styles.sheetContent}>
+          <View style={styles.sheetHead}>
+            <View style={styles.sheetIcon}>
+              <Ionicons name="ellipsis-horizontal" size={17} color={c.text2} />
+            </View>
+            <Text style={styles.sheetTitle} numberOfLines={2}>{doc.name}</Text>
+          </View>
+
+          <View style={styles.menuList}>
+            <Pressable
+              style={({ pressed }) => [styles.menuRow, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={onEdit}
+              accessibilityRole="button"
+              accessibilityLabel="编辑正文"
+            >
+              <Ionicons name="create-outline" size={17} color={c.text2} />
+              <Text style={styles.menuLabel}>编辑正文</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.menuRow, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={onDelete}
+              accessibilityRole="button"
+              accessibilityLabel="移到回收站"
+            >
+              <Ionicons name="trash-outline" size={17} color={c.danger} />
+              <Text style={[styles.menuLabel, styles.menuDanger]}>移到回收站</Text>
+            </Pressable>
+          </View>
+
+          <View style={styles.sheetActions}>
+            <Pressable
+              style={({ pressed }) => [styles.cancelBtn, pressed && { backgroundColor: c.hairSoft }]}
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="取消"
+            >
+              <Text style={styles.cancelText}>取消</Text>
+            </Pressable>
+          </View>
+        </View>
+      </View>
     </View>
   );
 }
@@ -1399,7 +1530,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   cardTop: { flexDirection: 'row', alignItems: 'flex-start' },
   cardPressed: { backgroundColor: c.hairSoft },
   /** 卡片正文的内边距 14/12 → 10/10：卡片一共五行，上下各 12 就是白送 24 的高度 */
-  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.xs, paddingVertical: 10 },
+  /** 右边不再常驻按钮（v0.31），左右内边距对齐了，标题能多放两个字 */
+  cardMain: { flex: 1, minWidth: 0, minHeight: metrics.controlHeight, paddingLeft: SPACE.md, paddingRight: SPACE.md, paddingVertical: 10 },
   side: { paddingRight: SPACE.xxs, paddingTop: SPACE.xxs },
   titleRow: { flexDirection: 'row', alignItems: 'flex-start' },
   /**
@@ -1445,6 +1577,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   overlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, justifyContent: 'center', padding: metrics.pagePadding },
   backdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.scrim },
   sheet: { flexGrow: 0, maxHeight: '100%', backgroundColor: c.card, borderRadius: metrics.cardRadius },
+  /* 长按菜单：一行一个动作，左图标右文字，行高够手指点 */
+  menuList: { marginTop: SPACE.xs, borderRadius: metrics.buttonRadius, overflow: 'hidden' },
+  menuRow: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
+    minHeight: metrics.controlHeight, paddingHorizontal: SPACE.sm,
+  },
+  menuLabel: { ...TYPE.body, color: c.text },
+  menuDanger: { color: c.danger },
   sheetContent: { padding: SPACE.lg },
   sheetHead: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm },
   sheetIcon: { width: 32, height: 32, borderRadius: metrics.buttonRadius, backgroundColor: c.hairSoft, alignItems: 'center', justifyContent: 'center' },

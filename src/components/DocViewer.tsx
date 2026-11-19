@@ -244,7 +244,16 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
   const limitNote = localReaderLimitNote(doc);
   const canRead = documentReadMode(doc, limitNote) !== 'unavailable';
   const jobText = job ? jobPhaseText(job) : '';
-  const fileDocument = doc.origin !== 'knowledge';
+  /**
+   * 三个来源 = 三种身份，判据只在这里算一次。
+   *
+   * v0.30 之前写的是 `origin !== 'knowledge'` —— 那等于把「自己写的」也算成
+   * 「有原文件」，于是它头上挂着「原文件已不在手机上」，
+   * 菜单里还摆着灰掉的「打开原件 / 云解析 / 重新准备」（用户 2026-11-19 提的）。
+   * 一条自己没有的东西，正确做法是**不出现**，而不是灰着占位。
+   */
+  const fileDocument = doc.origin === 'file';
+  const authored = doc.origin === 'authored';
   const canPrepareLocal = fileDocument && !!doc.fileUri && canLocal && !limitNote;
   const plan = planForDoc(doc.ext, doc.size, !!token.trim());
   const primaryLabel = ready ? '问这份' : running ? '取消准备' : canPrepareLocal ? '本地准备' : fileDocument ? '云解析' : '暂不可问';
@@ -255,7 +264,13 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
       <View style={styles.main} importantForAccessibility={cloudAsk ? 'no-hide-descendants' : 'auto'} accessibilityElementsHidden={cloudAsk}>
         <ScreenHeader
           title={doc.name}
-          subtitle={fileDocument ? `${doc.ext ? doc.ext.toUpperCase() : '未知格式'} · ${sizeText(doc.size)}` : '整理生成的文档'}
+          subtitle={
+            fileDocument
+              ? `${doc.ext ? doc.ext.toUpperCase() : '未知格式'} · ${sizeText(doc.size)}`
+              : authored
+                ? `自己写的 · ${doc.bodyMd.length.toLocaleString()} 字`
+                : '整理生成的文档'
+          }
           backIcon="close" backLabel="关闭文档" onBack={attemptClose}
         />
         <Text style={styles.documentStatus} accessibilityLiveRegion="polite">{statusLine(doc, jobText)}</Text>
@@ -320,7 +335,13 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
           {actionsOpen ? (
             <ScrollView style={styles.operations} contentContainerStyle={styles.operationContent} keyboardShouldPersistTaps="handled">
               <Text style={styles.operationTitle}>文档操作</Text>
-              <Text style={styles.operationHint}>{fileDocument ? '本地准备不上传；云解析每次都会先确认文件、接收方与通道。' : '这是整理生成的文档，没有原文件副本。'}</Text>
+              <Text style={styles.operationHint}>
+                {fileDocument
+                  ? '本地准备不上传；云解析每次都会先确认文件、接收方与通道。'
+                  : authored
+                    ? '这是你自己写的文档，正文就在库里，没有原文件这回事。'
+                    : '这是整理生成的文档，没有原文件副本。'}
+              </Text>
               {fileDocument ? (
                 <View style={styles.actions}>
                   <Action label={ready ? '重新准备' : '本地准备'} icon="phone-portrait-outline" onPress={startLocal} disabled={busy !== 'idle' || running || !canPrepareLocal} />

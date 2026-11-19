@@ -45,6 +45,16 @@ interface Props {
   rightInstant?: boolean;
   style?: any;
   pressedStyle?: any;
+  /**
+   * 内容层底色，默认页面底色。
+   * 卡片列表要传卡片色 —— 不传的话整块卡片会被刷成页面色，看起来像被掏空了。
+   */
+  surface?: string;
+  /** 内容层的无障碍角色。多选列表传 checkbox 并给 checked，读屏才会报「已选中」 */
+  role?: 'button' | 'checkbox';
+  checked?: boolean;
+  /** 覆盖内容层的无障碍标签（默认不给，读屏读子节点文字） */
+  label?: string;
 }
 
 /** 操作区宽度：放得下一枚图标 + 两个字，又不至于把正文挤没 */
@@ -77,6 +87,10 @@ export function SwipeRow({
   rightInstant,
   style,
   pressedStyle,
+  surface,
+  role,
+  checked,
+  label,
 }: Props) {
   const { c, styles, metrics } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
@@ -252,7 +266,9 @@ export function SwipeRow({
       <Animated.View style={{ transform: [{ translateX: tx }] }}>
         <Pressable
           onPress={handlePress}
-          accessibilityRole="button"
+          accessibilityRole={role ?? 'button'}
+          accessibilityState={role === 'checkbox' ? { checked: !!checked } : undefined}
+          accessibilityLabel={label}
           accessibilityActions={[
             { name: 'activate', label: '查看碎片' },
             ...(onLongPress ? [{ name: 'longpress', label: '复制正文' }] : []),
@@ -268,7 +284,7 @@ export function SwipeRow({
           }}
           onLongPress={onLongPress ? handleLongPress : undefined}
           delayLongPress={400}
-          style={({ pressed }) => [[style, { minHeight: metrics.controlHeight, backgroundColor: c.page }, pressed && pressedStyle], styles.touchTarget]}
+          style={({ pressed }) => [[style, { minHeight: metrics.controlHeight, backgroundColor: surface ?? c.page }, pressed && pressedStyle], styles.touchTarget]}
         >
           {children}
         </Pressable>

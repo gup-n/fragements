@@ -172,6 +172,8 @@ interface Props {
   ) => Promise<{ id: number; path: string }[]>;
   /** 详情页里删掉一张图 */
   onRemoveImage: (imageId: number) => Promise<void>;
+  /** 详情页「复制一条（含图）」 */
+  onDuplicate: (fragment: Fragment) => Promise<number>;
 }
 
 export function TimelineScreen({
@@ -198,6 +200,7 @@ export function TimelineScreen({
   onReparseImage,
   onAddImages,
   onRemoveImage,
+  onDuplicate,
 }: Props) {
   const { c, styles, metrics } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
@@ -1479,6 +1482,7 @@ export function TimelineScreen({
           onReparseImage={onReparseImage}
           onAddImages={onAddImages}
           onRemoveImage={onRemoveImage}
+          onDuplicate={onDuplicate}
           onClose={() => setDetail(null)}
           onSave={onEdit}
           onDelete={onDelete}

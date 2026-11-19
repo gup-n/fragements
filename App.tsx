@@ -30,6 +30,8 @@ import { TabBar, type MainTab } from './src/components/TabBar';
 import { useKeyboardHeight } from './src/util/keyboard';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
+import { stripStoredImageTokens } from './src/util/inlineImages';
+import { duplicateFragment } from './src/db/duplicate';
 import { runTrashCleanup } from './src/db/trashFiles';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
 import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
@@ -523,7 +525,11 @@ function Shell({ booted }: { booted: boolean }) {
       const paths: string[] = [];
       try {
         for (const image of images ?? []) paths.push(await saveFragmentImage(image.uri));
-        await repo.insertFragment(text, 'app', undefined,
+        /*
+         * 去掉粘过来的 `![](img:12)`：它指向的是**别的碎片**的配图，
+         * 新碎片里没有那一行，留着只会是坏引用。待发键（`img:p1`）保留。
+         */
+        await repo.insertFragment(stripStoredImageTokens(text), 'app', undefined,
           (images ?? []).map((image, i) => ({ path: paths[i], key: image.key })));
       } catch (error) {
         // The Repo promises that a rejection means its transaction did not commit.
@@ -687,6 +693,21 @@ function Shell({ booted }: { booted: boolean }) {
     [reload],
   );
 
+  /**
+   * 详情页「复制一条」：连图一起再存一份（v0.30.1）。
+   *
+   * 走 `db/duplicate` 而不是在这里拼 SQL：复制文件、建行、改写标记三件事
+   * 失败时要能一起退掉，那套顺序只在那一处维护一份。
+   */
+  const handleDuplicate = useCallback(
+    async (fragment: Fragment) => {
+      const id = await duplicateFragment(fragment);
+      await reload();
+      return id;
+    },
+    [reload],
+  );
+
   /** 详情页里的「重新解析」：同一张图再读一遍 */
   const handleReparseImage = useCallback(
     (fragment: Fragment, imageId: number) => {
@@ -763,6 +784,7 @@ function Shell({ booted }: { booted: boolean }) {
                   onReparseImage={handleReparseImage}
                   onAddImages={handleAddImages}
                   onRemoveImage={handleRemoveImage}
+                  onDuplicate={handleDuplicate}
                   onEdit={handleEdit}
                   onDelete={handleDelete}
                   onDeleteNote={handleDeleteNote}

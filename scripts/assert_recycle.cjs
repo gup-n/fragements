@@ -394,6 +394,43 @@ test('批量先问做什么：整理正文 / 打标签', () => {
   assert.ok(!/useState<BatchPlan>\(\(\) => planBatch/.test(sheet), '计划要等用户选了动作才建');
 });
 
+test('新建的碎片不带走别人的图，编辑器里也看不到 img 标记', () => {
+  // 从别处粘过来的正文可能带着 `![](img:12)`，它指向**原来那条**碎片的配图；
+  // 新碎片里没有那一行，留着就是坏引用（用户 2026-11-19 的「复制过来没有图」）
+  assert.equal(inline.stripStoredImageTokens('前文\n\n![](img:12)\n\n后文'), '前文\n\n后文');
+  assert.equal(
+    inline.stripStoredImageTokens('正文\n![](img:p3)'),
+    '正文\n![](img:p3)',
+    '这一次要写进去的待发图不能被摘掉',
+  );
+
+  const app = read('App.tsx');
+  assert.ok(app.includes('stripStoredImageTokens(text)'), '新建碎片的入口要先摘掉外来标记');
+
+  // 编辑器里只留正文，图片交给上面那条配图带
+  const detail = read('src/components/FragmentDetail.tsx');
+  assert.ok(detail.includes('stripImageTokens(fragment.content)'), '进编辑器时先把图片标记剥掉');
+  assert.ok(detail.includes('composeContent(text, fragment.images)'), '保存时按当前图片重新拼回去');
+  // 注释里提到 `![](img:12)` 是在解释它是什么，不算「界面上出现」；
+  // 真正要钉住的是那套「在光标处插标记」的实现已经删掉
+  assert.ok(!detail.includes('insertTokens('), '「加图插在光标处」那套标记插入要删干净');
+  assert.ok(!detail.includes('onSelectionChange'), '连光标位置也不用再记了');
+});
+
+test('复制一条碎片时图片跟着走', () => {
+  const src = read('src/db/duplicate.ts');
+  assert.ok(src.includes('saveFragmentImage('), '配图文件要复制一份，不能和原来共用');
+  assert.ok(src.includes('removeFragmentImage('), '写库失败要把刚复制出来的图删掉');
+  assert.ok(src.includes('insertFragment('), '最后一条记录由 repo 建');
+  // 先落文件再写库：反过来会留下「图片行指着不存在的文件」
+  assert.ok(
+    src.indexOf('saveFragmentImage(') < src.indexOf('repo.insertFragment('),
+    '先复制文件，再写记录',
+  );
+  const detail = read('src/components/FragmentDetail.tsx');
+  assert.ok(detail.includes('onDuplicate'), '详情页要有入口');
+});
+
 test('文档内嵌图与碎片配图分开认，谁也不吞谁', () => {
   // 碎片的 `img:12` 指向一张配图行；文档的 `doc-img:名` 只是一个文件。
   // 认错一边的后果是「图消失」或「模板串显示成正文」

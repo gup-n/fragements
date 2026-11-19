@@ -90,6 +90,18 @@ export function stripImageTokens(text: string): string {
   return text.replace(ANY_RE, '').replace(/\n{3,}/g, '\n\n');
 }
 
+/**
+ * 只去掉指向**已入库配图**的标记（`img:12`），保留待发的 `img:p1`。
+ *
+ * 用在「新建一条碎片」的入口：从别处粘过来的正文里可能带着原来那条碎片的
+ * `![](img:12)`，而新碎片没有那张图 —— 留着就是一个永远指向别人的坏引用
+ * （用户 2026-11-19 反馈「复制过来的碎片没有图」就是它）。
+ * 待发键不能动：那正是这一次要写进去的图。
+ */
+export function stripStoredImageTokens(text: string): string {
+  return text.replace(/!\[[^\]]*\]\(img:\d+\)/g, '').replace(/\n{3,}/g, '\n\n');
+}
+
 /** 把待发键换成真实配图 id。返回新正文（没变化时原样返回同一个字符串） */
 export function resolvePendingTokens(
   text: string,

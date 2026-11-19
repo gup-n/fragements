@@ -32,9 +32,18 @@ export function DocumentReader({ document: doc, embedded = false }: {
   const fmt = documentFormat(doc.ext);
   const limitNote = localReaderLimitNote(doc);
   const mode = documentReadMode(doc, limitNote);
-  const snapshotNotice = doc.origin === 'knowledge' ? undefined : !doc.fileUri
-    ? '原文件已不在手机上。这里是已保留的正文快照，不代表原版式。'
-    : '这里是已提取的正文快照，版式可能失真。查看原样请用「打开原件」。';
+  /**
+   * 只有「导入的原件」才谈得上「原文件不在」。
+   *
+   * 自己写的（`authored`）与整理产出的（`knowledge`）**本来就没有原文件**，
+   * 它们的正文就是全文本身 —— 对这两类说「原文件已不在手机上」，
+   * 等于告诉用户「你写的东西丢了」（用户 2026-11-19 提的）。
+   */
+  const snapshotNotice = doc.origin !== 'file'
+    ? undefined
+    : !doc.fileUri
+      ? '原文件已不在手机上。这里是已保留的正文快照，不代表原版式。'
+      : '这里是已提取的正文快照，版式可能失真。查看原样请用「打开原件」。';
 
   return (
     <View style={styles.root}>
