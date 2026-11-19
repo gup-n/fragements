@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.31.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.31.0)。26,359,230 字节，SHA-256 `53819a4e561d0f2ad43b0d39bf0af64b4831926240ab79b376961c33c9f03bc5`，`draft=false`。可回退：[v0.30.1](https://github.com/gup-n/fragements/releases/download/v0.30.1/fragments-v0.30.1.apk)（26,352,898 字节）、[v0.30.0](https://github.com/gup-n/fragements/releases/download/v0.30.0/fragments-v0.30.0.apk)（26,352,850 字节）。v0.31 修五处：自己写的文档不再说「原文件已不在手机上」、菜单里不再摆灰掉的云解析；碎片编辑框不再显示 `![](img:12)`；复制碎片能带图；文档卡片改成左滑删除 + 长按菜单。**真机仍未实测**。
+**v0.31.1 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.31.1)。26,354,426 字节，SHA-256 `52c63609807643dc44e52630a4ac7b62d99aef9b72d38a90a6a4fb51b980c637`，`draft=false`。可回退：[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节，五条报修的修复）、[v0.30.1](https://github.com/gup-n/fragements/releases/download/v0.30.1/fragments-v0.30.1.apk)（26,352,898 字节）、[v0.30.0](https://github.com/gup-n/fragements/releases/download/v0.30.0/fragments-v0.30.0.apk)（26,352,850 字节）。v0.31.0 修五处：自己写的文档不再说「原文件已不在手机上」、菜单里不再摆灰掉的云解析；碎片编辑框不再显示 `![](img:12)`；复制碎片能带图；文档卡片改成左滑删除 + 长按菜单。v0.31.1 是清理版：删掉 14 个没人引用的导出、三张提示卡的词回到 `TASK_LABEL`、文档字数只认 `charCount`、文档行属性只写一份并让滑开的那行自己收回。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|

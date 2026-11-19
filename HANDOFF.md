@@ -12,7 +12,7 @@
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.31.1 / versionCode 83 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.31.0 已发布（[CI 44466757781](https://github.com/gup-n/fragements/actions/runs/44466757781)，26,359,230 字节，SHA-256 `53819a4e…3bc5`，`draft=false`；经 ghfast.top 镜像整包下载后本地算 sha256 + zip 641 条全绿，文件头 `PK`）。可回退：v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）、v0.30.0（26,352,850 字节，SHA-256 `c91544b5…07b6`）。真机仍未验 |
+| 发布状态 | v0.31.1 已发布（[CI 44511106320](https://github.com/gup-n/fragements/actions/runs/44511106320)，26,354,426 字节，SHA-256 `52c63609…c637`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）、v0.30.0（26,352,850 字节，SHA-256 `c91544b5…07b6`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有17段结构迁移；无账号、后端、同步 |
@@ -489,7 +489,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 4. 子Agent不做Git操作；Lead可按已获授权范围创建可回退的本地Commit。本轮不push/tag/Release，不装依赖、不起服务、不做HTML界面预览、不本地构建APK；发布须另获明确授权。
 5. 获准设备测试时先确认设备、包来源和版本；每次动作后截图核对。没有设备或无法看图时停止视觉步骤，如实列未验。
 
-依赖/脚本以[package](<package.json>)为准。当前[Android CI](<.github/workflows/android.yml>)使用Node22/JDK21：生成PDF资源 → 类型与各组断言 → 文档检查 → 原生工程/APK。只有版本tag会创建Release并挂raw APK；artifact与Release asset不是一回事。本分支改版尚无新Release。
+依赖/脚本以[package](<package.json>)为准。当前[Android CI](<.github/workflows/android.yml>)使用Node22/JDK21：生成PDF资源 → 类型与各组断言 → 文档检查 → 原生工程/APK。只有版本tag会创建Release并挂raw APK；artifact与Release asset不是一回事。本分支上的 v0.30.0 / v0.30.1 / v0.31.0 / v0.31.1 都是按 tag 发出去的。
 
 本地已有工程如需获准prebuild，必须保留 `--no-clean`；不要手改原生生成目录，不根据旧日志擅自删工程或重装依赖。文件清理先核对绝对路径，保护用户数据及其它Agent产物。
 
