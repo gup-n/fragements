@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.29.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.29.0/fragments-v0.29.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.29.0)。26,352,726 字节，SHA-256 `29d3b4d3cdd3d51c512d6e8913b4ec074d6f619b96c16242f58ad6fc113ae364`，`draft=false`。同批可回退：[v0.28.0](https://github.com/gup-n/fragements/releases/download/v0.28.0/fragments-v0.28.0.apk)（26,344,390 字节，SHA-256 `e10a7044226f92769c97e0b65182c595ed33e38272b81f1691450a373d8b517d`）、[v0.27.0](https://github.com/gup-n/fragements/releases/download/v0.27.0/fragments-v0.27.0.apk)（26,237,522 字节）。v0.29 让文档里能插图（`![](doc-img:名)`），并把 v0.28 的两条半截路补完：「重新整理」终于有入口，批量先问「整理正文还是打标签」。v0.28 本身是这一轮的大头：删除先进回收站（30 天内多选恢复）、自己写文档（保存即入库）、标签平铺、AI 只出建议（提案审批）。**真机仍未实测**。
+**v0.30.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.30.0/fragments-v0.30.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.30.0)。26,352,850 字节，SHA-256 `c91544b5335781a629e4ea406271484eddfd2da54fea7275a4e2eeccd90d07b6`，`draft=false`。同批可回退：[v0.29.0](https://github.com/gup-n/fragements/releases/download/v0.29.0/fragments-v0.29.0.apk)（26,352,726 字节，SHA-256 `29d3b4d3cdd3d51c512d6e8913b4ec074d6f619b96c16242f58ad6fc113ae364`）、[v0.28.0](https://github.com/gup-n/fragements/releases/download/v0.28.0/fragments-v0.28.0.apk)（26,344,390 字节）。v0.30 是四条手感修正：打开 App 不再自动弹键盘、回收站搬到设置根页、文档页两个入口去掉图标（「写一篇」改名「新建文档」）、日历里当天的碎片一条一块带时刻。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
