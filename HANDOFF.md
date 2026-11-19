@@ -12,7 +12,7 @@
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.30.1 / versionCode 81 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.30.0 已发布（[CI 44429609570](https://github.com/gup-n/fragements/actions/runs/44429609570)，26,352,850 字节，SHA-256 `c91544b5…07b6`，`draft=false`；直连整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.29.0（26,352,726 字节，SHA-256 `29d3b4d3…e364`）、v0.28.0（26,344,390 字节，SHA-256 `e10a7044…517d`）。真机仍未验 |
+| 发布状态 | v0.30.1 已发布（[CI 44432788381](https://github.com/gup-n/fragements/actions/runs/44432788381)，26,352,898 字节，SHA-256 `d85538e5…2ba6`，`draft=false`；整包下载后本地算的 sha256 + zip 全部条目校验，文件头 `PK`）。可回退：v0.30.0（26,352,850 字节，SHA-256 `c91544b5…07b6`）、v0.29.0（26,352,726 字节，SHA-256 `29d3b4d3…e364`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有17段结构迁移；无账号、后端、同步 |
