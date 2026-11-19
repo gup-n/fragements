@@ -2,7 +2,7 @@
 
 这份文件不是设计文档，是**所有会被人和模型读到的中文**的位置清单。想改语气、改措辞、改提示词，只需要动这里列出的位置。
 
-对应版本 v0.29.0。行号会在每次改动后漂，`npm run check:docs` 能查出来——找文案先看段落标题，行号只当提示。
+对应版本 v0.30.0。行号会在每次改动后漂，`npm run check:docs` 能查出来——找文案先看段落标题，行号只当提示。
 
 ## 2026-11-15 当前UI文案入口
 
@@ -11,12 +11,12 @@
 | 展示内容 | 当前入口 |
 |---|---|
 | 首页标题/今日记录、展开/图片/发布 | [TimelineScreen](<src/screens/TimelineScreen.tsx>) 的header、导航、composer工具行 |
-| 设置四模块、长当前值、完整备份入口 | [SettingsScreen](<src/screens/SettingsScreen.tsx>) 的root菜单、MenuRow与data子页 |
+| 设置根页五行（接口与模型 / 外观 / 回收站 / 数据与备份 / 关于）、长当前值、完整备份入口 | [SettingsScreen](<src/screens/SettingsScreen.tsx>) 的root菜单、MenuRow与data子页 |
 | 聊天空态、范围、思考/联网开关（在输入框上方一行）、输入 | [AskScreen](<src/screens/AskScreen.tsx>) 的任务列表、scope、toggleRow 与 inputRow |
 | 查看全文、逐项选择、写入权限/确认 | [KnowledgeDraft](<src/components/KnowledgeDraft.tsx>) 和 [DraftDocPage](<src/components/DraftDocPage.tsx>) |
 | 提问时引用快照与错误详情 | [CitationSheet](<src/components/CitationSheet.tsx>)、[AgentError](<src/components/AgentError.tsx>) |
 | 回顾三个 tab、日历点阵与当天明细 | [ReviewScreen](<src/screens/ReviewScreen.tsx>) 的 tabs、CalendarTab |
-| 文档状态、阅读主次动作与翻页查找 | [DocsScreen](<src/screens/DocsScreen.tsx>)、[DocViewer](<src/components/DocViewer.tsx>)、[SearchBar](<src/documents/readers/SearchBar.tsx>) |
+| 文档页「添加文件 / 新建文档」两个入口（都不带图标）、文档状态、阅读主次动作与翻页查找 | [DocsScreen](<src/screens/DocsScreen.tsx>)、[DocViewer](<src/components/DocViewer.tsx>)、[SearchBar](<src/documents/readers/SearchBar.tsx>) |
 
 
 **目录**

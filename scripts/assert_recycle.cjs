@@ -431,11 +431,21 @@ test('摘要里不许出现图片标记', () => {
   assert.ok(util.includes('doc-img:'), 'excerptOf 要连同文档内嵌图一起去掉');
 });
 
-test('回收站入口在设置的数据页里，不是新开一个底栏项', () => {
+test('回收站入口在设置根页里，不是新开一个底栏项', () => {
   const settings = read('src/screens/SettingsScreen.tsx');
   assert.ok(settings.includes("trash: '回收站'"), '回收站是设置里的一页');
-  assert.ok(settings.includes("label=\"回收站\""), '数据页要能点进去');
+  assert.ok(settings.includes('label="回收站"'), '根页要能点进去');
   assert.ok(settings.includes('<TrashPane'), '回收站面板挂上了');
+  /*
+   * 用户 2026-11-19：从「数据与备份」里独立到根页。
+   * 判据是那一行落在 `pane === 'root'` 的那一段里 —— 只查字符串在不在文件里，
+   * 挪回去照样能过。
+   */
+  const rootAt = settings.indexOf("{pane === 'root' ? (");
+  const dataAt = settings.indexOf("{pane === 'data' ? (");
+  const rowAt = settings.indexOf('label="回收站"');
+  assert.ok(rootAt > 0 && dataAt > rootAt, '根页与数据页两段都要找得到');
+  assert.ok(rowAt > rootAt && rowAt < dataAt, '回收站那一行要在根页那一段里（不能又塞回数据页）');
   const tab = read('src/components/TabBar.tsx');
   assert.ok(!tab.includes('回收站'), '底栏只有五项，回收站不该占一格');
 });
@@ -449,9 +459,15 @@ test('回收站能多选恢复 —— 用户 2026-11-18 明确要求', () => {
   assert.ok(pane.includes('if (!armed) { setArmed(true); return; }'), '彻底删除必须两步确认');
 });
 
-test('文档页能把「写一篇」和「添加文件」分开', () => {
+test('文档页能把「新建文档」和「添加文件」分开', () => {
   const docs = read('src/screens/DocsScreen.tsx');
-  assert.ok(docs.includes('写一篇'), '自己写的入口要写在按钮上');
+  assert.ok(docs.includes('新建文档'), '自己写的入口要写在按钮上');
+  // 用户 2026-11-19：两个入口都不带图标 —— 文字本身就是动作
+  const at = docs.indexOf('<View style={styles.entryRow}>');
+  assert.ok(at > 0, '两个入口还是一行并排');
+  const block = docs.slice(at, docs.indexOf('</View>', at));
+  assert.ok(!block.includes('Ionicons'), '「添加文件」和「新建文档」前面不许再挂图标');
+  assert.ok(block.includes('添加文件') && block.includes('新建文档'), '两个按钮的文字都在');
   assert.ok(docs.includes('<DocEditor'), '编辑器挂上了');
   assert.ok(docs.includes('filterDocsByTag'), '标签筛选用的是共享的纯函数');
   assert.ok(docs.includes('archivedDocs'), '归档要单独一段');

@@ -95,12 +95,6 @@ function previewOfItem(item: TimelineItem): string {
 }
 
 /**
- * 冷启动只自动聚焦一次。放在模块作用域而不是 useRef，
- * 是因为从设置页/知识库返回时会卸载再挂载，用 ref 会反复弹键盘。
- */
-let autoFocusedOnce = false;
-
-/**
  * 「展开全文」四周补出来的触控区。
  *
  * 这一行看得见只有 26（一行 13 号字），上下各补一点才是好按的高度。
@@ -295,13 +289,15 @@ export function TimelineScreen({
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardHeight = useKeyboardHeight();
 
-  // 冷启动即聚焦：记录工具打开就该能打字，不该先点一下输入框
-  useEffect(() => {
-    if (Platform.OS === 'web' || autoFocusedOnce) return;
-    autoFocusedOnce = true;
-    const timer = setTimeout(() => inputRef.current?.focus(), 380);
-    return () => clearTimeout(timer);
-  }, []);
+  /*
+   * 冷启动**不自动聚焦**（用户 2026-11-19 要求）。
+   *
+   * 原来打开就弹键盘：进来只为翻看昨天记的东西，键盘先挡住半个屏幕，
+   * 还得先按一下返回才能看。想记的时候点一下输入框，成本只有一次点击；
+   * 不想记的时候却要多一次收键盘 —— 而且那一下很容易被当成「误触」。
+   *
+   * 通知栏点进来仍然聚焦（下面那个 effect）：那一路用户明确是为了记东西。
+   */
 
   // 通知栏点进来：页面可能已经在这，重新把光标放回输入框
   useEffect(() => {

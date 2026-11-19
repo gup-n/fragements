@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.29.0 / versionCode 79 |
+| 版本 | v0.30.0 / versionCode 80 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.29.0 已发布（[CI 44323748561](https://github.com/gup-n/fragements/actions/runs/44323748561)，26,352,726 字节，SHA-256 `29d3b4d3…e364`，`draft=false`；经代理整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.28.0（26,344,390 字节，SHA-256 `e10a7044…517d`）、v0.27.0（26,237,522 字节，SHA-256 `503f9486…b619`）。v0.28.1 没单独发版，改动合在 v0.29.0 里。真机仍未验 |
+| 发布状态 | v0.30.0 待发（本文写作时全量断言与 `build:web` 已过，尚未打 tag）。上一版 v0.29.0 已发布（[CI 44323748561](https://github.com/gup-n/fragements/actions/runs/44323748561)，26,352,726 字节，SHA-256 `29d3b4d3…e364`，`draft=false`；经代理整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.28.0（26,344,390 字节，SHA-256 `e10a7044…517d`）、v0.27.0（26,237,522 字节，SHA-256 `503f9486…b619`）。v0.28.1 没单独发版，改动合在 v0.29.0 里。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有17段结构迁移；无账号、后端、同步 |
@@ -23,6 +23,25 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.30.0：四条手感修正（不改数据结构）
+
+用户 2026-11-19 提的四条，没有一条是功能缺失，全是「用起来别扭」：
+
+- **打开 App 不再自动弹键盘**：`TimelineScreen` 里那个 380ms 后 `focus()` 的冷启动 effect
+  和 `autoFocusedOnce` 一起删了。通知栏「记一条」那条路（`focusSignal`）**保留**聚焦。
+- **回收站搬到设置根页**（原来在「数据与备份」里）：`SettingsScreen` 的 root 菜单第三行；
+  `trashCount` 的读取条件从 `pane === 'data'` 改成 root/data/trash 三处，
+  `TrashPane` 的 `onChanged` 外面多包一层回写计数。
+- **文档页两个入口去图标**，「写一篇」→「新建文档」，`uploadBtn` 补 `flex: 1`。
+- **日历当天碎片一条一块**：`ReviewScreen` 的每条记录包进 `fragRow`，
+  左边 `fragTime`（`formatTime`，固定 42 宽），上边一条 hairline 分隔线。
+
+`test:recycle` 的入口断言跟着改了口径：回收站那一行必须落在 `pane === 'root'` 那一段里，
+文档页那两个按钮必须不带 `Ionicons`（32 项不变，改的是查法不是数量）。
+
+**没验**（要真机）：去图标之后两个按钮在 320dp 屏上会不会挤、日历每条正文在 xlarge 字号下
+时刻列会不会被压窄、以及去掉自动聚焦之后「记一条」通知点进来的落点。
 
 ### v0.29.0：文档内嵌图
 
@@ -440,22 +459,22 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/digestReminder.ts` | 224 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2004 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2000 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1866 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 160 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 767 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1468 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1668 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 796 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1467 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1672 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 117 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 306 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 117 | 无颜色 TYPE/SPACE、四档字号倍数与 `setTypeScale`、装饰边线与显式 outline 判据 |
 | `src/types.ts` [打开](<src/types.ts>) | 476 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 | `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 456 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
-| `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 319 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
+| `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 320 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
 | `src/components/ProposalSheet.tsx` [打开](<src/components/ProposalSheet.tsx>) | 238 | 审批面板：建议/原稿两页签、字数对比，三个出口（存为新文档/只存标签/放弃） |
 | `src/components/DocBatchSheet.tsx` [打开](<src/components/DocBatchSheet.tsx>) | 288 | 批量工作流：一篇篇过，每篇都要单独审批；跳过与失败分开计数 |
 | `src/util/trash.ts` [打开](<src/util/trash.ts>) | 96 | 30 天口径、剩几天、分组与顶部那句话（纯函数） |

@@ -515,8 +515,10 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             ) : (
               /*
                * 两个入口并排，因为它们是**两件不同的事**：
-               * 「添加文件」是手上已经有一个东西，「写一篇」是从零开始。
-               * 只留一个角标图标时，用户找不到「我自己写」这条路。
+               * 「添加文件」是手上已经有一个东西，「新建文档」是从零开始。
+               *
+               * 都不带图标（用户 2026-11-19 要求）：这两个词本身就是动作，
+               * 前面再加一个 `+` 和一支笔，只是把按钮挤窄一截。
                */
               <View style={styles.entryRow}>
                 <Pressable
@@ -525,24 +527,21 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
                   disabled={picking}
                   accessibilityRole="button"
                   accessibilityLabel="添加文件"
+                  accessibilityState={{ disabled: picking, busy: picking }}
                 >
                   {picking ? (
                     <ActivityIndicator size="small" color={c.onAccent} />
                   ) : (
-                    <>
-                      <Ionicons name="add" size={19} color={c.onAccent} />
-                      <Text style={styles.uploadText}>添加文件</Text>
-                    </>
+                    <Text style={styles.uploadText}>添加文件</Text>
                   )}
                 </Pressable>
                 <Pressable
                   style={({ pressed }) => [styles.writeBtn, pressed && { opacity: 0.85 }]}
                   onPress={() => { Keyboard.dismiss(); setEditorFor({ docId: null }); }}
                   accessibilityRole="button"
-                  accessibilityLabel="自己写一篇文档"
+                  accessibilityLabel="新建文档"
                 >
-                  <Ionicons name="create-outline" size={17} color={c.text} />
-                  <Text style={styles.writeText}>写一篇</Text>
+                  <Text style={styles.writeText}>新建文档</Text>
                 </Pressable>
               </View>
             )}
@@ -614,7 +613,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
           ) : (
             <EmptyState
               icon="documents-outline"
-              title="先存一份文件，或者自己写一篇"
+              title="先存一份文件，或者新建一篇"
               body="导入的原文件留在本机；自己写的文档直接进库，可以随时改"
             />
           )
@@ -1318,11 +1317,11 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   loading: { paddingTop: SPACE.xl, alignItems: 'center' },
   uploadBlock: { paddingTop: SPACE.xxs, paddingBottom: SPACE.xs },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs },
-  /** 两个入口并排：主按钮占大头，「写一篇」是次级 */
+  /** 两个入口并排：主按钮占大头，「新建文档」是次级（宽度够放四个字，不折行） */
   entryRow: { flexDirection: 'row', alignItems: 'stretch', gap: SPACE.xs },
   writeBtn: {
-    flexGrow: 0, flexBasis: 104, minHeight: metrics.controlHeight, flexDirection: 'row',
-    alignItems: 'center', justifyContent: 'center', gap: 5, borderRadius: metrics.buttonRadius,
+    flexGrow: 0, flexBasis: 112, minHeight: metrics.controlHeight,
+    alignItems: 'center', justifyContent: 'center', borderRadius: metrics.buttonRadius,
     backgroundColor: c.card,
   },
   writeText: { ...TYPE.body, color: c.text, fontWeight: '600' },
@@ -1363,8 +1362,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   btnOff: { backgroundColor: c.hairSoft },
   /** 主操作按钮：48 是触控下限。原来写 44，比同一页所有按钮都矮一截 */
   uploadBtn: {
-    minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
-    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: SPACE.xs,
+    flex: 1, minHeight: metrics.controlHeight, borderRadius: metrics.buttonRadius,
+    backgroundColor: c.accent, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
   },
   uploadText: { ...TYPE.body, color: c.onAccent, fontWeight: '600' },
   limitText: { marginTop: SPACE.sm, ...TYPE.compact, color: c.text2 },

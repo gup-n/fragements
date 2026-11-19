@@ -24,7 +24,7 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
-import { dayKey, daySubLabel, periodAnchor, periodLabel } from '../util/date';
+import { dayKey, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
 import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle, type MonthCount } from '../util/digest';
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type DayCount, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
@@ -616,22 +616,36 @@ function CalendarTab({
               const text = stripImageTokens(f.content).replace(/\s+/g, ' ').trim();
               const open = openFrags.has(f.id);
               return (
-                <Pressable
-                  key={`f${f.id}`}
-                  onPress={() => setOpenFrags((prev) => {
-                    const next = new Set(prev);
-                    if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
-                    return next;
-                  })}
-                  accessibilityRole="button"
-                  accessibilityState={{ expanded: open }}
-                  accessibilityLabel={open ? '收起这条记录' : '展开这条记录'}
-                >
-                  {/* 收起时两行 + 省略号；展开时给全文，不再裁 */}
-                  <Text style={styles.dayQuote} numberOfLines={open ? undefined : 2}>
-                    {text || `[${f.images.length} 张图]`}
-                  </Text>
-                </Pressable>
+                /*
+                 * 一条一块，块与块之间一条极细的分隔线（用户 2026-11-19 要求）。
+                 *
+                 * 原来每条只有一行文字、上下留 3px：连着记的四五条在视觉上
+                 * 就是一大段，读的时候分不清哪里是上一条的结尾。
+                 * 分隔线之前先试过「空一行」，但两行文字的间距和段落间距一样，
+                 * 一段普通换行的正文也会被看成两条记录。
+                 *
+                 * 左边那一列是时刻：同一天的多条本来只能靠内容猜先后，
+                 * 而现在它们是并列摆着的，没有时刻就分不出顺序。
+                 */
+                <View key={`f${f.id}`} style={[styles.fragRow, styles.fragRowLine]}>
+                  <Text style={styles.fragTime}>{formatTime(f.createdAt)}</Text>
+                  <Pressable
+                    style={styles.fragMain}
+                    onPress={() => setOpenFrags((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(f.id)) next.delete(f.id); else next.add(f.id);
+                      return next;
+                    })}
+                    accessibilityRole="button"
+                    accessibilityState={{ expanded: open }}
+                    accessibilityLabel={open ? '收起这条记录' : '展开这条记录'}
+                  >
+                    {/* 收起时两行 + 省略号；展开时给全文，不再裁 */}
+                    <Text style={styles.dayQuote} numberOfLines={open ? undefined : 2}>
+                      {text || `[${f.images.length} 张图]`}
+                    </Text>
+                  </Pressable>
+                </View>
               );
             })}
             {dayFrag.length > DAY_FRAG_PREVIEW ? (
@@ -760,6 +774,21 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   dayTextDone: { color: c.text2, textDecorationLine: 'line-through' },
   dayQuote: { ...TYPE.meta, color: c.text2, paddingVertical: 3 },
   dayFrags: { marginTop: 2 },
+  /**
+   * 一条记录一块：左边时刻、右边正文，块与块之间一条极细的分隔线。
+   *
+   * 分隔线加在**每一条**上（含第一条）：它同时把上面的待办/小结和第一条记录隔开，
+   * 否则待办说完直接接一段正文，读起来还是连着的。
+   */
+  fragRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm, paddingVertical: SPACE.xxs },
+  fragRowLine: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.hairSoft },
+  /**
+   * 时刻那一列给固定宽度，正文才会左对齐成一条竖线。
+   * 42 是「08:05」在 TYPE.meta 下的实测宽度再留一点余量：
+   * 不给宽度的话，每条记录的正文字都会往右缩一点点，看起来像没对齐。
+   */
+  fragTime: { ...TYPE.meta, color: c.text3, width: 42, paddingVertical: 3, fontVariant: ['tabular-nums'] },
+  fragMain: { flex: 1, minWidth: 0 },
   /** 「展开其余 N 条」得能点：整行给 28 的可见高度，上下由 hitSlop 补 */
   dayMoreWrap: { minHeight: 28, justifyContent: 'center', alignSelf: 'flex-start' },
   dayMore: { ...TYPE.meta, color: c.accentText, paddingVertical: 3 },

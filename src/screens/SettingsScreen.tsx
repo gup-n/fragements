@@ -198,13 +198,16 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
   /** 非空时弹导入确认页。选完文件先看预览，确认了才写库 */
   const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   /**
-   * 回收站里有多少条。**只在数据页读一次**：
-   * 它是「有没有东西等我处理」的提示，不需要实时 —— 每次进数据页刷新就够了。
+   * 回收站里有多少条。
+   *
+   * 它是「有没有东西等我处理」的提示，不需要实时 —— 进根页、从回收站退回来时各读一次就够。
+   * v0.30 起放在**设置根页**（用户 2026-11-19 要求从「数据与备份」里独立出来）：
+   * 删完东西想找回，去翻一个二级页是多余的。
    */
   const [trashCount, setTrashCount] = useState(0);
 
   useEffect(() => {
-    if (pane !== 'data') return;
+    if (pane !== 'root' && pane !== 'data' && pane !== 'trash') return;
     let cancelled = false;
     repo
       .trashCount()
@@ -689,6 +692,14 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
               <MenuRow icon="contrast-outline" label="外观" value={`${THEME_MODE_LABEL[mode]} · ${THEME_STYLE_LABEL[themeStyle]}`}
                 onPress={() => setPane('appearance')} last />
             </View>
+            {/*
+              回收站是根页的一行（用户 2026-11-19 要求从「数据与备份」里独立出来）。
+              它不是「备份」的一部分：里面是刚删掉的东西，找它的心情和翻备份完全不同。
+            */}
+            <View style={styles.cardTight}>
+              <MenuRow icon="trash-outline" label="回收站" value={trashCount > 0 ? `${trashCount} 条待处理` : '空'}
+                onPress={() => setPane('trash')} last />
+            </View>
             <View style={styles.cardTight}>
               <MenuRow icon="file-tray-full-outline" label="数据与备份" value={dataValue}
                 onPress={() => setPane('data')} last />
@@ -977,27 +988,20 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
         </ScrollView>
       ) : null}
 
-      {/* ---------------- 数据 ---------------- */}
+      {/* ---------------- 回收站（根页独立一页） ---------------- */}
       {pane === 'trash' ? (
-        <TrashPane onChanged={onChanged} />
+        <TrashPane
+          onChanged={() => {
+            onChanged();
+            // 根页那一行的「N 条待处理」要跟着变：恢复完退回去还写着 5 条就是错的
+            void repo.trashCount().then(setTrashCount).catch(() => undefined);
+          }}
+        />
       ) : null}
 
+      {/* ---------------- 数据 ---------------- */}
       {pane === 'data' ? (
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          {/*
-            回收站放在数据页最上面：删完东西想找回，第一反应是「数据」，
-            而不是先点进某个子页再往下翻。
-          */}
-          <View style={styles.cardTight}>
-            <MenuRow
-              icon="trash-outline"
-              label="回收站"
-              value={trashCount > 0 ? `${trashCount} 条待处理` : '空'}
-              onPress={() => setPane('trash')}
-              last
-            />
-          </View>
-
           <GroupTitle text="现在有多少" />
           <View style={styles.card}>
             <View style={styles.statRow}>
