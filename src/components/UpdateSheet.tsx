@@ -33,8 +33,11 @@ import {
   formatBytes,
   installApk,
   openInstallPermissionSettings,
+  pendingDownload,
+  progressPercent,
   type DownloadProgress,
   type DownloadSourceReport,
+  type PendingDownload,
 } from '../update/download';
 import { clearNotify, initNotify, notifyProgress, notifyReady } from '../update/notify';
 import { APP_VERSION } from '../version';
@@ -84,6 +87,13 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   const [installing, setInstalling] = useState(false);
   /** 跳转失败的原因。手机上没有浏览器 / 链接被拦时 openURL 会 reject，不能当没点过 */
   const [linkErr, setLinkErr] = useState('');
+  /**
+   * 缓存里能接着用的那个包（打开面板时问一次）。
+   *
+   * 有它就把按钮改成「继续下载」并显示已下多少 —— 用户 2026-11-19 报的
+   * 「切了 10 秒别的应用，回来要重新下载」，一半原因就在这里没人问过缓存。
+   */
+  const [resume, setResume] = useState<PendingDownload | null>(null);
 
   const cancelRef = useRef<(() => void) | null>(null);
   const fileRef = useRef<File | null>(null);
@@ -121,16 +131,38 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
     return () => sub.remove();
   }, [phase, dismiss]);
 
-  // 组件卸载（用户关掉弹窗）时把残包清掉，免得 22 MB 一直躺在缓存里
+  /*
+   * 关掉弹窗**不再删残包**（v0.32 改）。
+   *
+   * 原来这里一卸载就 `clearDownload()`：26 MB 是省下了，代价是用户切一下应用、
+   * 或者顺手关掉弹窗，回来就得从头下。残包和旁边那张 sidecar 现在一直留到装完
+   * （`install()` 成功后清），下次打开面板还会被 `pendingDownload` 认出来。
+   */
   useEffect(() => {
     return () => {
-      if (phase !== 'ready') {
-        clearDownload();
-        clearNotify();
-      }
+      clearNotify();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** 打开面板先问一句：缓存里有没有这一版能接着用的包 */
+  useEffect(() => {
+    let alive = true;
+    pendingDownload(release)
+      .then((p) => {
+        if (!alive || !p) return;
+        setResume(p);
+        setProgress({ written: p.written, total: p.total });
+        // 上次已经下全，只是没来得及装：别再下一次 26 MB
+        if (p.file) {
+          fileRef.current = p.file;
+          setPhase('ready');
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [release]);
 
   /** 收到一次进度：更新条，顺便算速度 */
   const onProgress = useCallback(
@@ -154,11 +186,11 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
         setProgress(p);
       }
 
-      // 通知栏：一秒一次。后台时 JS 挂起，这个更新自然就停了 ——
-      // 通知会停在切走那一刻的数字，回到应用后立刻接上
+      // 通知栏：一秒一次。切到后台时进度回调不再触发（原生下载还在跑），
+      // 通知停在切走那一刻的数字，回到前台后补发的回调会立刻把它接上
       if (now - notifyAtRef.current > 1000) {
         notifyAtRef.current = now;
-        const pct = p.total > 0 ? Math.round((p.written / p.total) * 100) : null;
+        const pct = progressPercent({ written: p.written, total: p.total });
         const size = `${formatBytes(p.written)}${p.total > 0 ? ` / ${formatBytes(p.total)}` : ''}`;
         notifyProgress(release.version, size, pct);
       }
@@ -183,9 +215,23 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   );
 
   async function startDownload() {
+    /*
+     * 按磁盘上**现在**的大小起进度，不用挂载时那一次的结果：
+     * 上一次跑过之后残包可能又长大了，拿旧数字会先退回去再跳上来。
+     */
+    const known = await pendingDownload(release).catch(() => null);
+    if (known) setResume(known);
+
+    // 已经下全了：直接进「立即安装」，别再下一次 26 MB
+    if (known?.file) {
+      fileRef.current = known.file;
+      setPhase('ready');
+      return;
+    }
+
     setPhase('downloading');
     setError('');
-    setProgress({ written: 0, total: release.apkSize });
+    setProgress(known ? { written: known.written, total: known.total } : { written: 0, total: release.apkSize });
     setSpeed(0);
     setSource(null);
     rateRef.current = { at: 0, bytes: 0, ema: 0 };
@@ -194,7 +240,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
 
     // 通知失败不影响下载：没授权就静默跳过
     initNotify().then((ok) => {
-      if (ok) notifyProgress(release.version, formatBytes(0), 0);
+      if (ok) notifyProgress(release.version, formatBytes(known?.written ?? 0), known ? progressPercent(known) : 0);
     });
     try {
       const file = await downloadApk(
@@ -217,8 +263,11 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
       const msg = e instanceof Error ? e.message : '下载失败';
       // 主动取消不是错误，退回初始态让用户重新决定
       if (msg === '已取消下载') {
+        // 取消不清残包：重新问一次磁盘，按钮上就能写「继续下载（62%）」
+        const left = await pendingDownload(release).catch(() => null);
+        setResume(left);
         setPhase('prompt');
-        setProgress({ written: 0, total: release.apkSize });
+        setProgress(left ? { written: left.written, total: left.total } : { written: 0, total: release.apkSize });
         setSpeed(0);
         clearNotify();
         return;
@@ -251,8 +300,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
   }
 
   const headingRef = useHeadingFocus(`更新-${phase}`);
-  const pct =
-    progress.total > 0 ? Math.min(100, Math.round((progress.written / progress.total) * 100)) : 0;
+  const pct = progressPercent(progress) ?? 0;
   const unknownTotal = progress.total <= 0;
   /** 权限问题要额外给一个「去授权」入口，否则用户卡在这不知道怎么办 */
   const needPermission = /未知应用|授权/.test(error);
@@ -282,7 +330,11 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
             </Text>
             <Text style={styles.sub}>
               {phase === 'prompt'
-                ? `当前 ${versionLabel(APP_VERSION)} · 安装包 ${formatBytes(release.apkSize)}`
+                ? resume
+                  ? resume.file
+                    ? `当前 ${versionLabel(APP_VERSION)} · 上次已经下好，直接装就行`
+                    : `当前 ${versionLabel(APP_VERSION)} · 已下载 ${formatBytes(resume.written)} / ${formatBytes(resume.total)}`
+                  : `当前 ${versionLabel(APP_VERSION)} · 安装包 ${formatBytes(release.apkSize)}`
                 : phase === 'downloading'
                   ? [
                     source && source.total > 1
@@ -304,6 +356,12 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
           <>
             <View style={styles.notesBox}>
               {brief ? <Text style={styles.notesBrief}>{brief}</Text> : null}
+              {/* 有残包就说清「接着下」这件事，别让人以为又要从头等一遍 */}
+              {resume && !resume.file ? (
+                <Text style={styles.resumeHint}>
+                  已下的部分留着：切到别的应用、或者关掉这个弹窗再打开，都从这里接着下。
+                </Text>
+              ) : null}
               <Pressable style={[styles.linkBtn, styles.touchTarget]} onPress={openNotes}>
                 <Ionicons name="open-outline" size={13} color={c.accentText} />
                 <Text style={styles.linkText}>查看更新说明</Text>
@@ -350,8 +408,18 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
               <Pressable style={[styles.ghostBtn, styles.touchTarget]} onPress={dismiss}>
                 <Text style={styles.ghostText}>以后再说</Text>
               </Pressable>
-              <Pressable style={[styles.primaryBtn, styles.touchTarget]} onPress={startDownload}>
-                <Text style={styles.primaryText}>下载更新</Text>
+              <Pressable
+                style={[styles.primaryBtn, styles.touchTarget]}
+                onPress={resume?.file ? install : startDownload}
+                disabled={installing}
+              >
+                <Text style={styles.primaryText}>
+                  {resume?.file
+                    ? '立即安装'
+                    : resume
+                      ? `继续下载（${progressPercent(resume) ?? 0}%）`
+                      : '下载更新'}
+                </Text>
               </Pressable>
             </>
           ) : phase === 'downloading' ? (
@@ -391,7 +459,7 @@ export function UpdateSheet({ release, onClose, onSkipVersion }: Props) {
                 </Pressable>
               ) : (
                 <Pressable style={[styles.primaryBtn, styles.touchTarget]} onPress={startDownload}>
-                  <Text style={styles.primaryText}>重试</Text>
+                  <Text style={styles.primaryText}>{progress.written > 0 ? '继续下载' : '重试'}</Text>
                 </Pressable>
               )}
             </>
@@ -453,6 +521,8 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
 
   notesBox: { marginTop: SPACE.sm, alignItems: 'flex-start' },
   notesBrief: { ...TYPE.meta, color: c.text2 },
+  /** 续传那句话说清「不会再等一遍」，不抢摘要的位置，比它淡一档 */
+  resumeHint: { ...TYPE.meta, color: c.text3, marginTop: SPACE.xxs },
   /** 链接/次要动作：浅灰底、无边框 */
   linkBtn: { minWidth: metrics.controlHeight, minHeight: metrics.controlHeight,
     flexDirection: 'row',

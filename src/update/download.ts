@@ -1,12 +1,14 @@
 /**
  * 下载 APK 并交给系统安装器。
  *
- * 两个技术选择，都不是随便挑的：
+ * 三个技术选择，都不是随便挑的：
  *
- * 1. **下载用 `File.createDownloadTask`，不用 `downloadFileAsync`。**
- *    后者是一次性的 promise，没有进度回调 —— 22 MB 在弱网下要下好几分钟，
- *    界面上只有个转圈，用户会以为卡死。新 API 的 `onProgress` 直接给
- *    `bytesWritten` / `totalBytes`，进度条才有数据可画。
+ * 1. **下载用 `createDownloadResumable`（legacy），不用新的 `File.createDownloadTask`。**
+ *    新 API 没有进度回调以外的能力：不能给 Range、不能续、不能暂停。
+ *    用户 2026-11-19 报「切了 10 秒别的应用，回来要重新下载」—— 那次真正的原因是
+ *    进度回调**切后台就不再触发**（expo 文档明写），而这里的「15 秒没新字节就换源」
+ *    巡检还在计时，于是正常跑着的后台下载被判成卡死、掐源、顺手把残包删了。
+ *    现在：残包留着，续传靠 `resumeData`（就是残包的字节数，服务端按 `Range` 接着发）。
  *
  * 2. **安装走 content:// 而不是 file://。**
  *    Android 7 起禁止把 `file://` 交给别的应用（FileUriExposedException）。
@@ -14,16 +16,21 @@
  *    `expo-file-system` 在 Android 上已经注册好 `FileSystemFileProvider`，
  *    它的 paths 覆盖了 files 和 cache 两个目录，所以下载到 cache 能直接转。
  *    `getContentUriAsync` 目前只在 legacy 入口里，新 API 没有对应方法 ——
- *    这是全项目唯一一处故意混用新旧 API 的地方。
+ *    这是全项目唯一一处故意混用新旧 API 的地方（现在又多了一处续传）。
  */
+import { AppState } from 'react-native';
 import { File, Paths } from 'expo-file-system';
-import { getContentUriAsync } from 'expo-file-system/legacy';
+import { createDownloadResumable, getContentUriAsync } from 'expo-file-system/legacy';
 import * as IntentLauncher from 'expo-intent-launcher';
 import type { ReleaseInfo } from './check';
 import { buildCandidates, getDownloadBase } from './mirror';
+import { percentOf, resumeOffset, stallApplies, type PartialApk } from './resume';
 
 /** 固定文件名：同一时间只会有一次下载，不需要区分 */
 const APK_NAME = 'fragments-update.apk';
+
+/** 残包旁边那张「这半包是谁的」小卡片。和 APK 一起清，不单独留 */
+const SIDECAR_NAME = 'fragments-update.json';
 
 /** FLAG_GRANT_READ_URI_PERMISSION：不给这个 flag，安装器读不到 content URI */
 const FLAG_GRANT_READ_URI_PERMISSION = 1;
@@ -32,6 +39,55 @@ export interface DownloadProgress {
   written: number;
   /** 服务器没给 Content-Length 时是 -1 */
   total: number;
+}
+
+/** 打开更新面板时先问一句：缓存里有没有能接着用的半包 */
+export interface PendingDownload {
+  written: number;
+  total: number;
+  /** 已经下全了（上次装之前被系统杀掉的情况）：直接进「立即安装」 */
+  file: File | null;
+}
+
+function apkFile(): File {
+  return new File(Paths.cache, APK_NAME);
+}
+
+function sidecarFile(): File {
+  return new File(Paths.cache, SIDECAR_NAME);
+}
+
+async function readSidecar(): Promise<PartialApk | null> {
+  const f = sidecarFile();
+  if (!f.exists) return null;
+  try {
+    const raw = JSON.parse(await f.text()) as Partial<PartialApk>;
+    if (typeof raw.version !== 'string' || typeof raw.url !== 'string' || typeof raw.size !== 'number') {
+      return null;
+    }
+    return { version: raw.version, url: raw.url, size: raw.size };
+  } catch {
+    return null;
+  }
+}
+
+/** 记下这一轮是给哪个版本、哪个源下的。记不下来顶多是下次从头下，不该让下载失败 */
+async function writeSidecar(info: PartialApk): Promise<void> {
+  try {
+    await sidecarFile().write(JSON.stringify(info));
+  } catch {
+    /* 见上 */
+  }
+}
+
+function forgetSidecar(): void {
+  const f = sidecarFile();
+  if (!f.exists) return;
+  try {
+    f.delete();
+  } catch {
+    /* 缓存目录，系统迟早会清 */
+  }
 }
 
 /** 报告当前在试第几个下载源，给界面显示「加速镜像 2/5」这类提示 */
@@ -48,12 +104,16 @@ export class UpdateError extends Error {}
 /** 单源下载的入参。参数多了之后用对象，免得调用处一长串位置参数看串 */
 interface DownloadOneOptions {
   url: string;
+  /** 这一版是谁 —— 残包能不能接着用要先和它比 */
+  version: string;
   dest: File;
   expectedSize: number;
   onProgress: (p: DownloadProgress) => void;
   onCancelReady?: (cancel: () => void) => void;
   /** 后面还有别的源可试：慢到没指望时允许主动放弃这个源 */
   hasFallback: boolean;
+  /** 续传失败后重来一次时置 true：强行从头下，避免死循环 */
+  noResume?: boolean;
 }
 
 /**
@@ -85,34 +145,45 @@ export function formatBytes(n: number): string {
 /**
  * 单源下载：删残包 → 建任务 → 下载 → 校验大小。
  *
- * 每个源都是独立的：上个源下了一半，这个源要从 0 开始，所以残包在这里删。
+ * 每个源都是独立的：残包如果是**别的源**下的，这里会丢掉重下
+ * （不同源不保证逐字节一致，混着接会拼出坏包）。
  * 失败抛 `UpdateError`，让上层的多源循环决定换不换源。
  *
  * 下载期间挂一个巡检：**卡住或慢到没指望就自己掐掉这个源**，让上层换下一个。
- * 不这么做的话，用户只能看着一个不动的进度条，既没有进度也不会自动换源。
+ * 但切到后台期间不判 —— 进度回调这时候本来就不触发，见 `resume.ts` 的注释。
  */
 async function downloadOne(o: DownloadOneOptions): Promise<File> {
-  const { url, dest, expectedSize, onProgress, onCancelReady, hasFallback } = o;
+  const { url, version, dest, expectedSize, onProgress, onCancelReady, hasFallback, noResume } = o;
 
-  // 上一轮没下完的残包必须先删：createDownloadTask 对已存在的目标会报错，
-  // 而且残包大小对不上时会让人以为下载成功了
-  if (dest.exists) {
+  const partial = dest.exists ? (dest.info().size ?? 0) : 0;
+  const saved = noResume ? null : await readSidecar();
+  const offset = resumeOffset(saved, { version, url, size: expectedSize }, partial);
+
+  // 不能续的残包必须删掉：续传是往同一个文件尾部接，留着上一次的字节就成了坏包
+  if (offset === 0 && dest.exists) {
     try {
       dest.delete();
     } catch {
       /* 删不掉就让下面去报错，别在这里吞掉 */
     }
   }
+  // 先记下「这半包是给谁下的」，再开始下 —— 中途被杀也能靠它续上
+  await writeSidecar({ version, url, size: expectedSize });
 
   /** 巡检读的字节数：由 onProgress 持续刷新 */
-  let written = 0;
+  let written = offset;
 
-  const task = File.createDownloadTask(url, dest, {
-    onProgress: (p) => {
-      written = p.bytesWritten;
-      onProgress({ written: p.bytesWritten, total: p.totalBytes });
+  const task = createDownloadResumable(
+    url,
+    dest.uri,
+    {},
+    (p) => {
+      written = p.totalBytesWritten;
+      onProgress({ written: p.totalBytesWritten, total: p.totalBytesExpectedToWrite });
     },
-  });
+    // resumeData 就是残包的字节数；原生按 `Range: bytes=N-` 接着发，写入也改成追加
+    offset > 0 ? String(offset) : undefined,
+  );
 
   /** 被自己掐掉的原因。用户主动取消时保持 null，两条路径不能混 */
   let aborted: 'stall' | 'slow' | null = null;
@@ -129,12 +200,31 @@ async function downloadOne(o: DownloadOneOptions): Promise<File> {
     rejectOnAbort = reject;
   });
 
-  const startedAt = Date.now();
-  let lastGrowthAt = startedAt;
-  let lastSeen = 0;
+  let lastGrowthAt = Date.now();
+  let lastSeen = offset;
+  /**
+   * 平均速度只统计**前台**时间。
+   *
+   * 后台那段时间没有进度回调，把它算进分母，切走五分钟回来平均速度就成了几 KB/s，
+   * 直接判「这个源太慢」—— 和「没有进展」是同一种误判的另一种表现。
+   */
+  let activeMs = 0;
+  let tickAt = Date.now();
+  let active = stallApplies(AppState.currentState);
+
+  /** 回到前台：重新给一个完整观察窗口，后台那段时间两头都不算 */
+  const appSub = AppState.addEventListener('change', (state) => {
+    active = stallApplies(state);
+    if (!active) return;
+    lastGrowthAt = Date.now();
+    tickAt = Date.now();
+  });
 
   const watch = setInterval(() => {
     const now = Date.now();
+    const dt = Math.max(0, now - tickAt);
+    tickAt = now;
+    if (active) activeMs += dt;
 
     // 有进展就重新计时
     if (written > lastSeen) {
@@ -143,13 +233,20 @@ async function downloadOne(o: DownloadOneOptions): Promise<File> {
       return;
     }
 
+    /*
+     * 切到后台：**不判卡死，也不判慢**。
+     * 原生下载还在跑，只是进度回调要等回到前台才补发 —— 拿「没有回调」当
+     * 「没有进展」，就会把正常跑着的下载掐掉（用户 2026-11-19 报的就是这个：
+     * 切走 10 秒回来正好撞上 15 秒的判据，于是换源并从头下）。
+     */
+    if (!active) {
+      lastGrowthAt = now;
+      return;
+    }
+
     if (now - lastGrowthAt >= STALL_MS) {
       aborted = 'stall';
-      try {
-        task.cancel();
-      } catch {
-        /* 已经结束的任务取消会抛，忽略 */
-      }
+      abort();
       rejectOnAbort?.(new UpdateError(`这个源 ${STALL_MS / 1000} 秒没有进展，换下一个`));
       return;
     }
@@ -157,32 +254,30 @@ async function downloadOne(o: DownloadOneOptions): Promise<File> {
     // 没有后续源可换时，慢也让它慢慢下完 —— 掐掉只会变成「全失败」
     if (!hasFallback) return;
 
-    const elapsed = now - startedAt;
-    if (elapsed < SLOW_WINDOW_MS) return;
-    const avg = written / (elapsed / 1000);
+    if (activeMs < SLOW_WINDOW_MS) return;
+    const avg = (written - offset) / (activeMs / 1000);
     const ratio = expectedSize > 0 ? written / expectedSize : 0;
     if (avg < SLOW_BYTES_PER_SEC && ratio < SLOW_GIVE_UP_MAX_RATIO) {
       aborted = 'slow';
-      try {
-        task.cancel();
-      } catch {
-        /* 同上 */
-      }
+      abort();
       rejectOnAbort?.(new UpdateError('这个源太慢，换下一个'));
     }
   }, WATCH_INTERVAL_MS);
 
-  onCancelReady?.(() => {
+  /** 掐掉当前请求。两条出口（巡检 / 用户取消）都走它，别在别处再写一遍 */
+  function abort(): void {
     try {
-      task.cancel();
+      void task.cancelAsync();
     } catch {
       /* 已经结束的任务取消会抛，忽略 */
     }
-  });
+  }
 
-  let file: File | null;
+  onCancelReady?.(abort);
+
+  let done: unknown;
   try {
-    file = await Promise.race([task.downloadAsync(), abortSignal]);
+    done = await Promise.race([task.downloadAsync(), abortSignal]);
   } catch (e) {
     // 巡检掐的：这两句文案里**不能出现 abort / cancel** ——
     // 上层拿这两个词判断「用户主动取消」，混了就会把换源当成取消而停下
@@ -195,29 +290,44 @@ async function downloadOne(o: DownloadOneOptions): Promise<File> {
     throw new UpdateError(`下载失败：${msg}`);
   } finally {
     clearInterval(watch);
-    try {
-      task.release();
-    } catch {
-      /* 同上 */
-    }
+    appSub.remove();
   }
 
-  if (!file) throw new UpdateError('下载被中断，请重试');
+  // 用户取消时原生 resolve(undefined)；残包留着，下次还能接着下。
+  // 巡检掐掉时也可能先 resolve 成 undefined，所以先认 `aborted`
+  if (!done) {
+    if (aborted === 'stall') throw new UpdateError(`这个源 ${STALL_MS / 1000} 秒没有进展，换下一个`);
+    if (aborted === 'slow') throw new UpdateError('这个源太慢，换下一个');
+    throw new UpdateError('已取消下载');
+  }
 
   // 装之前必须校验大小。半包能拉起安装器，但装到一半会失败，
   // 而用户看到的只是「应用未安装」，根本猜不到是下载没下全
-  const actual = file.info().size ?? 0;
+  const actual = dest.info().size ?? 0;
   if (expectedSize > 0 && actual > 0) {
     const diff = Math.abs(actual - expectedSize);
     // 允许 1 KB 误差：Release 里的 size 是上传时算的，个别 CDN 会补尾部字节
     if (diff > 1024) {
+      /*
+       * 续传时对不上，最常见的原因是服务端忽略了 `Range`、直接回 200：
+       * 整包被接在残包后面，文件正好大出 `offset`。这不是网络问题，
+       * 换源也没用 —— 清掉重下一次，只给一次机会。
+       */
+      if (offset > 0 && !noResume) {
+        try {
+          dest.delete();
+        } catch {
+          /* 删不掉就让下一次自己失败 */
+        }
+        return downloadOne({ ...o, noResume: true });
+      }
       throw new UpdateError(
         `下载不完整（${formatBytes(actual)} / 应为 ${formatBytes(expectedSize)}），请重试`,
       );
     }
   }
 
-  return file;
+  return dest;
 }
 
 /**
@@ -238,17 +348,27 @@ export async function downloadApk(
 ): Promise<File> {
   const base = await getDownloadBase().catch(() => '');
   const candidates = buildCandidates(release, base);
-  const dest = new File(Paths.cache, APK_NAME);
+  const dest = apkFile();
+
+  /** 第一个源能不能接着上一次下。能的话进度条从这一格起，不要先跳回 0 */
+  const saved = await readSidecar();
+  const partial = dest.exists ? (dest.info().size ?? 0) : 0;
+  const carry = resumeOffset(
+    saved,
+    { version: release.version, url: candidates[0]?.url ?? '', size: release.apkSize },
+    partial,
+  );
 
   let lastError: Error | null = null;
   for (let i = 0; i < candidates.length; i++) {
     const src = candidates[i];
     onSource?.({ index: i + 1, total: candidates.length, label: src.label });
     // 切源时进度归零，别让上个源下了一半的数字误导进度条
-    onProgress({ written: 0, total: release.apkSize });
+    onProgress({ written: i === 0 ? carry : 0, total: release.apkSize });
     try {
       return await downloadOne({
         url: src.url,
+        version: release.version,
         dest,
         expectedSize: release.apkSize,
         onProgress,
@@ -304,12 +424,43 @@ export async function openInstallPermissionSettings(): Promise<void> {
   );
 }
 
-/** 清掉下载残包（用户取消或装完后都该收拾干净） */
+/**
+ * 缓存里还有没有这一版能用的包。
+ *
+ * 两种都能用，但要说清是哪一种：
+ * - 下了一半 → 给「继续下载」，进度条直接从这一格开始；
+ * - 已经下全（上次装之前被系统杀掉）→ 直接进「立即安装」，别再下一次 26 MB。
+ */
+export async function pendingDownload(release: ReleaseInfo): Promise<PendingDownload | null> {
+  const dest = apkFile();
+  if (!dest.exists) return null;
+  const written = dest.info().size ?? 0;
+  if (written <= 0) return null;
+
+  const saved = await readSidecar();
+  // 版本或目标大小对不上：这不是这一版的包，界面照常显示「下载更新」
+  if (!saved || saved.version !== release.version || saved.size !== release.apkSize) return null;
+
+  if (release.apkSize > 0 && Math.abs(written - release.apkSize) <= 1024) {
+    return { written, total: release.apkSize, file: dest };
+  }
+  if (release.apkSize > 0 && written >= release.apkSize) return null;
+  return { written, total: release.apkSize, file: null };
+}
+
+/** 百分比给人看，`null` 表示服务器没给总大小（见 `resume.ts`） */
+export function progressPercent(p: DownloadProgress): number | null {
+  return percentOf(p.written, p.total);
+}
+
+/** 清掉下载残包（装完之后收拾；用户中途关掉弹窗**不**清，留着下次续） */
 export function clearDownload(): void {
-  const dest = new File(Paths.cache, APK_NAME);
+  forgetSidecar();
+  const dest = apkFile();
   if (!dest.exists) return;
   try {
     dest.delete();
+
   } catch {
     /* 缓存目录，系统迟早会清 */
   }

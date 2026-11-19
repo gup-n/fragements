@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.31.1 / versionCode 83 |
+| 版本 | v0.32.0 / versionCode 84 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.31.1 已发布（[CI 44511106320](https://github.com/gup-n/fragements/actions/runs/44511106320)，26,354,426 字节，SHA-256 `52c63609…c637`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）、v0.30.0（26,352,850 字节，SHA-256 `c91544b5…07b6`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,25 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.32.0：切走十秒回来从头下（断点续传 + 后台不判卡死）
+
+- **根因**：`expo-file-system` 的进度回调切到后台就不再触发（文档明写），
+  而「15 秒没有新字节就换源」的巡检照判 → 掐源 → 换源 → `downloadOne` 开头无条件删残包。
+  三件事凑成「切走一会儿等于白下」。
+- **现在**：巡检先问 `stallApplies(AppState.currentState)`，后台不判、回前台重新给一个窗口；
+  下载换 legacy 的 `createDownloadResumable`，`resumeData` 就是残包字节数；
+  `cache/fragments-update.json` 记着这半包是哪个版本、哪个源、目标多大。
+  能不能续由 `update/resume.ts` 的 `resumeOffset` 判（版本 / 源 / 目标大小 / 未超目标）。
+- **面板**：`pendingDownload` 先问缓存 → 按钮写「继续下载（62%）」；已经下全直接「立即安装」；
+  关掉弹窗不再删残包（装完才 `clearDownload`）。
+- **断言**：新一组 `test:update` 7 条；合计 469 项。
+- **没验**（要真机）：切后台再回来的实际表现（进程活着 / 被系统杀掉两种）、
+  服务端忽略 `Range` 时「清掉重下一次」那条路、以及各家 ROM 对后台 OkHttp 的冻结策略。
+
+**边界（别把它当系统级后台下载）**：进程活着时传输继续；进程被杀则停，但已下字节不丢，
+下次打开面板接着下。要「杀掉也继续」得用 Android `DownloadManager` 或前台服务，
+那需要一个原生模块 + 配置插件，本轮没做。
 
 ### v0.31.1：清理没人引用的导出，文案与字数只认一份
 
@@ -457,13 +476,14 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:backup` | 19 项通过 |
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
+| `npm run test:update` | **7 项通过**（v0.32：残包续传判据 + 「后台不算卡死」+ 两处源码卫生） |
 | `npm run test:recycle` | **34 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
 | `npm run test:ui` | **45 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.31.1 新增「滑开行收回」「字数只认 charCount」） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.71 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有462项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有469项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -631,7 +651,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 785 | 月总结单篇/缺口队列、原稿对照和确认保存 |
 | `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 512 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 229 | 全屏覆盖编辑、子项和到期日 |
-| `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 529 | 更新提示/下载/安装/错误状态 |
+| `src/components/UpdateSheet.tsx` [打开](<src/components/UpdateSheet.tsx>) | 599 | 更新提示/下载（可续）/安装/错误状态 |
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 216 | 文字导入预览、范围/日期警告与确认 |
 | `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 238 | 引用快照、真实来源位置，不回库猜原文 |
 | `src/components/SwipeRow.tsx` [打开](<src/components/SwipeRow.tsx>) | 319 | 固定方向的时间轴手势，保留纵滚/长按和减少动效 |
@@ -673,7 +693,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `src/update/check.ts` [打开](<src/update/check.ts>) | 172 | Release查询、节流、自动检查/跳过版本 |
 | `src/update/mirror.ts` [打开](<src/update/mirror.ts>) | 66 | 自定义→官方→镜像候选顺序 |
-| `src/update/download.ts` [打开](<src/update/download.ts>) | 316 | 停滞/低速切源、字节核验和content URI安装 |
+| `src/update/download.ts` [打开](<src/update/download.ts>) | 467 | 续传（Range + sidecar）、停滞/低速切源、字节核验和content URI安装 |
+| `src/update/resume.ts` [打开](<src/update/resume.ts>) | 57 | 纯判据：残包能不能接着下、切后台算不算卡死、百分比 |
 | `src/update/notify.ts` [打开](<src/update/notify.ts>) | 142 | 下载状态通知；后台JS挂起时数字可能暂停 |
 | `src/util/semver.ts` [打开](<src/util/semver.ts>) | 57 | 数值分段比较版本，不比较字符串 |
 
@@ -693,6 +714,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 798 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 159 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
+| `scripts/assert_update.cjs` [打开](<scripts/assert_update.cjs>) | 121 | 7项：残包续传的四个判据（版本/源/大小/已下全）、切后台不算卡死、百分比、以及「下载不许退回一次性任务」「面板卸载不许删残包」两条源码卫生 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 

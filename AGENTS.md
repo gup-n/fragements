@@ -248,8 +248,9 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 
 ## 11. 更新、SDK与文档维护
 
-- 更新源只认GitHub Release。候选顺序自定义地址 → 官方 → 内置镜像；保留停滞/低速切源，按bytesWritten而非“是否收到回调”判进展。切源提示不能与用户主动取消混淆。
+- 更新源只认GitHub Release。候选顺序自定义地址 → 官方 → 内置镜像；保留停滞/低速切源，按bytesWritten而非“是否收到回调”判进展。切源提示不能与用户主动取消混淆。**切到后台期间两个判据都不算**（`update/resume.ts` 的 `stallApplies`）：进度回调本来就要等回前台才补发，照判会把正常跑着的后台下载掐掉 —— 这正是 v0.32 之前「切走 10 秒回来从头下」的根因。
 - 下载完成核验字节数；安装通过content URI交给系统，不能直接传file URI。保留当前新文件API与legacy content URI桥的明确分工；后台JS被挂起时通知数字不实时，不承诺前台服务能力。
+- **下载必须可续**：`createDownloadResumable` + 残包旁的 `fragments-update.json`（版本/源/目标大小），能不能续只由 `resumeOffset` 判。不许退回一次性的 `File.createDownloadTask`（不能给 Range），也不许在面板卸载时删残包（用户切走/关面板就白下）。
 - 版本比较用[semver工具](<src/util/semver.ts>)，不比较字符串/parseFloat。不要因网络失败伪称有更新或无更新。
 - Expo/RN接口先核对已安装版本的源码/类型与对应版本文档。网络fetch401等失败只说明没取得资料，不凭记忆编造新版API，不自主改搜索/代理配置或装依赖。
 - 正式记录各司其职：[README](<README.md>)讲产品，[SPEC](<SPEC.md>)讲批准设计，[HANDOFF](<HANDOFF.md>)讲现状，[ROADMAP](<ROADMAP.md>)讲剩余事项，[CHANGELOG](<CHANGELOG.md>)留历史；[TEXTS](<TEXTS.md>)是提示词与文案索引。

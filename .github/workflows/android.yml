@@ -84,6 +84,11 @@ jobs:
       - name: 大库分页与聚合断言
         run: npm run test:paging
 
+      # 更新下载的续传判据：残包能不能接着用、切到后台算不算卡死。
+      # 这条挡的是「切走 10 秒回来从头下」那类回归（用户 2026-11-19）。
+      - name: 更新下载续传断言
+        run: npm run test:update
+
       - name: UI排版与窄屏布局断言
         run: npm run test:ui
 
