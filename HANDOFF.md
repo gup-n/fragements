@@ -12,7 +12,7 @@
 | 包名 | `com.local.fragments`，不变 |
 | 版本 | v0.32.0 / versionCode 84 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.31.1 已发布（[CI 44511106320](https://github.com/gup-n/fragements/actions/runs/44511106320)，26,354,426 字节，SHA-256 `52c63609…c637`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）、v0.30.0（26,352,850 字节，SHA-256 `c91544b5…07b6`）。真机仍未验 |
+| 发布状态 | v0.32.0 已发布（[CI 44548003311](https://github.com/gup-n/fragements/actions/runs/44548003311)，26,360,894 字节，SHA-256 `7e52ee68…ac92`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.1（26,354,426 字节，SHA-256 `52c63609…c637`）、v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有17段结构迁移；无账号、后端、同步 |
