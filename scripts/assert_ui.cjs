@@ -745,6 +745,50 @@ test('文档行不再常驻删除按钮：左滑露出删除，长按弹菜单',
   }
 });
 
+/*
+ * 滑开一行之后，如果用户去滚动、去点别的行、去进多选，那一行得自己收回去 ——
+ * 否则从详情页回来时它还敞着半截「删除」，看着像忘了收拾。
+ * 顺带钉住「一行的属性只写一份」：库列表和归档列表原来各抄了一遍，
+ * 加一个新回调要改两个地方，迟早只改一处。
+ */
+test('滑开的文档行会自己收回，文档行也只写一份', () => {
+  const docs = parseSource('src/screens/DocsScreen.tsx').getText();
+  assert.equal(
+    docs.split('<DocRow').length - 1,
+    1,
+    'DocRow 只该在 renderRow 里出现一次，库列表与归档列表共用',
+  );
+  assert.ok(docs.includes('{renderRow(item)}'), '归档列表走 renderRow');
+  assert.ok(docs.includes('renderItem={({ item }) => renderRow(item)}'), '主列表走 renderRow');
+  assert.ok(docs.includes('onScrollBeginDrag'), '滚动时要把滑开的那行收回去');
+
+  const at = docs.indexOf('function renderRow(');
+  const end = docs.indexOf('const picked', at);
+  assert.ok(at > 0 && end > at, 'renderRow 要挨着列表数据之前');
+  const body = docs.slice(at, end);
+  assert.equal(
+    (body.match(/setOpenRow\(null\)/g) || []).length,
+    2,
+    '打开和长按之前各收一次（两处）',
+  );
+  assert.equal(
+    (docs.match(/setOpenRow\(null\)/g) || []).length >= 4,
+    true,
+    '再加上滚动与进多选，收回的地方至少四处',
+  );
+});
+
+/*
+ * 字数只有一份：repo 写入时算好 `charCount`。
+ * 头部再数一遍 `bodyMd.length` 就是「两处各算一次」，迟早和列表里显示的对不上
+ * （types.ts 里那句话说的就是这个）。
+ */
+test('文档字数只认 charCount，不在界面里重数正文', () => {
+  const viewer = parseSource('src/components/DocViewer.tsx').getText();
+  assert.ok(viewer.includes('doc.charCount.toLocaleString()'), '头部字数用 charCount');
+  assert.ok(!viewer.includes('doc.bodyMd.length'), '不许再自己对正文数一遍');
+});
+
 if (require.main === module) {
   suite.run().then(({ failed }) => { process.exitCode = failed ? 1 : 0; }).catch((error) => {
     console.error(error && error.stack ? error.stack : error);

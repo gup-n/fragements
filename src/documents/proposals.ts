@@ -9,7 +9,7 @@
  * 「不改原稿」贯穿到底：优化与重新整理都只**新写一篇**，
  * 原稿一个字不动。用户真想改原稿，自己编辑 —— 他的权限最高，不用借 AI 的手。
  */
-import type { AiConfig, DocProposal, DocProposalPayload, DocTag, Document } from '../types';
+import type { AiConfig, DocProposal, Document } from '../types';
 import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import type { ChatProgress } from '../ai/chat';
@@ -142,21 +142,3 @@ export async function rejectProposal(id: number): Promise<void> {
   await repo.decideProposal(id, 'rejected');
 }
 
-/** 还没批的提案。文档列表上的「待确认」角标用它 */
-export async function pendingProposals(): Promise<DocProposal[]> {
-  return repo.listProposals('pending');
-}
-
-/** 把一批标签名预先建出来（AI 提到的新名字）。返回的标签都已 approved */
-export async function ensureTags(names: string[]): Promise<DocTag[]> {
-  const out: DocTag[] = [];
-  for (const name of names) {
-    out.push(await repo.createDocTag(name, 'approved'));
-  }
-  return out;
-}
-
-export function payloadPreview(payload: DocProposalPayload): string {
-  if (payload.bodyMd) return payload.bodyMd;
-  return (payload.tags ?? []).join('、');
-}

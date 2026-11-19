@@ -51,12 +51,3 @@ export function visualLen(text: string): number {
   }
   return n;
 }
-
-/** 两个短文本是否一个被另一个完整包含（用于标签近义提示） */
-export function containsText(a: string, b: string): boolean {
-  const x = normText(a);
-  const y = normText(b);
-  if (!x || !y) return false;
-  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
-  return short.length >= 2 && long.includes(short);
-}

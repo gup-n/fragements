@@ -50,11 +50,6 @@ export function compareVersion(a: string, b: string): number {
   return 0;
 }
 
-/** `latest` 是否比 `current` 新 */
-export function isNewer(latest: string, current: string): boolean {
-  return compareVersion(latest, current) > 0;
-}
-
 /** 展示用：统一成 `v` 前缀 */
 export function versionLabel(raw: string): string {
   const v = raw.trim().replace(/^[vV]/, '');

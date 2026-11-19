@@ -27,10 +27,6 @@ function startOfDay(ts: number) {
   return d.getTime();
 }
 
-export function todayISO() {
-  return dayKey(Date.now());
-}
-
 /** 分组标题：今天 / 昨天 / 前天 / 10月18日 周六 */
 export function dayLabel(ts: number) {
   const diff = Math.round((startOfDay(Date.now()) - startOfDay(ts)) / 86400000);
@@ -185,4 +181,3 @@ export function periodLabel(period: string | null): string {
   }
   return period;
 }
-

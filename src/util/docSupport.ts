@@ -62,10 +62,6 @@ export interface DocPlan {
   needsToken: boolean;
 }
 
-export function isLocalText(ext: string): boolean {
-  return LOCAL_TEXT.has(norm(ext));
-}
-
 function norm(ext: string): string {
   return ext.toLowerCase().replace(/^\./, '').trim();
 }

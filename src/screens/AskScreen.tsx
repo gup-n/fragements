@@ -54,7 +54,7 @@ import { loadAiConfig } from '../ai/config';
 import { AiError, type AiErrorDetail } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
 import { docProblem, type DraftMode } from '../util/knowledgeDoc';
-import { planDraftInput, routeAsk, showsDraftAsk, TASK_SEED } from '../util/askIntent';
+import { planDraftInput, routeAsk, showsDraftAsk, TASK_LABEL, TASK_SEED } from '../util/askIntent';
 import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
 import { DraftDocPage } from '../components/DraftDocPage';
@@ -1176,11 +1176,11 @@ export function AskScreen({
                     onPress={() => void startDraft('knowledge', { instruction: TASK_SEED.organize })}
                     disabled={draftBusy || busy}
                     accessibilityRole="button"
-                    accessibilityLabel="整理碎片"
+                    accessibilityLabel={TASK_LABEL.organize}
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
                     <Ionicons name="sparkles-outline" size={19} color={c.accentText} accessible={false} />
-                    <Text style={styles.hintTitle}>整理碎片</Text>
+                    <Text style={styles.hintTitle}>{TASK_LABEL.organize}</Text>
                     <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
 
@@ -1189,11 +1189,11 @@ export function AskScreen({
                     onPress={() => void startDraft('todos', { instruction: TASK_SEED.todos })}
                     disabled={draftBusy || busy}
                     accessibilityRole="button"
-                    accessibilityLabel="整理待办"
+                    accessibilityLabel={TASK_LABEL.todos}
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
                     <Ionicons name="checkbox-outline" size={19} color={c.accentText} accessible={false} />
-                    <Text style={styles.hintTitle}>整理待办</Text>
+                    <Text style={styles.hintTitle}>{TASK_LABEL.todos}</Text>
                     <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
 
@@ -1202,11 +1202,11 @@ export function AskScreen({
                     onPress={() => setSummaryOpen(true)}
                     disabled={draftBusy || busy}
                     accessibilityRole="button"
-                    accessibilityLabel="写月小结"
+                    accessibilityLabel={TASK_LABEL.digest}
                     accessibilityState={{ disabled: draftBusy || busy }}
                   >
                     <Ionicons name="calendar-outline" size={19} color={c.accentText} accessible={false} />
-                    <Text style={styles.hintTitle}>写月小结</Text>
+                    <Text style={styles.hintTitle}>{TASK_LABEL.digest}</Text>
                     <Ionicons name="chevron-forward" size={15} color={c.text3} accessible={false} />
                   </Pressable>
                 </View>

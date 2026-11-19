@@ -39,15 +39,6 @@ const enabled = Platform.OS === 'android';
 
 export type ReminderResult = { ok: true } | { ok: false; reason: string };
 
-/** 设置里那个开关的当前值。默认关 —— 提醒该是用户主动开的 */
-export async function isDigestReminderEnabled(): Promise<boolean> {
-  try {
-    return (await repo.getSetting(SETTING_KEY)) === '1';
-  } catch {
-    return false;
-  }
-}
-
 /**
  * 建通道。
  *

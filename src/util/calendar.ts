@@ -72,11 +72,6 @@ export function shiftMonth({ year, month }: MonthRef, delta: number): MonthRef {
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
-/** 某月第一天 00:00 的时间戳，用来判断「今天是不是在这个月」 */
-export function monthStartOf({ year, month }: MonthRef): number {
-  return new Date(year, month - 1, 1).getTime();
-}
-
 /**
  * `YYYY-MM-DD` → 当天 00:00 的本地时间戳。
  *

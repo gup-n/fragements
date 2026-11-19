@@ -63,8 +63,3 @@ export function qaScopeKey(scope: QaScope): string {
   // 排序：勾选顺序不同但集合相同应当算同一个范围，否则会白开一场新会话
   return `documents:${[...scope.documentIds].sort((a, b) => a - b).join(',')}`;
 }
-
-/** 两个范围是不是同一个集合。换集合必须开新会话，比较用这个 */
-export function sameQaScope(a: QaScope, b: QaScope): boolean {
-  return qaScopeKey(a) === qaScopeKey(b);
-}

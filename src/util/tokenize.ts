@@ -103,13 +103,6 @@ export function dedupeTags(labels: string[], max = 3): string[] {
   return out;
 }
 
-/** 比较两个标签是不是同一个意思（只做字面归一，不做语义） */
-export function sameTag(a: string, b: string): boolean {
-  const x = normalizeTag(a);
-  const y = normalizeTag(b);
-  return !!x && x === y;
-}
-
 /**
  * 切成检索 token。
  * - 中文：重叠二元组；单字保留（否则「盘」这种查询完全搜不到）

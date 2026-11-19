@@ -16,11 +16,6 @@ const TAG_CANDIDATES = 40;
 
 export type DocEditMode = 'polish' | 'condense';
 
-export const DOC_EDIT_LABEL: Record<DocEditMode, string> = {
-  polish: '优化',
-  condense: '精简',
-};
-
 function systemFor(mode: DocEditMode, withTags: boolean): string {
   const common = [
     '你在帮用户整理他自己写的一篇文档。',

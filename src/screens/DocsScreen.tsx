@@ -287,6 +287,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   function enterSelect() {
     setSelectMode(true);
     setSelected([]);
+    // 多选时行上的点击变成勾选，滑开的「删除」留在那儿会挡住勾选框
+    setOpenRow(null);
   }
 
   function exitSelect() {
@@ -395,6 +397,31 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
    * 混在库里会让人以为同一个标题有两份内容。
    */
   const source = hits ?? docs ?? [];
+  /**
+   * 一行的属性只写一份：库列表和归档列表共用同一个渲染，
+   * 加一个新回调只用改这一处（v0.31.1 之前两处各抄了一遍）。
+   *
+   * 打开 / 长按前先把滑开的那行收回去：否则从详情页回到列表，
+   * 上一次滑开的那一行还敞着，露出半截「删除」。
+   */
+  function renderRow(item: DocumentMeta) {
+    return (
+      <DocRow
+        doc={item}
+        selectMode={selectMode}
+        selected={selected.includes(item.id)}
+        swipeOpen={openRow === item.id}
+        onSwipe={(open) => setOpenRow(open ? item.id : null)}
+        onOpen={() => { Keyboard.dismiss(); setOpenRow(null); setOpenDocId(item.id); }}
+        onToggle={() => toggle(item.id)}
+        onMenu={() => { Keyboard.dismiss(); setOpenRow(null); setMenuFor(item); }}
+        onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
+        onLocal={() => prepareMany([item])}
+        onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
+      />
+    );
+  }
+
   const picked = filterDocsByTag(source, tagFilter);
   const libraryDocs = picked.filter((d) => d.stage !== 'archived');
   const archivedDocs = picked.filter((d) => d.stage === 'archived');
@@ -506,6 +533,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
       <FlatList
         style={styles.list}
         keyboardShouldPersistTaps="handled"
+        /* 一滚就把滑开的那行收回去：行会跟着列表滚走，敞着看不出来是在等用户点 */
+        onScrollBeginDrag={() => { if (openRow !== null) setOpenRow(null); }}
         data={libraryDocs}
         keyExtractor={(d) => String(d.id)}
         contentContainerStyle={[styles.listContent, selectMode && styles.listContentWithBar]}
@@ -576,19 +605,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
               <Text style={styles.archivedHint}>AI 重新整理之后旧的让位到这里，内容和标签都还在。</Text>
               {archivedDocs.map((item) => (
                 <View key={item.id} style={styles.archivedRow}>
-                  <DocRow
-                    doc={item}
-                    selectMode={selectMode}
-                    selected={selected.includes(item.id)}
-                    swipeOpen={openRow === item.id}
-                    onSwipe={(open) => setOpenRow(open ? item.id : null)}
-                    onOpen={() => { Keyboard.dismiss(); setOpenDocId(item.id); }}
-                    onToggle={() => toggle(item.id)}
-                    onMenu={() => { Keyboard.dismiss(); setMenuFor(item); }}
-                    onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
-                    onLocal={() => prepareMany([item])}
-                    onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
-                  />
+                  {renderRow(item)}
                 </View>
               ))}
             </View>
@@ -626,21 +643,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
             />
           )
         }
-        renderItem={({ item }) => (
-          <DocRow
-            doc={item}
-            selectMode={selectMode}
-            selected={selected.includes(item.id)}
-            swipeOpen={openRow === item.id}
-            onSwipe={(open) => setOpenRow(open ? item.id : null)}
-            onOpen={() => { Keyboard.dismiss(); setOpenDocId(item.id); }}
-            onToggle={() => toggle(item.id)}
-            onMenu={() => { Keyboard.dismiss(); setMenuFor(item); }}
-            onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
-            onLocal={() => prepareMany([item])}
-            onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
-          />
-        )}
+        renderItem={({ item }) => renderRow(item)}
       />
 
       {selectMode ? (

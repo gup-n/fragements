@@ -268,7 +268,9 @@ export function DocViewer({ docId, reloadKey, onClose, onChanged, onAsk }: Props
             fileDocument
               ? `${doc.ext ? doc.ext.toUpperCase() : '未知格式'} · ${sizeText(doc.size)}`
               : authored
-                ? `自己写的 · ${doc.bodyMd.length.toLocaleString()} 字`
+                // 字数只认 `doc.charCount`（repo 写入时算好的那一份）。这里再数一遍 bodyMd，
+                // 就是「两处各算一次」，迟早和列表里显示的对不上
+                ? `自己写的 · ${doc.charCount.toLocaleString()} 字`
                 : '整理生成的文档'
           }
           backIcon="close" backLabel="关闭文档" onBack={attemptClose}

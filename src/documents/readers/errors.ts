@@ -82,10 +82,6 @@ export function abortError(): Error {
   return e;
 }
 
-export function isAbortError(e: unknown): boolean {
-  return e instanceof Error && e.name === 'AbortError';
-}
-
 /** 把任意异常压成一句能上屏的话。不要把 `[object Object]` 漏给用户 */
 export function readerMessage(e: unknown, fallback = '读取失败'): string {
   if (e instanceof ReaderError) return e.message;

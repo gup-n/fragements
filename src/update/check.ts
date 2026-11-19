@@ -170,7 +170,3 @@ export async function setAutoCheck(on: boolean): Promise<void> {
 export async function setSkipVersion(version: string | null): Promise<void> {
   await repo.setSetting(K_SKIP, version ?? '');
 }
-
-export async function getSkipVersion(): Promise<string> {
-  return (await repo.getSetting(K_SKIP).catch(() => null)) ?? '';
-}
