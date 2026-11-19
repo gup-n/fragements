@@ -290,22 +290,22 @@ export function TimelineScreen({
   const keyboardHeight = useKeyboardHeight();
 
   /*
-   * 冷启动**不自动聚焦**（用户 2026-11-19 要求）。
+   * 通知栏「记一条」点进来才聚焦 —— 那是唯一一路「用户明确是为了打字」的进入方式。
    *
-   * 原来打开就弹键盘：进来只为翻看昨天记的东西，键盘先挡住半个屏幕，
-   * 还得先按一下返回才能看。想记的时候点一下输入框，成本只有一次点击；
-   * 不想记的时候却要多一次收键盘 —— 而且那一下很容易被当成「误触」。
-   *
-   * 通知栏点进来仍然聚焦（下面那个 effect）：那一路用户明确是为了记东西。
+   * 判断的是**这一版信号有没有变过**，不是「有没有值」：`focusSignal` 是个只增的计数器，
+   * 点过一次之后它就不为 0 了，用 `if (!focusSignal) return` 会在切回时间轴时
+   * 每挂载一次就弹一次键盘 —— 那正是这一版要去掉的行为。
+   * ref 初值给 0 而不是当前值：冷启动就是从这个通知点进来的（`watchQuickRecord`
+   * 在挂载后才补上冷启动那一次），初值等于当前值会把这一次吞掉。
    */
-
-  // 通知栏点进来：页面可能已经在这，重新把光标放回输入框
+  const seenSignal = useRef(0);
   useEffect(() => {
-    if (!focusSignal) return;
+    if (!focusSignal || focusSignal === seenSignal.current) return;
+    seenSignal.current = focusSignal;
     if (fullEdit) setFullEdit(false);
     const timer = setTimeout(() => inputRef.current?.focus(), 120);
     return () => clearTimeout(timer);
-  }, [focusSignal]);
+  }, [focusSignal, fullEdit]);
 
   // 长文记录是覆盖层而非 Modal，安卓返回键得自己处理，否则直接退出 App。
   // 顺序是「先关最上面那层」：确认弹层压在长文编辑之上。

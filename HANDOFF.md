@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.30.0 / versionCode 80 |
+| 版本 | v0.30.1 / versionCode 81 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.30.0 已发布（[CI 44429609570](https://github.com/gup-n/fragements/actions/runs/44429609570)，26,352,850 字节，SHA-256 `c91544b5…07b6`，`draft=false`；直连整包下载后本地算的 sha256，文件头 `PK`）。可回退：v0.29.0（26,352,726 字节，SHA-256 `29d3b4d3…e364`）、v0.28.0（26,344,390 字节，SHA-256 `e10a7044…517d`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,13 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.30.1：通知那条路留着，但不能「有信号就聚焦」
+
+v0.30.0 删掉冷启动聚焦之后，剩下的条件是 `if (!focusSignal) return` ——
+而 `focusSignal` 是只增计数器，点过一次通知之后就不为 0，于是**每次切回时间轴都弹键盘**。
+改成 `seenSignal` ref 记住处理过哪一版（初值 0，冷启动那一次才不会被吞）。
+`test:ui` 41 项（+1 条钉住这段）。
 
 ### v0.30.0：四条手感修正（不改数据结构）
 
@@ -410,7 +417,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
 | `npm run test:recycle` | **32 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
-| `npm run test:ui` | 40 项通过（真实控件/菜单/样式、间距 token、导航预算及回调保留） |
+| `npm run test:ui` | 41 项通过（真实控件/菜单/样式、间距 token、导航预算及回调保留） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.70 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
@@ -641,7 +648,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 850 | 89项：问页意图、草稿与输出兼容；抽屉的挂载条件/压暗层/读屏屏蔽 |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1878 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
-| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 685 | 40项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 699 | 40项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 159 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |

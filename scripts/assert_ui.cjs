@@ -676,6 +676,20 @@ test('日历按字数加深、碎片能展开、页头有字数', () => {
   assert.ok(!todo.includes('哪天做'), '旧说法要清干净');
 });
 
+test('首页冷启动不抢键盘，只有通知点进来才聚焦', () => {
+  const timeline = parseSource('src/screens/TimelineScreen.tsx').getText();
+  // 冷启动那次 focus 已经删了（用户 2026-11-19）。加回来会让「打开看一眼」变成「先收键盘」
+  assert.ok(!timeline.includes('autoFocusedOnce'), '冷启动自动聚焦的开关要一起删干净');
+  assert.ok(!/inputRef\.current\?\.focus\(\), 380\)/.test(timeline), '那个 380ms 后的聚焦不许回来');
+  /*
+   * 判断「信号变没变」，不是「有没有值」：focusSignal 是只增的计数器，
+   * 用 `if (!focusSignal) return` 会让切回时间轴时每挂载一次弹一次键盘。
+   */
+  assert.ok(timeline.includes('seenSignal'), '要记住上一次处理过的信号');
+  assert.ok(timeline.includes('focusSignal === seenSignal.current) return;'), '信号没变就不聚焦');
+  assert.ok(timeline.includes('const seenSignal = useRef(0)'), 'ref 初值必须是 0，冷启动那一次才不会被吞掉');
+});
+
 if (require.main === module) {
   suite.run().then(({ failed }) => { process.exitCode = failed ? 1 : 0; }).catch((error) => {
     console.error(error && error.stack ? error.stack : error);
