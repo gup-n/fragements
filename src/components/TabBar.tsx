@@ -16,7 +16,6 @@
  * 理由是「低频配置项不该和四个高频入口争宽度」；用户试过之后的意见是
  * 一致地把所有入口放平更省事 —— 那就放平。
  */
-import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

@@ -71,7 +71,12 @@ interface Props {
   /** 读图失败的原因（配图 id → 一句话） */
   imageFail: Record<string, string>;
   onReparseImage: (fragment: Fragment, imageId: number) => void;
-  /** 给这条补图。返回落库后的配图（id 用来在正文里插定位标记） */
+  /**
+   * 给这条补图。
+   *
+   * 返回落库后的配图（id 与路径）。加图**只往配图带里加**，正文一个字都不动，
+   * 所以调用方不用返回值去插定位标记 —— 返回值留给「加了几张」这类反馈。
+   */
   onAddImages: (
     fragmentId: number,
     uris: string[],
@@ -375,7 +380,7 @@ export function FragmentDetail({
          * 正文里的位置由保存时统一拼出来，用户不用、也管不了那些标记。
          */
         setToast(
-          `加了 ${res.assets.length} 张图` +
+          `加了 ${added.length} 张图` +
             // 不读字了，别再说「正在读」—— 那句话会一直停在那里不被兑现
             (editing ? '，保存后排在正文末尾' : '，整理或提问时会读图里的字'),
         );

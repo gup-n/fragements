@@ -8,7 +8,6 @@
  * 「已写入 N 篇」那一块是 Pressable + hitSlop 的坑：它在整行的 Pressable 里面，
  * 点它必须先被它接住，否则用户想看整理出的文档，结果把会话重新加载了一遍。
  */
-import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import type { AskSession } from '../types';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

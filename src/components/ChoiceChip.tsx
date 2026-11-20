@@ -1,5 +1,5 @@
 /** 可见选中图形 + 48dp 的选项控件，墨水模式不依赖底色区分。 */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

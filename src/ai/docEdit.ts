@@ -6,9 +6,15 @@
  * 用户点了才落库。「AI 只出建议」这条铁律在这一层是靠不 import repo 实现的。
  */
 import type { AiConfig, DocProposalPayload, Document } from '../types';
-import { AiError, requestChat, type ChatProgress } from './chat';
+import { AiError, parseJsonLoose, requestChat, type ChatProgress } from './chat';
+import { safeCutIndex } from '../util/text';
 
-/** 一次能读进去的正文上限。再长就只取开头 —— 并如实把「只读了前面这些」写进 note */
+/**
+ * 一次能读进去的正文上限。
+ *
+ * 只用于**打标签**（读开头足够判断主题）。改稿不能用它截断 ——
+ * 产出的是一版要顶替原文的完整正文，只喂前半篇等于把后半篇删掉。
+ */
 const DOC_CHARS_BUDGET = 12_000;
 
 /** 打标签时用到的候选标签名上限。列太多模型会开始乱挑 */
@@ -41,7 +47,7 @@ function systemFor(mode: DocEditMode, withTags: boolean): string {
 function clipBody(bodyMd: string): { text: string; clipped: boolean } {
   const text = bodyMd.trim();
   if (text.length <= DOC_CHARS_BUDGET) return { text, clipped: false };
-  return { text: text.slice(0, DOC_CHARS_BUDGET), clipped: true };
+  return { text: text.slice(0, safeCutIndex(text, DOC_CHARS_BUDGET)), clipped: true };
 }
 
 /**
@@ -49,6 +55,9 @@ function clipBody(bodyMd: string): { text: string; clipped: boolean } {
  *
  * `finishReason === 'length'` 时**不返回半篇**：一篇被截断的正文如果存成新文档，
  * 用户看到的是一篇「写到一半」的东西，而它和原文的差别没人分得清。
+ *
+ * 同理，**原文超长时不改**：只把前 12,000 字喂给模型，产出的却是要顶替全文的
+ * 新版 —— 后半篇会静默蒸发，而界面上它看起来是一篇完整的文档。
  */
 export async function suggestDocRewrite(options: {
   config: AiConfig;
@@ -64,11 +73,19 @@ export async function suggestDocRewrite(options: {
   if (!config.apiKey) throw new AiError('nokey', '还没有配置 API Key');
   const body = clipBody(doc.bodyMd ?? '');
   if (!body.text) throw new AiError('format', '这篇文档还没有正文，先准备好再让 AI 处理');
+  if (body.clipped) {
+    throw new AiError(
+      'format',
+      `这篇 ${doc.bodyMd.length.toLocaleString()} 字，超过 AI 一次能读完的 ${DOC_CHARS_BUDGET.toLocaleString()} 字。` +
+        '直接改会把后半篇弄丢，所以没有动它。先把它拆成两篇，或者用「精简」手动删掉一部分再试。',
+      { stage: '改稿' },
+    );
+  }
 
   const user = [
     withTags && knownTags.length ? `【已有标签】${knownTags.slice(0, TAG_CANDIDATES).join('、')}` : '',
     `【标题】${doc.name}`,
-    body.clipped ? `【正文】只贴了前 ${DOC_CHARS_BUDGET.toLocaleString()} 字（全文 ${doc.bodyMd.length.toLocaleString()} 字）` : '【正文】',
+    '【正文】',
     '',
     body.text,
   ].filter(Boolean).join('\n');
@@ -94,7 +111,9 @@ export async function suggestDocRewrite(options: {
   const raw = outcome.content;
   let parsed: Record<string, unknown> = {};
   try {
-    parsed = JSON.parse(raw.replace(/^```(?:json)?\s*([\s\S]*?)```$/i, '$1'));
+    // 与整理链路同一套解析：剥围栏、修非法转义、截断后仍能救回前半段
+    const value = parseJsonLoose(raw);
+    parsed = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   } catch {
     throw new AiError('format', '模型返回的不是 JSON，这一版没法用。再试一次。', { stage: '改稿', raw });
   }
@@ -102,7 +121,7 @@ export async function suggestDocRewrite(options: {
   const bodyMd = typeof parsed.bodyMd === 'string' ? parsed.bodyMd.trim() : '';
   if (!bodyMd) throw new AiError('format', '模型没有给出正文，再试一次', { stage: '改稿', raw });
 
-  const note = [typeof parsed.note === 'string' ? parsed.note.trim() : '', body.clipped ? '（只读了正文开头）' : '']
+  const note = [typeof parsed.note === 'string' ? parsed.note.trim() : '']
     .filter(Boolean)
     .join(' ');
 
@@ -169,7 +188,8 @@ export async function suggestDocTags(options: {
 
   let parsed: Record<string, unknown> = {};
   try {
-    parsed = JSON.parse(outcome.content.replace(/^```(?:json)?\s*([\s\S]*?)```$/i, '$1'));
+    const value = parseJsonLoose(outcome.content);
+    parsed = value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   } catch {
     throw new AiError('format', '模型返回的不是 JSON，这次没有拿到标签。再试一次。', {
       stage: '打标签',

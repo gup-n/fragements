@@ -9,7 +9,7 @@
  * - **只存标签**：只动 `doc_tag_links`；
  * - **放弃**：什么都不写，提案留一条 rejected 审计。
  */
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocProposal, Document } from '../types';

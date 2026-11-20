@@ -16,7 +16,7 @@
  * - 位置只用提取结果里的 locator，**绝不凭印象补页码**；
  * - 原件可能被删、被重新解析过，打开前要如实说明，但快照始终可读。
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { BackHandler, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { QaCitation } from '../types';

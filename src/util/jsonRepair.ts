@@ -36,18 +36,44 @@ export type JsonParseResult =
  *
  * 用括号配对扫出 JSON 本体，而不是 `lastIndexOf('}')` ——
  * 后者遇到「后面还跟了一段带花括号的说明」时会切错位置。
+ *
+ * 两个模型常犯的毛病决定了写法：
+ * 1. **顶层是数组**（`[{...},{...}]`）。只找 `{` 会把第一篇之后的全丢掉；
+ * 2. **正文里先出现一对花括号**（「按 {标题, 正文} 的格式输出：{…}」）。
+ *    取第一个 `{` 会切出那个演示用的假对象。
+ * 所以这里扫出**所有顶层片段**，优先挑能直接解析的，其次挑最长的那个。
  */
 export function extractJsonSpan(text: string): string {
   const s = text.replace(/^\uFEFF/, '').trim();
   const fenced = s.match(/```(?:json)?\s*([\s\S]*?)```/i);
   const body = (fenced ? fenced[1] : s).trim();
-  const start = body.indexOf('{');
-  if (start < 0) return body;
+  const spans = topLevelSpans(body);
+  if (!spans.length) return body;
 
-  let depth = 0;
+  for (const span of spans) {
+    const piece = body.slice(span.start, span.end);
+    try {
+      JSON.parse(piece);
+      return piece;
+    } catch {
+      /* 这个片段坏了，试下一个 */
+    }
+  }
+  // 全都没法直接解析（多半需要 repair）：取最长的那段，噪声片段不会这么长
+  let best = spans[0];
+  for (const span of spans) if (span.end - span.start > best.end - best.start) best = span;
+  return body.slice(best.start, best.end);
+}
+
+/** 扫出互不嵌套的顶层 `{…}` / `[…]` 片段。截断时最后一个片段开到字符串末尾 */
+function topLevelSpans(body: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  const closers: string[] = [];
+  let start = -1;
   let inStr = false;
   let esc = false;
-  for (let i = start; i < body.length; i += 1) {
+
+  for (let i = 0; i < body.length; i += 1) {
     const ch = body[i];
     if (inStr) {
       if (esc) esc = false;
@@ -55,15 +81,29 @@ export function extractJsonSpan(text: string): string {
       else if (ch === '"') inStr = false;
       continue;
     }
-    if (ch === '"') inStr = true;
-    else if (ch === '{') depth += 1;
-    else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0) return body.slice(start, i + 1);
+    if (ch === '"') {
+      inStr = true;
+    } else if (ch === '{' || ch === '[') {
+      if (!closers.length) start = i;
+      closers.push(ch === '{' ? '}' : ']');
+    } else if (ch === '}' || ch === ']') {
+      if (!closers.length) continue;
+      // 括号种类对不上：这一段的形状已经不可信，整段丢掉重新找
+      if (ch !== closers[closers.length - 1]) {
+        closers.length = 0;
+        start = -1;
+        continue;
+      }
+      closers.pop();
+      if (!closers.length && start >= 0) {
+        out.push({ start, end: i + 1 });
+        start = -1;
+      }
     }
   }
-  // 没配平：多半是输出被截断。原样返回，交给解析去报「哪一字没了」
-  return body.slice(start);
+  // 没配平：多半是输出被截断。开到末尾，交给解析去报「哪一字没了」
+  if (closers.length && start >= 0) out.push({ start, end: body.length });
+  return out;
 }
 
 const VALID_ESCAPES = '"\\/bfnrt';

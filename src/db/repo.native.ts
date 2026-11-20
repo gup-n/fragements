@@ -6,7 +6,6 @@ import type {
   AskSession,
   DocProposal,
   DocTag,
-  Document,
   DocumentChunk,
   DocumentContentInput,
   DocumentLocator,
@@ -24,9 +23,11 @@ import type {
   TrashRef,
 } from '../types';
 import { normalizeQaScope } from '../util/qaScope';
+import { countChars } from '../util/text';
 import { normalizeTagName } from '../util/docTags';
 import { parseProposalPayload, serializeProposalPayload } from '../util/proposal';
 import { planToggle } from '../util/todoTree';
+import { trashDetail, trashTitle } from '../util/trash';
 import { buildFtsQuery, dedupeTags, indexText, likeNeedle, tokenizeText } from '../util/tokenize';
 import { docImageNames, removeImageToken, resolvePendingTokens, stripImageTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
@@ -416,12 +417,25 @@ const MIGRATIONS: string[] = [
   `,
 ];
 
+/**
+ * 逐版迁移。
+ *
+ * 每一版（SQL + user_version）必须包在**同一个事务**里：迁移里有多条
+ * `ALTER TABLE ADD COLUMN`，而它们不可重入。原来两句分开执行，进程若在
+ * 两者之间被杀，版本号停在旧值、列却已加上，下次启动重跑就报
+ * `duplicate column name` —— 而 App 启动时把 init 的错误只 warn 掉，
+ * 于是应用照常打开、跑在一个半截的库上，且永远不会自愈。
+ *
+ * `PRAGMA user_version` 是事务内的写，失败时跟着一起回滚。
+ */
 function migrate(d: SQLite.SQLiteDatabase) {
   const row = d.getFirstSync<{ user_version: number }>('PRAGMA user_version');
   const current = row?.user_version ?? 0;
   for (let i = current; i < MIGRATIONS.length; i++) {
-    d.execSync(MIGRATIONS[i]);
-    d.execSync(`PRAGMA user_version = ${i + 1}`);
+    d.withTransactionSync(() => {
+      d.execSync(MIGRATIONS[i]);
+      d.execSync(`PRAGMA user_version = ${i + 1}`);
+    });
   }
 }
 
@@ -695,10 +709,6 @@ function toDocumentMeta(r: DocumentRow): DocumentMeta {
   };
 }
 
-function toDocument(r: DocumentRow): Document {
-  return { ...toDocumentMeta(r), bodyMd: r.body_md ?? '' };
-}
-
 /**
  * 给一批文档补上标签（v0.28）。
  *
@@ -892,21 +902,25 @@ function countOf(d: SQLite.SQLiteDatabase, sql: string, params: (string | number
   return d.getFirstSync<{ n: number }>(sql, params)?.n ?? 0;
 }
 
-/** Caller owns the transaction; both ordinary replacement and draft commit use this one writer. */
+/*
+ * 只写「还在库里的」文档：删除是软删，`content_revision` 不动，
+ * 所以一篇已进回收站的文档仍会通过版本号校验。云解析迟到的结果一旦写进去，
+ * 用户恢复它时看到的是一份「删除那一刻并不存在」的正文。
+ * 刚恢复的文档 `deleted_at` 已回到 NULL，不会误挡。
+ */
 function replaceDocumentContentIn(
   d: SQLite.SQLiteDatabase, id: number, content: DocumentContentInput, expectedRevision: number,
 ): boolean {
-  /* trash:ok 按 id 读版本号，写入前必须先看到这一行（含刚恢复的） */
   const cur = d.getFirstSync<{ content_revision: number }>(
-    'SELECT content_revision FROM documents WHERE id = ?', [id],
+    'SELECT content_revision FROM documents WHERE id = ? AND deleted_at IS NULL', [id],
   );
   if (!cur || (cur.content_revision ?? 0) !== expectedRevision) return false;
   const next = expectedRevision + 1;
   d.runSync(
     `UPDATE documents SET body_md = ?, char_count = ?, pages = ?, state = ?,
        content_revision = ?, indexed_revision = ?, chunk_count = ?, content_source = ?,
-       error = NULL, updated_at = ? WHERE id = ?`,
-    [content.bodyMd, content.bodyMd.length, content.pages, 'done', next, next,
+       error = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NULL`,
+    [content.bodyMd, countChars(content.bodyMd), content.pages, 'done', next, next,
       content.chunks.length, content.source, Date.now(), id],
   );
   const old = d.getAllSync<{ id: number }>('SELECT id FROM document_chunks WHERE document_id = ?', [id]);
@@ -1009,23 +1023,6 @@ function detachSessionsFromDocs(d: SQLite.SQLiteDatabase, documentIds: number[])
   for (const id of documentIds) {
     d.runSync('UPDATE ask_sessions SET document_id = NULL WHERE document_id = ?', [id]);
   }
-}
-
-/** 回收站里那一行标题：碎片取第一行，其余用原标题 */function trashTitle(kind: TrashRef['kind'], raw: string, extra: string): string {
-  if (kind === 'fragment') {
-    const first = raw.split('\n').map((line) => line.trim()).find((line) => !!line) ?? '';
-    const flat = first.replace(/\s+/g, ' ');
-    return flat ? (flat.length > 60 ? `${flat.slice(0, 60)}…` : flat) : '（无正文的碎片）';
-  }
-  const text = raw.trim();
-  if (text) return text;
-  return kind === 'document' ? '（未命名文档）' : '（未命名会话）';
-}
-
-function trashDetail(kind: TrashRef['kind'], num: number, turns: number): string {
-  if (kind === 'fragment') return `${num} 字`;
-  if (kind === 'document') return num > 0 ? `${num} 字` : '没有正文';
-  return turns > 0 ? `${turns} 轮对话` : '空会话';
 }
 
 function toDocTag(row: { id: number; name: string; state: string; created_at: number; n?: number }): DocTag {
@@ -1406,14 +1403,21 @@ export const repo: Repo = {
     const d = db();
     // 存显示形式（保留 NAS/AI 的大小写），按归一化键去重
     const clean = dedupeTags(labels);
-    // 已合并的碎片不能被「打标」这一步复活成 tagged
-    d.runSync(
-      `UPDATE fragments SET tags = ?, project = ?,
-         status = CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END
-       WHERE id = ?`,
-      [JSON.stringify(clean), project, id],
-    );
-    reindexFragment(d, id);
+    /*
+     * 改标签与重建索引必须同一事务：`reindexFragment` 是先 DELETE 后 INSERT，
+     * 中途失败会把这条碎片的索引整行删掉 —— 正文还在，但从此搜不到，
+     * 只能等下次启动按条数差发现再全量重建。
+     */
+    d.withTransactionSync(() => {
+      // 已合并的碎片不能被「打标」这一步复活成 tagged
+      d.runSync(
+        `UPDATE fragments SET tags = ?, project = ?,
+           status = CASE WHEN status = 'merged' THEN 'merged' ELSE 'tagged' END
+         WHERE id = ? AND deleted_at IS NULL`,
+        [JSON.stringify(clean), project, id],
+      );
+      reindexFragment(d, id);
+    });
   },
 
   async searchFragments(query, limit = 40) {
@@ -1497,35 +1501,45 @@ export const repo: Repo = {
   },
 
   async insertTodo(input) {
-    const res = db().runSync(
-      'INSERT INTO todos (text, due_at, done, source_fragment_id, created_at, parent_id) VALUES (?, ?, 0, ?, ?, ?)',
-      [input.text, input.dueAt, input.sourceFragmentId, Date.now(), input.parentId],
-    );
     /*
-     * 给一条**已完成**的父项加子项，等于这件事还没完 —— 父项必须退回未完成。
-     * 否则列表上会出现「父项打着勾、底下挂着一条没做的子项」，
-     * 而这条状态没有任何操作能让它自洽（勾子项会把它顶成完成，看起来像没反应）。
+     * INSERT 与「父项退回未完成」必须同一事务：分开写时中途失败会留下
+     * 「父项打着勾、底下挂着一条没做的子项」，而这条状态没有任何操作能让它自洽。
      */
-    if (input.parentId !== null) {
-      db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ? AND done = 1', [
-        input.parentId,
-      ]);
-    }
-    return Number(res.lastInsertRowId);
+    let id = 0;
+    db().withTransactionSync(() => {
+      const res = db().runSync(
+        'INSERT INTO todos (text, due_at, done, source_fragment_id, created_at, parent_id) VALUES (?, ?, 0, ?, ?, ?)',
+        [input.text, input.dueAt, input.sourceFragmentId, Date.now(), input.parentId],
+      );
+      id = Number(res.lastInsertRowId);
+      /*
+       * 给一条**已完成**的父项加子项，等于这件事还没完 —— 父项必须退回未完成。
+       * 否则列表上会出现「父项打着勾、底下挂着一条没做的子项」，
+       * 而这条状态没有任何操作能让它自洽（勾子项会把它顶成完成，看起来像没反应）。
+       */
+      if (input.parentId !== null) {
+        db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ? AND done = 1', [
+          input.parentId,
+        ]);
+      }
+    });
+    return id;
   },
 
   async updateTodo(id, patch) {
-    if (patch.text !== undefined) {
-      const text = patch.text.trim();
-      // 空文字不写库：想删就删，把内容改成空只会留下一条看不见的待办。
-      // 注意这里**不 return** —— 同一份 patch 里的日期修改还要生效。
-      if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, id]);
-    }
-    if (patch.dueAt !== undefined) {
-      // 清日期必须写 NULL 字面量，不能靠 ? 绑 JS null（见 AGENTS「SQL 里清空字段」）
-      if (patch.dueAt === null) db().runSync('UPDATE todos SET due_at = NULL WHERE id = ?', [id]);
-      else db().runSync('UPDATE todos SET due_at = ? WHERE id = ?', [patch.dueAt, id]);
-    }
+    db().withTransactionSync(() => {
+      if (patch.text !== undefined) {
+        const text = patch.text.trim();
+        // 空文字不写库：想删就删，把内容改成空只会留下一条看不见的待办。
+        // 注意这里**不 return** —— 同一份 patch 里的日期修改还要生效。
+        if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, id]);
+      }
+      if (patch.dueAt !== undefined) {
+        // 清日期必须写 NULL 字面量，不能靠 ? 绑 JS null（见 AGENTS「SQL 里清空字段」）
+        if (patch.dueAt === null) db().runSync('UPDATE todos SET due_at = NULL WHERE id = ?', [id]);
+        else db().runSync('UPDATE todos SET due_at = ? WHERE id = ?', [patch.dueAt, id]);
+      }
+    });
   },
 
   async listTodos() {
@@ -1548,39 +1562,48 @@ export const repo: Repo = {
     const plan = planToggle(rows.map(toTodo), id, done);
     if (!plan.length) return;
 
-    const now = Date.now();
-    for (const step of plan) {
-      if (step.done) {
-        // 已经是完成的不刷新时间：「最近完成」的排序不该被重复点击推后
-        db().runSync('UPDATE todos SET done = 1, done_at = COALESCE(done_at, ?) WHERE id = ?', [
-          now,
-          step.id,
-        ]);
-      } else {
-        db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [step.id]);
+    // 多条 UPDATE 必须同一个事务：中途失败会留下「父项完成、子项没完成」，
+    // 而那正是 planToggle 要防的自相矛盾态
+    db().withTransactionSync(() => {
+      const now = Date.now();
+      for (const step of plan) {
+        if (step.done) {
+          // 已经是完成的不刷新时间：「最近完成」的排序不该被重复点击推后
+          db().runSync('UPDATE todos SET done = 1, done_at = COALESCE(done_at, ?) WHERE id = ?', [
+            now,
+            step.id,
+          ]);
+        } else {
+          db().runSync('UPDATE todos SET done = 0, done_at = NULL WHERE id = ?', [step.id]);
+        }
       }
-    }
-    if (done) pruneDoneTodos(db());
+      if (done) pruneDoneTodos(db());
+    });
   },
 
   async deleteTodo(id) {
-    // 子项升为顶层而不是跟着删：「删掉这一条」不该连带删掉用户另外写的内容
-    db().runSync('UPDATE todos SET parent_id = NULL WHERE parent_id = ?', [id]);
-    db().runSync('DELETE FROM todos WHERE id = ?', [id]);
+    // 子项升为顶层而不是跟着删：「删掉这一条」不该连带删掉用户另外写的内容。
+    // 两句分开写的话，中间失败会让子项升了级、父项还在 —— 同一件事出现两次。
+    db().withTransactionSync(() => {
+      db().runSync('UPDATE todos SET parent_id = NULL WHERE parent_id = ?', [id]);
+      db().runSync('DELETE FROM todos WHERE id = ?', [id]);
+    });
   },
 
   async mergeTodos(keepId, dropIds, text) {
     const drops = dropIds.filter((id) => id !== keepId);
-    if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, keepId]);
-    if (!drops.length) return;
-    const marks = drops.map(() => '?').join(',');
-    // 被合并的父项如果挂着子项，子项跟到保留项下面 —— 不搬的话它们会变成
-    // parent_id 指向一条已隐藏条目的孤儿，界面上永远看不到，也勾不掉
-    db().runSync(`UPDATE todos SET parent_id = ? WHERE parent_id IN (${marks})`, [
-      keepId,
-      ...drops,
-    ]);
-    db().runSync(`UPDATE todos SET merged_into = ? WHERE id IN (${marks})`, [keepId, ...drops]);
+    db().withTransactionSync(() => {
+      if (text) db().runSync('UPDATE todos SET text = ? WHERE id = ?', [text, keepId]);
+      if (!drops.length) return;
+      const marks = drops.map(() => '?').join(',');
+      // 被合并的父项如果挂着子项，子项跟到保留项下面 —— 不搬的话它们会变成
+      // parent_id 指向一条已隐藏条目的孤儿，界面上永远看不到，也勾不掉
+      db().runSync(`UPDATE todos SET parent_id = ? WHERE parent_id IN (${marks})`, [
+        keepId,
+        ...drops,
+      ]);
+      db().runSync(`UPDATE todos SET merged_into = ? WHERE id IN (${marks})`, [keepId, ...drops]);
+    });
   },
 
   async listMergedTodos() {
@@ -1692,7 +1715,13 @@ export const repo: Repo = {
         params.push(input.fragmentId);
       }
       params.push(input.id);
-      db().runSync(`UPDATE ask_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
+      /*
+       * `changes === 0` 说明这一行已经进了回收站（软删不动 id）。
+       * 不能假装存成功：轮次会写进一条界面上看不到的会话，用户恢复它时
+       * 发现里面多出几轮自己没见过的对话。抛出去，让调用方知道这次没落库。
+       */
+      const res = db().runSync(`UPDATE ask_sessions SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`, params);
+      if (res.changes === 0) throw new Error('这场会话已被删除，这次回答没能保存');
       return input.id;
     }
 
@@ -1835,7 +1864,7 @@ export const repo: Repo = {
     }
     if (patch.bodyMd !== undefined) {
       sets.push('body_md = ?', 'char_count = ?');
-      params.push(patch.bodyMd, patch.bodyMd.length);
+      params.push(patch.bodyMd, countChars(patch.bodyMd));
     }
     if (patch.excerpt !== undefined) {
       sets.push('excerpt = ?');
@@ -1856,7 +1885,9 @@ export const repo: Repo = {
     if (!sets.length) return;
     sets.push('updated_at = ?');
     params.push(Date.now(), id);
-    db().runSync(`UPDATE documents SET ${sets.join(', ')} WHERE id = ?`, params);
+    // 回收站里的文档不再接受改名 / 改正文：一次迟到的 AI 提案写进去，
+    // 用户恢复它时看到的是一份「删掉之后才有的」内容
+    db().runSync(`UPDATE documents SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`, params);
   },
 
   async clearAskSessionDocuments(documentId) {
@@ -1919,7 +1950,7 @@ export const repo: Repo = {
       return {
         kind,
         id: row.id,
-        title: trashTitle(kind, row.title ?? '', extra),
+        title: trashTitle(kind, row.title ?? ''),
         detail: trashDetail(kind, row.num ?? 0, turns),
         deletedAt: row.deleted_at,
         files: kind === 'fragment' ? imageFiles.get(row.id) ?? [] : kind === 'document' && extra ? [extra] : [],
@@ -1955,8 +1986,18 @@ export const repo: Repo = {
             slice,
           );
           restored += res.changes;
-          // 软删时删掉了索引行，恢复要补回来，否则搜不到刚找回的内容
-          if (kind === 'fragment') for (const id of slice) reindexFragment(d, id);
+          /*
+           * 软删时删掉了索引行，恢复要补回来，否则搜不到刚找回的内容。
+           * 只补**真的恢复成功**的那几条：传进来的 id 里可能有本来就不在
+           * 回收站的（重复点击、界面与库不同步），给它们插索引会让
+           * `indexed > total`，每次启动都白重建一遍全量索引。
+           */
+          if (kind === 'fragment') {
+            const live = d.getAllSync<{ id: number }>(
+              `SELECT id FROM fragments WHERE id IN (${ph}) AND deleted_at IS NULL`, slice,
+            );
+            for (const row of live) reindexFragment(d, row.id);
+          }
         }
       }
     });

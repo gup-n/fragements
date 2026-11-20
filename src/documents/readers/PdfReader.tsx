@@ -10,7 +10,7 @@
  * - 查找与计数在页面内完成（跨页、字面匹配），RN 只显示「第 i / N 处」；
  * - 加密、损坏、没有文字层都由页面报错误码，这里翻译成用户能读的一句话。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { BusyIndicator as ActivityIndicator } from '../../components/BusyIndicator';
 import type { Document } from '../../types';

@@ -1,7 +1,7 @@
 /**
  * DeepSeek 请求层：流式 + 多段超时 + 错误映射。
  *
- * 整理、周期总结、知识库问答三个功能共用这一层 ——
+ * 整理、月总结、文档问答三个功能共用这一层 ——
  * 它们的差别只在 prompt 和结果收敛，传输方式完全一样。
  *
  * v0.2.4 起从 deepseek.ts 抽出来，避免那个文件无限变大。
@@ -11,6 +11,7 @@ import type { AiConfig, ReasoningEffort } from '../types';
 import { DEFAULT_AI_CONFIG } from '../types';
 import { NoStreamError, readChatStream, type FinishReason } from './stream';
 import { parseJsonLenient } from '../util/jsonRepair';
+import { cutPrefix } from '../util/text';
 
 export type AiErrorCode =
   | 'nokey'
@@ -58,7 +59,7 @@ const RAW_KEEP = 4_000;
 
 export function clipRaw(text: string): string {
   if (text.length <= RAW_KEEP) return text;
-  return `${text.slice(0, RAW_KEEP)}\n……（后面还有 ${text.length - RAW_KEEP} 字，已省略）`;
+  return `${cutPrefix(text, RAW_KEEP)}\n……（后面还有 ${text.length - RAW_KEEP} 字，已省略）`;
 }
 
 /**
@@ -168,7 +169,7 @@ export function describeFinish(reason: FinishReason | null, maxTokens: number): 
   }
 }
 
-/** 每次请求的可调项。三个调用方（整理 / 周期总结 / 知识库问答）只在这些上有差别 */
+/** 每次请求的可调项。三个调用方（整理 / 月总结 / 文档问答）只在这些上有差别 */
 export interface RequestOptions {
   /**
    * 输出上限。不传就用模型对应的默认值（DeepSeek V4 是 64K，第三方是 8K）。

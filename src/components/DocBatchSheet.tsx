@@ -10,7 +10,7 @@
  * 这样「生成失败」「用户跳过」「用户存了」三种情况走的是同一条路，
  * 不会出现某一种之后卡住不动。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocProposal, Document, ProposalKind } from '../types';

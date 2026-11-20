@@ -1141,7 +1141,6 @@ PNG 用 Node 自带 zlib 手写 chunk。
 |---|---|---|
 | `icon.png` | iOS / 旧版 Android，满幅底色 | 0.74 |
 | `android-icon-foreground.png` | 自适应图标前景，透明底 | 0.62（系统只保证中心 66% 可见） |
-| `android-icon-background.png` | 纯色兜底 | — |
 | `android-icon-monochrome.png` | Android 13+ 主题图标，取 alpha 染色 | 0.62 |
 | `favicon.png` | 网页标签页，128px | 0.82 |
 

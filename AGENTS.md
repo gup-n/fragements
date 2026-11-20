@@ -108,7 +108,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 ## 5. 存储、历史兼容与配图
 
 - [Repo接口](<src/db/types.ts>)、[Native实现](<src/db/repo.native.ts>)和[Web实现](<src/db/repo.web.ts>)必须同步。Web驱动服务编译/内存测试，不证明原生SQLite迁移、文件或事务故障已验。
-- **17段已发布迁移不改写，旧id/字段/原件路径不随清理删除。** 数据库结构为v17（v0.28 加软删、`stage`/`origin_id`、`doc_tags`/`doc_tag_links`/`doc_proposals`）；原生迁移事务和完整恢复点尚需专门故障验收，不能拿Git分支代替。
+- **17段已发布迁移不改写，旧id/字段/原件路径不随清理删除。** 数据库结构为v17（v0.28 加软删、`stage`/`origin_id`、`doc_tags`/`doc_tag_links`/`doc_proposals`）；v0.34 起每一版的 SQL 与版本号在同一个事务里，但仍缺一次「升级中途断电」的真机验收（现在最多验证到代码级事务边界）。
 - 保留旧 `tags`、`nature`、旧会话指针等兼容字段。标签不是实体，不建标签表或恢复管理UI；清理导入标签时 `cleanTag` 保留显示大小写，`normalizeTag` 只作比较键，统一去重逻辑。
 - v16已把单图列迁入 `fragment_images`；旧 `image_path` / `image_text` 列不删。每张图有独立id、路径、ordinal和文字状态，忙碌/失败集合的键是**配图id**。
 - `text === null` 表示未读，空串表示已读但无字；两者不能混。自动读图只在需要材料时发生，保存图片不触发模型。读图应串行、守预算，失败和剩余数量如实报告。
@@ -145,6 +145,16 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
   `npm run test:recycle` 逐条扫 SQL 来钉它：例外只有两类 —— `DELETE FROM`，
   或者语句前 400 字内有 `trash:ok` 并写清理由（针对「按 id 读一行」这类必须能看到已删行的内部动作，
   比如 `reindexFragment`）。加例外前先问自己「真的不能只读没删的吗」。
+- **写也要挡**（v0.34）。`UPDATE documents / fragments / ask_sessions` 同样要带
+  `deleted_at IS NULL`：迟到的云解析、AI 提案、保存会话都会写进已删的行，
+  恢复时看到一份「删除那一刻并不存在」的内容。`saveAskSession` 还要看影响行数，
+  0 行就抛错，不许返回一个假 id。那条扫描器只看 `SELECT`，写路径靠单独三条断言钉。
+- **一次业务动作里的多条写必须同事务**（v0.34）：待办的 insert/toggle/delete/merge、
+  改标签 + 重建索引、迁移的 SQL + `PRAGMA user_version`。分开写的失败态是
+  「父项打勾、子项没打勾」这类自相矛盾的数据，没有任何操作能修回来。
+- **一条迁移 = 一个事务**。迁移里有 `ALTER TABLE ADD COLUMN`，不可重入；
+  两句分开执行时中途被杀，版本号停在旧值、列却加上了，下次启动就报 `duplicate column name`，
+  而启动流程把 `init` 的错误只 `warn` 掉 —— 应用照常打开，跑在一个半截的库上。
 - **FTS 行在软删时就要删掉**，恢复时 `reindexFragment` 补回。它是投影不是数据：
   留着会让启动自检「索引条数 = 碎片条数」永远不等，每次启动白重建一遍索引。
 - **文档的 `stage` 只有 `library` / `archived`，没有 `draft`**。用户 2026-11-18 定的是

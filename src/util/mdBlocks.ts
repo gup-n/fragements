@@ -312,7 +312,7 @@ function buildTable(
     const line = lines[i];
     if (!line.trim() || !line.includes('|')) break;
     // 表格后面紧跟一个代码块/标题时，别把它当行
-    if (/^```/.test(line.trim()) || /^#{1,4}\s/.test(line.trim())) break;
+    if (/^```/.test(line.trim()) || /^#{1,6}\s/.test(line.trim())) break;
     if (isSeparator(line)) break;
     rows.push(pad(splitRow(line)).map(cell));
     i++;
@@ -404,7 +404,7 @@ export function parseBlocks(text: string, opts?: { literalCitations?: boolean })
       continue;
     }
 
-    const heading = line.match(/^#{1,4}\s+(.*)$/);
+    const heading = line.match(/^#{1,6}\s+(.*)$/);
     if (heading) {
       blocks.push({ kind: 'h', segs: parseInline(heading[1], opts) });
       continue;

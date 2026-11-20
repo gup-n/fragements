@@ -4,7 +4,6 @@
  * 默认收起 —— 确认结果才是主任务，思考过程是「想追问时再翻」的参考。
  * 整理页和周期总结面板都要用，所以样式在这里自成一套。
  */
-import React from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

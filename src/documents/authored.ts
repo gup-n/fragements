@@ -16,17 +16,19 @@ import { repo } from '../db/repo';
 import { contentFromText } from './readers/chunk';
 import { excerptOf } from '../util/knowledgeDoc';
 import { DEFAULT_DOC_TAG, normalizeTagName } from '../util/docTags';
+import { clampTitle } from '../util/text';
+import { LOCAL_READER_LIMITS } from './formats';
 
-/** 标题上限。比整理产出的 24 宽一点 —— 自己写的东西，标题常常是一句话 */
-export const AUTHORED_TITLE_MAX = 60;
-
-/** 正文长度上限，和阅读器读文本时同一个口径（超了明确报错，不静默截断） */
-export const AUTHORED_BODY_MAX = 200_000;
+/**
+ * 正文长度上限，**就取阅读器那一个数**。
+ *
+ * 原来这里是独立的 200,000：导入一篇 30 万字的 md 完全正常，打开编辑器
+ * 原样保存却报「超过上限」—— 同一个对象，能进来不能存回去。
+ */
+export const AUTHORED_BODY_MAX = LOCAL_READER_LIMITS.bodyChars;
 
 export function normalizeTitle(raw: string): string {
-  const text = String(raw ?? '').replace(/\s+/g, ' ').trim();
-  if (!text) return '未命名文档';
-  return text.length > AUTHORED_TITLE_MAX ? `${text.slice(0, AUTHORED_TITLE_MAX)}…` : text;
+  return clampTitle(raw) || '未命名文档';
 }
 
 /**

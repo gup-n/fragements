@@ -176,8 +176,8 @@ console.log('bbox', BOX, 'w', BOX_W, 'h', BOX_H);
 write('icon.png', render(1024, NAVY, PAPER, 0.72));
 // 自适应图标前景：透明底，图形收进中心安全区（系统只保证中心 66% 可见）
 write('android-icon-foreground.png', render(1024, null, PAPER, 0.62));
-// 自适应图标背景：纯色，系统按自己的形状裁
-write('android-icon-background.png', render(1024, NAVY, NAVY, 0.72));
+// 背景不生成图：app.json 用的是 adaptiveIcon.backgroundColor 纯色，
+// 配一张 backgroundImage 只会多一份没人读的文件（v0.34 删掉）
 // 主题图标（Android 13+）：系统只取 alpha，自己上色
 write('android-icon-monochrome.png', render(1024, null, [255, 255, 255], 0.62));
 // 网页标签页

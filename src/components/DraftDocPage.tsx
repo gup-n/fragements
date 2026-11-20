@@ -14,7 +14,7 @@
  * 仍然不弹 `Modal`（Android 红线）：这一页由 AskScreen 以绝对定位覆盖层渲染，
  * 返回键走 `attemptClose` 的层级判断。
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

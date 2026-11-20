@@ -1,5 +1,5 @@
 /** 聊天中的整理产出：所有篇可审阅，权限/数量/写入共用一个稳定 key 计划。 */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

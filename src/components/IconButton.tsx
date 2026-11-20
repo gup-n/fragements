@@ -3,7 +3,7 @@
  * 默认触控槽至少 48dp；列表行里的次要动作可以用 `compact`（36 槽 + hitSlop 补到 48），
  * 主导航可带短标签，不依赖颜色或长按才能知道用途。
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { ComponentProps } from 'react';
 import { Pressable, StyleSheet, Text, View, type AccessibilityState } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';

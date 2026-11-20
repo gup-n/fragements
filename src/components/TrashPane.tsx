@@ -13,7 +13,7 @@
  * - 彻底删除：两步确认，并且说清「图片和原件也会一起没」——
  *   它之后数据库里连一条记录都不剩，30 天的后悔期到此为止。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { TrashEntry, TrashKind } from '../types';

@@ -13,7 +13,7 @@ import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
  * 弹窗的职责是「要不要装」，不是「读一篇变更记录」；正文在 GitHub 上本来就有，
  * 在这里再排一遍只会把按钮挤到很下面。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   Linking,

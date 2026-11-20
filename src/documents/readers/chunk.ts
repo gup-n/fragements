@@ -19,6 +19,7 @@ import type {
   DocumentContentSource,
   DocumentLocator,
 } from '../../types';
+import { safeCutIndex } from '../../util/text';
 import { LOCAL_READER_LIMITS } from '../formats';
 import { bodyTooLong, ReaderError } from './errors';
 
@@ -27,20 +28,6 @@ export interface LinePiece {
   text: string;
   lineStart: number;
   lineEnd: number;
-}
-
-/**
- * 把一个字符位置从代理对中间挪开。
- *
- * 中文 / emoji 在 JS 里按 UTF-16 存，一个 emoji 占两个 code unit。
- * 硬切在中间时两个 half 会各变成一个 `�`，正文看着像乱码，
- * 而且原字符再也拼不回来。
- */
-function safeCut(s: string, at: number): number {
-  if (at <= 0 || at >= s.length) return at;
-  const high = s.charCodeAt(at - 1);
-  // 高代理后面紧跟低代理 = 正好切在一对中间，往前让一格
-  return high >= 0xd800 && high <= 0xdbff ? at - 1 : at;
 }
 
 /**
@@ -73,7 +60,7 @@ export function splitByLines(text: string, limit: number = LOCAL_READER_LIMITS.c
     if (raw.length > limit) {
       flush();
       for (let at = 0; at < raw.length; ) {
-        const end = Math.max(at + 1, safeCut(raw, Math.min(raw.length, at + limit)));
+        const end = Math.max(at + 1, safeCutIndex(raw, Math.min(raw.length, at + limit)));
         out.push({ text: raw.slice(at, end), lineStart: no, lineEnd: no });
         at = end;
       }

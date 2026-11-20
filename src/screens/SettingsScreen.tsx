@@ -1,5 +1,5 @@
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   BackHandler,
   Linking,
@@ -137,6 +137,13 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
     | 'restoring'
   >('idle');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+  /**
+   * AI 配置是否真的读出来了。
+   *
+   * 读失败时四个输入框是空的，而「保存」会拿这四个空值覆盖已存的 Key ——
+   * 一次读取失败就变成一次静默的配置丢失，所以这时禁止保存。
+   */
+  const [configLoaded, setConfigLoaded] = useState(false);
   /** 完整备份的反馈。和 Markdown 的提示分开：两件事的失败原因完全不同 */
   const [bkMsg, setBkMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   /** 通知栏常驻入口的开关状态。默认关：常驻通知该是用户主动开的 */
@@ -216,34 +223,57 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
     return () => { cancelled = true; };
   }, [pane, stats.total]);
 
+  /**
+   * 重新读一遍「库里有几条、索引健康度、回收站条数」。
+   *
+   * 三处要用：进设置页、导入之后、**从备份恢复之后**。恢复完不重读的话，
+   * 页面上的「当前 N 条会被覆盖」还是覆盖前那个数 —— 而它正是用户判断
+   * 要不要覆盖的唯一依据。
+   */
+  const refreshStats = useCallback(async () => {
+    try { setStats(await repo.stats()); } catch { /* 统计读不到不影响改设置 */ }
+    // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
+    try { setIndexState(await repo.searchIndexStats()); } catch { /* 已有「检查失败」态 */ }
+    try { setProbe(await repo.selfTestSearch(5)); } catch { /* 同上 */ }
+    try { setTrashCount(await repo.trashCount()); } catch { /* 同上 */ }
+  }, []);
+
   useEffect(() => {
     (async () => {
-      const cfg = await loadAiConfig();
-      setBaseUrl(cfg.baseUrl);
-      setModel(cfg.model);
-      setApiKey(cfg.apiKey);
-      setThinking(cfg.thinking);
-      setEffort(cfg.effort);
-      setAutoCheckOn(await getAutoCheck());
-      setDownloadBaseOn(await getDownloadBase());
-      setMineruTokenOn(await getMineruToken());
       /*
-       * 余额先查一次。查不到不提示：设置页一打开就飘一条红字说「余额查询失败」，
-       * 而用户只是来看看主题色的，那种体验比不显示更糟。
+       * 每一段各自兜底。原来这一串是裸 await：任意一环抛错（SecureStore 不可用、
+       * 库是半迁移状态、自检 SQL 失败）后面全部不执行，界面停在空 Key、0 条，
+       * 而用户此时点「保存」正好用空串把已经存好的 API Key 抹掉。
        */
-      if (cfg.apiKey) {
-        void fetchBalance(cfg).then(setBalance);
+      try {
+        const cfg = await loadAiConfig();
+        setBaseUrl(cfg.baseUrl);
+        setModel(cfg.model);
+        setApiKey(cfg.apiKey);
+        setThinking(cfg.thinking);
+        setEffort(cfg.effort);
+        setConfigLoaded(true);
+        /*
+         * 余额先查一次。查不到不提示：设置页一打开就飘一条红字说「余额查询失败」，
+         * 而用户只是来看看主题色的，那种体验比不显示更糟。
+         */
+        if (cfg.apiKey) void fetchBalance(cfg).then(setBalance);
+      } catch {
+        /* configLoaded 保持 false：这时禁止保存，免得把 Key 覆盖成空 */
+        setMsg({ kind: 'err', text: 'AI 配置没读出来，重启应用再试。这期间不要点保存' });
       }
-      setStats(await repo.stats());
-      // 先出条数（一次 COUNT，很快），自检要真跑几次搜索，后到不影响阅读
-      setIndexState(await repo.searchIndexStats());
-      setProbe(await repo.selfTestSearch(5));
-      setQuickOn(await isQuickRecordEnabled());
-      setQuickBlocked(await isQuickRecordBlocked());
-      const remind = await digestReminderState();
-      setRemindOn(remind.on);
-      setRemindBlocked(remind.blocked);
-      setRemindAt(remind.at);
+      try { setAutoCheckOn(await getAutoCheck()); } catch { /* 保持默认 */ }
+      try { setDownloadBaseOn(await getDownloadBase()); } catch { /* 同上 */ }
+      try { setMineruTokenOn(await getMineruToken()); } catch { /* 同上 */ }
+      await refreshStats();
+      try { setQuickOn(await isQuickRecordEnabled()); } catch { /* 保持默认 */ }
+      try { setQuickBlocked(await isQuickRecordBlocked()); } catch { /* 同上 */ }
+      try {
+        const remind = await digestReminderState();
+        setRemindOn(remind.on);
+        setRemindBlocked(remind.blocked);
+        setRemindAt(remind.at);
+      } catch { /* 同上 */ }
     })();
   }, []);
 
@@ -292,6 +322,10 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
   }
 
   async function handleSave() {
+    if (!configLoaded) {
+      setMsg({ kind: 'err', text: '设置没读出来，先别保存 —— 直接存会用空值覆盖已保存的 Key' });
+      return;
+    }
     setBusy('saving');
     setMsg(null);
     try {
@@ -489,6 +523,8 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
       const out = await repo.restoreBackup(restoreAsk.uri);
       setRestoreAsk(null);
       onChanged();
+      // 恢复完必须重读：页面上的条数、索引健康度、回收站计数都变了
+      await refreshStats();
       setBkMsg({
         kind: 'ok',
         text: `已从 ${name} 恢复：${out.counts.fragments} 条碎片 · ${out.counts.images} 张图 · ${

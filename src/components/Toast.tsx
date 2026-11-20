@@ -10,7 +10,6 @@
  *
  * `pointerEvents="none"` 是必须的：它浮在内容上方，拦截触摸会把下面的按钮变哑。
  */
-import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 

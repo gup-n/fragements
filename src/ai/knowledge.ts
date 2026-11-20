@@ -16,6 +16,7 @@
  */
 import type { AiConfig, Fragment, QaTurn } from '../types';
 import { fragmentText } from '../util/fragmentText';
+import { safeCutIndex } from '../util/text';
 import {
   AiError,
   clipRaw,
@@ -163,15 +164,41 @@ export function formatExistingTodos(list: TodoSnapshot[]): string {
  *
  * 只留前面会丢掉最近的结论，只留后面会丢掉起因 —— 两头都留才看得出一个月的走向。
  * 这一点和月小结的素材预算同一条口径（SPEC §6.3）。
+ *
+ * 切口要**落在条目边界**上：材料是按 `【1】【2】…` 一条条拼的，切在条目中间
+ * 会产出「【2】2026-11-03」后面接半句话，模型会把半句当成一条独立事实。
+ * 找不到空行时才退到任意位置，并且避开代理对（见 `safeCutIndex`）。
  */
 export function trimMaterial(text: string, limit = INPUT_LIMIT): { text: string; truncated: boolean } {
   if (text.length <= limit) return { text, truncated: false };
-  const head = Math.floor(limit * 0.7);
-  const tail = limit - head;
+  const headBudget = Math.floor(limit * 0.7);
+  const tailBudget = Math.max(1, limit - headBudget);
+  const headEnd = findBreak(text, headBudget, -1);
+  const tailStart = findBreak(text, text.length - tailBudget, 1);
+  // 省略的是两头之间**真正被丢掉**的那段，不是 `text.length - limit`
+  const omitted = Math.max(0, tailStart - headEnd);
   return {
-    text: `${text.slice(0, head)}\n\n……（中间省略 ${text.length - limit} 字）……\n\n${text.slice(-tail)}`,
+    text: `${text.slice(0, headEnd)}\n\n……（中间省略 ${omitted} 字）……\n\n${text.slice(tailStart)}`,
     truncated: true,
   };
+}
+
+/**
+ * 从 `at` 出发找一个换行位置，找不到就对齐到不会切断代理对的那一格。
+ * `dir = -1` 往前找（取头部），`dir = 1` 往后找（取尾部）。
+ */
+function findBreak(text: string, at: number, dir: -1 | 1): number {
+  const clamped = Math.max(0, Math.min(text.length, at));
+  const window = 400;
+  const from = dir === -1 ? Math.max(0, clamped - window) : clamped;
+  const to = dir === -1 ? clamped : Math.min(text.length, clamped + window);
+  const slice = text.slice(from, to);
+  const hit = dir === -1 ? slice.lastIndexOf('\n\n') : slice.indexOf('\n\n');
+  if (hit >= 0) return from + hit;
+  // 退到行边界；再找不到就只保证不切在代理对中间
+  const lineHit = dir === -1 ? slice.lastIndexOf('\n') : slice.indexOf('\n');
+  if (lineHit >= 0) return from + lineHit;
+  return safeCutIndex(text, clamped);
 }
 
 function materialOf(source: KnowledgeSource): string {

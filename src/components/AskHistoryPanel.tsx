@@ -15,7 +15,6 @@
  * 3. **`sheetVisible` 时对读屏隐藏**。会话操作簿叠在抽屉之上，
  *    两边都能被读到的话，TalkBack 会把同一件事念两遍。
  */
-import React from 'react';
 import { Animated, ScrollView, StyleSheet, Text, View, type GestureResponderHandlers } from 'react-native';
 import type { AskSession } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

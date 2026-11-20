@@ -38,6 +38,31 @@ export function isTrashExpired(deletedAt: number, now: number): boolean {
   return deletedAt < purgeCutoff(now);
 }
 
+/**
+ * 回收站那一行的标题。
+ *
+ * 碎片取其**第一行非空内容**（正文第一行通常就是这条的要点），文档与会话用原标题。
+ * 太长截断 —— 一行放不下会换行，把「删除时间」挤出去。
+ * native 与 web 各写一份时，一边压空白一边不压，同一条在两个端上显示不同。
+ */
+export function trashTitle(kind: TrashKind, raw: string): string {
+  if (kind === 'fragment') {
+    const first = String(raw ?? '').split('\n').map((line) => line.trim()).find(Boolean) ?? '';
+    const flat = first.replace(/\s+/g, ' ');
+    return flat ? (flat.length > 60 ? `${flat.slice(0, 60)}…` : flat) : '（无正文的碎片）';
+  }
+  const text = String(raw ?? '').trim();
+  if (text) return text;
+  return kind === 'document' ? '（未命名文档）' : '（未命名会话）';
+}
+
+/** 回收站那一行的副标题：碎片与文档报字数，会话报轮数 */
+export function trashDetail(kind: TrashKind, chars: number, turns: number): string {
+  if (kind === 'fragment') return `${chars} 字`;
+  if (kind === 'document') return chars > 0 ? `${chars} 字` : '没有正文';
+  return turns > 0 ? `${turns} 轮对话` : '空会话';
+}
+
 /** 一行字：「还有 12 天」/「今天到期」。到期但还没被清掉的也说「今天到期」 */
 export function trashLeftText(deletedAt: number, now: number): string {
   const days = trashDaysLeft(deletedAt, now);

@@ -1,5 +1,5 @@
 /** 阅读器查找：确定性字面匹配，99+ 明示上限，不把索引中说成零命中。 */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../../theme';

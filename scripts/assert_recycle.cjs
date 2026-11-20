@@ -527,6 +527,51 @@ test('删除的文案不许说「无法恢复」', () => {
   }
 });
 
+test('写回收站里的行也要被挡住，不只是读', () => {
+  /*
+   * 上面那条扫描只看 SELECT，而「软删之后又被写进去」全是 UPDATE：
+   * 云解析迟到的结果、AI 提案、迟到的会话保存。它们不报错、界面也不显示，
+   * 等用户恢复时才看到一份删除那一刻并不存在的内容。
+   */
+  const text = read('src/db/repo.native.ts');
+  const check = (fn, needle) => {
+    const at = text.indexOf(fn);
+    assert.ok(at > 0, `找不到 ${fn}`);
+    const end = text.indexOf('\n  async ', at + 10);
+    const body = text.slice(at, end > 0 ? end : undefined);
+    assert.ok(body.includes(needle), `${fn} 没排除回收站（缺 ${needle}）`);
+  };
+  check('async updateDocument(', 'deleted_at IS NULL');
+  check('async applyTags(', 'deleted_at IS NULL');
+  check('async saveAskSession(', 'deleted_at IS NULL');
+  // 正文写入的真正落点（repo 方法只是包了一层事务）
+  check('function replaceDocumentContentIn(', 'deleted_at IS NULL');
+});
+
+test('每一条迁移与它的版本号在同一个事务里', () => {
+  /*
+   * 迁移里有 `ALTER TABLE ADD COLUMN`，不可重入。两句分开执行时，
+   * 进程若在中间被杀，下次启动重跑就报 duplicate column —— 而启动流程
+   * 把 init 的错误只 warn 掉，应用会带着半截的库一直跑下去。
+   */
+  const text = read('src/db/repo.native.ts');
+  const at = text.indexOf('function migrate(');
+  assert.ok(at > 0, '找不到 migrate');
+  const body = text.slice(at, text.indexOf('\n}', at));
+  const tx = body.indexOf('withTransactionSync(');
+  assert.ok(tx > 0, '迁移要包事务');
+  assert.ok(tx < body.indexOf('execSync(MIGRATIONS[i])'), '事务要开在第一条语句之前');
+  assert.ok(body.lastIndexOf('PRAGMA user_version') > tx, '版本号要在同一个事务里推进');
+});
+
+test('恢复只能给真正恢复成功的那几条重建索引', () => {
+  const text = read('src/db/repo.native.ts');
+  const at = text.indexOf('async restoreTrash(');
+  const body = text.slice(at, text.indexOf('\n  async ', at + 10));
+  assert.ok(/SELECT id FROM fragments WHERE id IN \(\$\{ph\}\) AND deleted_at IS NULL/.test(body),
+    '按「恢复成功的 id」重查一遍再建索引，否则会给还在回收站的行插索引');
+});
+
 if (require.main === module) {
   suite.run().then(({ failed }) => {
     process.exitCode = failed ? 1 : 0;

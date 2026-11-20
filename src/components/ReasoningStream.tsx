@@ -3,9 +3,9 @@ import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
  * 流式生成时的实时面板：转圈 + 已用秒数 + 思维链滚动区 + 字数统计。
  *
  * 和 OrganizeScreen 里那个同名面板是同一套观感，但这里自带样式、
- * 不依赖任何页面的 StyleSheet —— 周期总结和知识库问答都要用它。
+ * 不依赖任何页面的 StyleSheet —— 月总结和问答都要用它。
  */
-import React, { useRef } from 'react';
+import { useRef } from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { ScrollViewInstance } from 'react-native';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

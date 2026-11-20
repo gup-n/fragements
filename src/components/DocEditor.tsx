@@ -7,7 +7,7 @@
  * 保存后**直接入库**（用户 2026-11-18 定的「自动入库」）。没有「草稿区」：
  * 草稿是新建文档默认挂的标签，不是另一块存放处。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   KeyboardAvoidingView,
@@ -27,7 +27,8 @@ import { WEB_INPUT_RESET } from '../util/platformStyle';
 import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { repo } from '../db/repo';
-import { AUTHORED_TITLE_MAX, createAuthoredDoc, saveDocBody, renameDoc } from '../documents/authored';
+import { createAuthoredDoc, saveDocBody, renameDoc } from '../documents/authored';
+import { DOC_TITLE_MAX } from '../util/text';
 import { DEFAULT_DOC_TAG, normalizeTagName } from '../util/docTags';
 import { docImageToken } from '../util/inlineImages';
 import { saveFragmentImage } from '../db/fragmentImages';
@@ -194,9 +195,13 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
           tagNames: tags.map((t) => t.name).filter((n) => n !== DEFAULT_DOC_TAG),
         });
       } else {
-        // 先标题后正文：正文写入会推进版本号，标题改的是另一列，互不影响
-        await renameDoc(id, title);
+        /*
+         * 先正文后标题。正文会推进版本号并可能因「被别处改过」失败；
+         * 反过来先改标题的话，正文一失败，用户关掉编辑器会看到
+         * 文档换了名字、正文却没保存 —— 而且没有任何提示。
+         */
         await saveDocBody(id, body);
+        await renameDoc(id, title);
         await repo.setDocumentTags(id, tags.map((t) => t.id));
       }
       if (!alive.current) return;
@@ -256,7 +261,7 @@ export function DocEditor({ docId, initialTitle, onClose, onSaved }: Props) {
               placeholder="标题"
               placeholderTextColor={c.text3}
               style={styles.titleInput}
-              maxLength={AUTHORED_TITLE_MAX}
+              maxLength={DOC_TITLE_MAX}
               accessibilityLabel="文档标题"
               selectionColor={c.selection}
             />

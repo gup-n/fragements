@@ -7,7 +7,7 @@
  * 全屏覆盖层而不是 Modal：安卓上 Modal 会把返回键接管成一套自己的手势，
  * 而且键盘弹起时高度计算是另一套。项目红线见 AGENTS.md。
  */
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Todo } from '../types';
 import { repo } from '../db/repo';

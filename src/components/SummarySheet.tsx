@@ -18,7 +18,7 @@ import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
  *
  * 覆盖层而非 Modal，安卓返回键自己接 —— 项目红线，见 AGENTS.md。
  */
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
   Pressable,

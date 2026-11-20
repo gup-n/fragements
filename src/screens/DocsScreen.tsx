@@ -12,7 +12,7 @@
  * 各起一个任务、同一个文件传到服务端两遍；页面卸载后进度回调指向死组件，
  * 列表永远停在「解析中」。这些都不是靠加防抖能修的，得换结构。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   BackHandler,
   FlatList,
@@ -233,7 +233,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, docs, docVersion]);
+  }, [query, docVersion]);
 
   /*
    * 任务状态变了就重新读一次列表（节流 400ms）。
@@ -368,6 +368,8 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     const ids = new Set(list.map((d) => d.id));
     if (openDocId !== null && ids.has(openDocId)) setOpenDocId(null);
     setSelected((prev) => prev.filter((id) => !ids.has(id)));
+    // 搜索结果也要就地摘掉：否则那条还在屏幕上停一瞬，点了是空阅读器
+    setHits((prev) => (prev ? prev.filter((d) => !ids.has(d.id)) : prev));
     showToast(
       done === list.length
         ? list.length === 1
@@ -386,8 +388,16 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     await deleteDocs([target]);
   }
 
-  const selectedCount = selected.length;
-  const covered =
+  /*
+   * 搜索词或标签一变，可见集合就变了。选中项**不跟着变**的话，批量删除会连
+   * 屏幕上看不见的一起删掉 —— 用户勾了 5 篇、再搜一次只剩 2 篇，点「删除」
+   * 却删了 5 篇。破坏性动作的作用范围必须和屏幕上看到的一致。
+   */
+  useEffect(() => {
+    setSelected((prev) => (prev.length ? [] : prev));
+  }, [query, tagFilter]);
+
+  const selectedCount = selected.length;  const covered =
     openDocId !== null || !!pendingDelete || !!cloudFor || !!blocked ||
     !!editorFor || !!batchFor || tagPick || confirmMany || !!menuFor;
 
@@ -634,6 +644,13 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
               icon="pricetag-outline"
               title="这个标签下还没有文档"
               body="在文档详情里可以给任何一篇加标签"
+            />
+          ) : archivedDocs.length ? (
+            /* 只剩归档时别摆「先存一份文件」：下面正列着那几篇，自相矛盾 */
+            <EmptyState
+              icon="archive-outline"
+              title="进行中的文档都清空了"
+              body={`还有 ${archivedDocs.length} 篇归档的在下面，内容和标签都还在`}
             />
           ) : (
             <EmptyState

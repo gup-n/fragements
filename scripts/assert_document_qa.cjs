@@ -56,6 +56,7 @@ build();
 
 const { normalizeQaScope } = require(path.join(OUT, 'util/qaScope.js'));
 const { citedKeys, collectSources } = require(path.join(OUT, 'util/qaNote.js'));
+const textUtil = require(path.join(OUT, 'util/text.js'));
 const {
   DOC_LIMITS,
   buildDocumentCitations,
@@ -469,10 +470,34 @@ async function main() {
     for (const c of plan.coverage) assert.ok(c.usedChars <= Math.ceil(budget * 0.6) + DOC_LIMITS.maxChunkChars);
   });
 
-  console.log(`\n${n} 项全部通过`);
-}
+  /* ---- 9. 字数与截断的口径（一处实现，两端一致） ---- */
 
-main()
+  await ok('字数按码点算：emoji 算 1 个，与 SQLite 的 LENGTH() 同口径', async () => {
+    assert.strictEqual(textUtil.countChars('abc'), 3);
+    assert.strictEqual(textUtil.countChars('碎片🖨️'), 4);
+    // UTF-16 的 length 会把 emoji 算成 2，两端就会差一半
+    assert.notStrictEqual('🖨️'.length, textUtil.countChars('🖨️'));
+  });
+
+  await ok('标题截断的省略号算在上限内', async () => {
+    const long = '一'.repeat(80);
+    const out = textUtil.clampTitle(long, 60);
+    assert.strictEqual(out.length, 60);
+    assert.ok(out.endsWith('…'));
+    assert.strictEqual(textUtil.clampTitle('  带\n换行  ', 60), '带 换行', '换行压成空格');
+    assert.strictEqual(textUtil.clampTitle('   ', 60), '', '全空白就是空');
+  });
+
+  await ok('截断不切在代理对中间（不会切出半个 emoji）', async () => {
+    const s = 'ab🖨️cd';
+    // 位置 3 正好落在代理对中间
+    assert.strictEqual(textUtil.safeCutIndex(s, 3), 2);
+    const cut = textUtil.clip(`12345${'🖨️'}`, 7);
+    assert.ok(!/[\uD800-\uDBFF]$/.test(cut.replace('…', '')), '不许留下孤立的高代理');
+  });
+
+  console.log(`\n${n} 项全部通过`);
+}main()
   .then(() => {
     fs.rmSync(OUT, { recursive: true, force: true });
   })

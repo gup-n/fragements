@@ -1,5 +1,5 @@
 import { BusyIndicator as ActivityIndicator } from './BusyIndicator';
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

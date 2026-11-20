@@ -18,7 +18,7 @@ import { BusyIndicator as ActivityIndicator } from '../components/BusyIndicator'
  * （`onLoadDay`）。首页的大库分页就是被这一条撑开的：以前这三件事都靠
  * 上层那一个全量数组，数组一截断，日历和缺口就跟着错。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Fragment, Note, Todo } from '../types';
@@ -29,7 +29,6 @@ import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle, type Mont
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type DayCount, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
 import { withAlpha } from '../util/color';
-import { shortPreview } from '../util/text';
 import { NoteBody } from '../components/NoteBody';
 import { NoteViewer } from '../components/NoteViewer';
 import { SummarySheet } from '../components/SummarySheet';
@@ -146,8 +145,13 @@ export function ReviewScreen({
   const [merged, setMerged] = useState<Todo[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
-  /** 阅读器停在第几篇 */
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  /**
+   * 阅读器停在哪一篇，**按 id 记**而不是下标：
+   * 打开时用 `indexOf` 算下标，中途来一次 reload（保存小结、接分享）顺序一变，
+   * 下标还指着原位，人却已经被换到另一篇上了 —— 内容不对，还看不出错。
+   */
+  const [viewerNoteId, setViewerNoteId] = useState<number | null>(null);
+  const viewerIndex = viewerNoteId === null ? null : notes.findIndex((n) => n.id === viewerNoteId);
   /**
    * 月度总结面板要预选的月份。`undefined` = 没开；
    * 空串 = 开了但没有缺口（面板自己退到最近一个月）。
@@ -171,12 +175,12 @@ export function ReviewScreen({
   }, [reload]);
 
   /*
-   * 阅读器开着的时候如果数据变了（保存了新小结、删了旧的），下标可能越过新长度。
-   * 不处理的话 NoteViewer 拿不到 note 会直接不渲染，用户看到一片空白且关不掉。
+   * 阅读器开着的时候这篇被删掉了：得关掉，否则 NoteViewer 拿不到 note 会返回 null，
+   * 用户看到一片空白且关不掉。
    */
   useEffect(() => {
-    if (viewerIndex !== null && viewerIndex >= notes.length) setViewerIndex(null);
-  }, [viewerIndex, notes.length]);
+    if (viewerNoteId !== null && !notes.some((n) => n.id === viewerNoteId)) setViewerNoteId(null);
+  }, [viewerNoteId, notes]);
 
   // v0.15 只剩月总结，分组通常只有一组；留着 groupNotes 是为了兼容
   // 库里可能残留的「主题总结」，那类旧数据也要照常读得到
@@ -205,7 +209,7 @@ export function ReviewScreen({
   );
 
   return (
-    <View style={styles.root}><View style={styles.normalContent} importantForAccessibility={viewerIndex !== null || sheetOpen || editor !== null ? "no-hide-descendants" : "auto"}>
+    <View style={styles.root}><View style={styles.normalContent} importantForAccessibility={viewerNoteId !== null || sheetOpen || editor !== null ? "no-hide-descendants" : "auto"}>
       <ScreenHeader
         title="回顾"
         subtitle={
@@ -253,9 +257,17 @@ export function ReviewScreen({
           days={days}
           onLoadDay={onLoadDay}
           onToggle={async (todo) => {
-            await repo.toggleTodo(todo.id, !todo.done);
-            await reload();
-            await onChanged?.();
+            /*
+             * 勾选失败必须说话：复选框会自己弹回原样（props 没变），
+             * 用户看到的只是「点了没反应」，于是反复点。
+             */
+            try {
+              await repo.toggleTodo(todo.id, !todo.done);
+              await reload();
+              await onChanged?.();
+            } catch (error) {
+              setLoadError(error instanceof Error ? `这一下没保存：${error.message}` : '这一下没保存成功，再点一次');
+            }
           }}
           onOpenEditor={(todo) => setEditor({ todo, parentId: null })}
         />
@@ -302,7 +314,7 @@ export function ReviewScreen({
                 {group.notes.map((note) => (
                   <Pressable
                     key={note.id}
-                    onPress={() => setViewerIndex(notes.indexOf(note))}
+                    onPress={() => setViewerNoteId(note.id)}
                     style={({ pressed }) => [[styles.noteCard, pressed && { opacity: 0.7 }], styles.touchTarget]}
                   >
                     <Text style={styles.noteTitle}>
@@ -328,11 +340,11 @@ export function ReviewScreen({
       )}
 
       </View>
-      {viewerIndex !== null ? (
+      {viewerNoteId !== null ? (
         <NoteViewer
           notes={notes}
-          initialIndex={viewerIndex}
-          onClose={() => setViewerIndex(null)}
+          initialIndex={Math.max(0, viewerIndex ?? 0)}
+          onClose={() => setViewerNoteId(null)}
         />
       ) : null}
 

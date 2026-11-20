@@ -127,7 +127,7 @@ interface Props {
   /** 已完成待办对应的碎片 id，用来在时间轴上打「已完成」标记 */
   doneIds: Set<number>;
   /**
-   * 输入框里的草稿。**由上层持有** —— 这个组件在切到知识库/设置/回顾时会被卸载，
+   * 输入框里的草稿。**由上层持有** —— 这个组件在切到文档/问/回顾/设置时会被卸载，
    * 草稿放在组件里就等于「打个半句去翻张卡，回来全没了」。
    */
   draft: string;
@@ -265,10 +265,13 @@ export function TimelineScreen({
    */
   const [filter, setFilter] = useState<{ kind: 'project'; value: string } | null>(null);
   /**
-   * 折叠过的日期。null 表示「还没手动动过」—— 这时用默认规则（只展开今天）。
-   * 不直接把默认集合塞进 state，是因为「今天」会随日期变，写死一次就永远停在旧日期上了。
+   * 每一级「这一天是开是关」的显式选择。
+   *
+   * 不存「当前整份折叠集合」：那样一存，之后加载进来的更早日期都不在集合里，
+   * 会被当成展开 —— 用户点过一次折叠，再「加载更早」就铺满一屏。
+   * 只记用户真正动过的那几天，没动过的继续按默认（只有今天展开）。
    */
-  const [collapsedDays, setCollapsedDays] = useState<Set<string> | null>(null);
+  const [dayOpen, setDayOpen] = useState<Record<string, boolean>>({});
   /**
    * 展开的「月里面的某一天」。空集合 = 全部收起。
    *
@@ -366,7 +369,7 @@ export function TimelineScreen({
    * 那是这个版本最容易犯、也最难被自己发现的错。
    * FTS 分不出 1 个字或 emoji，所以本地那一路留着，两路按 id 合并。
    */
-  const [dbHits, setDbHits] = useState<Fragment[] | null>(null);
+  const [dbHits, setDbHits] = useState<{ q: string; list: Fragment[] } | null>(null);
   useEffect(() => {
     const q = query.trim();
     if (!q) {
@@ -378,7 +381,12 @@ export function TimelineScreen({
     const timer = setTimeout(() => {
       repo
         .searchFragments(q, 200)
-        .then((list) => { if (alive) setDbHits(list); })
+        /*
+         * 结果连同**它对应的那个词**一起存。只存数组的话，关键词从「a」改成
+         * 「ab」的这段空窗里，界面会把上一批结果当成新词的命中并进列表 ——
+         * 出现「找到 37 条」，逐条看却一条都对不上。
+         */
+        .then((list) => { if (alive) setDbHits({ q, list }); })
         // 检索失败就只说本地命中的那些，别把「库搜不了」说成「搜不到」
         .catch(() => { if (alive) setDbHits(null); });
     }, 150);
@@ -390,7 +398,10 @@ export function TimelineScreen({
     const q = query.trim().toLowerCase();
     if (!q) return base;
     const local = base.filter((f) => fragmentSearchText(f).toLowerCase().includes(q));
-    const remote = (dbHits ?? []).filter((f) => !filter || f.project === filter.value);
+    const remote =
+      dbHits && dbHits.q.toLowerCase() === q
+        ? dbHits.list.filter((f) => !filter || f.project === filter.value)
+        : [];
     return mergeWindowHits(local, remote);
   }, [fragments, query, filter, dbHits]);
 
@@ -498,9 +509,13 @@ export function TimelineScreen({
    */
   const collapsedKeys = useMemo(() => {
     if (narrowed) return new Set<string>();
-    if (collapsedDays) return collapsedDays;
-    return new Set(sections.filter((s) => s.key !== todayKey).map((s) => s.key));
-  }, [sections, collapsedDays, narrowed, todayKey]);
+    const out = new Set<string>();
+    for (const sec of sections) {
+      const open = dayOpen[sec.key] ?? sec.key === todayKey;
+      if (!open) out.add(sec.key);
+    }
+    return out;
+  }, [sections, dayOpen, narrowed, todayKey]);
 
   const displaySections = useMemo<DisplaySection[]>(() => {
     const pickPreview = (sec: Section): string => {
@@ -730,12 +745,8 @@ export function TimelineScreen({
       }
       setComposerNotice(notice ? { kind: 'ok', text: notice } : null);
       showToast(notice || '已记录');
-      setCollapsedDays((previous) => {
-        if (!previous || !previous.has(todayKey)) return previous;
-        const next = new Set(previous);
-        next.delete(todayKey);
-        return next;
-      });
+      // 刚记下的东西必须看得见：今天要是被收起了，这里展开它
+      setDayOpen((prev) => (prev[todayKey] === false ? { ...prev, [todayKey]: true } : prev));
       if (fullEdit) setFullEdit(false);
       inputRef.current?.focus();
       scrollToTopSoon();
@@ -822,6 +833,8 @@ export function TimelineScreen({
 
   /** 再点同一个事项就取消 —— 否则筛选开了没法用同一个手势关掉 */
   function toggleFilter(value: string) {
+    // 列表集合换了，滑开的那行要收回：它可能已经不在屏幕上
+    setOpenRow(null);
     setFilter((prev) => (prev && prev.value === value ? null : { kind: 'project', value }));
   }
 
@@ -835,14 +848,11 @@ export function TimelineScreen({
     });
   }
 
-  /** 第一次点击时把「默认只展开今天」固化成显式集合，之后完全按用户的来 */
+  /** 点一下这一天：开了就关、关了再开。只记这一天的显式选择，其余日期不受影响 */
   function toggleDay(key: string) {
-    setCollapsedDays((prev) => {
-      const next = new Set(prev ?? collapsedKeys);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
+    const open = !collapsedKeys.has(key);
+    setOpenRow(null);
+    setDayOpen((prev) => ({ ...prev, [key]: !open }));
   }
 
   function toggleNote(id: number) {

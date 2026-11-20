@@ -1,5 +1,5 @@
 /** 小结全屏阅读器：滑动顺序来自调用方列表，等实测宽度后才挂分页FlatList。 */
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BackHandler, FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Note } from '../types';
 import { dayKey, periodLabel } from '../util/date';
@@ -22,8 +22,29 @@ export function NoteViewer({ notes, initialIndex, onClose }: Props) {
   const { styles } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
   const [width, setWidth] = useState(0);
-  const [current, setCurrent] = useState(Math.min(Math.max(initialIndex, 0), Math.max(notes.length - 1, 0)));
+  const first = Math.min(Math.max(initialIndex, 0), Math.max(notes.length - 1, 0));
+  const [current, setCurrent] = useState(first);
   const listRef = useRef<FlatList<Note>>(null);
+  /**
+   * 正看的那一篇，按 id 记。
+   *
+   * 列表会变（保存了新小结、删了旧的）：只按下标续着，位置不变、内容却换了
+   * 一篇 —— 界面上看不出任何错，这才是最难发现的一种错位。
+   */
+  const currentIdRef = useRef<number | null>(notes[first]?.id ?? null);
+
+  useEffect(() => {
+    currentIdRef.current = notes[current]?.id ?? null;
+  }, [current, notes]);
+
+  useEffect(() => {
+    const id = currentIdRef.current;
+    if (id === null || !notes.length) return;
+    const at = notes.findIndex((n) => n.id === id);
+    if (at < 0 || at === current) return;
+    setCurrent(at);
+    if (width > 0) listRef.current?.scrollToIndex({ index: at, animated: false });
+  }, [notes, current, width]);
 
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => { onClose(); return true; });

@@ -14,6 +14,7 @@
  * - **读不全就如实说**。`truncated` + `coverage` 是给用户看的账，不是内部指标。
  * - **位置只来自提取结果**。没有 locator 的片子只写「正文第 N 段」，绝不反推页码。
  */
+import { cutPrefix } from '../util/text';
 import type {
   DocumentChunk,
   DocumentCoverage,
@@ -211,7 +212,7 @@ function makePick(doc: DocumentMeta, cand: Candidate, limit: number): DocPick | 
   const raw = cand.chunk.text ?? '';
   if (!raw.trim()) return null;
   const cap = Math.max(1, Math.min(limit, DOC_LIMITS.maxChunkChars));
-  const text = raw.length > cap ? raw.slice(0, cap) : raw;
+  const text = cutPrefix(raw, cap);
   return {
     documentId: doc.id,
     documentName: doc.name,

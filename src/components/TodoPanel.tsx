@@ -9,7 +9,7 @@
  * 合并复用 `repo.mergeTodos`（隐藏而非删除），「已合并」区就是它的撤回入口 ——
  * 这条从 v0.3 就有的规矩不能因为列表改版而丢。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { IconButton } from './IconButton';

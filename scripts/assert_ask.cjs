@@ -554,6 +554,33 @@ check('语法错时给出位置，不是只说「不合法的 JSON」', () => {
   assert(r.problem.near.includes('title'), `附近原文要能定位：${r.problem.near}`);
 });
 
+check('顶层直接是数组时整段取出，不能只剩第一篇', () => {
+  // 只找 `{` 的写法会把第二篇之后全丢掉，而界面上看不出任何异常
+  const span = json.extractJsonSpan('[{"title":"A"},{"title":"B"}]');
+  eq(span, '[{"title":"A"},{"title":"B"}]', '要整段');
+});
+
+check('解释文字里先出现一对花括号时不会切错', () => {
+  const raw = '按 {标题, 正文} 的格式：{"docs":[{"title":"A"}]}';
+  const r = json.parseJsonLenient(raw);
+  eq(r.ok, true, '应当成功');
+  eq(r.value.docs[0].title, 'A', '取到的是真正的 JSON，不是那个演示用的假对象');
+});
+
+check('顶层数组也能归一成草稿', () => {
+  const d = doc.normalizeDraft([{ title: '甲', body_md: '正文一' }, { title: '乙', body_md: '正文二' }], 'knowledge', []);
+  eq(d.docs.length, 2, '两篇都要在');
+  eq(d.docs[1].title, '乙', '顺序不变');
+});
+
+check('历史文案只数真正会写进去的那几篇', () => {
+  const d = doc.normalizeDraft({ docs: [{ title: '甲', body_md: '一' }, { title: '乙', body_md: '二' }], todos: [] }, 'knowledge', []);
+  d.docs[1].keep = false;
+  const line = doc.describeForHistory(d);
+  assert(line.includes('1 篇'), `取消勾选的那篇不该再数进去：${line}`);
+  assert(!line.includes('乙'), `取消勾选的篇名不该出现：${line}`);
+});
+
 // ---------------------------------------------------------------------------
 // 3.8 配图的文字层（v0.19 一张图 / v0.20 多张图）
 // ---------------------------------------------------------------------------

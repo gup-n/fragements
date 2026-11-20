@@ -11,6 +11,7 @@
  *
  * 所以这里不做 JSON 解析，输出就是 Markdown 正文。
  */
+import { cutPrefix } from '../util/text';
 import type { AiConfig, Fragment, Todo } from '../types';
 import { formatTime, periodLabel, periodRange } from '../util/date';
 import { fragmentText } from '../util/fragmentText';
@@ -137,7 +138,7 @@ function fragmentLine(f: Fragment) {
   const d = new Date(f.createdAt);
   const stamp = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${formatTime(f.createdAt)}`;
   const fullText = fragmentText(f);
-  const text = fullText.length > PER_FRAGMENT_CLIP ? `${fullText.slice(0, PER_FRAGMENT_CLIP)}…` : fullText;
+  const text = fullText.length > PER_FRAGMENT_CLIP ? `${cutPrefix(fullText, PER_FRAGMENT_CLIP)}…` : fullText;
   return `${stamp} ${text.replace(/\s*\n\s*/g, ' / ')}`;
 }
 
@@ -222,8 +223,15 @@ function buildUserContent(options: SummarizeOptions, packed: ReturnType<typeof p
   out.push(...packed.lines);
   out.push('');
 
-  const periodTodos = todos.filter((t) => range && t.createdAt >= range.from && t.createdAt < range.to);
-  const doneInPeriod = periodTodos.filter((t) => t.done);
+  /*
+   * 「这段时间完成的」按**完成时间**算，不是创建时间。
+   * 9 月写下、10 月才勾掉的待办属于 10 月；按 createdAt 归月的话，
+   * 它既不会出现在 10 月小结里，又会被算成 9 月「完成」—— 月小结是长期档案，
+   * 错一次不会有人发现。
+   */
+  const doneInPeriod = range
+    ? todos.filter((t) => t.done && t.doneAt !== null && t.doneAt >= range.from && t.doneAt < range.to)
+    : [];
   const openNow = todos.filter((t) => !t.done);
   if (doneInPeriod.length) {
     out.push('【这段时间标记完成的待办】');

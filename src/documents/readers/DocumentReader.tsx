@@ -1,5 +1,4 @@
 /** 只读入口：格式/容量沿用唯一判据；读原件和正文快照均不自动准备或上传。 */
-import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import type { Document } from '../../types';
 import { ScreenHeader } from '../../components/ScreenHeader';

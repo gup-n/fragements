@@ -9,7 +9,7 @@
  *   历史轮次默认收起，避免一屏全是思考链。
  * - **思维链跟着 QaTurn 持久化**，历史会话重开也能看，不是只活在这一次运行里。
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

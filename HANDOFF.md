@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.33.0 / versionCode 85 |
+| 版本 | v0.34.0 / versionCode 86 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.32.0 已发布（[CI 44548003311](https://github.com/gup-n/fragements/actions/runs/44548003311)，26,360,894 字节，SHA-256 `7e52ee68…ac92`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.1（26,354,426 字节，SHA-256 `52c63609…c637`）、v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,36 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.34.0：全仓审一遍，把会静默出错的地方改掉
+
+用户 2026-11-20：「审阅所有代码，去除无用注释，清理项目资源，着重检查代码逻辑，优化项目」。
+没有新功能，只有「不报错但结果不对」的地方。完整清单在 CHANGELOG v0.34，这里只列**结论与雷**。
+
+- **迁移必须原子**：`migrate()` 现在把每一版的 SQL 与 `PRAGMA user_version` 包在同一个事务里。
+  原来两句分开执行，而迁移里有不可重入的 `ALTER TABLE ADD COLUMN` —— 中途被杀就永远带病启动。
+  `assert_recycle` 新增一条钉住它，别再拆开。
+- **写也要挡回收站**：`replaceDocumentContentIn` / `updateDocument` / `applyTags` /
+  `saveAskSession` 四处都加了 `deleted_at IS NULL`，`saveAskSession` 还检查影响行数。
+  原来那条「逐条扫 SQL」的断言只看 `SELECT`，**这是个洞**；现在补了写路径的断言。
+- **多步写入包事务**：待办的 insert/update/toggle/delete/merge、`applyTags`+重建索引。
+  新增待办写入时照这个模式来，否则「父项打勾、子项没打」这种态没有任何操作能修回来。
+- **字数口径只剩一份**：`util/text.countChars`（按码点，与 SQLite `LENGTH()` 同义）。
+  文档 `char_count`、网页端统计、回收站副标题都走它。别再写 `.length`。
+- **截断只剩一份**：`util/text.safeCutIndex` / `cutPrefix`。emoji 切一半会变成 `�` 并且入库。
+- **标题上限只剩一份**：`util/text.DOC_TITLE_MAX`（60）+ `clampTitle`（省略号算在内）。
+  整理产出另用 24（`TITLE_MAX`），是草稿卡只占一行的缘故。
+- **文档改稿超过 12,000 字直接拒绝**：只喂前 12,000 字却拿产出顶替全文，等于删掉后半篇。
+  要改只能先拆短 —— 这条是刻意的，别为了「让用户能点」改回截断。
+- **界面状态机**：文档页「搜索/标签变了就清空多选」；时间轴的折叠改成**按天记显式开关**
+  （`dayOpen`，不再是「当前折叠集合」）；阅读器按 id 认篇；滑开行在筛选/折叠/搜索时收回。
+  这几处都在断言里钉了源码判据，改结构时注意别把它们一起改掉。
+- **设置页的保存闸门**：`configLoaded === false` 时禁止保存 —— 读失败时四个输入框是空的，
+  一点保存就把已存的 API Key 覆盖成空串。
+- 断言 475 → **485**（ask +4、recycle +3、docs +3）；`tsc --noUnusedLocals` 零告警。
+- **没验**（要真机）：折叠与滑开行的手感、阅读器换篇、恢复备份后的统计刷新。
+- **故意没做**：网页端 19 个写方法吞错、新建文档三步三事务、启动失败全屏提示、
+  列表 `renderItem` memo、两套标签归一化合并。理由写在 CHANGELOG v0.34 第 5 节。
 
 ### v0.33.0：抄 chat-demo 的回答版本（重新生成 / 改问题 / 切回旧答案）
 
@@ -488,22 +518,22 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|
 | `npm run typecheck` | 通过，0错误 |
 | `npm run test:md` | 24 项通过 |
-| `npm run test:docs` | 71 项通过（问答16 + 任务8 + 阅读器47） |
+| `npm run test:docs` | 74 项通过（问答19 + 任务8 + 阅读器47） |
 | `npm run test:todos` | 23 项通过 |
-| `npm run test:ask` | **95 项通过**（v0.33：+6 条回答版本判据） |
+| `npm run test:ask` | **99 项通过**（v0.33 回答版本 + v0.34 顶层数组/花括号噪声/保留项计数） |
 | `npm run test:reliability` | 88 项通过（既有真实控制流+内存桩） |
 | `npm run test:appearance` | 46 项通过 |
 | `npm run test:backup` | 19 项通过 |
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
 | `npm run test:update` | **7 项通过**（v0.32：残包续传判据 + 「后台不算卡死」+ 两处源码卫生） |
-| `npm run test:recycle` | **34 项通过**（v0.28：软删过滤逐条扫 SQL + 30 天口径 + 标签平铺 + 提案/批量状态机） |
+| `npm run test:recycle` | **37 项通过**（软删过滤逐条扫 SQL；v0.34 增「写也不能碰回收站的行」「迁移包事务」「恢复只补真恢复的那几条」） |
 | `npm run test:ui` | **45 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.31.1 新增「滑开行收回」「字数只认 charCount」） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
-| `npm run build:web` | 通过，4.71 MiB；产物已删除，不供预览 |
+| `npm run build:web` | 通过，4.72 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有475项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有485项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -547,27 +577,27 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/digestReminder.ts` | 215 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2004 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2014 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2072 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
-| `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 160 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
-| `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
+| `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 159 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
+| `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 116 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 327 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源 + 版本操作行；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
-| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 796 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
-| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1610 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1672 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
+| `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 808 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
+| `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1627 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1708 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 117 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 306 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 117 | 无颜色 TYPE/SPACE、四档字号倍数与 `setTypeScale`、装饰边线与显式 outline 判据 |
 | `src/types.ts` [打开](<src/types.ts>) | 511 | 领域类型、引用/会话（含答案版本）、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
-| `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 456 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
+| `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 461 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
 | `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 320 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
 | `src/components/ProposalSheet.tsx` [打开](<src/components/ProposalSheet.tsx>) | 238 | 审批面板：建议/原稿两页签、字数对比，三个出口（存为新文档/只存标签/放弃） |
 | `src/components/DocBatchSheet.tsx` [打开](<src/components/DocBatchSheet.tsx>) | 288 | 批量工作流：一篇篇过，每篇都要单独审批；跳过与失败分开计数 |
-| `src/util/trash.ts` [打开](<src/util/trash.ts>) | 96 | 30 天口径、剩几天、分组与顶部那句话（纯函数） |
+| `src/util/trash.ts` [打开](<src/util/trash.ts>) | 121 | 30 天口径、剩几天、分组与顶部那句话（纯函数） |
 | `src/util/docTags.ts` [打开](<src/util/docTags.ts>) | 96 | 标签命名规范化、去重、芯片色档、按标签筛（纯函数） |
-| `src/util/proposal.ts` [打开](<src/util/proposal.ts>) | 116 | 提案 payload 宽容读取、派生标题、字数对比（纯函数） |
+| `src/util/proposal.ts` [打开](<src/util/proposal.ts>) | 117 | 提案 payload 宽容读取、派生标题、字数对比（纯函数） |
 | `src/util/docBatch.ts` [打开](<src/util/docBatch.ts>) | 73 | 批量进度状态机：一次只有一个 running（纯函数） |
 
 ### 4.2 Repo、文件与文字迁出
@@ -575,8 +605,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `src/db/types.ts` [打开](<src/db/types.ts>) | 498 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2229 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1246 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2270 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1260 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
@@ -594,15 +624,15 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/ai/chat.ts` [打开](<src/ai/chat.ts>) | 567 | 唯一请求层，四段超时、SSE、finish_reason、额度与错误证据 |
-| `src/ai/stream.ts` [打开](<src/ai/stream.ts>) | 148 | 流分片解析，reasoning/content分离 |
+| `src/ai/chat.ts` [打开](<src/ai/chat.ts>) | 568 | 唯一请求层，四段超时、SSE、finish_reason、额度与错误证据 |
+| `src/ai/stream.ts` [打开](<src/ai/stream.ts>) | 173 | 流分片解析，reasoning/content分离 |
 | `src/ai/config.ts` [打开](<src/ai/config.ts>) | 35 | 模型服务配置读取/保存 |
 | `src/ai/keyStore.ts` [打开](<src/ai/keyStore.ts>) | 37 | 系统安全存储中的API Key |
-| `src/ai/knowledge.ts` [打开](<src/ai/knowledge.ts>) | 403 | fragments/session材料、docs/todos/note输出、预算、改稿与身份/授权对账 |
-| `src/ai/qa.ts` [打开](<src/ai/qa.ts>) | 759 | 记录问答、按需检索与预算、联网、真实引用和历史快照 |
+| `src/ai/knowledge.ts` [打开](<src/ai/knowledge.ts>) | 430 | fragments/session材料、docs/todos/note输出、预算、改稿与身份/授权对账 |
+| `src/ai/qa.ts` [打开](<src/ai/qa.ts>) | 764 | 记录问答、按需检索与预算、联网、真实引用和历史快照 |
 | `src/ai/variants.ts` [打开](<src/ai/variants.ts>) | 137 | 回答版本：追加/切换/上限、问题随版本走、旧字段镜像（兼容旧版 APK 与 qa.ts） |
-| `src/ai/documentRetrieval.ts` [打开](<src/ai/documentRetrieval.ts>) | 530 | 限定文档检索、公平装填、内容版本与D引用快照 |
-| `src/ai/summarize.ts` [打开](<src/ai/summarize.ts>) | 303 | 月总结材料与提示词，按日事件表/重要进展 |
+| `src/ai/documentRetrieval.ts` [打开](<src/ai/documentRetrieval.ts>) | 531 | 限定文档检索、公平装填、内容版本与D引用快照 |
+| `src/ai/summarize.ts` [打开](<src/ai/summarize.ts>) | 311 | 月总结材料与提示词，按日事件表/重要进展 |
 | `src/ai/search.ts` [打开](<src/ai/search.ts>) | 192 | 官方工具搜索、退避与结果兜底 |
 | `src/ai/fetchPage.ts` [打开](<src/ai/fetchPage.ts>) | 144 | 用户打开联网并发送链接后的页面读取 |
 | `src/ai/vision.ts` [打开](<src/ai/vision.ts>) | 90 | 指定图片的文字/内容识别请求，不在保存图片时调用 |
@@ -619,7 +649,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/organize/run.ts` [打开](<src/organize/run.ts>) | 157 | 可注入真实执行器，固定来源、pending批次、检查点与代次防迟到 |
 | `src/organize/useOrganize.ts` [打开](<src/organize/useOrganize.ts>) | 394 | Ask控制器：发起/改稿/原源重试/批准/暂停/保存/恢复/放弃 |
 | `src/util/askIntent.ts` [打开](<src/util/askIntent.ts>) | 148 | 月总结/待办/整理/问答路由、草稿输入分流与气泡显示判据 |
-| `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 355 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
+| `src/util/knowledgeDoc.ts` [打开](<src/util/knowledgeDoc.ts>) | 359 | 模型草稿收敛、真实日期校验、摘要/命名与兼容单篇形状 |
 | `src/util/batch.ts` [打开](<src/util/batch.ts>) | 61 | 条数/字数装箱与批次数边界，至少保留一条材料 |
 
 ### 4.5 文档、PDF与其它阅读器
@@ -629,10 +659,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/documents/importLocal.ts` [打开](<src/documents/importLocal.ts>) | 55 | 本地文件入库的唯一顺序：先落原文件→再写记录→失败删原件；选择器与系统分享共用 |
 | `src/documents/formats.ts` [打开](<src/documents/formats.ts>) | 128 | 本机格式、容量、能问判据和真实定位标签 |
 | `src/documents/jobs.ts` [打开](<src/documents/jobs.ts>) | 487 | 应用级本地/云准备任务，每文档互斥、取消与版本写回 |
-| `src/documents/readers/DocumentReader.tsx` [打开](<src/documents/readers/DocumentReader.tsx>) | 81 | 只读分派，嵌入时不再外包滚动容器 |
+| `src/documents/readers/DocumentReader.tsx` [打开](<src/documents/readers/DocumentReader.tsx>) | 80 | 只读分派，嵌入时不再外包滚动容器 |
 | `src/documents/readers/readerAvailability.ts` [打开](<src/documents/readers/readerAvailability.ts>) | 18 | original/snapshot/unavailable纯判据，不依赖能问索引状态 |
 | `src/documents/readers/extract.ts` [打开](<src/documents/readers/extract.ts>) | 164 | 本地提取分派，完整正文/切片/定位 |
-| `src/documents/readers/chunk.ts` [打开](<src/documents/readers/chunk.ts>) | 182 | 按完整文本切片、真实行号和contentFromText |
+| `src/documents/readers/chunk.ts` [打开](<src/documents/readers/chunk.ts>) | 169 | 按完整文本切片、真实行号和contentFromText |
 | `src/documents/readers/PdfReader.tsx` [打开](<src/documents/readers/PdfReader.tsx>) | 230 | PDF阅读与本地查找命令、文字索引三态、主题消息更新 |
 | `src/documents/readers/PdfWebView.tsx` [打开](<src/documents/readers/PdfWebView.tsx>) | 83 | 稳定source、命令桥、本地导航与WebView安全边界 |
 | `src/documents/readers/PdfWebView.web.tsx` [打开](<src/documents/readers/PdfWebView.web.tsx>) | 22 | Web编译占位，非PDF网页产品 |
@@ -655,20 +685,20 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/components/TabBar.tsx` [打开](<src/components/TabBar.tsx>) | 119 | 底栏四项（碎片/文档/回顾/问），flex:1 四等分且每槽≥48dp；选中用实心图标+加粗+短线头，不只靠颜色 |
-| `src/components/GlassBackdrop.tsx` [打开](<src/components/GlassBackdrop.tsx>) | 63 | 墨水风格专属毛玻璃垫层：dimezis 真模糊 + 纸色遮罩保证正文可读；`glassable()` 决定卡片是否让出实底 |
+| `src/components/TabBar.tsx` [打开](<src/components/TabBar.tsx>) | 118 | 底栏四项（碎片/文档/回顾/问），flex:1 四等分且每槽≥48dp；选中用实心图标+加粗+短线头，不只靠颜色 |
+| `src/components/GlassBackdrop.tsx` [打开](<src/components/GlassBackdrop.tsx>) | 62 | 墨水风格专属毛玻璃垫层：dimezis 真模糊 + 纸色遮罩保证正文可读；`glassable()` 决定卡片是否让出实底 |
 | `src/components/IconButton.tsx` [打开](<src/components/IconButton.tsx>) | 171 | 默认48dp槽；compact为36槽+hitSlop补48；短label、选中/禁用/焦点语义，diameter只管视觉底 |
 | `src/components/EmptyState.tsx` [打开](<src/components/EmptyState.tsx>) | 80 | 空屏的唯一实现：48 圆底 + 标题 + 可选一句说明；`fill` 撑满、`tone="accent"` 只给首页那一个「邀请型」空屏 |
 | `src/components/ScreenHeader.tsx` [打开](<src/components/ScreenHeader.tsx>) | 52 | 共享页头（56高）、返回/右侧动作及标题聚焦 |
-| `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 23 | 减少动效时静态忙碌图形，不改变业务进度 |
+| `src/components/BusyIndicator.tsx` [打开](<src/components/BusyIndicator.tsx>) | 22 | 减少动效时静态忙碌图形，不改变业务进度 |
 | `src/components/ChoiceChip.tsx` [打开](<src/components/ChoiceChip.tsx>) | 67 | 带文字/状态的共享选项控件 |
 | `src/components/useHeadingFocus.ts` [打开](<src/components/useHeadingFocus.ts>) | 20 | 只为屏幕阅读器聚焦新标题，不抢普通键盘 |
 | `src/components/KnowledgeDraft.tsx` [打开](<src/components/KnowledgeDraft.tsx>) | 248 | 全部产出可审阅、稳定key、逐项授权与统一写入计数 |
 | `src/components/DraftDocPage.tsx` [打开](<src/components/DraftDocPage.tsx>) | 235 | 草稿单篇整页阅读/编辑与批准入口 |
-| `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1107 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
+| `src/components/FragmentDetail.tsx` [打开](<src/components/FragmentDetail.tsx>) | 1112 | 分页阅读/编辑、原比例多图、删除确认、OCR/正文/事项命中与实测y |
 | `src/components/DocViewer.tsx` [打开](<src/components/DocViewer.tsx>) | 773 | 只按id读取文档、独立读/问门槛、一行主动作、展开操作与逐次云确认 |
 | `src/components/NoteBody.tsx` [打开](<src/components/NoteBody.tsx>) | 622 | Markdown/图片块、单Text预览、字面引用、当前命中及动态纸面排版 |
-| `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 109 | 小结整页阅读与列表同序分页 |
+| `src/components/NoteViewer.tsx` [打开](<src/components/NoteViewer.tsx>) | 130 | 小结整页阅读与列表同序分页 |
 | `src/components/SummarySheet.tsx` [打开](<src/components/SummarySheet.tsx>) | 785 | 月总结单篇/缺口队列、原稿对照和确认保存 |
 | `src/components/TodoPanel.tsx` [打开](<src/components/TodoPanel.tsx>) | 512 | 父子待办、独立勾选/编辑、合并恢复与非颜色状态 |
 | `src/components/TodoEditor.tsx` [打开](<src/components/TodoEditor.tsx>) | 229 | 全屏覆盖编辑、子项和到期日 |
@@ -676,10 +706,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/components/ImportSheet.tsx` [打开](<src/components/ImportSheet.tsx>) | 216 | 文字导入预览、范围/日期警告与确认 |
 | `src/components/CitationSheet.tsx` [打开](<src/components/CitationSheet.tsx>) | 238 | 引用快照、真实来源位置，不回库猜原文 |
 | `src/components/SwipeRow.tsx` [打开](<src/components/SwipeRow.tsx>) | 319 | 固定方向的时间轴手势，保留纵滚/长按和减少动效 |
-| `src/components/Toast.tsx` [打开](<src/components/Toast.tsx>) | 70 | 就近消息呈现，不自行决定业务成功或计时 |
+| `src/components/Toast.tsx` [打开](<src/components/Toast.tsx>) | 69 | 就近消息呈现，不自行决定业务成功或计时 |
 | `src/components/ReasoningFold.tsx` [打开](<src/components/ReasoningFold.tsx>) | 76 | 答后仍可打开的思考折叠 |
 | `src/components/ReasoningStream.tsx` [打开](<src/components/ReasoningStream.tsx>) | 91 | 流式思考展示，减少动效与滚动策略 |
-| `src/components/ReasoningTrace.tsx` [打开](<src/components/ReasoningTrace.tsx>) | 60 | 过程轨迹显示 |
+| `src/components/ReasoningTrace.tsx` [打开](<src/components/ReasoningTrace.tsx>) | 59 | 过程轨迹显示 |
 | `src/components/AgentError.tsx` [打开](<src/components/AgentError.tsx>) | 152 | 错误短提示/阶段/原始证据展开，不吞掉失败原因 |
 
 ### 4.7 共用纯函数
@@ -693,7 +723,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/tokenize.ts` [打开](<src/util/tokenize.ts>) | 158 | 中文bigram/FTS查询与旧标签规范化兼容工具 |
 | `src/util/highlight.ts` [打开](<src/util/highlight.ts>) | 55 | 唯一字面命中findHits/countHits |
 | `src/util/mdBlocks.ts` [打开](<src/util/mdBlocks.ts>) | 493 | Markdown、表格、代码、引用与图片块解析 |
-| `src/util/text.ts` [打开](<src/util/text.ts>) | 53 | 文本规范化、显示宽度与截取 |
+| `src/util/text.ts` [打开](<src/util/text.ts>) | 104 | 文本规范化、显示宽度与截取 |
 | `src/util/date.ts` [打开](<src/util/date.ts>) | 183 | 日/月等历史日期键、标签与月末锚点 |
 | `src/util/calendar.ts` [打开](<src/util/calendar.ts>) | 92 | 回顾日历的纯日期网格：固定42格、周一开头、翻月跨年、本地时区解析；`DayCount` 是日历的唯一输入 |
 | `src/util/color.ts` [打开](<src/util/color.ts>) | 23 | 唯一一份 `withAlpha`：三位/六位十六进制、alpha 夹紧；PDF 高亮与毛玻璃共用 |
@@ -703,7 +733,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/todoTree.ts` [打开](<src/util/todoTree.ts>) | 125 | 父子树、唯一完成级联计划与展开 |
 | `src/util/qaScope.ts` [打开](<src/util/qaScope.ts>) | 65 | 记录/文档范围规范化与身份键 |
 | `src/util/qaNote.ts` [打开](<src/util/qaNote.ts>) | 20 | 历史纪要文本包装工具，不是恢复旧整理产物入口 |
-| `src/util/jsonRepair.ts` [打开](<src/util/jsonRepair.ts>) | 193 | JSON语法宽容修复与出错位置，不补残缺结构 |
+| `src/util/jsonRepair.ts` [打开](<src/util/jsonRepair.ts>) | 233 | JSON语法宽容修复与出错位置，不补残缺结构 |
 | `src/util/urls.ts` [打开](<src/util/urls.ts>) | 61 | 链接提取与查询词构建 |
 | `src/util/keyboard.ts` [打开](<src/util/keyboard.ts>) | 39 | edge-to-edge键盘高度与占位 |
 | `src/util/docSupport.ts` [打开](<src/util/docSupport.ts>) | 208 | 云通道判据、显式解析分派和本地容量说明 |
@@ -725,11 +755,11 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `scripts/assert_md.cjs` [打开](<scripts/assert_md.cjs>) | 303 | 原有Markdown往返断言 |
 | `scripts/assert_backup.cjs` | 243 | 完整备份的 19 项断言：命名、清单、四种拒绝、路径穿越过滤、SQLite 头、体积上限 |
-| `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 483 | 限定文档问答/预算/引用 |
+| `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 508 | 限定文档问答/预算/引用 |
 | `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 576 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |
 | `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 392 | 父子待办和月总结规则 |
-| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 934 | 95项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
+| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 961 | 95项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1884 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 798 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |

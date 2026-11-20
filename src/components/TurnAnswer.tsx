@@ -6,7 +6,7 @@
  * 页面和这里引用（页面里「整理轮」「待发问」也用 `aRow` / `aText`），所以它必须导出，
  * 不能让两边各写一份。
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Clipboard from 'expo-clipboard';

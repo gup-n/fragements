@@ -1,5 +1,4 @@
 /** 进度图形只改变呈现：墨水/系统减少动效时不连续旋转，业务状态仍由调用者保留。 */
-import React from 'react';
 import { ActivityIndicator, View, type ActivityIndicatorProps } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useTheme } from '../theme';

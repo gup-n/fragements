@@ -11,6 +11,7 @@
  * 2. **待办分两层**。整理一次抽出十几条平铺待办，看起来就是一堆碎片；
  *    真正的「一件事分几步」在库里本来就有父子结构（todos.parent_id），只是没被用上。
  */
+import { clampTitle } from './text';
 
 export type DraftMode = 'knowledge' | 'todos';
 
@@ -146,7 +147,9 @@ export function normalizeDraft(
   sourceIds: number[],
   maxDocs = MAX_DOCS,
 ): KnowledgeDraft {
-  const root = obj(raw);
+  // 顶层直接给数组：模型偶尔省掉外层对象，按模式塞回对应的槽位。
+  // 不认这一种，`obj(raw)` 会得到空对象，整批产出被静默丢掉
+  const root = Array.isArray(raw) ? (mode === 'todos' ? { todos: raw } : { docs: raw }) : obj(raw);
 
   const docs: DraftDoc[] = [];
   const list = arr(root.docs ?? root.documents);
@@ -173,9 +176,8 @@ export function normalizeDraft(
 }
 
 export function clipTitle(title: string): string {
-  const t = title.replace(/\s+/g, ' ').trim();
-  if (!t) return '';
-  return t.length > TITLE_MAX ? `${t.slice(0, TITLE_MAX - 1)}…` : t;
+  // 整理产出的标题上限比手写文档更紧（24）：一篇文档的标题在草稿卡上只占一行
+  return clampTitle(title, TITLE_MAX);
 }
 
 /**
@@ -338,18 +340,20 @@ export function docProblem(doc: DraftDoc): string | null {
  * 也**不写「成功」**：没有产出时就说没有，别让它看起来像跑了点什么。
  */
 export function describeForHistory(draft: KnowledgeDraft, leftover = 0): string {
-  const docs = draft.docs.filter((d) => d.bodyMd.trim());
-  const todos = draft.todos.filter((t) => t.text.trim());
+  /*
+   * 只数**真正会写进去的**那几篇。用户点过「继续」之前可能取消勾选，
+   * 那些项还留在草稿里（keep=false）；按全量报「整理出 5 篇」，
+   * 实际只写了 2 篇 —— 历史文案和同一屏的卡片计数会对不上。
+   */
+  const docs = keptDocs(draft);
+  const todos = keptTodos(draft);
   if (!docs.length && !todos.length) return '这批碎片里没有可沉淀的知识，没有生成文档。';
   const bits: string[] = [];
   if (docs.length) {
     const names = docs.map((d) => `《${d.title.trim() || '未命名'}》`).join('、');
     bits.push(`整理出 ${docs.length} 篇文档：${names}`);
   }
-  if (todos.length) {
-    const n = todos.reduce((sum, t) => sum + 1 + t.children.filter((c) => c.text.trim()).length, 0);
-    bits.push(`${n} 条待办`);
-  }
+  if (todos.length) bits.push(`${countTodos(draft)} 条待办`);
   const tail = leftover ? `；还有 ${leftover} 条碎片没整理` : '';
   return `${bits.join('，')}${tail}。`;
 }

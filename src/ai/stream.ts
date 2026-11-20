@@ -77,19 +77,44 @@ export async function readChatStream(
   let content = '';
   let finishReason: FinishReason | null = null;
 
+  /**
+   * 上一行没解析成功的 data。
+   *
+   * SSE 规范里一个事件可以把 JSON 折成**多条 `data:` 行**，客户端要用换行
+   * 拼起来再解析。只按单行解析时，这种响应会被整块丢掉 —— 而丢掉的是正文
+   * 增量，最终表现是「回答少了半句」，却没有任何报错。
+   *
+   * 做法是「先单行、失败再拼」：不依赖空行来切事件，服务端省略空行时
+   * 仍然逐块上屏（和原来一样），只有真的拼得起来才用拼接结果。
+   */
+  let pending = '';
+  const PENDING_MAX = 64 * 1024;
+
   const consume = (line: string) => {
     const payload = payloadOf(line);
     if (payload === null) return false;
     if (payload === '[DONE]') return true;
 
-    let chunk: any;
-    try {
-      chunk = JSON.parse(payload);
-    } catch {
-      // 单个畸形分片不该毁掉整轮整理，跳过它
-      return false;
+    const candidates = pending ? [`${pending}\n${payload}`, payload] : [payload];
+    for (const candidate of candidates) {
+      let chunk: any;
+      try {
+        chunk = JSON.parse(candidate);
+      } catch {
+        // 单个畸形分片不该毁掉整轮整理，跳过它（拼接的重试见下）
+        continue;
+      }
+      pending = '';
+      return handleChunk(chunk);
     }
 
+    // 这条解析不了：留着，和下一条 data 拼一次。兜底不让它无限长
+    pending = pending ? `${pending}\n${payload}` : payload;
+    if (pending.length > PENDING_MAX) pending = '';
+    return false;
+  };
+
+  const handleChunk = (chunk: any) => {
     const choice = chunk?.choices?.[0];
     if (!choice) return false;
 

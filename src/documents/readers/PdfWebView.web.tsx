@@ -8,7 +8,7 @@
  * 不是「先能编译、运行再说」——`PDF_WEBVIEW_SUPPORTED = false` 会让
  * 阅读器和提取器都走明确的降级分支，不会尝试挂一个假 WebView。
  */
-import React, { forwardRef, useImperativeHandle } from 'react';
+import { forwardRef, useImperativeHandle } from 'react';
 import type { PdfWebViewHandle, PdfWebViewProps } from './pdfProtocol';
 
 export const PDF_WEBVIEW_SUPPORTED = false;

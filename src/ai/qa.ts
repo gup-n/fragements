@@ -193,7 +193,12 @@ export async function retrieveLocal(
   const range = timeRange(question);
   if (range) {
     try {
-      push(await repo.listFragmentsBetween(range.from, range.to));
+      /*
+       * 时间意图要的是「最近」，而 `listFragmentsBetween` 按时间**正序**返回。
+       * 不在这里倒一次，预算装填就是从区间最早那条开始的：问「最近三天」
+       * 得到的是三天里最开头的事，最近的记录全被截掉。
+       */
+      push((await repo.listFragmentsBetween(range.from, range.to)).sort((a, b) => b.createdAt - a.createdAt));
     } catch {
       /* 同上 */
     }
@@ -209,8 +214,8 @@ export async function retrieveLocal(
     }
   }
 
-  // 时间意图命中的那条池子是按时间正序来的，这里整体按时间倒序兜一遍，
-  // 让「最近的事」更容易进预算（FTS 命中的已经在前面，不受影响）
+  // 装填顺序就是优先级：检索命中在前，其次是时间区间（已倒序）、上一轮引用。
+  // 预算按这个顺序吃，先装满的是最近、最相关的那批。
   const fragments: Fragment[] = [];
   let chars = 0;
   for (const f of picked) {

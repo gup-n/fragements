@@ -12,7 +12,7 @@
  * 默认收起而不是默认摊开：正文错了的时候用户只想知道「怎么了 + 怎么办」，
  * 一屏 JSON 会把「重试」按钮挤没；但入口必须看得见，不能藏在长按菜单里。
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SPACE, TYPE, surfaceStroke, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';

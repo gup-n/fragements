@@ -14,7 +14,6 @@ import type {
   Todo,
   TrashEntry,
   TrashKind,
-  TrashRef,
 } from '../types';
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
@@ -24,6 +23,8 @@ import { docImageNames, removeImageToken, resolvePendingTokens } from '../util/i
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 import { dayKey } from '../util/date';
+import { countChars } from '../util/text';
+import { trashDetail, trashTitle } from '../util/trash';
 import { countByMonth } from '../util/digest';
 
 /**
@@ -79,6 +80,16 @@ function trashedAt(d: WebDb, kind: TrashKind, id: number): number | null {
 
 function isTrashed(d: WebDb, kind: TrashKind, id: number): boolean {
   return trashedAt(d, kind, id) !== null;
+}
+
+/**
+ * 放进回收站。**先删同一条的旧记录**：native 那句
+ * `UPDATE ... SET deleted_at = ?` 天然幂等，而 web 这里是数组 push ——
+ * 重复删两次会多出一行，回收站条数比实际多，恢复时又会多算一次。
+ */
+function markTrashed(d: WebDb, kind: TrashKind, id: number): void {
+  d.trash = d.trash.filter((t) => !(t.kind === kind && t.id === id));
+  d.trash.push({ kind, id, at: Date.now() });
 }
 
 /** 没进回收站的碎片（含已合并的）。导出与备份要用全量 */
@@ -224,10 +235,18 @@ function load(): WebDb {
      * v0.20：配图从 `imagePath` 一个标量变成 `images[]`。
      * 网页版本来就没有相册，老数据里不会有真图；这里只保证形状对得上 ——
      * 少一个 `images` 数组，界面 `f.images.length` 会直接抛异常。
+     *
+     * 同一段还要补 `organizedAt` / `mergedInto` / `nature`：native 侧这几个
+     * 是后加的列，旧行是 NULL；web 的旧数据里是 `undefined`，而 `active()` 与
+     * `stats.pending` 都按 `=== null` 判断 —— 不补的话这些碎片既不出现在
+     * 搜索结果里，也被算成「已整理」。
      */
     cache!.fragments = (cache!.fragments ?? []).map((f) => ({
       ...f,
       images: Array.isArray(f.images) ? f.images : [],
+      organizedAt: f.organizedAt ?? null,
+      mergedInto: f.mergedInto ?? null,
+      nature: f.nature ?? null,
     }));
   } catch (error) {
     // 读取/解析失败不等于空库；不能让下一次原子写入用空库覆盖仍存在的数据。
@@ -290,11 +309,6 @@ function insertFragmentIn(
   return fragment;
 }
 
-function activeOld(d: WebDb) {
-  return d.fragments.filter((f) => f.mergedInto === null);
-}
-
-
 export const repo: Repo = {
   async init() {
     load();
@@ -319,7 +333,7 @@ export const repo: Repo = {
             fileUri: null,
             bodyMd: content.bodyMd,
             pages: content.pages,
-            charCount: content.bodyMd.length,
+            charCount: countChars(content.bodyMd),
             state: 'done',
             error: null,
             contentRevision: 1,
@@ -555,7 +569,7 @@ export const repo: Repo = {
     // 软删：只记「谁、什么时候」。文件与配图行都不动，30 天内恢复还看得见图。
     // 并进它的那几条仍然落回未整理 —— 理由同 repo.native.ts
     return writeAtomically((d) => {
-      d.trash.push({ kind: 'fragment', id, at: Date.now() });
+      markTrashed(d, 'fragment', id);
       for (const x of d.fragments) {
         if (x.mergedInto === id) {
           x.mergedInto = null;
@@ -823,8 +837,9 @@ export const repo: Repo = {
     const now = Date.now();
 
     if (input.id !== undefined) {
-      const s = d.askSessions.find((x) => x.id === input.id);
-      if (!s) return input.id;
+      // 与 native 一致：回收站里的会话不再接受写入
+      const s = liveSessions(d).find((x) => x.id === input.id);
+      if (!s) throw new Error('这场会话已被删除，这次回答没能保存');
       // 与 native 一致：只改传进来的字段，undefined 保持原值
       s.title = input.title;
       s.turns = input.turns;
@@ -883,7 +898,7 @@ export const repo: Repo = {
 
   async deleteAskSession(id) {
     writeAtomically((d) => {
-      d.trash.push({ kind: 'ask_session', id, at: Date.now() });
+      markTrashed(d, 'ask_session', id);
     });
   },
 
@@ -955,7 +970,7 @@ export const repo: Repo = {
     if (patch.name !== undefined) doc.name = patch.name.trim() || '未命名文档';
     if (patch.bodyMd !== undefined) {
       doc.bodyMd = patch.bodyMd;
-      doc.charCount = patch.bodyMd.length;
+      doc.charCount = countChars(patch.bodyMd);
     }
     if (patch.excerpt !== undefined) doc.excerpt = patch.excerpt;
     if (patch.pages !== undefined) doc.pages = patch.pages;
@@ -979,7 +994,7 @@ export const repo: Repo = {
   async deleteDocument(id) {
     // 软删：切片留着（可重建的投影），检索路径会按 liveDocuments 过滤掉它
     writeAtomically((d) => {
-      d.trash.push({ kind: 'document', id, at: Date.now() });
+      markTrashed(d, 'document', id);
     });
   },
 
@@ -990,7 +1005,7 @@ export const repo: Repo = {
     if (!doc || doc.contentRevision !== expectedRevision) return false;
     const next = expectedRevision + 1;
     doc.bodyMd = content.bodyMd;
-    doc.charCount = content.bodyMd.length;
+    doc.charCount = countChars(content.bodyMd);
     doc.pages = content.pages;
     doc.state = 'done';
     doc.error = null;
@@ -1049,11 +1064,10 @@ export const repo: Repo = {
       if (item.kind === 'fragment') {
         const f = d.fragments.find((x) => x.id === item.id);
         const text = f?.content ?? '';
-        const first = text.split('\n').map((line) => line.trim()).find((line) => !!line) ?? '';
         return {
           kind: 'fragment', id: item.id, deletedAt: at,
-          title: first ? (first.length > 60 ? `${first.slice(0, 60)}…` : first) : '（无正文的碎片）',
-          detail: `${text.length} 字`,
+          title: trashTitle('fragment', text),
+          detail: trashDetail('fragment', countChars(text), 0),
           files: (f?.images ?? []).map((i) => i.path),
         };
       }
@@ -1061,8 +1075,8 @@ export const repo: Repo = {
         const doc = d.documents.find((x) => x.id === item.id);
         return {
           kind: 'document', id: item.id, deletedAt: at,
-          title: (doc?.name ?? '').trim() || '（未命名文档）',
-          detail: (doc?.charCount ?? 0) > 0 ? `${doc!.charCount} 字` : '没有正文',
+          title: trashTitle('document', doc?.name ?? ''),
+          detail: trashDetail('document', doc?.charCount ?? 0, 0),
           files: doc?.fileUri ? [doc.fileUri] : [],
         };
       }
@@ -1070,8 +1084,8 @@ export const repo: Repo = {
       const turns = s?.turns?.length ?? 0;
       return {
         kind: 'ask_session', id: item.id, deletedAt: at,
-        title: (s?.title ?? '').trim() || '（未命名会话）',
-        detail: turns > 0 ? `${turns} 轮对话` : '空会话',
+        title: trashTitle('ask_session', s?.title ?? ''),
+        detail: trashDetail('ask_session', 0, turns),
         files: [],
       };
     });

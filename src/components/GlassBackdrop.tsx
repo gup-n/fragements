@@ -17,7 +17,6 @@
  * 3. **圆角要跟宿主一致**。BlurView 自己不吃父级的 borderRadius，露直角是常见翻车点，
  *    所以由调用方把半径传进来。
  */
-import React from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { useTheme } from '../theme';

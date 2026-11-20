@@ -2,7 +2,7 @@
  * 文档阅读覆盖层。只持有id并刷新当前记录；准备任务属于documents/jobs。
  * 阅读、准备、问答索引相互独立。打开页面不提取、不上传；云解析每次重新确认。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BackHandler, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import type { DocProposal, DocTag, Document, DocumentMeta } from '../types';
