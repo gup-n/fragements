@@ -1631,7 +1631,7 @@ test('真实Ask.startDraft→控制器start/run→执行器，历史入口确实
     revise: async () => { throw new Error('这个用例不是改稿重试'); },
   };
   const control = api.loader.extract('src/organize/useOrganize.ts', ['loadTodos', 'run', 'start', 'retry'], bindings, { scope: 'useOrganize' });
-  const { startDraft } = api.loader.extract('src/screens/AskScreen.tsx', ['startDraft'], { busy: false, setInput: noop, organize: control }, { scope: 'AskScreen' });
+  const { startDraft } = api.loader.extract('src/screens/AskScreen.tsx', ['startDraft'], { busy: false, setInput: noop, setEditing: noop, organize: control }, { scope: 'AskScreen' });
   const session = sessionFixture({ turns: owner().turns });
   await startDraft('knowledge', { session, turns: session.turns, instruction: '只保留恢复顺序' });
   assert.equal(errors.length, 0, JSON.stringify(errors));
@@ -1831,6 +1831,10 @@ test('真实Ask.send用工作区保护判据：保留输入、禁止discard/star
       input, busy: false, scopeProblem: null, draft: work.draft,
       organize: { workspace: work, isLocked: () => false, discard, start },
       allowDoc: work.allowDoc, allowTodos: work.allowTodos,
+      // v0.33：send 多了「正在改某一轮」和「去问模型」两条出口。
+      // 这个用例只关心草稿保护判据，所以两条都走不到（editing 为空、意图也不是问答）。
+      editing: null,
+      runQuestion: async () => { throw new Error('这个用例不该走到问答'); },
       hasUnsavedWorkspace: api.hasUnsavedWorkspace,
       // 即使误退回旧的可写计划逻辑，也应以“发生了discard”失败，而不是因缺桩失败。
       selectDraftTargets: api.selectDraftTargets,

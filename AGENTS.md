@@ -234,6 +234,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - F/N/T/W/D引用只接受本轮给过的编号，编号按首次出现顺序；历史引用用快照，不依赖原记录仍在。行内/块代码的标记不是引用。
 - 联网只有用户打开后发送才执行：有链接走fetch，没有才search；失败保留本地回答与明确失败信息。网页标题/链接可作为独立来源显示，不依赖模型一定写W标记。
 - `ask_sessions`与碎片分开；每轮完成保存，切会话校验代次，不因重复退出把旧历史顶到最前；归档不改活动时间，删除有确认且不连带删已产出文档。旧document_id与document_ids指针兼容读写，删文档两者都处理。
+- **回答版本（v0.33，抄 chat-demo 的 message branches）**：`QaTurn.variants[]` + `active` 是唯一真相，`variants[active]` 必须经 `ai/variants.ts` 的 `mirror` 回写到旧字段 —— 旧版 APK 与 `qa.ts` 都读旧字段，别在界面里手拼 `variants`。重新生成 / 改问题只追加不覆盖，上下文只取这一轮之前（`historyBefore`），绝不能带本轮的旧答案；切换与追加立即落库；每轮上限 `MAX_VARIANTS`，当前版不丢；失败重试记住原轮次（`lastRun`），不能退化成新开一问。
 - 错误保留阶段、状态码、finish和原始返回等证据，默认短提示、需要时展开；日志/诊断不得包含API密钥或未经授权的用户全文。
 
 ## 10. 待办与月总结

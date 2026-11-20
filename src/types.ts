@@ -204,8 +204,43 @@ export interface QaCitation {
   locator?: DocumentLocator;
 }
 
+/**
+ * 一轮回答的**一个版本**（v0.33）。
+ *
+ * 为什么要版本：用户问完不满意，只有「重新生成」和「改问题重问」两条路；
+ * 原来两条路都是覆盖 —— 原来那版答案就没了，想对照一下都没办法。
+ * 现在每次重答都追加一版，界面底部给 `‹ 2/3 ›` 切回去。
+ *
+ * 一个版本带着自己那一版的问题：改问题重问之后，两个版本的问题文本不一样，
+ * 切换版本时上面的气泡也要跟着换。
+ */
+export interface QaVariant {
+  question: string;
+  answer: string;
+  sourceIds: number[];
+  citations?: QaCitation[];
+  webSources?: { title: string; url: string }[];
+  reasoning?: string;
+  truncated?: boolean;
+  documentCoverage?: DocumentCoverage[];
+  /** 这一版是什么时候生成的。切版本时给人看先后 */
+  at: number;
+}
+
 /** sourceIds 仍只代表碎片，文档来源使用 citations 的稳定身份。 */
 export interface QaTurn {
+  /*
+   * v0.33：新写入的数据都带 `variants` + `active`。
+   *
+   * 下面那批同名字段是**兼容层**：`variants[active]` 会被镜像回这里，
+   * 这样两件事不用改 —— 问答上下文（ai/qa.ts 只读 question/answer），
+   * 以及用户回退到旧版 APK 时旧代码还能读出这一轮。
+   * 镜像只有 `ai/variants.ts` 一处实现，别在别处手写。
+   */
+  variants?: QaVariant[];
+  /** 当前显示第几版（0 起）。缺省 0 */
+  active?: number;
+
   question: string;
   answer: string;
   sourceIds: number[];

@@ -43,6 +43,7 @@ import type {
   QaCitation,
   QaScope,
   QaTurn,
+  QaVariant,
 } from '../types';
 import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { WEB_INPUT_RESET } from '../util/platformStyle';
@@ -53,6 +54,14 @@ import { repo } from '../db/repo';
 import { loadAiConfig } from '../ai/config';
 import { AiError, type AiErrorDetail } from '../ai/chat';
 import { askQuestion } from '../ai/qa';
+import {
+  activeIndexOf,
+  historyBefore,
+  turnFromVariant,
+  variantsOf,
+  withActive,
+  withVariant,
+} from '../ai/variants';
 import { docProblem, type DraftMode } from '../util/knowledgeDoc';
 import { planDraftInput, routeAsk, showsDraftAsk, TASK_LABEL, TASK_SEED } from '../util/askIntent';
 import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
@@ -163,11 +172,28 @@ export function AskScreen({
   const [docNames, setDocNames] = useState<string[]>([]);
   const [turns, setTurns] = useState<QaTurn[]>([]);
   const [input, setInput] = useState('');
-  /** 最后一句话。失败卡上的「重试」用它，否则输入框已清空就重发不出去 */
-  const [lastQ, setLastQ] = useState('');
+  /**
+   * 最后一句话发给了谁。失败卡上的「重试」用它 ——
+   * v0.33 起必须带上 target：重新生成失败后重试，不能把同一问当成新的一轮再问一次。
+   */
+  const [lastRun, setLastRun] = useState<{ question: string; target: number | null } | null>(null);
   const [busy, setBusy] = useState(false);
   /** 正在回答的那个问题，先上屏让用户看到自己问了什么 */
   const [pendingQ, setPendingQ] = useState('');
+  /**
+   * v0.33：正在补哪一轮（重新生成 / 改问题）。
+   *
+   * 和 `pendingQ` 分开：补旧轮次时不能把「正在回答」的那个气泡画在最底下 ——
+   * 它看起来像又新问了一句。这个下标让等待提示落在那一轮下面。
+   */
+  const [busyIndex, setBusyIndex] = useState<number | null>(null);
+  /**
+   * 正在改第几轮的问题。发送时这一句发给那一轮，不是新开一轮。
+   * `original` 只用于「没改就取消」的判断和提示，不发出去。
+   */
+  const [editing, setEditing] = useState<{ index: number; original: string } | null>(null);
+  /** 开始改问题时把光标送进输入框 */
+  const inputRef = useRef<React.ComponentRef<typeof TextInput>>(null);
   const [reasoning, setReasoning] = useState('');
   /** 刚答完的那一轮默认展开思考过程；历史加载的轮次不自动展开 */
   const [openReasoningKey, setOpenReasoningKey] = useState<string | null>(null);
@@ -264,6 +290,11 @@ export function AskScreen({
   const allowTodos = organize.workspace?.allowTodos ?? true;
   const savedDocs = organize.workspace?.receipt.documents ?? [];
   const leftover = organize.workspace ? remainingIds(organize.workspace).length : 0;
+  /**
+   * 最后一个问答轮。只有它默认摊开「重新生成 / 改问题 / 复制」——
+   * 每条历史都摊开，屏幕会变成一片灰色小字（判据交给 TurnAnswer 的 collapsible）。
+   */
+  const lastQaIndex = turns.reduce((acc, t, i) => (t.kind === 'organize' ? acc : i), -1);
   const setDraft = organize.changeDraft;
   const setAllowDoc = organize.setAllowDoc;
   const setAllowTodos = organize.setAllowTodos;
@@ -702,6 +733,7 @@ export function AskScreen({
     setSessionId(null); sessionIdRef.current = null;
     setSessionTitle(null); startedAtRef.current = Date.now();
     setInput(''); setError(null); setWebNote(''); setPendingQ('');
+    setEditing(null); setBusyIndex(null);
     setReasoning(''); setOpenReasoningKey(null); setReceived(0); setElapsed(0);
     setCite(null); setHistoryOpen(false); setDraftDoc(null);
     setActionSession(null); setDeleteSession(null); setSessionDocs(null);
@@ -723,6 +755,7 @@ export function AskScreen({
     setScope(nextScope); setScopeProblem(null); setHistoryOpen(false);
     setActionSession(null); setDeleteSession(null); setCite(null); setDraftDoc(null);
     setInput(''); setError(null); setWebNote(''); setPendingQ('');
+    setEditing(null); setBusyIndex(null);
     setReasoning(''); setOpenReasoningKey(null); setReceived(0); setElapsed(0);
     setContext(null); setTimeout(scrollToEnd, 120);
   }
@@ -746,12 +779,79 @@ export function AskScreen({
     }
   }
 
+  /**
+   * v0.33：把第 index 轮的问题放回输入框，发出去就追加一版。
+   *
+   * 不清空已有输入会被这里覆盖 —— 如果用户正在打字又点了「改问题」，
+   * 他的草稿就没了。所以先看一眼：输入框里有别的内容就问一句。
+   */
+  function beginEdit(index: number) {
+    if (busy || draftBusy) return;
+    if (draft) {
+      // 草稿开着时输入框属于「改稿」，这时候改历史问题会把两种上下文搅在一起
+      showToast('先把当前草稿处理掉，再改历史里的问题');
+      return;
+    }
+    const turn = turnsRef.current[index];
+    if (!turn) return;
+    if (input.trim() && input.trim() !== turn.question.trim()) {
+      showToast('输入框里还有没发出去的话，先发掉或清空再改问题');
+      return;
+    }
+    setEditing({ index, original: turn.question });
+    setInput(turn.question);
+    setError(null);
+    setTimeout(() => inputRef.current?.focus(), 60);
+  }
+
+  /** 同问再答一版。上下文只到这一轮之前（见 runQuestion 里的 history） */
+  async function regenerate(index: number) {
+    if (busy || draftBusy) return;
+    if (draft) {
+      showToast('先把当前草稿处理掉，再重新生成');
+      return;
+    }
+    const turn = turnsRef.current[index];
+    if (!turn) return;
+    setEditing(null);
+    await runQuestion(turn.question, index);
+  }
+
+  /**
+   * 切换这一轮显示的版本。
+   *
+   * 切换本身就落库：用户切到第 2 版然后退出，下次进来应该还是第 2 版 ——
+   * 「我刚才看的那版不见了」比什么都让人怀疑数据。
+   */
+  function switchVariant(index: number, to: number) {
+    if (busy || draftBusy) return;
+    const next = turnsRef.current.map((t, i) => (i === index ? withActive(t, to) : t));
+    setTurns(next);
+    turnsRef.current = next;
+    dirtyRef.current = true;
+    void persistSession(next);
+    setOpenReasoningKey(null);
+  }
+
   async function send(raw?: string) {
     const question = (raw ?? input).trim();
     if (!question || busy || organize.isLocked()) return;
     if (scopeProblem) {
       // 边界不清楚就不发：宁可让用户回去重选，也不要拿错的范围去查
       setError({ message: scopeProblem });
+      return;
+    }
+
+    /*
+     * v0.33：正在改某一轮的问题 —— 这一句发回那一轮，不是新开一轮。
+     * 必须排在草稿与意图路由之前：改问题时那句话（「那 2025 年呢」）很容易
+     * 被判成新的整理任务，而用户此刻明明是在改那一轮。
+     */
+    if (editing) {
+      const target = editing.index;
+      setEditing(null);
+      setInput('');
+      await runQuestion(question, target);
       return;
     }
 
@@ -796,10 +896,22 @@ export function AskScreen({
       return;
     }
 
-    const docMode = scope.kind === 'documents';
     setInput('');
-    setLastQ(question);
-    setPendingQ(question);
+    await runQuestion(question, null);
+  }
+
+  /**
+   * 真正去问模型（v0.33 从 `send` 里抽出来）。
+   *
+   * `target === null` 新开一轮；`target = i` 把这次回答追加成第 i 轮的**又一版**
+   * （重新生成 / 改问题都走这条）。抽出来的原因很实际：重新生成时不希望
+   * 「这一问的旧答案」被塞进上下文，拼上下文的地方必须知道自己在补哪一轮。
+   */
+  async function runQuestion(question: string, target: number | null) {
+    const docMode = scope.kind === 'documents';
+    setLastRun({ question, target });
+    if (target === null) setPendingQ(question);
+    else setBusyIndex(target);
     setBusy(true);
     setError(null);
     setWebNote(docMode ? '正在读选定的文档…' : webOn ? '正在同时搜本地和网络…' : '');
@@ -807,7 +919,15 @@ export function AskScreen({
     setReceived(0);
     setElapsed(0);
     streamRef.current.lastFlush = 0;
-    scrollToEnd();
+    if (target === null) scrollToEnd();
+
+    /*
+     * 上下文只取「这一轮之前」，且每轮只取当前显示的那一版。
+     * 重新生成时**不能把这一问的旧答案**喂回去 —— 那等于让模型照着上一版再写一遍。
+     */
+    const base = turnsRef.current;
+    const history =
+      target === null ? base.filter((t) => t.kind !== 'organize') : historyBefore(base, target);
 
     try {
       let config: AiConfig;
@@ -821,7 +941,7 @@ export function AskScreen({
       const run = await askQuestion({
         question,
         // 整理轮不参与问答上下文：它不是用户问过的问题，塞进去会让模型答偏
-        turns: turns.filter((t) => t.kind !== 'organize'),
+        turns: history,
         config: { ...config, thinking: thinkingOn },
         thinking: thinkingOn,
         // 文档模式不联网：来源必须是用户选的那几份
@@ -840,7 +960,11 @@ export function AskScreen({
 
       setReasoning(run.reasoning);
       setReceived(run.answer.length);
-      const turn: QaTurn = {
+      /*
+       * 一版回答（v0.33）。重新生成 / 改问题都追加一份、不覆盖 ——
+       * 存进 `variants` 之后，底部的 `‹ 2/3 ›` 才能在旧答案之间切。
+       */
+      const variant: QaVariant = {
         question,
         answer: run.answer,
         sourceIds: run.cited.map((f) => f.id),
@@ -856,13 +980,19 @@ export function AskScreen({
         reasoning: run.reasoning,
         truncated: run.truncated,
         documentCoverage: run.documentCoverage,
+        at: Date.now(),
       };
-      const next = [...turns, turn];
+      const next =
+        target === null
+          ? [...base, turnFromVariant(variant)]
+          : base.map((t, i) => (i === target ? withVariant(t, variant) : t));
       setTurns(next);
+      turnsRef.current = next;
       // 这一轮的思维链默认摊开：否则用户看到的还是「闪一下就没了」
-      setOpenReasoningKey(`${turns.length}-${question.slice(0, 8)}`);
+      setOpenReasoningKey(`${target ?? base.length}-${question.slice(0, 8)}`);
       dirtyRef.current = true;
-      void persistSession(next);
+      // 改的是第一问时，标题跟着换 —— 会话列表里还挂着旧问题会让人以为是另一场
+      void persistSession(next, target === 0 ? question : null);
 
       // 这一轮顺手读了图里的字（已经写进库），时间轴那份数据要跟上，别再说「还没读」
       if (run.imageReads) {
@@ -919,8 +1049,10 @@ export function AskScreen({
       setError(errorDetailOf(e));
     } finally {
       setPendingQ('');
+      setBusyIndex(null);
       setBusy(false);
-      scrollToEnd();
+      // 补旧轮次时不滚到底：用户正看着那一轮，滚走等于把他从答案上拽开
+      if (target === null) scrollToEnd();
     }
   }
 
@@ -940,6 +1072,8 @@ export function AskScreen({
   }
   async function startDraft(mode: DraftMode, opts: StartDraftOptions = {}) {
     if (busy) return;
+    // 开新任务就不再是「改那一问」：编辑条留着会让下一次发送跑回旧轮次
+    setEditing(null);
     setInput('');
     await organize.start(mode, opts);
   }
@@ -1247,7 +1381,41 @@ export function AskScreen({
                     defaultOpen={openReasoningKey === `${i}-${t.question.slice(0, 8)}`}
                   />
                 ) : null}
-                <TurnAnswer turn={t} onCite={setCite} />
+                <TurnAnswer
+                  turn={t}
+                  onCite={setCite}
+                  actions={{
+                    index: i,
+                    total: variantsOf(t).length,
+                    active: activeIndexOf(t),
+                    disabled: busy || draftBusy,
+                    collapsible: i !== lastQaIndex,
+                    onRegenerate: () => void regenerate(i),
+                    onEdit: () => beginEdit(i),
+                    onSwitch: (to) => switchVariant(i, to),
+                  }}
+                />
+                {/* 正在重写这一轮：提示落在它下面，别画到页尾去 */}
+                {busyIndex === i ? (
+                  <View style={styles.aRow}>
+                    <View style={styles.thinkingRow}>
+                      <ActivityIndicator size="small" color={c.text2} />
+                      <Text style={styles.thinkingText}>
+                        {received > 0 ? `正在重写这一轮…（已收到 ${received} 字）` : '正在重写这一轮…'}
+                      </Text>
+                    </View>
+                  </View>
+                ) : null}
+                {busyIndex === i && reasoning ? (
+                  <ReasoningStream
+                    title="思考过程"
+                    text={reasoning}
+                    received={received}
+                    elapsed={elapsed}
+                    thinking={thinkingOn}
+                    height={180}
+                  />
+                ) : null}
               </View>
             ),
           )}
@@ -1275,7 +1443,7 @@ export function AskScreen({
             </View>
           ) : null}
 
-          {busy && reasoning ? (
+          {busy && reasoning && busyIndex === null ? (
             <ReasoningStream
               title="思考过程"
               text={reasoning}
@@ -1339,7 +1507,7 @@ export function AskScreen({
               code={error.code}
               detail={error.detail}
               onRetry={() => {
-                if (lastQ) void send(lastQ);
+                if (lastRun) void runQuestion(lastRun.question, lastRun.target);
               }}
             />
           ) : null}
@@ -1360,6 +1528,29 @@ export function AskScreen({
                 style={styles.controlButton}
                 accessibilityRole="button"
                 accessibilityLabel="移除这条上下文"
+              >
+                <Ionicons name="close" size={13} color={c.text3} />
+              </Pressable>
+            </View>
+          ) : null}
+
+          {/*
+            正在改某一轮的问题（v0.33）。
+            要说清两件事：这是第几问、发出去之后旧答案还在 —— 否则用户会以为
+            「改一下就覆盖了」，于是不敢改。
+          */}
+          {editing ? (
+            <View style={styles.editBar}>
+              <Ionicons name="create-outline" size={13} color={c.accentText} />
+              <Text style={styles.editBarText} numberOfLines={2}>
+                正在改第 {editing.index + 1} 问 · 发送后旧答案保留，可切回
+                {editing.index < turns.length - 1 ? ' · 后面的轮次不动' : ''}
+              </Text>
+              <Pressable
+                onPress={() => { setEditing(null); setInput(''); }}
+                style={styles.controlButton}
+                accessibilityRole="button"
+                accessibilityLabel="取消修改这一问"
               >
                 <Ionicons name="close" size={13} color={c.text3} />
               </Pressable>
@@ -1417,9 +1608,16 @@ export function AskScreen({
               设了就不会长；有了上限，写到第五行以后框内滚动，不会把整页顶走。
             */}
             <TextInput
+              ref={inputRef}
               value={input}
               onChangeText={setInput}
-              placeholder={draft ? '说要改哪里，比如「第二段并进第一段」…' : '问点什么，或者让它整理…'}
+              placeholder={
+                editing
+                  ? '改这一问，发出去会追加一版'
+                  : draft
+                    ? '说要改哪里，比如「第二段并进第一段」…'
+                    : '问点什么，或者让它整理…'
+              }
               placeholderTextColor={c.text3}
               selectionColor={c.selection}
               style={styles.input}
@@ -1780,6 +1978,14 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.accent, backgroundColor: c.hairSoft,
   },
   contextText: { ...TYPE.meta, flex: 1, color: c.text2 },
+  /** 「正在改第 N 问」：和上下文条同一形状，底色换成强调色，一眼能分清是哪种前置状态 */
+  editBar: {
+    flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
+    marginHorizontal: metrics.pagePadding, marginBottom: SPACE.xs,
+    paddingLeft: SPACE.sm, paddingVertical: SPACE.xxs,
+    borderLeftWidth: metrics.strokeWidth, borderLeftColor: c.accent, backgroundColor: c.accentBg,
+  },
+  editBarText: { ...TYPE.meta, flex: 1, color: c.text2 },
   /**
    * 和首页输入卡同一套：浅灰底、无边框。
    *

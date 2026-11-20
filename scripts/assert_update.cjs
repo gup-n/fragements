@@ -103,11 +103,11 @@ test('面板不再一卸载就删残包，还能认出缓存里的半包', () =>
   const sheet = read('src/components/UpdateSheet.tsx');
   assert.ok(sheet.includes('pendingDownload(release)'), '打开面板要先问缓存');
   assert.ok(sheet.includes('继续下载'), '有残包时按钮要说「继续下载」');
-  // v0.31 的卸载清理会把残包删掉 —— 那正是「切走就要重下」的另一半原因
-  const at = sheet.indexOf('useEffect(() => {\n    return () => {');
-  assert.ok(at > 0, '找不到卸载清理');
-  const block = sheet.slice(at, sheet.indexOf('}, []);', at));
-  assert.ok(!block.includes('clearDownload'), '卸载时不许删残包');
+  // v0.31 的卸载清理会把残包删掉 —— 那正是「切走就要重下」的另一半原因。
+  // 用正则而不是按 `\n` 切：仓库工作树是 CRLF，写死换行符的断言迟早会假红。
+  const cleanup = sheet.match(/useEffect\(\(\) => \{\s*return \(\) => \{([\s\S]*?)\}, \[\]\);/);
+  assert.ok(cleanup, '找不到卸载清理');
+  assert.ok(!cleanup[1].includes('clearDownload'), '卸载时不许删残包');
   // 装完才收拾
   assert.ok(sheet.includes('clearDownload();'), '装完要清掉，不然 26 MB 一直躺着');
 });

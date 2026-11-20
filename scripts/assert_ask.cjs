@@ -81,6 +81,7 @@ const tscArgs = [
   'src/util/pendingImages.ts',
   'src/util/askText.ts',
   'src/util/urls.ts',
+  'src/ai/variants.ts',
   '--rootDir',
   'src',
   '--outDir',
@@ -115,6 +116,7 @@ const inline = require(path.join(outDir, 'util', 'inlineImages.js'));
 const mdBlocks = require(path.join(outDir, 'util', 'mdBlocks.js'));
 const pending = require(path.join(outDir, 'util', 'pendingImages.js'));
 const askText = require(path.join(outDir, 'util', 'askText.js'));
+const variants = require(path.join(outDir, 'ai', 'variants.js'));
 
 // ---------------------------------------------------------------------------
 // 1. 指令路由
@@ -832,6 +834,88 @@ check('「读了多少」：部分、全部、一段没读到三种说法', () =
 
 check('历史预览剥掉 Markdown 外壳，压成一行', () => {
   eq(askText.plainPreview('## 标题\nn\n```\ncode\n```\n> 引用'), '标题 n 引用', '预览');
+});
+
+// ---------------------------------------------------------------------------
+// 6. 回答版本（v0.33，抄 chat-demo 的 message branches）
+// ---------------------------------------------------------------------------
+
+const qaTurn = (q, a, extra = {}) => ({ question: q, answer: a, sourceIds: [], ...extra });
+const qaVariant = (q, a, extra = {}) => ({ question: q, answer: a, sourceIds: [], at: 1, ...extra });
+
+check('旧数据没有 variants：按一版读，越界切换是空操作', () => {
+  const t = qaTurn('Q', 'A');
+  eq(variants.variantsOf(t).length, 1, '旧数据视作一版');
+  eq(variants.activeVariant(t).answer, 'A', '读到的那一版就是旧字段');
+  eq(variants.activeIndexOf({ ...t, active: 5 }), 0, 'active 越界回到 0');
+  eq(variants.activeIndexOf({ ...t, active: -1 }), 0, '负数回到 0');
+  eq(variants.activeIndexOf({ ...t, active: 1.5 }), 0, '非整数回到 0');
+  // 切到不存在的版本必须原样返回：误点一下不能把当前答案弄丢
+  eq(variants.withActive(t, 3), t, '越界切换不改这一轮');
+});
+
+check('重新生成 = 追加一版并切过去，旧字段跟着镜像', () => {
+  const t = qaTurn('Q', 'A1');
+  const two = variants.withVariant(t, qaVariant('Q', 'A2', { at: 2 }));
+  eq(two.variants.length, 2, '两版');
+  eq(two.active, 1, '默认看新的一版');
+  eq(two.answer, 'A2', 'answers 镜像进旧字段（qa.ts 与旧版 App 都靠它）');
+  eq(two.question, 'Q', '问题没变');
+  eq(two.variants[0].answer, 'A1', '旧答案还在，能切回去');
+
+  const back = variants.withActive(two, 0);
+  eq(back.active, 0, '切回第 1 版');
+  eq(back.answer, 'A1', '镜像跟着回到第 1 版');
+});
+
+check('改问题 = 问题也随版本走，旧问法不丢', () => {
+  const t = qaTurn('Q1', 'A1');
+  const two = variants.withVariant(t, qaVariant('Q2', 'A2', { at: 2 }));
+  eq(two.question, 'Q2', '气泡换成改过的问题');
+  eq(two.variants[0].question, 'Q1', '旧版本保留原问题');
+  assert(variants.hasEditedQuestion(two), '两个版本问法不同，要能认出来');
+  eq(variants.hasEditedQuestion(t), false, '只有一版时不算改过');
+
+  const back = variants.withActive(two, 0);
+  eq(back.question, 'Q1', '切回去时问题也切回去 —— 否则会出现「旧答案配新问题」');
+});
+
+check('版本有上限：只丢最老的，当前这版永远不丢', () => {
+  let t = qaTurn('Q', 'A0');
+  for (let i = 1; i <= 14; i++) t = variants.withVariant(t, qaVariant('Q', `A${i}`, { at: i }));
+  eq(t.variants.length, variants.MAX_VARIANTS, '版本数封顶');
+  eq(t.answer, 'A14', '当前显示最新的');
+  eq(t.variants[t.variants.length - 1].answer, 'A14', '最后一版就是当前版');
+  assert(!t.variants.some((v) => v.answer === 'A0'), '最老的那版被丢掉');
+});
+
+check('重新生成的上下文：不含这一问，也不含整理轮', () => {
+  const list = [
+    qaTurn('Q1', 'A1'),
+    { question: '整理', answer: 'x', sourceIds: [], kind: 'organize' },
+    qaTurn('Q2', 'A2'),
+  ];
+  const before = variants.historyBefore(list, 2);
+  eq(before.length, 1, '只带第一问');
+  eq(before[0].question, 'Q1', '顺序不变');
+  eq(variants.historyBefore(list, 0).length, 0, '第一问的上文是空');
+  // 这一问的旧答案绝不能出现：出现了模型就会照着上一版抄
+  assert(!before.some((t) => t.question === 'Q2'), '不含正在重写的那一问');
+});
+
+check('页面接上了版本操作，且失败重试不会变成新的一轮', () => {
+  const page = fs.readFileSync('src/screens/AskScreen.tsx', 'utf8');
+  assert(page.includes("from '../ai/variants'"), '版本判据用共享模块，不在页面里手拼');
+  assert(page.includes('withVariant('), '追加版本走 withVariant');
+  assert(page.includes('withActive('), '切换版本走 withActive');
+  assert(page.includes('historyBefore(base, target)'), '补旧轮次时上下文只取这一轮之前');
+  assert(page.includes('void persistSession(next);'), '切换版本要落库，否则退出再看就变了');
+  assert(page.includes('runQuestion(lastRun.question, lastRun.target)'), '重试要带回原轮次');
+
+  const answer = fs.readFileSync('src/components/TurnAnswer.tsx', 'utf8');
+  assert(answer.includes('重新生成') && answer.includes('改问题'), '操作行两个入口都在');
+  assert(answer.includes('actions.total > 1'), '只有一版时不显示切换器');
+  assert(answer.includes('hitSlop'), '小按钮要靠 hitSlop 补到 48');
 });
 
 // ---------------------------------------------------------------------------

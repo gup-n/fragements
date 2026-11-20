@@ -1,6 +1,6 @@
 # 项目交接：当前开发分支
 
-最后整理：2026-11-19。本文记录当前工作树与接手入口，**不是发布说明**。先读[本轮间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)和[SPEC最新节](<SPEC.md>)；此前的[当前UI修订](<docs/plans/2026-11-15-ui-polish.md>)、[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
+最后整理：2026-11-20。本文记录当前工作树与接手入口，**不是发布说明**。先读[本轮间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)和[SPEC最新节](<SPEC.md>)；此前的[当前UI修订](<docs/plans/2026-11-15-ui-polish.md>)、[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
 
 ## 1. 三十秒速览
 
@@ -10,7 +10,7 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.32.0 / versionCode 84 |
+| 版本 | v0.33.0 / versionCode 85 |
 | 开发分支 | `feat/ui-polish-20261115` |
 | 发布状态 | v0.32.0 已发布（[CI 44548003311](https://github.com/gup-n/fragements/actions/runs/44548003311)，26,360,894 字节，SHA-256 `7e52ee68…ac92`，`draft=false`；经 ghfast.top 镜像按 3 MB 分段拉取拼接，字节数与资产一致、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。可回退：v0.31.1（26,354,426 字节，SHA-256 `52c63609…c637`）、v0.31.0（26,359,230 字节，SHA-256 `53819a4e…3bc5`）、v0.30.1（26,352,898 字节，SHA-256 `d85538e5…2ba6`）。真机仍未验 |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
@@ -23,6 +23,26 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.33.0：抄 chat-demo 的回答版本（重新生成 / 改问题 / 切回旧答案）
+
+用户 2026-11-20：「DeepSeek 的 chat-demo 开源，可以加入碎片的优化计划」→「抄了，最细致的方法开写」。
+抄的是**数据结构与交互**，不是代码（chat-demo 是 Web + React，碎片是 RN）。
+
+- `types.ts` 加 `QaVariant` 与 `QaTurn.variants/active`；`ai/variants.ts`（新，137 行）负责
+  `variantsOf / activeVariant / withVariant / withActive / historyBefore / MAX_VARIANTS`，
+  并把激活版**镜像**回旧字段 —— 旧版 APK 与 `ai/qa.ts` 都不用改。
+- `AskScreen`：`send()` 拆出 `runQuestion(question, target)`；target=null 新开一轮，
+  target=i 追加成第 i 轮的又一版。重新生成 / 改问题都走它；失败重试用 `lastRun` 带回原轮次。
+- `TurnAnswer`：底部动作行（重新生成 / 改问题 / 复制）+ `‹ 2/3 ›` 切换；
+  最新一轮摊开，更早的轮次收起成「⋯」。切换与追加立即 `persistSession`。
+- 上下文：`historyBefore` 只取这一轮之前，且每轮只取当前版 —— 防止模型照着旧答案抄。
+- 断言：`test:ask` 89 → 95（旧数据一版读、镜像、问题随版本走、上限、上下文、页面接线）；
+  顺带修了 `assert_update` 一个 CRLF 假红（按 `\n` 切源码的断言在 CRLF 工作树上找不到块）。
+- **没验**（要真机）：长会话里动作行的点按与「⋯」展开手感；改问题提示条与键盘同屏的位置；
+  旧版 APK 打开新版会话的降级表现；10 版上限时 `turns_json` 的实际体积。
+- **没抄**：语音输入/朗读（要新增原生依赖，真机才能验）、历史 ZIP（已有整套备份）、
+  附件上传与图片压缩（路径不同）、Mermaid（RN 要 WebView）。原因写在 CHANGELOG v0.33。
 
 ### v0.32.0：切走十秒回来从头下（断点续传 + 后台不判卡死）
 
@@ -470,7 +490,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:md` | 24 项通过 |
 | `npm run test:docs` | 71 项通过（问答16 + 任务8 + 阅读器47） |
 | `npm run test:todos` | 23 项通过 |
-| `npm run test:ask` | 89 项通过 |
+| `npm run test:ask` | **95 项通过**（v0.33：+6 条回答版本判据） |
 | `npm run test:reliability` | 88 项通过（既有真实控制流+内存桩） |
 | `npm run test:appearance` | 46 项通过 |
 | `npm run test:backup` | 19 项通过 |
@@ -483,7 +503,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run build:web` | 通过，4.71 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有469项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有475项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -528,10 +548,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2004 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 1866 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2072 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 160 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 117 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
-| `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 163 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源；`makeTurnStyles` 由问页 spread 复用 |
+| `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 327 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源 + 版本操作行；`makeTurnStyles` 由问页 spread 复用 |
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 796 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1610 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
@@ -539,7 +559,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 117 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 306 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 117 | 无颜色 TYPE/SPACE、四档字号倍数与 `setTypeScale`、装饰边线与显式 outline 判据 |
-| `src/types.ts` [打开](<src/types.ts>) | 476 | 领域类型、引用/会话、文档、配图与PendingFragmentImage |
+| `src/types.ts` [打开](<src/types.ts>) | 511 | 领域类型、引用/会话（含答案版本）、文档、配图与PendingFragmentImage |
 | `src/version.ts` [打开](<src/version.ts>) | 8 | 与包配置同步的应用版本常量 |
 | `src/components/DocEditor.tsx` [打开](<src/components/DocEditor.tsx>) | 456 | 写文档（新建与编辑同一界面）：标题、正文、标签、放弃确认；保存即入库 |
 | `src/components/TrashPane.tsx` [打开](<src/components/TrashPane.tsx>) | 320 | 回收站：三类混排、多选、批量恢复/彻底删除（两步确认）、30 天倒计时 |
@@ -580,6 +600,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/ai/keyStore.ts` [打开](<src/ai/keyStore.ts>) | 37 | 系统安全存储中的API Key |
 | `src/ai/knowledge.ts` [打开](<src/ai/knowledge.ts>) | 403 | fragments/session材料、docs/todos/note输出、预算、改稿与身份/授权对账 |
 | `src/ai/qa.ts` [打开](<src/ai/qa.ts>) | 759 | 记录问答、按需检索与预算、联网、真实引用和历史快照 |
+| `src/ai/variants.ts` [打开](<src/ai/variants.ts>) | 137 | 回答版本：追加/切换/上限、问题随版本走、旧字段镜像（兼容旧版 APK 与 qa.ts） |
 | `src/ai/documentRetrieval.ts` [打开](<src/ai/documentRetrieval.ts>) | 530 | 限定文档检索、公平装填、内容版本与D引用快照 |
 | `src/ai/summarize.ts` [打开](<src/ai/summarize.ts>) | 303 | 月总结材料与提示词，按日事件表/重要进展 |
 | `src/ai/search.ts` [打开](<src/ai/search.ts>) | 192 | 官方工具搜索、退避与结果兜底 |
@@ -708,8 +729,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 576 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |
 | `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 392 | 父子待办和月总结规则 |
-| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 850 | 89项：问页意图、草稿与输出兼容；抽屉的挂载条件/压暗层/读屏屏蔽 |
-| `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1880 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
+| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 934 | 95项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
+| `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1884 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 798 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
