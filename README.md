@@ -6,7 +6,7 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.32.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.32.0)。26,360,894 字节，SHA-256 `7e52ee6869377d484c71ff5dbedaa5f0fdfdb23e68c5586b6cd09600baccac92`，`draft=false`。可回退：[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节，清理版）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节，五条报修的修复）、[v0.30.1](https://github.com/gup-n/fragements/releases/download/v0.30.1/fragments-v0.30.1.apk)（26,352,898 字节）。v0.32.0 修「切走 10 秒回来从头下」：后台不再判卡死，残包留着按 `Range` 续，面板直接写「继续下载（62%）」。**这不是系统级后台下载**：进程活着传输继续，被杀则停，但已下的字节不丢。**真机仍未实测**。
+**v0.34.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.34.0/fragments-v0.34.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.34.0)。26,377,298 字节，SHA-256 `5709eb361aaddce24f5ca927fbba7b9a99e1325bf80e62bd6e0414e403cedd30`，`draft=false`。可回退：[v0.32.0](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk)（26,360,894 字节，断点续传）、[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节，清理版）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节）。v0.34.0 是审阅版：迁移包事务、写回收站的行也被挡住、时间区间检索倒序、顶层数组的 JSON 不再丢篇；同包还带着未单独发版的 v0.33（回答可重新生成 / 改问题 / 切回旧答案）。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
