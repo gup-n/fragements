@@ -1,5 +1,5 @@
 /**
- * 库打不开时的整屏兜底（v0.35）。
+ * 整屏兜底：库打不开，或者库打开了但首屏读不出来（v0.35 / v0.36）。
  *
  * 之前 `repo.init()` 失败只 `console.warn`，然后 `setBooted(true)` 照常进门：
  * 列表是空的、统计是 0 条，首页还写着「还没有碎片，记一条试试」——
@@ -7,6 +7,9 @@
  *
  * 这块屏幕只做一件事：把「数据还在、别卸载」说清楚，并给一个真的能按的重试。
  * 不做「从备份恢复」入口：那条路依赖已经打开的库，正是现在没有的东西。
+ *
+ * 默认文案是「库打不开」；首屏读库失败复用同一个组件，只换标题/正文/重试文案
+ * （`App.tsx` 的 `loadError`）。**不要再写第二块错误屏** —— 两份文案迟早不一致。
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -17,11 +20,25 @@ export function BootError({
   detail,
   busy,
   onRetry,
+  title = '数据打不开',
+  body = '你的记录还在手机上，这次只是没能打开数据库。',
+  warn = '先不要卸载应用 —— 卸载会连同这些记录一起删掉。',
+  hint = '反复失败的话，先看看手机存储是不是满了。',
+  retryLabel = '重试',
+  retryAccessibilityLabel = '重新打开数据库',
 }: {
   detail: string;
   /** 正在重试。没有这个反馈，用户会以为按钮没反应，连着点 */
   busy: boolean;
   onRetry: () => void;
+  /** 标题。首屏读库失败时用「数据没读出来」，不要说成数据库打不开 */
+  title?: string;
+  body?: string;
+  /** 整块屏幕上最要紧的那句：卸载 = 删数据 */
+  warn?: string;
+  hint?: string;
+  retryLabel?: string;
+  retryAccessibilityLabel?: string;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   return (
@@ -31,10 +48,10 @@ export function BootError({
           <Ionicons name="alert-circle-outline" size={26} color={c.danger} accessible={false} />
         </View>
         <Text style={styles.title} accessibilityRole="header">
-          数据打不开
+          {title}
         </Text>
-        <Text style={styles.body}>你的记录还在手机上，这次只是没能打开数据库。</Text>
-        <Text style={styles.warn}>先不要卸载应用 —— 卸载会连同这些记录一起删掉。</Text>
+        <Text style={styles.body}>{body}</Text>
+        <Text style={styles.warn}>{warn}</Text>
         {detail ? (
           <View style={styles.detailBox}>
             <Text style={styles.detail} numberOfLines={6}>
@@ -46,13 +63,13 @@ export function BootError({
           onPress={onRetry}
           disabled={busy}
           accessibilityRole="button"
-          accessibilityLabel="重新打开数据库"
+          accessibilityLabel={retryAccessibilityLabel}
           accessibilityState={{ disabled: busy, busy }}
           style={({ pressed }) => [styles.btn, pressed && styles.btnPressed, busy && styles.btnBusy]}
         >
-          <Text style={styles.btnText}>{busy ? '正在重试…' : '重试'}</Text>
+          <Text style={styles.btnText}>{busy ? '正在重试…' : retryLabel}</Text>
         </Pressable>
-        <Text style={styles.hint}>反复失败的话，先看看手机存储是不是满了。</Text>
+        <Text style={styles.hint}>{hint}</Text>
       </View>
     </SafeAreaView>
   );

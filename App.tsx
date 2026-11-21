@@ -222,6 +222,16 @@ function Shell({ booted }: { booted: boolean }) {
   const { styles } = useThemedStyles(makeStyles);
   const { dark } = useTheme();
   const [ready, setReady] = useState(false);
+  /**
+   * 首屏读库失败。和上层的 `bootError` 分开：库已经打开、文件都在，
+   * 只是这一次没读出列表 —— 文案不能说成「数据库打不开」。
+   *
+   * 为什么不能只 warn：`ready` 一旦为真，下面渲染的就是正常页面，
+   * 空数组会让时间轴说「今天记点什么？」、页头写 0 条 —— 用户以为记录没了。
+   */
+  const [loadError, setLoadError] = useState<unknown>(null);
+  /** 首屏重试中。错误页上的按钮据此变成「正在重试…」 */
+  const [loadBusy, setLoadBusy] = useState(false);
   const [route, setRoute] = useState<Route>('timeline');
   /**
    * 输入框草稿放在 App 里，不放在 TimelineScreen 里。
@@ -463,18 +473,31 @@ function Shell({ booted }: { booted: boolean }) {
     }
   }, [fragments.length, loadingOlder]);
 
+  /**
+   * 首屏加载。**只在这里决定「进门还是停在错误页」**。
+   *
+   * `reload` 本身仍然会抛：写操作后的刷新失败要在调用处说「已保存，列表暂未刷新」，
+   * 不能把整页换掉。所以错误处理放在这一个入口，而不是塞进 `reload`。
+   * 重试也走这里 —— 不要再开第二条初始化路径。
+   */
+  const loadInitial = useCallback(async () => {
+    setLoadBusy(true);
+    try {
+      await reload();
+      setLoadError(null);
+    } catch (e) {
+      console.warn('[fragments] 读取数据失败', e);
+      setLoadError(e);
+    } finally {
+      setLoadBusy(false);
+      setReady(true);
+    }
+  }, [reload]);
+
   useEffect(() => {
     if (!booted) return;
-    (async () => {
-      try {
-        await reload();
-      } catch (e) {
-        console.warn('[fragments] 读取数据失败', e);
-      } finally {
-        setReady(true);
-      }
-    })();
-  }, [booted, reload]);
+    void loadInitial();
+  }, [booted, loadInitial]);
 
   /**
    * 底栏切换。
@@ -812,115 +835,133 @@ function Shell({ booted }: { booted: boolean }) {
       <View style={[styles.outer, isWeb && styles.outerWeb]}>
         <View style={[styles.app, isWeb && styles.appWeb]}>
           {ready ? (
-            <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
-              {route === 'timeline' && (
-                <TimelineScreen
-                  fragments={fragments}
-                  notes={notes}
-                  doneIds={doneIds}
-                  draft={draft}
-                  onDraftChange={setDraft}
-                  pendingImages={pendingImages}
-                  onPendingImagesChange={setPendingImages}
-                  nextImageKey={nextImageKey}
-                  onAdd={handleAdd}
-                  imageBusy={imageBusy}
-                  imageFail={imageFail}
-                  onReparseImage={handleReparseImage}
-                  onAddImages={handleAddImages}
-                  onRemoveImage={handleRemoveImage}
-                  onDuplicate={handleDuplicate}
-                  onEdit={handleEdit}
-                  onDelete={handleDelete}
-                  onDeleteNote={handleDeleteNote}
-                  onOpenAsk={(fragmentId) => {
-                    setAskContextId(fragmentId ?? null);
-                    setRoute('ask');
-                  }}
-                  focusSignal={quickTap}
-                  total={fragmentTotal}
-                  loadingOlder={loadingOlder}
-                  todayChars={days.find((d) => d.day === dayKey(Date.now()))?.chars ?? 0}
-                  onLoadOlder={() => void loadOlder()}
-                />
-              )}
-              {route === 'settings' && (
-                <SettingsScreen
-                  embedded
-                  onChanged={reload}
-                  /*
-                   * 开关一拨就要立刻重排那条通知，所以这里传的是「用当前数据对齐一次」。
-                   * 传 reload 不行：Reload 之后数据没变，重排的时机就错过了。
-                   */
-                  onReminderChange={() => syncDigestReminder(months, notes)}
-                />
-              )}
-              {route === 'review' && (
-                <ReviewScreen
-                  embedded
-                  days={days}
-                  months={months}
-                  onLoadDay={loadDay}
-                  onChanged={reload}
-                  onOpenSettings={() => setRoute('settings')}
-                  focusTab={reviewFocus?.tab}
-                  focusSignal={reviewFocus?.signal}
-                />
-              )}
-              {route === 'docs' && (
-                <DocsScreen
-                  embedded
-                  onAsk={(documentIds) => {
-                    // 文档问和碎片问是两条入口，进来时清掉另一条，别让上一个范围残留
-                    setAskContextId(null);
-                    setAskDocIds(documentIds);
-                    setRoute('ask');
-                  }}
-                />
-              )}
-              {route === 'ask' && (
-                <AskScreen
-                  embedded
-                  onClose={() => {
-                    setRoute('timeline');
-                    setAskContextId(null);
-                    setAskDocIds(null);
-                  }}
-                  onSaved={reload}
-                  registerClose={registerAskClose}
-                  registerLeave={registerAskLeave}
-                  // 文档范围是会话契约：进来就锁死，页面里不许再改（改就得开新会话）
-                  initialScope={askDocIds ? { kind: 'documents', documentIds: askDocIds } : undefined}
-                  contextFragment={
-                    askContextId === null
-                      ? null
-                      : fragments.find((f) => f.id === askContextId) ?? null
-                  }
-                />
-              )}
-              {/*
-                底栏：五个平级页面之间切换。设置也在里面（它不再是覆盖层）。
-                键盘抬起时不显示 —— 它那 50 多 dp 正好是输入法要占的地方。
-              */}
-              {keyboardHeight === 0 ? (
-                <TabBar current={route} onChange={switchTab} />
-              ) : null}
-              {/*
-                更新弹窗放在所有页面之后：它是覆盖层，要盖在 route 内容之上。
-                放在 SafeAreaView 里面而不是外面，是为了让卡片居中时不被状态栏顶偏。
-              */}
-              {update ? (
-                <UpdateSheet
-                  release={update}
-                  onClose={() => setUpdate(null)}
-                  onSkipVersion={() => {
-                    setSkipVersion(update.version).catch(() => undefined);
-                  }}
-                />
-              ) : null}
-              {/* 提示条要浮在底栏之上，否则「已保存」这类反馈会被底栏整个盖住 */}
-              <Toast text={writeNotice} bottom={TAB_BAR_HEIGHT + 8} />
-            </SafeAreaView>
+            loadError ? (
+              /*
+               * 库已经打开，但这一次没读出列表。和「数据打不开」分开说：
+               * 说成数据库坏了会让用户去卸载重装，那才是真的丢数据。
+               */
+              <BootError
+                title="数据没读出来"
+                body="本地库已经打开，但这次没能读出列表。记录还在手机上，不是被删掉了。"
+                warn="先不要卸载应用，也不要清数据 —— 那会真的删掉这些记录。"
+                hint="如果反复失败，先看看手机存储是不是满了。"
+                retryLabel="重新读取"
+                retryAccessibilityLabel="重新读取记录列表"
+                detail={describeBootError(loadError)}
+                busy={loadBusy}
+                onRetry={() => void loadInitial()}
+              />
+            ) : (
+              <SafeAreaView style={styles.safe} edges={['top', 'bottom']}>
+                {route === 'timeline' && (
+                  <TimelineScreen
+                    fragments={fragments}
+                    notes={notes}
+                    doneIds={doneIds}
+                    draft={draft}
+                    onDraftChange={setDraft}
+                    pendingImages={pendingImages}
+                    onPendingImagesChange={setPendingImages}
+                    nextImageKey={nextImageKey}
+                    onAdd={handleAdd}
+                    imageBusy={imageBusy}
+                    imageFail={imageFail}
+                    onReparseImage={handleReparseImage}
+                    onAddImages={handleAddImages}
+                    onRemoveImage={handleRemoveImage}
+                    onDuplicate={handleDuplicate}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                    onDeleteNote={handleDeleteNote}
+                    onOpenAsk={(fragmentId) => {
+                      setAskContextId(fragmentId ?? null);
+                      setRoute('ask');
+                    }}
+                    focusSignal={quickTap}
+                    total={fragmentTotal}
+                    loadingOlder={loadingOlder}
+                    todayChars={days.find((d) => d.day === dayKey(Date.now()))?.chars ?? 0}
+                    onLoadOlder={() => void loadOlder()}
+                  />
+                )}
+                {route === 'settings' && (
+                  <SettingsScreen
+                    embedded
+                    onChanged={reload}
+                    /*
+                     * 开关一拨就要立刻重排那条通知，所以这里传的是「用当前数据对齐一次」。
+                     * 传 reload 不行：Reload 之后数据没变，重排的时机就错过了。
+                     */
+                    onReminderChange={() => syncDigestReminder(months, notes)}
+                  />
+                )}
+                {route === 'review' && (
+                  <ReviewScreen
+                    embedded
+                    days={days}
+                    months={months}
+                    onLoadDay={loadDay}
+                    onChanged={reload}
+                    onOpenSettings={() => setRoute('settings')}
+                    focusTab={reviewFocus?.tab}
+                    focusSignal={reviewFocus?.signal}
+                  />
+                )}
+                {route === 'docs' && (
+                  <DocsScreen
+                    embedded
+                    onAsk={(documentIds) => {
+                      // 文档问和碎片问是两条入口，进来时清掉另一条，别让上一个范围残留
+                      setAskContextId(null);
+                      setAskDocIds(documentIds);
+                      setRoute('ask');
+                    }}
+                  />
+                )}
+                {route === 'ask' && (
+                  <AskScreen
+                    embedded
+                    onClose={() => {
+                      setRoute('timeline');
+                      setAskContextId(null);
+                      setAskDocIds(null);
+                    }}
+                    onSaved={reload}
+                    registerClose={registerAskClose}
+                    registerLeave={registerAskLeave}
+                    // 文档范围是会话契约：进来就锁死，页面里不许再改（改就得开新会话）
+                    initialScope={askDocIds ? { kind: 'documents', documentIds: askDocIds } : undefined}
+                    contextFragment={
+                      askContextId === null
+                        ? null
+                        : fragments.find((f) => f.id === askContextId) ?? null
+                    }
+                  />
+                )}
+                {/*
+                  底栏：五个平级页面之间切换。设置也在里面（它不再是覆盖层）。
+                  键盘抬起时不显示 —— 它那 50 多 dp 正好是输入法要占的地方。
+                */}
+                {keyboardHeight === 0 ? (
+                  <TabBar current={route} onChange={switchTab} />
+                ) : null}
+                {/*
+                  更新弹窗放在所有页面之后：它是覆盖层，要盖在 route 内容之上。
+                  放在 SafeAreaView 里面而不是外面，是为了让卡片居中时不被状态栏顶偏。
+                */}
+                {update ? (
+                  <UpdateSheet
+                    release={update}
+                    onClose={() => setUpdate(null)}
+                    onSkipVersion={() => {
+                      setSkipVersion(update.version).catch(() => undefined);
+                    }}
+                  />
+                ) : null}
+                {/* 提示条要浮在底栏之上，否则「已保存」这类反馈会被底栏整个盖住 */}
+                <Toast text={writeNotice} bottom={TAB_BAR_HEIGHT + 8} />
+              </SafeAreaView>
+            )
           ) : (
             <View style={styles.splash} />
           )}

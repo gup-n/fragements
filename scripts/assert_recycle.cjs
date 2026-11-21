@@ -560,6 +560,10 @@ test('写回收站里的行也要被挡住，不只是读', () => {
    * 上面那条扫描只看 SELECT，而「软删之后又被写进去」全是 UPDATE：
    * 云解析迟到的结果、AI 提案、迟到的会话保存。它们不报错、界面也不显示，
    * 等用户恢复时才看到一份删除那一刻并不存在的内容。
+   *
+   * v0.36 补上碎片侧漏掉的五条：迟到的读图（setFragmentImageText）、
+   * 详情页改正文（updateFragmentContent）、加图（insertFragmentImages）、
+   * 整理标记（markFragmentsOrganized / commitDraft）。
    */
   const text = read('src/db/repo.native.ts');
   const check = (fn, needle) => {
@@ -574,6 +578,20 @@ test('写回收站里的行也要被挡住，不只是读', () => {
   check('async saveAskSession(', 'deleted_at IS NULL');
   // 正文写入的真正落点（repo 方法只是包了一层事务）
   check('function replaceDocumentContentIn(', 'deleted_at IS NULL');
+
+  check('async updateFragmentContent(', 'deleted_at IS NULL');
+  check('async insertFragmentImages(', 'deleted_at IS NULL');
+  check('async setFragmentImageText(', 'deleted_at IS NULL');
+  check('async markFragmentsOrganized(', 'deleted_at IS NULL');
+
+  /*
+   * commitDraft 里有两处 deleted_at（会话读取和 organized_at），
+   * 所以不能用 body.includes 一刀切 —— 必须钉到那句 UPDATE 上。
+   */
+  assert.ok(
+    /UPDATE fragments SET organized_at = \? WHERE id IN \([^)]*\) AND deleted_at IS NULL/.test(text),
+    'commitDraft 的 organized_at 也要挡回收站',
+  );
 });
 
 test('每一条迁移与它的版本号在同一个事务里', () => {

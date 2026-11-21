@@ -206,6 +206,14 @@ export function AskScreen({
    * 重试也不会好的错误，在界面上和「网络抖了一下」长得一模一样。
    */
   const [error, setError] = useState<ErrInfo | null>(null);
+  /**
+   * 会话没存上的原因（v0.36）。
+   *
+   * 以前 `persistSession` 的 catch 是空的：会话在回收站里、或磁盘写不进去时，
+   * 每轮回答都只活在内存里，切个 tab 就全没，界面一句提示都没有。
+   * 这个状态只服务一条可见的横幅，不参与问答流程。
+   */
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [webNote, setWebNote] = useState('');
   const [thinkingOn, setThinkingOn] = useState(true);
   const [webOn, setWebOn] = useState(false);
@@ -240,6 +248,13 @@ export function AskScreen({
   const sessionGenRef = useRef(0);
   /** 有没有「还没成功落库」的新轮次。退出时只补这一种，避免每次关闭都把会话顶到最前 */
   const dirtyRef = useRef(false);
+  /**
+   * 保存失败后「仍然离开」的第二次确认。
+   *
+   * 第一次拦住并说清会丢什么；用户再按一次返回（或再点一次别的 tab）才放行。
+   * 不做成弹层：这一页已经有历史抽屉、引用面板等五层覆盖物，再加一层只会更难退。
+   */
+  const leaveAnywayRef = useRef(false);
   const startedAtRef = useRef(Date.now());
 
   /* ---- 历史会话 ---- */
@@ -499,8 +514,8 @@ export function AskScreen({
    * 失败只静默 —— 保存历史不该拦着用户看答案。
    */
   const persistSession = useCallback(
-    async (list: QaTurn[], titleHint?: string | null) => {
-      if (!list.length) return;
+    async (list: QaTurn[], titleHint?: string | null): Promise<boolean> => {
+      if (!list.length) return true;
       const gen = sessionGenRef.current;
       const id = sessionIdRef.current;
       // 范围在调用的一瞬间取定：await 之后 state 可能已经换了新会话
@@ -519,15 +534,26 @@ export function AskScreen({
           createdAt: startedAtRef.current,
         });
         // 保存期间用户可能已经新建/切换会话，那就只落库，不再改当前界面状态
-        if (sessionGenRef.current !== gen) return;
+        if (sessionGenRef.current !== gen) return true;
         if (id === null) {
           sessionIdRef.current = nextId;
           setSessionId(nextId);
         }
         setSessionTitle(title);
         dirtyRef.current = false;
-      } catch {
-        /* 会话保存失败不拦问答 */
+        leaveAnywayRef.current = false;
+        setSaveError(null);
+        return true;
+      } catch (e) {
+        /*
+         * 不能吞掉：会话可能在回收站里（`saveAskSession` 会抛），
+         * 也可能磁盘满了。无论哪种，这一页现在的回答都没有落库 ——
+         * 用户离开就真的没了，所以必须有一条看得见的提示。
+         */
+        if (sessionGenRef.current === gen) {
+          setSaveError(e instanceof Error ? e.message : '写入本地库失败');
+        }
+        return false;
       }
     },
     [sessionTitle],
@@ -547,7 +573,21 @@ export function AskScreen({
   const flushBeforeLeave = useCallback(async () => {
     if (organize.isLocked()) { showToast('先暂停整理，或等待写入完成'); return false; }
     if (!(await organize.suspend())) return false;
-    if (dirtyRef.current) void persistSession(turnsRef.current);
+    if (dirtyRef.current) {
+      const saved = await persistSession(turnsRef.current);
+      if (!saved) {
+        /*
+         * 第一次拦住并说清代价；再按一次返回才放行。
+         * 不 await 的话，页面一卸载，没落库的轮次就真的只剩内存里那一份了。
+         */
+        if (!leaveAnywayRef.current) {
+          leaveAnywayRef.current = true;
+          showToast('会话没存上。再按一次返回会放弃这次对话；也可以点上面的重试');
+          return false;
+        }
+        leaveAnywayRef.current = false;
+      }
+    }
     return true;
   }, [organize, showToast, persistSession]);
 
@@ -727,8 +767,17 @@ export function AskScreen({
     if (busy || organize.isLocked()) return false;
     if (!(await organize.suspend())) return false;
     if (!turnsRef.current.length && sessionIdRef.current === null) flashNewHint();
-    if (dirtyRef.current) void persistSession(turnsRef.current);
+    if (dirtyRef.current) {
+      const saved = await persistSession(turnsRef.current);
+      if (!saved && !leaveAnywayRef.current) {
+        leaveAnywayRef.current = true;
+        showToast('上一场会话没存上。再点一次会放弃没存的部分');
+        return false;
+      }
+      leaveAnywayRef.current = false;
+    }
     sessionGenRef.current += 1; dirtyRef.current = false;
+    setSaveError(null);
     setTurns([]); turnsRef.current = [];
     setSessionId(null); sessionIdRef.current = null;
     setSessionTitle(null); startedAtRef.current = Date.now();
@@ -747,8 +796,17 @@ export function AskScreen({
     try { nextScope = normalizeQaScope(s.scope, true); }
     catch { showToast('这场会话的范围读不出来，不能继续问'); return; }
     if (!(await organize.suspend())) return;
-    if (dirtyRef.current) void persistSession(turnsRef.current);
+    if (dirtyRef.current) {
+      const saved = await persistSession(turnsRef.current);
+      if (!saved && !leaveAnywayRef.current) {
+        leaveAnywayRef.current = true;
+        showToast('上一场会话没存上。再点一次会放弃没存的部分');
+        return;
+      }
+      leaveAnywayRef.current = false;
+    }
     sessionGenRef.current += 1; dirtyRef.current = false;
+    setSaveError(null);
     setTurns(s.turns); turnsRef.current = s.turns;
     setSessionId(s.id); sessionIdRef.current = s.id;
     setSessionTitle(s.title); startedAtRef.current = s.createdAt;
@@ -1259,6 +1317,17 @@ export function AskScreen({
           {docMode ? <Text style={styles.scopeTag}>不联网</Text> : null}
         </View>
         {scopeProblem ? <Text style={styles.scopeWarn}>{scopeProblem}</Text> : null}
+        {/*
+          会话没存上的提示放在滚动区外面：它是一条「离开就会丢」的警告，
+          跟着消息滚走等于没提示。只在这一页真的有未落库轮次时出现。
+        */}
+        {saveError ? (
+          <AgentError
+            title="这次会话没存上"
+            message={`${saveError}。离开这一页会丢掉还没存的部分。`}
+            onRetry={() => void persistSession(turnsRef.current)}
+          />
+        ) : null}
 
         <ScrollView
           ref={scrollRef}

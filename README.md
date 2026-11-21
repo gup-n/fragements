@@ -6,13 +6,13 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.35.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.35.0/fragments-v0.35.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.35.0)。26,381,726 字节，SHA-256 `d44d7f6cbae42dcf0973f069fbc3fa30a3d17b15cf9da4083029c0647dd41c34`，`draft=false`。可回退：[v0.34.0](https://github.com/gup-n/fragements/releases/download/v0.34.0/fragments-v0.34.0.apk)（26,377,298 字节，SHA-256 `5709eb36…dd30`）、[v0.32.0](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk)（26,360,894 字节）、[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节）。v0.35.0 把 v0.34 记的五项账还掉四项（网页端原子写 / 新建文档单事务 / 启动兜底 / 文档行 memo），另加首页光标改 ref；时间轴的 memo 试过又退回。**真机仍未实测**。
+**v0.36.0 开发中，尚未发布。最新发布仍是 v0.35.0。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.35.0/fragments-v0.35.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.35.0)。26,381,726 字节，SHA-256 `d44d7f6cbae42dcf0973f069fbc3fa30a3d17b15cf9da4083029c0647dd41c34`，`draft=false`。可回退：[v0.34.0](https://github.com/gup-n/fragements/releases/download/v0.34.0/fragments-v0.34.0.apk)（26,377,298 字节，SHA-256 `5709eb36…dd30`）、[v0.32.0](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk)（26,360,894 字节）、[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节）。v0.36.0 先修「读库失败装成空库」「软删之后还会被写」「会话保存失败不说话」，并补上 CI 漏跑的回收站断言；**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.35.0（versionCode 87） |
+| 当前版本 | v0.36.0（versionCode 88）· 开发中 |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

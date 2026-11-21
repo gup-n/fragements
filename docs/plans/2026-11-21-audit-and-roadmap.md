@@ -51,7 +51,7 @@
 
 ### D-01 启动读库失败被当成「空库」（P0）
 
-- [ ] **修：首屏加载失败要停在错误页，不许 `setReady(true)` 后照常进门。**
+- [x] **修：首屏加载失败要停在错误页，不许 `setReady(true)` 后照常进门。**
   - 证据：`App.tsx` 的 `reload()` 用 `Promise.all` 读六项，任一失败整体 reject；
     调用处只 `console.warn`，`finally` 无条件 `setReady(true)`（第 466–477 行）。
   - 后果：`fragments`/`days`/`months` 全空，时间轴渲染 `EmptyState tone="accent"` 的
@@ -63,6 +63,7 @@
   - 验收：用桩让任一查询 reject → 界面显示加载失败而不是空状态；点重试成功后才出现列表。
     新增断言钉住「`reload` 失败路径不许调用 `setReady(true)` 作为成功」。
 
+  - **落地（v0.36.0）**：`Shell` 增加 `loadError`/`loadBusy`，首屏收成 `loadInitial`；`BootError` 加可选文案；`test:ui` 48 项钉住。
 ### D-02 恢复备份不是原子替换，且安全副本没有入口（P0）
 
 - [ ] **修：恢复要能失败回退；安全副本要能在 App 里恢复；恢复前要排空文档任务。**
@@ -87,7 +88,7 @@
 
 ### D-03 软删的写闸门还漏五条路径（P1）
 
-- [ ] **修：`fragments` 的写路径补 `deleted_at IS NULL`，并扩 `assert_recycle`。**
+- [x] **修：`fragments` 的写路径补 `deleted_at IS NULL`，并扩 `assert_recycle`。**
   - 证据（`src/db/repo.native.ts`）：
     - 第 1384 行 `updateFragmentContent`：`UPDATE fragments SET content = ? WHERE id = ?`；
     - 第 1328 行 `insertFragmentImages`：只查 `SELECT id ... WHERE id = ?`，不看软删；
@@ -103,9 +104,10 @@
   - 验收：`assert_recycle` 从「三条写路径」扩到逐方法断言；另加一条
     「软删后读图结果不落库、FTS 条数不变」的故障桩用例。
 
+  - **落地（v0.36.0）**：五处补 `deleted_at IS NULL`（native/web 同步），`assert_recycle` 扩到八条写路径。
 ### D-04 会话保存失败无声（P1）
 
-- [ ] **修：保存失败要看得见；离开前要等最后一次保存。**
+- [x] **修：保存失败要看得见；离开前要等最后一次保存。**
   - 证据：`AskScreen.tsx` 的 `persistSession` catch 是空的（第 529–531 行）；
     `flushBeforeLeave` 里 `if (dirtyRef.current) void persistSession(...)`（第 550 行）不 await，
     随即返回 `true` 让页面卸载。
@@ -116,6 +118,7 @@
     失败时留在页面并给重试，而不是静默放行。
   - 验收：桩让 `saveAskSession` reject → 条出现、离开被拦住；重试成功后条消失、可离开。
 
+  - **落地（v0.36.0）**：`persistSession` 返回结果并设 `saveError`；横幅带重试；离开/新建/切换都等保存，失败二次放行。
 ### D-05 分享接收在主线程整文件复制，且没有大小上限（P1）
 
 - [ ] **修：复制挪到后台线程、加单文件/总大小上限，并把跳过项告诉 JS。**
@@ -134,7 +137,7 @@
 
 ### D-06 CI 少跑 `test:recycle`（P1）
 
-- [ ] **修：把 38 项软删/迁移/标签断言加进 Android CI。**
+- [x] **修：把 38 项软删/迁移/标签断言加进 Android CI。**
   - 证据：`package.json` 的 `test` 包含 `npm run test:recycle`；
     `.github/workflows/android.yml` 的步骤从 `test:update` 直接到 `test:ui`，没有 recycle。
   - 后果：v0.28 以来最重要的那条「逐条扫 SQL 的软删过滤」在 CI 里从未拦过任何东西，
@@ -144,6 +147,7 @@
     防止下次再加脚本又漏。
   - 验收：CI 日志出现 `回收站与标签：38 项通过`；故意删掉一条 `deleted_at IS NULL` 能让 CI 红。
 
+  - **落地（v0.36.0）**：workflow 在 `test:update` 后加了 `test:recycle`，当前 38 项。
 ### D-07 搜索 200 上限却报「找到 N 条」（P1）
 
 - [ ] **修：上限要可见，或给「继续加载」。**
@@ -348,6 +352,9 @@
 
 ## 5. 执行顺序（按版本切）
 
+> 2026-11-22：v0.36.0 第一批已落地 D-01 / D-03 / D-04 / D-06；
+> **D-02（恢复备份回退）与 D-05（分享上限）顺延到 v0.36.1**，它们是下一批的第一条。
+
 | 版本 | 内容 | 为什么先做 |
 |---|---|---|
 | **v0.36** | D-01、D-02（含 F-02）、D-03、D-04、D-05、D-06；O-01、O-02 | 全是「数据看起来没了 / 保存失败不说话」；不改 schema |
@@ -391,3 +398,20 @@
 
 > 这张表的勾只代表「本轮确实做了」，不代表「功能已验」。真机与真实数据的结论，
 > 必须另起一行、写明设备与包来源，按 AGENTS 第 3 节来。
+
+## 8. 2026-11-22 执行记录（v0.36.0 第一批）
+
+- [x] **D-01** 首屏读库失败停在 `BootError` 的「数据没读出来」，重试走 `loadInitial`；
+  `test:ui` 48 项钉住，旧写法（失败也 `setReady(true)`）被源码断言拦下。
+- [x] **D-03** 五条软删写路径补 `deleted_at IS NULL`（native/web 同步）；
+  `assert_recycle` 的写路径检查从三条扩到八条。
+- [x] **D-04** `persistSession` 返回成功/失败并设 `saveError`；横幅带重试；
+  离开/新建/切换会话都等保存，失败第一次拦住、第二次放行。
+- [x] **D-06** Android CI 在 `test:update` 之后跑 `test:recycle`（38 项）。
+- [ ] **D-02** 恢复备份的两阶段替换、安全副本入口、恢复前排空文档任务 —— **下一批第一条**。
+- [ ] **D-05** 分享接收后台复制、单文件/总量上限、跳过清单 —— 下一批。
+- [ ] **真机** 错误页观感、保存失败横幅与键盘/返回键层叠、软删迟到写入的实际时序。
+  没有设备，不勾。
+
+本地验证：`npm test` **489 项**全绿；`tsc --noEmit --noUnusedLocals` 0 告警；
+`build:web` 4.73 MiB。CI 由本轮提交触发（只构建，不打 tag、不发 Release）。

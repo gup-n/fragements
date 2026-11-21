@@ -823,6 +823,24 @@ test('文档字数只认 charCount，不在界面里重数正文', () => {
   assert.ok(!viewer.includes('doc.bodyMd.length'), '不许再自己对正文数一遍');
 });
 
+/*
+ * 首屏读库失败不许装成空库。
+ *
+ * v0.36 之前 `reload()` 失败只 warn，`finally` 无条件 `setReady(true)`：
+ * 页面照常进门，列表是空的、页头 0 条、首页写「今天记点什么？」——
+ * 用户以为记录没了。这条钉住「失败要停在错误页，重试走同一条加载路径」。
+ */
+test('读库失败停在错误页，不装成空库', () => {
+  const app = parseSource('App.tsx').getText();
+  assert.ok(app.includes('const [loadError, setLoadError] = useState<unknown>(null)'), '要有独立的 loadError');
+  assert.ok(app.includes('const loadInitial = useCallback('), '首屏加载要收成一个入口');
+  assert.ok(/setLoadError\(e\)/.test(app), '失败要记下原因');
+  assert.ok(app.includes('onRetry={() => void loadInitial()}'), '重试必须走同一条加载路径');
+  assert.ok(app.includes('title="数据没读出来"'), '文案要和「数据库打不开」分开');
+  assert.ok(!/await reload\(\);\s*\}\s*catch \(e\) \{\s*console\.warn\('\[fragments\] 读取数据失败', e\);\s*\}\s*finally \{\s*setReady\(true\)/.test(app),
+    '旧写法：reload 失败也 setReady(true) 照常进门');
+});
+
 if (require.main === module) {
   suite.run().then(({ failed }) => { process.exitCode = failed ? 1 : 0; }).catch((error) => {
     console.error(error && error.stack ? error.stack : error);

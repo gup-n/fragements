@@ -423,7 +423,10 @@ export const repo: Repo = {
       if (receipt.documents.length + receipt.todos.length > before) {
         const sourceIds = positiveIds(input.sourceIds);
         const sources = new Set(sourceIds);
-        for (const f of d.fragments) if (sources.has(f.id)) f.organizedAt = now;
+        for (const f of d.fragments) {
+          // 整理期间被删掉的来源不要再打「已整理」，理由同 native
+          if (sources.has(f.id) && !isTrashed(d, 'fragment', f.id)) f.organizedAt = now;
+        }
         const session = input.sessionId === null
           ? undefined
           : d.askSessions.find((s) => s.id === input.sessionId);
@@ -536,7 +539,9 @@ export const repo: Repo = {
     if (!images.length) return [];
     return writeAtomically((d) => {
       const fragment = d.fragments.find((f) => f.id === fragmentId);
-      if (!fragment) throw new Error('这条碎片已经不存在');
+      if (!fragment || isTrashed(d, 'fragment', fragmentId)) {
+        throw new Error('这条碎片已经不存在，或已在回收站');
+      }
       if (fragment.images.length + images.length > 9 || images.some((img) => !img.path)) {
         throw new Error('一条碎片最多9张有效配图');
       }
@@ -560,6 +565,7 @@ export const repo: Repo = {
   async setFragmentImageText(imageId, text) {
     writeAtomically((d) => {
       for (const f of d.fragments) {
+        if (isTrashed(d, 'fragment', f.id)) continue;
         const img = f.images.find((i) => i.id === imageId);
         if (img) {
           img.text = text;
@@ -587,7 +593,10 @@ export const repo: Repo = {
   async updateFragmentContent(id, content) {
     writeAtomically((d) => {
       const f = d.fragments.find((x) => x.id === id);
-      if (f) f.content = content.trim();
+      if (!f || isTrashed(d, 'fragment', id)) {
+        throw new Error('这条碎片不存在或已在回收站，改动没有保存');
+      }
+      f.content = content.trim();
     });
   },
 
@@ -595,7 +604,10 @@ export const repo: Repo = {
     if (!ids.length) return;
     writeAtomically((d) => {
       const set = new Set(ids);
-      for (const f of d.fragments) if (set.has(f.id)) f.organizedAt = at;
+      for (const f of d.fragments) {
+        if (!set.has(f.id) || isTrashed(d, 'fragment', f.id)) continue;
+        f.organizedAt = at;
+      }
     });
   },
 

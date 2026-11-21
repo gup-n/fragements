@@ -10,9 +10,9 @@
 |---|---|
 | 工作目录 | `F:/coding/python/project/Test/fragments` |
 | 包名 | `com.local.fragments`，不变 |
-| 版本 | v0.35.0 / versionCode 87 |
+| 版本 | v0.36.0 / versionCode 88 |
 | 开发分支 | `feat/ui-polish-20261115` |
-| 发布状态 | v0.35.0 已发布（[CI 44873073103](https://github.com/gup-n/fragements/actions/runs/44873073103)，26,381,726 字节，SHA-256 `d44d7f6c…1c34`，`draft=false`；签名地址 9 路并行分段拉取拼接：九段字节数全对、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。**发布说明第一次抽出来只有「验证」四条** —— `release_notes.mjs` 只认 `- ` 条目，而这一版前六节是段落；脚本已修（不足 6 条时用无 bullet 的节标题兜底），Release body 已手动 PATCH。可回退：v0.34.0（26,377,298 字节，SHA-256 `5709eb36…dd30`）、v0.32.0（26,360,894 字节）、v0.31.1（26,354,426 字节）、v0.31.0（26,359,230 字节）。**v0.34.0 与 v0.35.0 的真机都没验** |
+| 发布状态 | **v0.36.0 未发布**；最新发布 v0.35.0（[CI 44873073103](https://github.com/gup-n/fragements/actions/runs/44873073103)，26,381,726 字节，SHA-256 `d44d7f6c…1c34`，`draft=false`；签名地址 9 路并行分段拉取拼接：九段字节数全对、文件头 `PK`、本地算 sha256、zip 641 条无坏项）。**发布说明第一次抽出来只有「验证」四条** —— `release_notes.mjs` 只认 `- ` 条目，而这一版前六节是段落；脚本已修（不足 6 条时用无 bullet 的节标题兜底），Release body 已手动 PATCH。可回退：v0.34.0（26,377,298 字节，SHA-256 `5709eb36…dd30`）、v0.32.0（26,360,894 字节）、v0.31.1（26,354,426 字节）、v0.31.0（26,359,230 字节）。**v0.34.0 与 v0.35.0 的真机都没验** |
 | 本轮代码恢复点 | `backup/pre-ui-polish-20261115` / `76d91b0`（含完整备份、快速记录和分享）；原开发分支不变 |
 | 技术 | RN0.88 / Expo SDK58 / React19.3 / TypeScript6；Android单端 |
 | 数据 | 本地SQLite和私有文件，已有17段结构迁移；无账号、后端、同步 |
@@ -23,6 +23,28 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### v0.36.0：先修「看起来正常」的三件事（第一批，未发布）
+
+用户 2026-11-22：「开始优化」。按计划书 D-01 → D-02 → D-03 的顺序做，
+这一批完成 D-01、D-03、D-04、D-06；**D-02（恢复备份回退）与 D-05（分享上限）还没做**。
+
+- **首屏读库失败不再装成空库**：`Shell` 新增 `loadError` / `loadBusy`，首屏加载收成
+  `loadInitial` 一个入口；失败停在 `BootError` 的「数据没读出来」变体（同一组件、换文案），
+  重试走 `loadInitial`。`reload` 仍然抛错，写操作后的刷新失败继续在调用处说
+  「已保存，列表暂未刷新」——两种失败不混。
+- **软删的写闸门补齐五条**：`updateFragmentContent` / `insertFragmentImages` /
+  `setFragmentImageText` / `markFragmentsOrganized` / `commitDraft` 的 `organized_at`
+  都带 `deleted_at IS NULL`，native 与 web 同步。迟到的读图结果不再写进回收站里的行，
+  也不会给已删碎片重建 FTS 行。
+- **会话保存失败看得见**：`persistSession` 返回成功/失败，失败设 `saveError`；
+  问答流顶部一条 `AgentError`「这次会话没存上」，带重试。离开页面 / 新建 / 切换会话
+  都先等最后一次保存；失败第一次拦住并说清会丢什么，再按一次才放行。
+- **CI 补上 `test:recycle`**：38 项软删/迁移/标签断言终于会在 tag 和 PR 上跑。
+- 断言：`test:ask` 99 → 100、`test:ui` 47 → 48（recycle 仍 38，但 CI 开始跑它）。
+  本地 `npm test` **489 项**全绿；`tsc --noUnusedLocals` 0 告警。
+- **没验**：真机上的错误页观感、保存失败横幅与键盘/返回键的层叠；
+  D-02 的备份恢复回退还没有实现，也谈不上验收。
 
 ### 2026-11-21 全仓复审（只有文档，没有代码改动）
 
@@ -564,7 +586,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:md` | 24 项通过 |
 | `npm run test:docs` | 74 项通过（问答19 + 任务8 + 阅读器47） |
 | `npm run test:todos` | 23 项通过 |
-| `npm run test:ask` | **99 项通过**（v0.33 回答版本 + v0.34 顶层数组/花括号噪声/保留项计数） |
+| `npm run test:ask` | **100 项通过**（v0.33 回答版本 + v0.34 顶层数组/花括号噪声/保留项计数；v0.36 会话保存失败可见） |
 | `npm run test:reliability` | 88 项通过（既有真实控制流+内存桩） |
 | `npm run test:appearance` | 46 项通过 |
 | `npm run test:backup` | 19 项通过 |
@@ -572,12 +594,12 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:paging` | 10 项通过 |
 | `npm run test:update` | **7 项通过**（v0.32：残包续传判据 + 「后台不算卡死」+ 两处源码卫生） |
 | `npm run test:recycle` | **38 项通过**（软删过滤逐条扫 SQL；v0.34 增「写也不能碰回收站的行」「迁移包事务」「恢复只补真恢复的那几条」；v0.35 增「全角折叠、标点不折叠、三处查重同源」） |
-| `npm run test:ui` | **47 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.35 新增「文档行 memo + 行回调稳定」「光标不进 state」） |
+| `npm run test:ui` | **48 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.36 新增「读库失败停在错误页」） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.72 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有488项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有489项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -615,14 +637,14 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `App.tsx` [打开](<App.tsx>) | 951 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
+| `App.tsx` [打开](<App.tsx>) | 992 | route state、两轴偏好落盘、底栏五页与键盘让位、记录草稿/待发图、数据/图片提交接线、分享接收（多文件）、两条通知的接线、返回与文档运行时 |
 | `src/quickRecord.ts` | 141 | 通知栏常驻「记一条」：MIN 渠道 sticky 通知、点击回时间轴并聚焦输入框；冷启动那次靠 `getLastNotificationResponseAsync` 单独捞 |
 | `src/shareInbox.ts` | 177 | 读系统分享进来的内容：`files/incoming/` 那份 json + 文件列表，用时间戳做幂等键只消费一次（失败可退回 `prevAt`）；`files[]` 与旧版单文件 json 都认；每个文件各自判 mime / 扩展名 |
 | `src/digestReminder.ts` | 215 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
 | `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2029 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
-| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2072 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
+| `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2141 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 159 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 116 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
 | `src/components/TurnAnswer.tsx` [打开](<src/components/TurnAnswer.tsx>) | 327 | 一条回答：正文（可点引用小标）+ 引用来源 + 网页来源 + 版本操作行；`makeTurnStyles` 由问页 spread 复用 |
@@ -649,8 +671,8 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `src/db/types.ts` [打开](<src/db/types.ts>) | 512 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2332 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1343 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2349 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1355 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
@@ -803,13 +825,14 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 576 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |
 | `scripts/assert_todos.cjs` [打开](<scripts/assert_todos.cjs>) | 392 | 父子待办和月总结规则 |
-| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 961 | 95项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
+| `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 970 | 100项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1884 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
-| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 832 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 850 | 48项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 159 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
 | `scripts/assert_update.cjs` [打开](<scripts/assert_update.cjs>) | 121 | 7项：残包续传的四个判据（版本/源/大小/已下全）、切后台不算卡死、百分比、以及「下载不许退回一次性任务」「面板卸载不许删残包」两条源码卫生 |
+| `scripts/assert_recycle.cjs` | 629 | 38项：逐条扫 SQL 的软删过滤、五条写路径不碰回收站、迁移与版本号同事务、恢复只补真恢复的行、标签查重同源 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |
 | `scripts/check_docs.mjs` [打开](<scripts/check_docs.mjs>) | 265 | 文档机器一致性（行数表连 .cjs/.mjs 一起查）；不得通过降低覆盖率躲检查 |
 

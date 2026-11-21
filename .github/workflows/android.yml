@@ -89,6 +89,12 @@ jobs:
       - name: 更新下载续传断言
         run: npm run test:update
 
+      # 软删只有一条判据（deleted_at IS NULL），漏一条不会报错，只会「删掉的东西又冒出来」。
+      # 这组还钉着「写也要挡回收站」、迁移与版本号同事务、标签查重同源。
+      # v0.36 之前 CI 一直漏跑它（package.json 的 test 有、workflow 没有）。
+      - name: 回收站与软删写路径断言
+        run: npm run test:recycle
+
       - name: UI排版与窄屏布局断言
         run: npm run test:ui
 

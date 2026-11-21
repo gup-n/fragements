@@ -1131,7 +1131,7 @@ export const repo: Repo = {
         const sourceIds = positiveIds(input.sourceIds);
         for (let i = 0; i < sourceIds.length; i += 400) {
           const ids = sourceIds.slice(i, i + 400);
-          d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ids.map(() => '?').join(',')})`, [now, ...ids]);
+          d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ids.map(() => '?').join(',')}) AND deleted_at IS NULL`, [now, ...ids]);
         }
         if (input.sessionId !== null) {
           /* trash:ok 按 id 读会话；下面那句注释说的就是「已删的会话不能被迟到的提交复活」 */
@@ -1324,8 +1324,10 @@ export const repo: Repo = {
     const d = db();
     const added: FragmentImage[] = [];
     d.withTransactionSync(() => {
-      /* trash:ok 按 id 读，判断这条碎片还在不在（加图要先确认它还活着） */
-      if (!d.getFirstSync('SELECT id FROM fragments WHERE id = ?', [fragmentId])) throw new Error('这条碎片已经不存在');
+      /* trash:ok 按 id 读，判断这条碎片还在不在（加图要先确认它还活着，不是回收站里的） */
+      if (!d.getFirstSync('SELECT id FROM fragments WHERE id = ? AND deleted_at IS NULL', [fragmentId])) {
+        throw new Error('这条碎片已经不存在，或已在回收站');
+      }
       const total = countOf(d, 'SELECT COUNT(*) AS n FROM fragment_images WHERE fragment_id = ?', [fragmentId]);
       if (total + images.length > 9 || images.some((img) => !img.path)) throw new Error('一条碎片最多9张有效配图');
       const ordinal = d.getFirstSync<{ n: number | null }>(
@@ -1351,8 +1353,17 @@ export const repo: Repo = {
   async setFragmentImageText(imageId, text) {
     const d = db();
     d.withTransactionSync(() => {
+      /*
+       * 读图是异步的：用户可能在这一步之前把碎片删了。软删之后还写文字层、
+       * 还 reindex，会把一条指向回收站碎片的 FTS 行插回去 —— 下次启动
+       * `indexed > total`，白重建一遍全量索引；恢复时也会看到「删除之后才有的」文字。
+       */
       const mine = d.getFirstSync<{ fragment_id: number }>(
-        'SELECT fragment_id FROM fragment_images WHERE id = ?', [imageId],
+        `SELECT i.fragment_id AS fragment_id
+           FROM fragment_images i
+           JOIN fragments f ON f.id = i.fragment_id
+          WHERE i.id = ? AND f.deleted_at IS NULL`,
+        [imageId],
       );
       if (!mine) return;
       d.runSync('UPDATE fragment_images SET text = ? WHERE id = ?', [text, imageId]);
@@ -1381,7 +1392,12 @@ export const repo: Repo = {
   async updateFragmentContent(id, content) {
     const d = db();
     d.withTransactionSync(() => {
-      d.runSync('UPDATE fragments SET content = ? WHERE id = ?', [content.trim(), id]);
+      // 已进回收站的碎片不再接受编辑：详情页可能停在删除之前的那一版上
+      const res = d.runSync(
+        'UPDATE fragments SET content = ? WHERE id = ? AND deleted_at IS NULL',
+        [content.trim(), id],
+      );
+      if (res.changes === 0) throw new Error('这条碎片不存在或已在回收站，改动没有保存');
       reindexFragment(d, id);
     });
   },
@@ -1394,7 +1410,8 @@ export const repo: Repo = {
     for (let i = 0; i < list.length; i += 400) {
       const slice = list.slice(i, i + 400);
       const ph = slice.map(() => '?').join(',');
-      d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ph})`, [at, ...slice]);
+      // 整理期间被删掉的来源不要再打「已整理」：恢复时会看到删除之后才有的标记
+      d.runSync(`UPDATE fragments SET organized_at = ? WHERE id IN (${ph}) AND deleted_at IS NULL`, [at, ...slice]);
     }
   },
 

@@ -945,6 +945,15 @@ check('页面接上了版本操作，且失败重试不会变成新的一轮', (
   assert(answer.includes('hitSlop'), '小按钮要靠 hitSlop 补到 48');
 });
 
+check('会话保存失败要看得见，离开前要等它', () => {
+  const page = fs.readFileSync('src/screens/AskScreen.tsx', 'utf8');
+  assert(page.includes('const [saveError, setSaveError]'), '要有独立的保存失败状态');
+  assert(page.includes('setSaveError(e instanceof Error'), '失败原因要落到状态里，不许空 catch');
+  assert(page.includes('const saved = await persistSession(turnsRef.current)'), '离开前要等最后一次保存');
+  assert(page.includes('title="这次会话没存上"'), '要有一条可见的横幅');
+  assert(page.includes('leaveAnywayRef'), '永久失败时要有第二次放行，否则用户被关在页面里');
+});
+
 // ---------------------------------------------------------------------------
 // 收尾
 // ---------------------------------------------------------------------------
