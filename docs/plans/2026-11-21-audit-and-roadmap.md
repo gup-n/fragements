@@ -413,5 +413,5 @@
 - [ ] **真机** 错误页观感、保存失败横幅与键盘/返回键层叠、软删迟到写入的实际时序。
   没有设备，不勾。
 
-本地验证：`npm test` **489 项**全绿；`tsc --noEmit --noUnusedLocals` 0 告警；
+本地验证：`npm test` **490 项**全绿；`tsc --noEmit --noUnusedLocals` 0 告警；
 `build:web` 4.73 MiB。CI 由本轮提交触发（只构建，不打 tag、不发 Release）。
