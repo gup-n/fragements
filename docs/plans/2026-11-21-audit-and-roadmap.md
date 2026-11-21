@@ -98,8 +98,8 @@
     并重建一条指向已删碎片的 FTS 行。`ensureSearchIndex` 下次启动看到
     `indexed > total`，白重建一遍全量索引；恢复那条碎片时，会看到一份「删除之后才有的」内容。
     v0.34 已经把「写也要挡回收站」写进 AGENTS，但只覆盖了文档/会话/`applyTags`。
-  - 做法：这五处一起补；`insertFragmentImages` 找不到存活行时抛「这条碎片已经不存在」；
-    `setFragmentImageText` 找不到存活碎片时直接返回（不 reindex）。
+  - 做法：这五处一起补（native 与 web 两侧同步）；`insertFragmentImages` 找不到存活行时抛
+    「这条碎片已经不存在」；`setFragmentImageText` 找不到存活碎片时直接返回（不 reindex）。
   - 验收：`assert_recycle` 从「三条写路径」扩到逐方法断言；另加一条
     「软删后读图结果不落库、FTS 条数不变」的故障桩用例。
 
@@ -386,7 +386,7 @@
 - [x] 实跑 `npm test`（488 项全绿）、`tsc --noUnusedLocals`（0 告警）、`build:web`（4.73 MiB）。
 - [x] 做导出扫描、模块扫描、软删写路径扫描、CI 与 package 对账。
 - [x] 写这份计划书，并把 ROADMAP 的过期描述与 HANDOFF 的现状入口回填。
-- [ ] 提交 git、推送分支、触发 GitHub Actions 构建（本轮只构建，不打 tag、不发 Release）。
+- [x] 提交 git、推送分支、触发 GitHub Actions 构建（本轮只构建，不打 tag、不发 Release）。
 - [ ] 真机验收 —— **没有设备，未做**，不勾。
 
 > 这张表的勾只代表「本轮确实做了」，不代表「功能已验」。真机与真实数据的结论，
