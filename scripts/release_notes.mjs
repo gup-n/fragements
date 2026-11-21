@@ -58,50 +58,72 @@ for (let i = start + 1; i < lines.length; i++) {
  * **按 `###` 小节分组收集**，不按出现顺序一把梭。v0.11.0 一次改了下载和文档两块，
  * 前 6 条全是下载的，文档那半整个被截掉 —— Release 说明变成「这版只修了下载」。
  * 「版本」小节不收：里面的 bullet 是 versionCode 之类的元信息，不是改动。
+ *
+ * **一节里一条 `- ` 都没有时，用它的小节标题兜底**（v0.35 起）：有的版本
+ * （比如 v0.35）整节是「问题 → 原因 → 改法」的叙述，没有 bullet，
+ * 于是 Release 说明只剩「验证」那几条 —— 用户看不到这版改了什么。
+ * 标题本身就是那句话，剥掉序号直接当条目。
  */
-const buckets = [[]];
+const buckets = [{ title: '', items: [] }];
 let skipping = false;
 for (const line of lines.slice(start + 1, end)) {
   if (/^###\s+/.test(line)) {
     skipping = /版本/.test(line);
     // 跳过的小节仍然要有个桶，否则下一条 bullet 会掉进上一节的桶里
-    buckets.push([]);
+    buckets.push({
+      title: skipping ? '' : line.replace(/^###\s+/, '').replace(/^\d+[.、]\s*/, '').trim(),
+      items: [],
+    });
     continue;
   }
   const bucket = buckets[buckets.length - 1];
   const bullet = line.match(/^-\s+(.+)$/);
   if (bullet) {
     if (skipping) continue;
-    bucket.push(bullet[1].trim());
+    bucket.items.push(bullet[1].trim());
     continue;
   }
   // 顶格的段落、小标题、`> 引用` 不是任何一条的一部分
-  if (!skipping && bucket.length && /^\s+\S/.test(line)) {
-    const prev = bucket[bucket.length - 1];
+  if (!skipping && bucket.items.length && /^\s+\S/.test(line)) {
+    const prev = bucket.items[bucket.items.length - 1];
     const next = line.trim();
     // 中文折行不需要空格，英文单词之间需要
     const glue = /[A-Za-z0-9`]$/.test(prev) && /^[A-Za-z0-9`]/.test(next) ? ' ' : '';
-    bucket[bucket.length - 1] = prev + glue + next;
+    bucket.items[bucket.items.length - 1] = prev + glue + next;
   }
 }
 
-// 加粗标记在纯文本里只是两颗星
-const groups = buckets
-  .map((g) => g.map((t) => t.replace(/\*\*/g, '').trim()).filter(Boolean))
-  .filter((g) => g.length);
-
 /*
- * 各小节平分名额。只有一个小节时（绝大多数版本）就是「取前 6 条」，和以前一样。
+ * 分配名额：先在**有 bullet 的小节之间**平分。
+ * 只有一个小节时（绝大多数版本）就是「取前 6 条」，和以前一样。
  * 分不匀的名额按小节顺序补回去，免得第二节只剩一条时浪费额度。
  */
-const quota = Math.max(1, Math.floor(MAX_ITEMS / Math.max(1, groups.length)));
-const clean = [];
-for (const g of groups) clean.push(...g.slice(0, quota));
-for (const g of groups) {
-  if (clean.length >= MAX_ITEMS) break;
-  clean.push(...g.slice(quota, quota + (MAX_ITEMS - clean.length)));
+const bulletGroups = buckets
+  .map((b) => b.items.map((t) => t.replace(/\*\*/g, '').trim()).filter(Boolean))
+  .filter((g) => g.length);
+
+const quota = Math.max(1, Math.floor(MAX_ITEMS / Math.max(1, bulletGroups.length)));
+const bullets = [];
+for (const g of bulletGroups) bullets.push(...g.slice(0, quota));
+for (const g of bulletGroups) {
+  if (bullets.length >= MAX_ITEMS) break;
+  bullets.push(...g.slice(quota, quota + (MAX_ITEMS - bullets.length)));
 }
-clean.length = Math.min(clean.length, MAX_ITEMS);
+bullets.length = Math.min(bullets.length, MAX_ITEMS);
+
+/*
+ * 一条 bullet 都凑不够时，用**没有 bullet 的小节标题**补在前面 ——
+ * 那些节是「问题 → 原因 → 改法」的叙述，标题本身就是那句话。
+ *
+ * 反过来做（有标题就优先用标题）会让 v0.34 那种「标题 + 段落 + 少量 bullet」
+ * 的版本退化：标题抢走了实质内容的名额。所以只在不足时才补。
+ */
+const titles = buckets
+  .filter((b) => b.title && !b.items.length)
+  .map((b) => b.title.replace(/\*\*/g, '').trim())
+  .filter(Boolean);
+
+const clean = (bullets.length >= MAX_ITEMS ? bullets : [...titles, ...bullets]).slice(0, MAX_ITEMS);
 
 if (clean.length) {
   // 版本号和列表之间要留一个空行，否则 Markdown 会把 `- ` 当成上一段的普通文字
