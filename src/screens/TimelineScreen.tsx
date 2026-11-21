@@ -95,6 +95,14 @@ function previewOfItem(item: TimelineItem): string {
 }
 
 /**
+ * 列表的 key。放在模块级而不是内联箭头里：
+ * 内联的话每次重渲染都是一个新闭包，200 条就要重新拼 200 次字符串。
+ */
+function keyOfTimelineItem(item: TimelineItem): string {
+  return `${item.kind}-${item.id}`;
+}
+
+/**
  * 「展开全文」四周补出来的触控区。
  *
  * 这一行看得见只有 26（一行 13 号字），上下各补一点才是好按的高度。
@@ -246,8 +254,15 @@ export function TimelineScreen({
   const [armedNoteDelete, setArmedNoteDelete] = useState<number | null>(null);
   const [fullEdit, setFullEdit] = useState(false);
   // 待发图与定位键由 App 持有；本页只持有光标和临时展开状态。
-  /** 输入框光标。插图插在光标处，不是一律追加到末尾 */
-  const [sel, setSel] = useState({ start: 0, end: 0 });
+  /**
+   * 输入框光标。插图插在光标处，不是一律追加到末尾。
+   *
+   * **必须是 ref 而不是 state**：它不参与任何渲染输出，只在插图时读一次，
+   * 但每次点输入框、移动光标、选中文字都会变。放进 state 等于每动一下光标
+   * 就把整页重渲染一遍 —— 包括时间轴那两百多行 `renderItem`。
+   * 列表本身没有 memo，这一下就是它被反复重算的主要来源。
+   */
+  const selRef = useRef({ start: 0, end: 0 });
   /** 加图的方式菜单（拍照 / 相册）。不用 Modal：本项目一律 absolute + 自接返回键 */
   const [imageMenu, setImageMenu] = useState(false);
   const [query, setQuery] = useState('');
@@ -705,7 +720,7 @@ export function TimelineScreen({
   /** 在本次光标处插入由 App 分配、不会在切页后复用的待发键。 */
   function insertTokens(keys: string[]) {
     const current = draftRef.current;
-    const at = Math.min(sel.start, current.length);
+    const at = Math.min(selRef.current.start, current.length);
     const before = current.slice(0, at);
     const after = current.slice(at);
     const block = keys.map((key) => imageToken(key)).join('\n');
@@ -714,7 +729,7 @@ export function TimelineScreen({
     const next = `${before}${lead}${block}${tail}${after}`;
     draftRef.current = next;
     onDraftChange(next);
-    setSel({ start: at + lead.length + block.length, end: at + lead.length + block.length });
+    selRef.current = { start: at + lead.length + block.length, end: at + lead.length + block.length };
   }
 
   function dropPending(key: string) {
@@ -1006,7 +1021,7 @@ export function TimelineScreen({
           <SectionList
             ref={listRef}
             sections={displaySections}
-            keyExtractor={(item) => `${item.kind}-${item.id}`}
+            keyExtractor={keyOfTimelineItem}
             stickySectionHeadersEnabled
             contentContainerStyle={styles.listContent}
             keyboardShouldPersistTaps="handled"
@@ -1380,7 +1395,7 @@ export function TimelineScreen({
               onChangeText={changeDraft}
               editable={!composerBusy}
               selectionColor={c.selection}
-              onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
+              onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; }}
               placeholder={pending.length ? '这张图是什么？可留空' : '随手记一条…'}
               placeholderTextColor={c.text3}
               style={styles.input}
@@ -1429,7 +1444,7 @@ export function TimelineScreen({
               <Pressable
                 onPress={() => {
                   // 光标默认落在末尾：展开长文时人通常是接着往下写
-                  setSel({ start: draft.length, end: draft.length });
+                  selRef.current = { start: draft.length, end: draft.length };
                   navigate(() => setFullEdit(true));
                 }}
                 style={[styles.toolBtn, styles.touchTarget]}
@@ -1555,7 +1570,7 @@ export function TimelineScreen({
             onChangeText={changeDraft}
               editable={!composerBusy}
               selectionColor={c.selection}
-            onSelectionChange={(e) => setSel(e.nativeEvent.selection)}
+            onSelectionChange={(e) => { selRef.current = e.nativeEvent.selection; }}
             style={styles.fullInput}
             multiline
             placeholder="想写多少写多少。长一点也没关系，整理时 AI 会单独提炼要点。"

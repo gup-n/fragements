@@ -779,8 +779,24 @@ test('滑开的文档行会自己收回，文档行也只写一份', () => {
 });
 
 /*
- * 打字时整列重渲染是 v0.34 记账没做的那一条。判据是**两件事一起成立**：
- * 行组件 memo 了，且它收到的每个回调都是稳定引用（`useCallback`）。
+ * 光标位置放 state 是个看起来无害、实际很贵的错误：它从不参与渲染输出，
+ * 却会在每次点输入框、移动光标、选中文字时 setState —— 于是整页重渲染，
+ * 时间轴那两百多行 renderItem 跟着重算一遍。首页是「随手记」的地方，
+ * 这条路上的每一次多余重渲染都直接压在打字手感上。
+ */
+test('输入框光标不进 state：它从不参与渲染，却每次都触发整页重渲染', () => {
+  const t = parseSource('src/screens/TimelineScreen.tsx').getText();
+  assert.ok(t.includes('const selRef = useRef('), '光标位置要放在 ref 里');
+  assert.ok(
+    !/onSelectionChange=\{\(e\) => set[A-Z]/.test(t),
+    'onSelectionChange 里不许 setState —— 那是每次点输入框、每次移动光标都会走的路',
+  );
+});
+
+/*
+ * 文档页的列表重渲染走的是另一条路：`DocRow` 本来就是独立组件（内部还订阅
+ * `useDocumentJob`），memo 住它、把回调稳定下来就够了，不需要 `extraData`。
+ * 判据是**两件事一起成立**：组件 memo 了，且它收到的每个回调都是稳定引用 ——
  * 只做到一半时看起来「已经优化」，但 props 每次全新，memo 一次都不会命中。
  */
 test('文档行是 memo 的，行回调也在渲染之外稳定下来', () => {

@@ -130,6 +130,16 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
   两路合并的判据在 `util/paging.mergeWindowHits`。
 - **`onLoadDay` 这类回调必须 `useCallback`**。日历把它当 effect 依赖，每次 render 换新函数
   就会「读到 → setState → 重渲染 → 再读」，日历一打开就不停发查询。
+- **光标位置不进 state**（v0.35）。`selRef` 只在插图时读一次、从不参与渲染；
+  放进 state 的话，每次点输入框 / 移动光标 / 选中文字都 `setState` ——
+  整页连同时间轴那 270 行 `renderItem` 一起重算。`test:ui` 钉住
+  「`onSelectionChange` 里不许 setState」。
+- **列表的 `renderItem` 不要为了「性能」随手 memo**（v0.35 试过又退回）。
+  SectionList 在 props 没变时**不会**调用 `renderItem`，所以把引用稳定之后必须补
+  `extraData`，把折叠 / 滑开 / 命中数这些状态喂给它 —— 那是一份必须手工同步的清单，
+  漏一项就是某个功能静默失效；而可见行只有十来行，重算成本远小于这个风险。
+  文档页的 `DocRow` 是另一回事：它本来就是独立组件（内部订阅 `useDocumentJob`），
+  memo 住它 + 把回调稳定下来就够了，不需要 `extraData`。
 - **`TYPE` 是会变的导出**（v0.26 字号档位）。它现在等于「当前档位下的一套字号」，
   改档位必须先 `setTypeScale(scale)` 再 `setTypeScaleState(scale)`，顺序反了第一帧还是旧字号。
   不要在模块顶层把 `TYPE.body` 存进常量（那时读到的是标准档，之后永远不变）。

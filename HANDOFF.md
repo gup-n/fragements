@@ -40,11 +40,17 @@
   否则 memo 一次都不会命中。`assert_ui` 有一条同时钉住这两半。
 - **标签查重一把尺子**：`util/docTags.docTagKey`（全半角 + 大小写折叠，**不折标点**）。
   native / web / `attachTagNames` 三处都用它。**不做数据迁移、不自动合并老标签** —— 那是改用户的组织方式。
-- 断言 485 → **487**（recycle +1、ui +1）；`tsc --noUnusedLocals` 零告警。
+- 断言 485 → **488**（recycle +1、ui +2）；`tsc --noUnusedLocals` 零告警。
 - **没验**：网页端 19 个方法没有运行时覆盖（现有断言只做源码扫描，改的是「失败会报错」，
   不是「已经在浏览器里验过」）；启动错误页与文档列表手感要真机。
-- **仍然没做**：时间轴 `renderItem` 的 memo（500 行内联 + `NoteBody` 解析，风险和收益都要真机量）、
-  碎片/文档两套标签归一化的完全合并（会改用户组织方式）。理由在 CHANGELOG v0.35 第 6 节。
+- **时间轴的重渲染改在根因上**：`sel`（输入框光标）从 state 改成 `ref`（`selRef`）。
+  它不参与任何渲染，却每次点输入框 / 移动光标都 `setState` —— 整页连同 270 行
+  `renderItem` 一起重算。`keyExtractor` 也提到模块级（内联箭头每次重渲染重拼 200 条 key）。
+- **`renderItem` 本身没有 memo**：试过抽 `useCallback` + `extraData`，退回了。
+  SectionList 在 props 没变时不会调用 `renderItem`，所以必须靠 `extraData` 告诉它
+  「折叠 / 滑开 / 命中数变了」—— 那是一份**必须手工同步**的清单，漏一项就是某个功能
+  静默失效，而收益只是可见十行 element 的重建。理由在 CHANGELOG v0.35 第 6 节。
+- **仍然没做**：碎片/文档两套标签归一化的完全合并（会改用户组织方式）。
 
 ### v0.34.0：全仓审一遍，把会静默出错的地方改掉
 
@@ -551,12 +557,12 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:paging` | 10 项通过 |
 | `npm run test:update` | **7 项通过**（v0.32：残包续传判据 + 「后台不算卡死」+ 两处源码卫生） |
 | `npm run test:recycle` | **38 项通过**（软删过滤逐条扫 SQL；v0.34 增「写也不能碰回收站的行」「迁移包事务」「恢复只补真恢复的那几条」；v0.35 增「全角折叠、标点不折叠、三处查重同源」） |
-| `npm run test:ui` | **46 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.35 新增「文档行 memo + 行回调稳定」） |
+| `npm run test:ui` | **47 项通过**（真实控件/菜单/样式、间距 token、导航预算及回调保留；v0.35 新增「文档行 memo + 行回调稳定」「光标不进 state」） |
 | `npm run check:docs` | 通过；保留并同步源码行数地图和当前文案索引 |
 | `npm run build:web` | 通过，4.72 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有487项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有488项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -600,7 +606,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/digestReminder.ts` | 215 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2014 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2029 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2072 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 159 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 116 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
@@ -785,7 +791,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_ask.cjs` [打开](<scripts/assert_ask.cjs>) | 961 | 95项：问页意图、草稿与输出兼容、抽屉契约；v0.33 起含回答版本（追加/切换/上限/上下文） |
 | `scripts/assert_reliability.cjs` [打开](<scripts/assert_reliability.cjs>) | 1884 | 真实模块+内存桩的故障、授权、迁出/恢复和控制流回归 |
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
-| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 816 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
+| `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 832 | 45项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
 | `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 159 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
 | `scripts/assert_update.cjs` [打开](<scripts/assert_update.cjs>) | 121 | 7项：残包续传的四个判据（版本/源/大小/已下全）、切后台不算卡死、百分比、以及「下载不许退回一次性任务」「面板卸载不许删残包」两条源码卫生 |
