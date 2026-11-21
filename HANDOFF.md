@@ -1,6 +1,6 @@
 # 项目交接：当前开发分支
 
-最后整理：2026-11-20。本文记录当前工作树与接手入口，**不是发布说明**。先读[本轮间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)和[SPEC最新节](<SPEC.md>)；此前的[当前UI修订](<docs/plans/2026-11-15-ui-polish.md>)、[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
+最后整理：2026-11-21。本文记录当前工作树与接手入口，**不是发布说明**。先读[本轮间距返工与日历](<docs/plans/2026-11-15-spacing-and-calendar.md>)和[SPEC最新节](<SPEC.md>)；此前的[当前UI修订](<docs/plans/2026-11-15-ui-polish.md>)、[A方案](<docs/plans/2026-11-14-ui-refresh-ink-proposal.md>)与[实施契约](<docs/plans/2026-11-14-implementation-contracts.md>)保留为历史依据，操作规则见[项目AGENTS](<AGENTS.md>)。
 
 ## 1. 三十秒速览
 
@@ -23,6 +23,21 @@
 路由由 App 的 state 管理，`type Route = MainTab`，没有 Expo Router。五个页面（timeline / docs / ask / review / settings）**全部**由 `src/components/TabBar.tsx` 在底栏平级切换，没有覆盖层式的「设置」；键盘抬起时底栏隐藏。记录正文/待发图保存在 App 生命周期；整理工作区另有 settings 持久化，两者不是同一恢复机制。
 
 ## 2. 当前进度与未覆盖项
+
+### 2026-11-21 全仓复审（只有文档，没有代码改动）
+
+用户要求「阅读项目、从头审阅代码、写计划书，完成后提交 git 与 GitHub 构建」。
+这一轮按模块过了一遍 40,173 行源码的关键路径（入口、数据层、AI、文档、整理、页面与断言），
+**没有逐行读完每个页面的样式代码**，也没有改任何代码：
+
+- 实跑：`npm test` 全绿（488 项）、`tsc --noEmit --noUnusedLocals` 0 告警、
+  `build:web` 通过（4.73 MiB，产物已删）。
+- 结论与工作项写在 [2026-11-21 计划书](<docs/plans/2026-11-21-audit-and-roadmap.md>)：
+  两条 P0（读库失败装成空库 / 恢复备份没有回退）、四条 P1（软删写闸门漏五条路径、
+  会话保存失败无声、分享接收主线程复制且无上限、CI 漏跑 `test:recycle`），
+  另有今日条数/搜索上限/小结窗口三处口径与若干清理项。
+- **没有真机**：计划书里带「设备轮」的条目一条都没勾。
+- 下一轮从 D-01 → D-02 → D-03 开始；修完再谈体验。
 
 ### v0.35.0：还掉 v0.34 记的账（原子写 / 单事务 / 启动兜底 / 列表 memo）
 
