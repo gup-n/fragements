@@ -12,7 +12,7 @@
  * 各起一个任务、同一个文件传到服务端两遍；页面卸载后进度回调指向死组件，
  * 列表永远停在「解析中」。这些都不是靠加防抖能修的，得换结构。
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BackHandler,
   FlatList,
@@ -297,9 +297,9 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     setBlocked(null);
   }
 
-  function toggle(id: number) {
+  const toggle = useCallback((id: number) => {
     setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  }
+  }, []);
 
   /** 多选里点「问」：先分清哪些没准备好，不能偷偷只问剩下的 */
   function askSelected() {
@@ -320,7 +320,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
   }
 
   /** 在本地准备一批。只对「本机能读且没超上限」的动手，其余如实说明 */
-  function prepareMany(list: DocumentMeta[]) {
+  const prepareMany = useCallback((list: DocumentMeta[]) => {
     let started = 0;
     const skipped: string[] = [];
     for (const doc of list) {
@@ -338,7 +338,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
         text: `${skipped.length} 份本机读不了（${skipped.slice(0, 3).join('、')}${skipped.length > 3 ? ' 等' : ''}），需要云解析`,
       });
     }
-  }
+  }, [showToast]);
 
   /**
    * 删除 = 移到回收站（v0.28）。
@@ -413,29 +413,76 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
    *
    * 打开 / 长按前先把滑开的那行收回去：否则从详情页回到列表，
    * 上一次滑开的那一行还敞着，露出半截「删除」。
+   *
+   * **回调只认 doc、不认下标，并且自己稳定下来**：行组件是 `memo` 的，
+   * 这些函数每渲染换一份的话，每个 prop 都是新的，等于没 memo。
    */
-  function renderRow(item: DocumentMeta) {
-    return (
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const rowSwipe = useCallback((doc: DocumentMeta, open: boolean) => {
+    setOpenRow(open ? doc.id : null);
+  }, []);
+  const rowOpen = useCallback((doc: DocumentMeta) => {
+    Keyboard.dismiss();
+    setOpenRow(null);
+    setOpenDocId(doc.id);
+  }, []);
+  const rowToggle = useCallback((doc: DocumentMeta) => toggle(doc.id), [toggle]);
+  const rowMenu = useCallback((doc: DocumentMeta) => {
+    Keyboard.dismiss();
+    setOpenRow(null);
+    setMenuFor(doc);
+  }, []);
+  const rowDelete = useCallback((doc: DocumentMeta) => {
+    Keyboard.dismiss();
+    setPendingDelete(doc);
+  }, []);
+  const rowLocal = useCallback((doc: DocumentMeta) => prepareMany([doc]), [prepareMany]);
+  const rowCloud = useCallback((doc: DocumentMeta) => {
+    Keyboard.dismiss();
+    setCloudFor(doc);
+  }, []);
+
+  const renderRow = useCallback(
+    (item: DocumentMeta) => (
       <DocRow
         doc={item}
         selectMode={selectMode}
-        selected={selected.includes(item.id)}
+        selected={selectedSet.has(item.id)}
         swipeOpen={openRow === item.id}
-        onSwipe={(open) => setOpenRow(open ? item.id : null)}
-        onOpen={() => { Keyboard.dismiss(); setOpenRow(null); setOpenDocId(item.id); }}
-        onToggle={() => toggle(item.id)}
-        onMenu={() => { Keyboard.dismiss(); setOpenRow(null); setMenuFor(item); }}
-        onDelete={() => { Keyboard.dismiss(); setPendingDelete(item); }}
-        onLocal={() => prepareMany([item])}
-        onCloud={() => { Keyboard.dismiss(); setCloudFor(item); }}
+        onSwipe={rowSwipe}
+        onOpen={rowOpen}
+        onToggle={rowToggle}
+        onMenu={rowMenu}
+        onDelete={rowDelete}
+        onLocal={rowLocal}
+        onCloud={rowCloud}
       />
-    );
-  }
+    ),
+    [
+      selectMode,
+      selectedSet,
+      openRow,
+      rowSwipe,
+      rowOpen,
+      rowToggle,
+      rowMenu,
+      rowDelete,
+      rowLocal,
+      rowCloud,
+    ],
+  );
 
-  const picked = filterDocsByTag(source, tagFilter);
-  const libraryDocs = picked.filter((d) => d.stage !== 'archived');
-  const archivedDocs = picked.filter((d) => d.stage === 'archived');
-  const selectedDocs = (docs ?? []).filter((d) => selected.includes(d.id));
+  /*
+   * 这三个数组必须缓存：`FlatList` 拿到新的 `data` 引用就会重算一遍可见 cell。
+   * 打字时 `source` 没变（搜索命中还是上一批），不该连带整个列表重算。
+   */
+  const picked = useMemo(() => filterDocsByTag(source, tagFilter), [source, tagFilter]);
+  const libraryDocs = useMemo(() => picked.filter((d) => d.stage !== 'archived'), [picked]);
+  const archivedDocs = useMemo(() => picked.filter((d) => d.stage === 'archived'), [picked]);
+  const selectedDocs = useMemo(
+    () => (docs ?? []).filter((d) => selectedSet.has(d.id)),
+    [docs, selectedSet],
+  );
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (covered || !selectMode) return false;
@@ -892,7 +939,15 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
  * 卡片本体和右侧按钮是**并排的两个 Pressable**，不是嵌套的：嵌套在 RN Web 上点击会冒泡，
  * 点垃圾桶会顺带打开阅读器。
  */
-function DocRow({
+/**
+ * 单行的渲染成本不低（一次 `useDocumentJob` 订阅 + 一次 `isDocumentReady` 判定），
+ * 而搜索框每敲一个字都会让整页重渲染。`memo` 之后只有 props 真的变了才重算：
+ * 打字时 `doc` / `selected` / `swipeOpen` 都不动，整列一次都不重渲染。
+ *
+ * 前提是父级的回调必须稳定（见 `renderRow` 上方），这也是为什么回调都改成
+ * 「传 doc 进来」而不是在外层闭包捕获 `item`。
+ */
+const DocRow = memo(function DocRow({
   doc,
   selectMode,
   selected,
@@ -910,14 +965,14 @@ function DocRow({
   selected: boolean;
   /** 这一行是不是正滑开着。父级统一持有，保证同时只开一行 */
   swipeOpen: boolean;
-  onSwipe: (open: boolean) => void;
-  onOpen: () => void;
-  onToggle: () => void;
+  onSwipe: (doc: DocumentMeta, open: boolean) => void;
+  onOpen: (doc: DocumentMeta) => void;
+  onToggle: (doc: DocumentMeta) => void;
   /** 长按 = 右键菜单（编辑正文 / 移到回收站） */
-  onMenu: () => void;
-  onDelete: () => void;
-  onLocal: () => void;
-  onCloud: () => void;
+  onMenu: (doc: DocumentMeta) => void;
+  onDelete: (doc: DocumentMeta) => void;
+  onLocal: (doc: DocumentMeta) => void;
+  onCloud: (doc: DocumentMeta) => void;
 }) {
   const { c, styles } = useThemedStyles(makeStyles);
   const job = useDocumentJob(doc.id);
@@ -948,9 +1003,9 @@ function DocRow({
     } else if (ready) {
       action = null;
     } else if (canLocal && !limitNote) {
-      action = { label: doc.state === 'failed' ? '重试' : '本地准备', icon: 'download-outline', run: onLocal };
+      action = { label: doc.state === 'failed' ? '重试' : '本地准备', icon: 'download-outline', run: () => onLocal(doc) };
     } else {
-      action = { label: '云解析', icon: 'cloud-outline', run: onCloud };
+      action = { label: '云解析', icon: 'cloud-outline', run: () => onCloud(doc) };
     }
   }
 
@@ -966,17 +1021,17 @@ function DocRow({
      */
     <SwipeRow
       open={swipeOpen ? 'right' : null}
-      onOpen={() => onSwipe(true)}
-      onClose={() => onSwipe(false)}
-      onPress={selectMode ? onToggle : onOpen}
-      onLongPress={selectMode ? undefined : onMenu}
+      onOpen={() => onSwipe(doc, true)}
+      onClose={() => onSwipe(doc, false)}
+      onPress={selectMode ? () => onToggle(doc) : () => onOpen(doc)}
+      onLongPress={selectMode ? undefined : () => onMenu(doc)}
       rightAction={{
         label: '删除',
         icon: 'trash-outline',
         bg: c.danger,
         fg: c.onDanger,
         // 先收起操作区再弹确认：取消之后不该留一条敞开的红条
-        onPress: () => { onSwipe(false); onDelete(); },
+        onPress: () => { onSwipe(doc, false); onDelete(doc); },
       }}
       surface={c.card}
       style={[styles.card, selected && styles.cardSelected]}
@@ -1092,7 +1147,7 @@ function DocRow({
       ) : null}
     </SwipeRow>
   );
-}
+});
 
 /**
  * 选中里有没准备好的文档。

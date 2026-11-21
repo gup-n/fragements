@@ -160,8 +160,19 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **文档的 `stage` 只有 `library` / `archived`，没有 `draft`**。用户 2026-11-18 定的是
   「新建文档自动入库」；草稿是出生时挂的标签（`DEFAULT_DOC_TAG`），不是另一块存放区。
   留一个没有写入路径的枚举值，只会让「这篇在哪」多一条分支。
-- **写正文必须走 `contentFromText` → `replaceDocumentContent`**（`documents/authored.ts` 一处）。
-  绕过去会留下一篇「有标题、没正文、问答永远说资料里没有」的文档，而这种错在界面上看起来完全正常。
+- **新建文档只走 `repo.createDocumentWithContent`**（v0.35：记录 + 正文切片 + 标签同一个事务），
+  **改正文走 `contentFromText` → `replaceDocumentContent`**（`documents/authored.ts` 一处）。
+  在调用侧拼 `insertDocument` + `replaceDocumentContent` + `setDocumentTags` 时，第二步失败会留下
+  一篇「列表里有、点开是空的、也没有任务会去补」的文档 —— 这种错在界面上看起来完全正常。
+- **`repo.web.ts` 只有一条写路径 `writeAtomically`**（v0.35）。`persist()` 已删；新增写方法就
+  `return writeAtomically((d) => { ... })`，回调必须同步、不许调公开的 async Repo 方法。
+  没有 localStorage 时它抛错 —— 不要再加 `?.` 或 `catch`，那等于把「没存上」说成「存上了」。
+- **启动失败要停在 `components/BootError`**（v0.35），不许「warn 一句然后照常进门」：
+  那样列表是空的、统计 0 条，首页还写着「还没有碎片，记一条试试」，用户会以为记录没了。
+  `App.boot()` 是唯一入口，重试也走它 —— 别再写第二条初始化路径。
+- **标签查重只有一把尺子 `util/docTags.docTagKey`**（v0.35）：全半角与大小写折叠，**标点不折**。
+  native / web / `attachTagNames` 三处同源。**不做数据迁移、不自动合并已有标签** ——
+  合并标签是在改用户的组织方式（他可能故意用「读/写」和「读写」区分两件事）。
 - **AI 层不碰数据库**这条在 v0.28 有断言（`ai/docEdit.ts` 不许 import `db/`）。
   AI 产物一律走 `doc_proposals` → `documents/proposals.approveProposal`；
   **放弃不写业务表**，只留一条 `rejected` 审计。优化/重新整理只新建一篇，原稿一个字不动。

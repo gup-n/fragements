@@ -6,6 +6,7 @@ import type {
   DocTag,
   Document,
   DocumentChunk,
+  DocumentContentInput,
   DocumentMeta,
   Fragment,
   FragmentSource,
@@ -18,7 +19,7 @@ import type {
 import { normalizeQaScope } from '../util/qaScope';
 import { planToggle } from '../util/todoTree';
 import { dedupeTags, tokenizeText } from '../util/tokenize';
-import { normalizeTagName } from '../util/docTags';
+import { docTagKey, normalizeTagName } from '../util/docTags';
 import { docImageNames, removeImageToken, resolvePendingTokens } from '../util/inlineImages';
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
@@ -258,30 +259,63 @@ function load(): WebDb {
 }
 
 /**
- * 新写入路径只在独立副本上操作，setItem 抛错时不发布 rows、seq 或提交凭据。
- * 回调必须同步，不可调用公开的 async Repo 方法。没有 localStorage 时仅用于内存测试。
+ * 唯一的写路径：在独立副本上操作，setItem 抛错时不发布 rows、seq 或提交凭据。
+ * 回调必须同步，不可调用公开的 async Repo 方法。
+ *
+ * 没有 localStorage 时**显式报错**而不是退回内存态 —— 后者会让「没存上」
+ * 看起来像「存上了」，刷新之后用户才发现记录不见了。
  */
 function writeAtomically<T>(write: (d: WebDb) => T): T {
+  const storage = globalThis.localStorage;
+  if (!storage) throw new Error('这个浏览器没有可用的本地存储，改动无法保存');
   const draft: WebDb = JSON.parse(JSON.stringify(load()));
   const result = write(draft);
   const serialized = JSON.stringify(draft);
   // 不捕获配额/权限等错误：调用方必须知道没有成功保存，cache 也仍是旧版本。
-  globalThis.localStorage?.setItem(KEY, serialized);
+  storage.setItem(KEY, serialized);
   cache = draft;
   return result;
 }
 
-/** 旧接口的兼容写法；新增原子路径不得调用这个会吞掉持久化错误的函数。 */
-function persist() {
-  try {
-    globalThis.localStorage?.setItem(KEY, JSON.stringify(load()));
-  } catch {
-    // 配额超了也不该让 UI 崩，静默降级为内存态
-  }
-}
-
 function nextId(d: WebDb) {
   return d.seq++;
+}
+
+/**
+ * 写正文与切片、推进版本号。**调用方拥有事务副本**。
+ * 版本号对不上返回 false，由调用方决定要不要抛。
+ */
+function applyContentIn(
+  d: WebDb,
+  id: number,
+  content: DocumentContentInput,
+  expectedRevision: number,
+): boolean {
+  const doc = d.documents.find((x) => x.id === id);
+  if (!doc || doc.contentRevision !== expectedRevision) return false;
+  const next = expectedRevision + 1;
+  doc.bodyMd = content.bodyMd;
+  doc.charCount = countChars(content.bodyMd);
+  doc.pages = content.pages;
+  doc.state = 'done';
+  doc.error = null;
+  doc.contentRevision = next;
+  doc.indexedRevision = next;
+  doc.contentSource = content.source;
+  doc.updatedAt = Date.now();
+  d.documentChunks = d.documentChunks.filter((c) => c.documentId !== id);
+  content.chunks.forEach((chunk, i) => {
+    d.documentChunks.push({
+      id: nextId(d),
+      documentId: id,
+      contentRevision: next,
+      ordinal: i,
+      text: chunk.text,
+      locator: chunk.locator,
+    });
+  });
+  doc.chunkCount = content.chunks.length;
+  return true;
 }
 
 /** 只操作事务副本；正文、图片和导入标签在同一次发布中生效。 */
@@ -559,10 +593,10 @@ export const repo: Repo = {
 
   async markFragmentsOrganized(ids, at) {
     if (!ids.length) return;
-    const d = load();
-    const set = new Set(ids);
-    for (const f of d.fragments) if (set.has(f.id)) f.organizedAt = at;
-    persist();
+    writeAtomically((d) => {
+      const set = new Set(ids);
+      for (const f of d.fragments) if (set.has(f.id)) f.organizedAt = at;
+    });
   },
 
   async deleteFragment(id) {
@@ -581,15 +615,16 @@ export const repo: Repo = {
   },
 
   async applyTags(id, labels, project) {
-    const d = load();
-    const f = d.fragments.find((x) => x.id === id);
-    if (f) {
+    writeAtomically((d) => {
+      // 已在回收站的碎片不接受写入，理由同 repo.native.ts
+      if (isTrashed(d, 'fragment', id)) return;
+      const f = d.fragments.find((x) => x.id === id);
+      if (!f) return;
       f.tags = dedupeTags(labels);
       f.project = project;
       // 已合并的不复活，理由同 repo.native.ts
       if (f.status !== 'merged') f.status = 'tagged';
-    }
-    persist();
+    });
   },
 
   async searchFragments(query, limit = 40) {
@@ -669,42 +704,42 @@ export const repo: Repo = {
   },
 
   async insertTodo(input) {
-    const d = load();
-    const id = nextId(d);
-    d.todos.push({
-      id,
-      text: input.text,
-      dueAt: input.dueAt,
-      done: false,
-      doneAt: null,
-      sourceFragmentId: input.sourceFragmentId,
-      createdAt: Date.now(),
-      mergedInto: null,
-      parentId: input.parentId,
-    });
-    // 给已完成的父项加子项 = 这件事还没完，父项退回未完成（与 native 同口径）
-    if (input.parentId !== null) {
-      const parent = d.todos.find((t) => t.id === input.parentId);
-      if (parent?.done) {
-        parent.done = false;
-        parent.doneAt = null;
+    return writeAtomically((d) => {
+      const id = nextId(d);
+      d.todos.push({
+        id,
+        text: input.text,
+        dueAt: input.dueAt,
+        done: false,
+        doneAt: null,
+        sourceFragmentId: input.sourceFragmentId,
+        createdAt: Date.now(),
+        mergedInto: null,
+        parentId: input.parentId,
+      });
+      // 给已完成的父项加子项 = 这件事还没完，父项退回未完成（与 native 同口径）
+      if (input.parentId !== null) {
+        const parent = d.todos.find((t) => t.id === input.parentId);
+        if (parent?.done) {
+          parent.done = false;
+          parent.doneAt = null;
+        }
       }
-    }
-    persist();
-    return id;
+      return id;
+    });
   },
 
   async updateTodo(id, patch) {
-    const d = load();
-    const t = d.todos.find((x) => x.id === id);
-    if (!t) return;
-    if (patch.text !== undefined) {
-      const text = patch.text.trim();
-      // 空文字不写：想删就删，改成空只会留下一条看不见的待办
-      if (text) t.text = text;
-    }
-    if (patch.dueAt !== undefined) t.dueAt = patch.dueAt;
-    persist();
+    writeAtomically((d) => {
+      const t = d.todos.find((x) => x.id === id);
+      if (!t) return;
+      if (patch.text !== undefined) {
+        const text = patch.text.trim();
+        // 空文字不写：想删就删，改成空只会留下一条看不见的待办
+        if (text) t.text = text;
+      }
+      if (patch.dueAt !== undefined) t.dueAt = patch.dueAt;
+    });
   },
 
   async listTodos() {
@@ -719,48 +754,51 @@ export const repo: Repo = {
   },
 
   async toggleTodo(id, done) {
-    const d = load();
     // 只拿还在用的条目算级联：被合并掉的子项不该参与「父项是不是全做完了」
-    const live = d.todos.filter((t) => t.mergedInto === null);
-    const plan = planToggle(live, id, done);
+    const plan = planToggle(
+      load().todos.filter((t) => t.mergedInto === null),
+      id,
+      done,
+    );
     if (!plan.length) return;
 
     const now = Date.now();
-    for (const step of plan) {
-      const t = d.todos.find((x) => x.id === step.id);
-      if (!t) continue;
-      if (step.done) {
-        t.done = true;
-        // 已经是完成的不刷新时间（与 native 的 COALESCE 同口径）
-        t.doneAt = t.doneAt ?? now;
-      } else {
-        t.done = false;
-        t.doneAt = null;
+    writeAtomically((d) => {
+      for (const step of plan) {
+        const t = d.todos.find((x) => x.id === step.id);
+        if (!t) continue;
+        if (step.done) {
+          t.done = true;
+          // 已经是完成的不刷新时间（与 native 的 COALESCE 同口径）
+          t.doneAt = t.doneAt ?? now;
+        } else {
+          t.done = false;
+          t.doneAt = null;
+        }
       }
-    }
-    if (done) pruneDone(d);
-    persist();
+      if (done) pruneDone(d);
+    });
   },
 
   async deleteTodo(id) {
-    const d = load();
-    // 子项升为顶层而不是跟着删（与 native 同口径）
-    for (const t of d.todos) if (t.parentId === id) t.parentId = null;
-    d.todos = d.todos.filter((x) => x.id !== id);
-    persist();
+    writeAtomically((d) => {
+      // 子项升为顶层而不是跟着删（与 native 同口径）
+      for (const t of d.todos) if (t.parentId === id) t.parentId = null;
+      d.todos = d.todos.filter((x) => x.id !== id);
+    });
   },
 
   async mergeTodos(keepId, dropIds, text) {
-    const d = load();
-    const drops = dropIds.filter((id) => id !== keepId);
-    const keep = d.todos.find((t) => t.id === keepId);
-    if (keep && text) keep.text = text;
-    for (const t of d.todos) {
-      if (drops.includes(t.id)) t.mergedInto = keepId;
-      // 被合并的父项挂着的子项跟到保留项下（与 native 同口径）
-      if (t.parentId !== null && drops.includes(t.parentId)) t.parentId = keepId;
-    }
-    persist();
+    writeAtomically((d) => {
+      const drops = dropIds.filter((id) => id !== keepId);
+      const keep = d.todos.find((t) => t.id === keepId);
+      if (keep && text) keep.text = text;
+      for (const t of d.todos) {
+        if (drops.includes(t.id)) t.mergedInto = keepId;
+        // 被合并的父项挂着的子项跟到保留项下（与 native 同口径）
+        if (t.parentId !== null && drops.includes(t.parentId)) t.parentId = keepId;
+      }
+    });
   },
 
   async listMergedTodos() {
@@ -770,9 +808,9 @@ export const repo: Repo = {
   },
 
   async unmergeTodos(keepId) {
-    const d = load();
-    for (const t of d.todos) if (t.mergedInto === keepId) t.mergedInto = null;
-    persist();
+    writeAtomically((d) => {
+      for (const t of d.todos) if (t.mergedInto === keepId) t.mergedInto = null;
+    });
   },
 
   async listDoneTodoSourceIds() {
@@ -783,29 +821,28 @@ export const repo: Repo = {
   },
 
   async insertNote(input) {
-    const d = load();
-    const id = nextId(d);
-    d.notes.push({ id, ...input, createdAt: Date.now() });
-    persist();
-    return id;
+    return writeAtomically((d) => {
+      const id = nextId(d);
+      d.notes.push({ id, ...input, createdAt: Date.now() });
+      return id;
+    });
   },
 
   async upsertNote(input) {
-    const d = load();
-    const hit = input.period
-      ? d.notes.find((n) => n.type === input.type && n.period === input.period)
-      : undefined;
-    if (hit) {
-      hit.title = input.title;
-      hit.bodyMd = input.bodyMd;
-      hit.createdAt = Date.now();
-      persist();
-      return { id: hit.id, replaced: true };
-    }
-    const id = nextId(d);
-    d.notes.push({ id, ...input, createdAt: Date.now() });
-    persist();
-    return { id, replaced: false };
+    return writeAtomically((d) => {
+      const hit = input.period
+        ? d.notes.find((n) => n.type === input.type && n.period === input.period)
+        : undefined;
+      if (hit) {
+        hit.title = input.title;
+        hit.bodyMd = input.bodyMd;
+        hit.createdAt = Date.now();
+        return { id: hit.id, replaced: true };
+      }
+      const id = nextId(d);
+      d.notes.push({ id, ...input, createdAt: Date.now() });
+      return { id, replaced: false };
+    });
   },
 
   async listNotes(limit = 30) {
@@ -817,9 +854,9 @@ export const repo: Repo = {
   },
 
   async deleteNote(id) {
-    const d = load();
-    d.notes = d.notes.filter((x) => x.id !== id);
-    persist();
+    writeAtomically((d) => {
+      d.notes = d.notes.filter((x) => x.id !== id);
+    });
   },
 
   async listAskSessions(includeArchived = false) {
@@ -833,67 +870,68 @@ export const repo: Repo = {
   },
 
   async saveAskSession(input) {
-    const d = load();
     const now = Date.now();
+    return writeAtomically((d) => {
+      if (input.id !== undefined) {
+        // 与 native 一致：回收站里的会话不再接受写入
+        const s = liveSessions(d).find((x) => x.id === input.id);
+        if (!s) throw new Error('这场会话已被删除，这次回答没能保存');
+        // 与 native 一致：只改传进来的字段，undefined 保持原值
+        s.title = input.title;
+        s.turns = input.turns;
+        s.scope = normalizeQaScope(input.scope);
+        s.updatedAt = now;
+        if (input.archived !== undefined) s.archived = input.archived;
+        if (input.fragmentId !== undefined) s.fragmentId = input.fragmentId;
+        return s.id;
+      }
 
-    if (input.id !== undefined) {
-      // 与 native 一致：回收站里的会话不再接受写入
-      const s = liveSessions(d).find((x) => x.id === input.id);
-      if (!s) throw new Error('这场会话已被删除，这次回答没能保存');
-      // 与 native 一致：只改传进来的字段，undefined 保持原值
-      s.title = input.title;
-      s.turns = input.turns;
-      s.scope = normalizeQaScope(input.scope);
-      s.updatedAt = now;
-      if (input.archived !== undefined) s.archived = input.archived;
-      if (input.fragmentId !== undefined) s.fragmentId = input.fragmentId;
-      persist();
-      return s.id;
-    }
-
-    const id = nextId(d);
-    d.askSessions.push({
-      id,
-      title: input.title,
-      turns: input.turns,
-      scope: normalizeQaScope(input.scope),
-      archived: input.archived ?? false,
-      fragmentId: input.fragmentId ?? null,
-      documentId: null,
-      documentIds: [],
-      sourceIds: [],
-      createdAt: input.createdAt,
-      updatedAt: now,
+      const id = nextId(d);
+      d.askSessions.push({
+        id,
+        title: input.title,
+        turns: input.turns,
+        scope: normalizeQaScope(input.scope),
+        archived: input.archived ?? false,
+        fragmentId: input.fragmentId ?? null,
+        documentId: null,
+        documentIds: [],
+        sourceIds: [],
+        createdAt: input.createdAt,
+        updatedAt: now,
+      });
+      return id;
     });
-    persist();
-    return id;
   },
 
   async setAskSessionArchived(id, archived) {
-    const d = load();
-    const s = d.askSessions.find((x) => x.id === id);
-    if (s) s.archived = archived;
-    // 不动 updatedAt，理由同 repo.native.ts
-    persist();
+    writeAtomically((d) => {
+      // 与 native 一致：不动 updatedAt
+      if (isTrashed(d, 'ask_session', id)) return;
+      const s = d.askSessions.find((x) => x.id === id);
+      if (s) s.archived = archived;
+    });
   },
 
   async markAskSessionConverted(id, fragmentId) {
-    const d = load();
-    const s = d.askSessions.find((x) => x.id === id);
-    if (s) s.fragmentId = fragmentId;
-    persist();
+    writeAtomically((d) => {
+      if (isTrashed(d, 'ask_session', id)) return;
+      const s = d.askSessions.find((x) => x.id === id);
+      if (s) s.fragmentId = fragmentId;
+    });
   },
 
   async markAskSessionDocument(id, documentIds, sourceIds) {
-    const d = load();
-    const s = d.askSessions.find((x) => x.id === id);
-    if (s) {
-      const ids = documentIds ?? [];
-      s.documentId = ids.length ? ids[0] : null;
-      s.documentIds = ids;
-      if (sourceIds) s.sourceIds = sourceIds;
-    }
-    persist();
+    writeAtomically((d) => {
+      if (isTrashed(d, 'ask_session', id)) return;
+      const s = d.askSessions.find((x) => x.id === id);
+      if (s) {
+        const ids = documentIds ?? [];
+        s.documentId = ids.length ? ids[0] : null;
+        s.documentIds = ids;
+        if (sourceIds) s.sourceIds = sourceIds;
+      }
+    });
   },
 
   async deleteAskSession(id) {
@@ -933,62 +971,123 @@ export const repo: Repo = {
   },
 
   async insertDocument(input) {
-    const d = load();
-    const now = Date.now();
-    const id = nextId(d);
-    d.documents.push({
-      id,
-      name: input.name,
-      ext: input.ext,
-      size: input.size,
-      fileUri: input.fileUri,
-      bodyMd: '',
-      pages: null,
-      charCount: 0,
-      state: input.state,
-      error: null,
-      contentRevision: 0,
-      indexedRevision: 0,
-      chunkCount: 0,
-      contentSource: null,
-      origin: input.origin ?? 'file',
-      originId: input.originId ?? null,
-      stage: input.stage ?? 'library',
-      tags: [],
-      excerpt: input.excerpt ?? '',
-      createdAt: now,
-      updatedAt: now,
+    return writeAtomically((d) => {
+      const now = Date.now();
+      const id = nextId(d);
+      d.documents.push({
+        id,
+        name: input.name,
+        ext: input.ext,
+        size: input.size,
+        fileUri: input.fileUri,
+        bodyMd: '',
+        pages: null,
+        charCount: 0,
+        state: input.state,
+        error: null,
+        contentRevision: 0,
+        indexedRevision: 0,
+        chunkCount: 0,
+        contentSource: null,
+        origin: input.origin ?? 'file',
+        originId: input.originId ?? null,
+        stage: input.stage ?? 'library',
+        tags: [],
+        excerpt: input.excerpt ?? '',
+        createdAt: now,
+        updatedAt: now,
+      });
+      return id;
     });
-    persist();
-    return id;
+  },
+
+  async createDocumentWithContent(input) {
+    /*
+     * 记录、正文+切片、标签在**同一次发布**里。分成三步调用时，第二步失败会
+     * 留下一篇空壳：它在列表里看得见、点开是空的，也没有任何任务会去补它。
+     */
+    return writeAtomically((d) => {
+      const now = Date.now();
+      const id = nextId(d);
+      d.documents.push({
+        id,
+        name: input.name,
+        ext: input.ext,
+        size: input.size,
+        fileUri: null,
+        bodyMd: '',
+        pages: null,
+        charCount: 0,
+        state: 'parsing',
+        error: null,
+        contentRevision: 0,
+        indexedRevision: 0,
+        chunkCount: 0,
+        contentSource: null,
+        origin: input.origin ?? 'authored',
+        originId: input.originId ?? null,
+        stage: 'library',
+        tags: [],
+        excerpt: input.excerpt ?? '',
+        createdAt: now,
+        updatedAt: now,
+      });
+      // 刚插的记录版本号必然是 0；走不到 false，走到了说明有人并发改了它
+      if (!applyContentIn(d, id, input.content, 0)) {
+        throw new Error('文档刚被改过，正文没有写进去');
+      }
+      for (const raw of input.tagNames ?? []) {
+        const name = normalizeTagName(raw);
+        if (!name) continue;
+        const key = docTagKey(name);
+        let tagId = d.docTags.find((t) => docTagKey(t.name) === key)?.id;
+        if (tagId === undefined) {
+          const created: DocTag = {
+            id: nextId(d),
+            name,
+            state: input.tagState ?? 'approved',
+            createdAt: now,
+            count: 0,
+          };
+          d.docTags.push(created);
+          tagId = created.id;
+        }
+        if (!d.docTagLinks.some((l) => l.documentId === id && l.tagId === tagId)) {
+          d.docTagLinks.push({ documentId: id, tagId });
+        }
+      }
+      return id;
+    });
   },
 
   async updateDocument(id, patch) {
-    const d = load();
-    const doc = d.documents.find((x) => x.id === id);
-    if (!doc) return;
-    if (patch.name !== undefined) doc.name = patch.name.trim() || '未命名文档';
-    if (patch.bodyMd !== undefined) {
-      doc.bodyMd = patch.bodyMd;
-      doc.charCount = countChars(patch.bodyMd);
-    }
-    if (patch.excerpt !== undefined) doc.excerpt = patch.excerpt;
-    if (patch.pages !== undefined) doc.pages = patch.pages;
-    if (patch.state !== undefined) doc.state = patch.state;
-    if (patch.error !== undefined) doc.error = patch.error;
-    doc.updatedAt = Date.now();
-    persist();
+    writeAtomically((d) => {
+      // 与 native 一致：回收站里的文档不接受迟到的改名 / 改正文
+      if (isTrashed(d, 'document', id)) return;
+      const doc = d.documents.find((x) => x.id === id);
+      if (!doc) return;
+      if (patch.name !== undefined) doc.name = patch.name.trim() || '未命名文档';
+      if (patch.bodyMd !== undefined) {
+        doc.bodyMd = patch.bodyMd;
+        doc.charCount = countChars(patch.bodyMd);
+      }
+      if (patch.excerpt !== undefined) doc.excerpt = patch.excerpt;
+      if (patch.pages !== undefined) doc.pages = patch.pages;
+      if (patch.state !== undefined) doc.state = patch.state;
+      if (patch.error !== undefined) doc.error = patch.error;
+      doc.updatedAt = Date.now();
+    });
   },
 
   async clearAskSessionDocuments(documentId) {
-    const d = load();
-    for (const s of d.askSessions) {
-      // 多篇文档里删掉一篇：只摘掉这一篇，其余还在，徽标上的数量也要跟着少一
-      const ids = (s.documentIds ?? []).filter((x) => x !== documentId);
-      s.documentIds = ids;
-      s.documentId = ids.length ? ids[0] : null;
-    }
-    persist();
+    writeAtomically((d) => {
+      for (const s of d.askSessions) {
+        // 多篇文档里删掉一篇：只摘掉这一篇，其余还在，徽标上的数量也要跟着少一
+        const ids = (s.documentIds ?? []).filter((x) => x !== documentId);
+        s.documentIds = ids;
+        s.documentId = ids.length ? ids[0] : null;
+      }
+    });
   },
 
   async deleteDocument(id) {
@@ -999,34 +1098,16 @@ export const repo: Repo = {
   },
 
   async replaceDocumentContent(id, content, expectedRevision) {
-    const d = load();
-    const doc = d.documents.find((x) => x.id === id);
-    // 与 native 同一口径：文档没了或版本已被推进，这次写入作废
-    if (!doc || doc.contentRevision !== expectedRevision) return false;
-    const next = expectedRevision + 1;
-    doc.bodyMd = content.bodyMd;
-    doc.charCount = countChars(content.bodyMd);
-    doc.pages = content.pages;
-    doc.state = 'done';
-    doc.error = null;
-    doc.contentRevision = next;
-    doc.indexedRevision = next;
-    doc.contentSource = content.source;
-    doc.updatedAt = Date.now();
-    d.documentChunks = d.documentChunks.filter((c) => c.documentId !== id);
-    content.chunks.forEach((chunk, i) => {
-      d.documentChunks.push({
-        id: nextId(d),
-        documentId: id,
-        contentRevision: next,
-        ordinal: i,
-        text: chunk.text,
-        locator: chunk.locator,
-      });
-    });
-    doc.chunkCount = content.chunks.length;
-    persist();
-    return true;
+    /*
+     * 先只读判断，免得为一次注定失败的写入做整库深拷贝。
+     * 与 native 同一口径：文档没了、已在回收站、或版本已被推进，这次写入作废。
+     */
+    const snapshot = load();
+    const current = snapshot.documents.find((x) => x.id === id);
+    if (!current || isTrashed(snapshot, 'document', id) || current.contentRevision !== expectedRevision) {
+      return false;
+    }
+    return writeAtomically((d) => applyContentIn(d, id, content, expectedRevision));
   },
 
   async listDocumentChunks(documentId) {
@@ -1137,7 +1218,9 @@ export const repo: Repo = {
     const clean = normalizeTagName(name);
     if (!clean) throw new Error('标签名不能为空');
     return writeAtomically((d) => {
-      const existing = d.docTags.find((t) => t.name === clean);
+      // 比较键折叠全半角与大小写：「ＡＩ」不该在「AI」旁边再长一条
+      const key = docTagKey(clean);
+      const existing = d.docTags.find((t) => docTagKey(t.name) === key);
       if (existing) return { ...existing };
       const tag: DocTag = { id: nextId(d), name: clean, state, createdAt: Date.now(), count: 0 };
       d.docTags.push(tag);

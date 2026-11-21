@@ -6,13 +6,13 @@
 
 个人单机 Android 记录工具。记录时不要求分类；「问」负责问答、整理碎片、整理待办和发起月总结。没有账号、应用后端或云同步；**这不表示 AI、联网搜索和云解析不会发送资料**，外发边界见下文。
 
-**v0.34.0 已构建并发布。** [下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.34.0/fragments-v0.34.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.34.0)。26,377,298 字节，SHA-256 `5709eb361aaddce24f5ca927fbba7b9a99e1325bf80e62bd6e0414e403cedd30`，`draft=false`。可回退：[v0.32.0](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk)（26,360,894 字节，断点续传）、[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节，清理版）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节）。v0.34.0 是审阅版：迁移包事务、写回收站的行也被挡住、时间区间检索倒序、顶层数组的 JSON 不再丢篇；同包还带着未单独发版的 v0.33（回答可重新生成 / 改问题 / 切回旧答案）。**真机仍未实测**。
+**v0.35.0 尚未发版**（工作树已到 0.35.0 / versionCode 87，等内容齐了打 tag 走 CI）。当前可下载的是 **v0.34.0**，[下载 APK（约 26.4 MB）](https://github.com/gup-n/fragements/releases/download/v0.34.0/fragments-v0.34.0.apk) · [版本说明](https://github.com/gup-n/fragements/releases/tag/v0.34.0)。26,377,298 字节，SHA-256 `5709eb361aaddce24f5ca927fbba7b9a99e1325bf80e62bd6e0414e403cedd30`，`draft=false`。可回退：[v0.32.0](https://github.com/gup-n/fragements/releases/download/v0.32.0/fragments-v0.32.0.apk)（26,360,894 字节，断点续传）、[v0.31.1](https://github.com/gup-n/fragements/releases/download/v0.31.1/fragments-v0.31.1.apk)（26,354,426 字节，清理版）、[v0.31.0](https://github.com/gup-n/fragements/releases/download/v0.31.0/fragments-v0.31.0.apk)（26,359,230 字节）。v0.34.0 是审阅版：迁移包事务、写回收站的行也被挡住、时间区间检索倒序、顶层数组的 JSON 不再丢篇；同包还带着未单独发版的 v0.33（回答可重新生成 / 改问题 / 切回旧答案）。**真机仍未实测**。
 
 | 项 | 值 |
 |---|---|
 | 应用名 | 碎片 |
 | 包名 | `com.local.fragments`，保持不变 |
-| 当前版本 | v0.34.0（versionCode 86） |
+| 当前版本 | v0.35.0（versionCode 87） |
 | 开发分支 | `feat/ui-polish-20261115`；v0.20.6~v0.21.1 的 tag 都从该分支提交构建，master 未合并 |
 | 本轮恢复点 | tag `v0.20.6`（`f65e9ca`）保留上一版；`backup/pre-ui-polish-20261115` 保留 v0.20.5 / `76d91b0` |
 | 平台 | Android；目标设备 vivo Y78（V2278A），targetSdk 36 / minSdk 24 |

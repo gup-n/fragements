@@ -425,14 +425,28 @@ export interface Repo {
 
   /* ---- 个人文档（v0.28） ---- */
   /*
-   * 没有 `createAuthoredDoc` 这个方法。
+   * 「新建一篇自己写的文档」走 `createDocumentWithContent`，**不要**在调用侧
+   * 拼 `insertDocument` + `replaceDocumentContent` + `setDocumentTags`。
+   * 那三步各自是一个事务，第二步失败会留下一篇「列表里看得见、点开是空的、
+   * 也没有任务会去补」的文档（v0.35 修的正是这个）。
    *
-   * 「新建一篇自己写的文档」= `insertDocument({origin:'authored'})` +
-   * `replaceDocumentContent(切好的正文)` + `setDocumentTags([草稿])`，
-   * 三步都在 `documents/authored.ts` 里，一个事务都不缺。
-   * 在 repo 上再包一层的话，那三步的顺序会出现两份实现 —— 而顺序错了
-   * 会留下「正文有了但切片没有」的文档，问答永远说「资料里没有」。
+   * 切片规则不在 repo 里：调用方用 `contentFromText` 切好传进来，
+   * 这样「怎么切」仍然只有一份实现，repo 只保证「三样要么都在、要么都没有」。
    */
+  createDocumentWithContent(input: {
+    name: string;
+    ext: string;
+    size: number;
+    excerpt?: string;
+    origin?: DocumentMeta['origin'];
+    originId?: number | null;
+    /** 已经切好的正文与切片 */
+    content: DocumentContentInput;
+    /** 按名字挂标签，不存在就建。重名按 `docTagKey` 复用已有那条 */
+    tagNames?: string[];
+    /** 只给 AI 提议的标签用 `'pending'` */
+    tagState?: 'approved' | 'pending';
+  }): Promise<number>;
   /** 换一段：library / archived。归档是「AI 重新整理后旧的让位」，可查可恢复 */
   setDocumentStage(id: number, stage: DocStage): Promise<void>;
 

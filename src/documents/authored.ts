@@ -1,21 +1,19 @@
 /**
  * 个人文档的写入口（v0.28）。
  *
- * 「新建一篇自己写的文档」涉及**三步**，它们必须按这个顺序、在同一处发生：
- *
- * 1. `insertDocument` 插一条 `origin='authored'` 的空记录；
- * 2. `replaceDocumentContent` 写正文 + 切片（版本号从 0 推到 1）；
- * 3. `setDocumentTags` 挂上默认标签「草稿」。
- *
- * 为什么不让 repo 包一个 `createAuthoredDoc`：包了之后这三步就有两份实现，
- * 而漏掉第 2 步会留下一篇「有标题、没正文、问答永远说资料里没有」的文档 ——
+ * 「新建一篇自己写的文档」= 插记录 + 写正文与切片 + 挂默认标签「草稿」。
+ * 这三件事在 `repo.createDocumentWithContent` 里是**同一个事务**：分成三步调用时，
+ * 第二步失败会留下一篇「有标题、没正文、问答永远说资料里没有」的文档 ——
  * 这种错在界面上看起来完全正常，只有真正去问的时候才发现。
+ *
+ * 切片仍然在这里做（`contentFromText`）：repo 只保证「三样要么都在、要么都没有」，
+ * 不负责「怎么切」，否则切片规则会有两份实现。
  */
 import type { DocTag, Document } from '../types';
 import { repo } from '../db/repo';
 import { contentFromText } from './readers/chunk';
 import { excerptOf } from '../util/knowledgeDoc';
-import { DEFAULT_DOC_TAG, normalizeTagName } from '../util/docTags';
+import { DEFAULT_DOC_TAG, docTagKey, normalizeTagName } from '../util/docTags';
 import { clampTitle } from '../util/text';
 import { LOCAL_READER_LIMITS } from './formats';
 
@@ -51,26 +49,15 @@ export async function createAuthoredDoc(input: {
 
   // 切片在这里做：走和导入文档同一条 `contentFromText`，问答的引用定位才有行号
   const content = contentFromText(bodyMd, 'markdown');
-  const id = await repo.insertDocument({
+  return repo.createDocumentWithContent({
     name: normalizeTitle(input.title),
     ext: 'md',
     size: bodyMd.length,
-    fileUri: null,
-    state: 'parsing',
-    origin: 'authored',
-    stage: 'library',
     excerpt: excerptOf(bodyMd),
+    origin: 'authored',
+    content,
+    tagNames: [DEFAULT_DOC_TAG, ...(input.tagNames ?? [])],
   });
-
-  const wrote = await repo.replaceDocumentContent(id, content, 0);
-  if (!wrote) {
-    // 刚插进去的记录版本号必然是 0，走不到这里；真走到了说明有人并发改了它
-    throw new Error('这篇文档刚被改过，正文没有写进去。请重新打开再试。');
-  }
-
-  const tags = await attachTagNames(id, [DEFAULT_DOC_TAG, ...(input.tagNames ?? [])]);
-  void tags;
-  return id;
 }
 
 /**
@@ -98,17 +85,21 @@ export async function renameDoc(id: number, title: string): Promise<void> {
 /**
  * 把一串标签名挂到文档上（**追加**，不覆盖已有的）。
  *
- * 名字重复的（大小写不同）由 `normalizeTagName` 与 repo 的 UNIQUE 一起收掉：
- * 界面上不可能出现两个只差大小写的标签。
+ * 判重用 `docTagKey`（全半角、大小写折叠），与 `repo.createDocTag` 同一把尺子：
+ * 两边不一致的话，这里认为「已挂过」而 repo 认为「是新标签」，
+ * 就会出现「标签栏两条看起来一样的芯片」。
  */
 export async function attachTagNames(documentId: number, names: string[]): Promise<DocTag[]> {
   const doc = await repo.findDocument(documentId);
   if (!doc) return [];
   const tags: DocTag[] = [...doc.tags];
+  const seen = new Set(tags.map((tag) => docTagKey(tag.name)));
   for (const raw of names) {
     const name = normalizeTagName(raw);
     if (!name) continue;
-    if (tags.some((tag) => tag.name.toLowerCase() === name.toLowerCase())) continue;
+    const key = docTagKey(name);
+    if (seen.has(key)) continue;
+    seen.add(key);
     tags.push(await repo.createDocTag(name, 'approved'));
   }
   await repo.setDocumentTags(documentId, tags.map((tag) => tag.id));

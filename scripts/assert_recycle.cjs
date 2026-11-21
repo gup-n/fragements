@@ -228,7 +228,14 @@ test('默认标签是「草稿」，而且它只是一个标签', () => {
   const authored = read('src/documents/authored.ts');
   assert.ok(authored.includes('DEFAULT_DOC_TAG'), '新建文档要挂上默认标签');
   assert.ok(
-    authored.includes("stage: 'library'"),
+    authored.includes('createDocumentWithContent('),
+    '新建要走单事务入口：记录、正文、标签分成三个事务会留下「有标题没正文」的空壳',
+  );
+  const native = read('src/db/repo.native.ts');
+  const at = native.indexOf('async createDocumentWithContent');
+  const body = native.slice(at, native.indexOf('async updateDocument', at));
+  assert.ok(
+    body.includes("'library'"),
     '用户定的是自动入库：新建文档直接进库，不要 draft 段',
   );
   const types = read('src/types.ts');
@@ -246,6 +253,27 @@ test('标签名去空白、去 #、压空格，最长 12 字', () => {
 test('同名不同大小写算一个标签，保留第一次的写法', () => {
   assert.deepEqual(plain(docTags.cleanTagNames(['Work', 'work', 'WORK', '生活'])), ['Work', '生活']);
   assert.deepEqual(plain(docTags.cleanTagNames(['', '  ', '#'])), []);
+});
+
+/*
+ * 全角输入是输入法随手打出来的，不是用户想建第二个标签。
+ * 「ＡＩ」和「AI」在列表里长得一模一样，分不出点哪个 —— 所以判重必须折叠全半角。
+ * 但**存库仍保留用户的写法**（NAS 不该变成 nas），折叠只用于比较。
+ */
+test('全角与半角算同一个标签，但保留用户第一次的写法', () => {
+  assert.equal(docTags.docTagKey('ＡＩ'), docTags.docTagKey('AI'));
+  assert.equal(docTags.docTagKey('Ｗｏｒｋ'), docTags.docTagKey('work'));
+  assert.deepEqual(
+    plain(docTags.cleanTagNames(['ＡＩ', 'AI', 'ai'])),
+    ['ＡＩ'],
+    '只留一条，写法取第一次出现的那个',
+  );
+  // 标点不折叠：「读/写」和「读写」可能是用户有意分开的两件事，合并等于替他做决定
+  assert.notEqual(docTags.docTagKey('读/写'), docTags.docTagKey('读写'));
+  // 两端的查重必须是同一把尺子，否则「这里认为已存在、那里认为新标签」会生出两条
+  for (const file of ['src/db/repo.native.ts', 'src/db/repo.web.ts', 'src/documents/authored.ts']) {
+    assert.ok(read(file).includes('docTagKey'), `${file} 的标签查重要走 docTagKey`);
+  }
 });
 
 test('芯片颜色由名字稳定算出，换设备也一样', () => {

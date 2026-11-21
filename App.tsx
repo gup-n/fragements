@@ -35,6 +35,7 @@ import { duplicateFragment } from './src/db/duplicate';
 import { runTrashCleanup } from './src/db/trashFiles';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
 import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
+import { BootError } from './src/components/BootError';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
@@ -61,6 +62,19 @@ type Route = MainTab;
 
 const isWeb = Platform.OS === 'web';
 
+/**
+ * 启动异常 → 一行能看懂的字。
+ *
+ * `Error` 的 message 已经是最有用的那部分（enospc / database is locked /
+ * no such column…），不加工直接给，用户截图反馈时比「未知错误」有用得多。
+ * 但空 message 和 `[object Object]` 要换掉，否则屏幕上会出现一行噪音。
+ */
+function describeBootError(error: unknown): string {
+  if (error instanceof Error) return error.message.trim() || error.name;
+  const text = String(error ?? '').trim();
+  return !text || text === '[object Object]' ? '' : text;
+}
+
 /** 外观偏好的存储键。放 settings 表，跟 AI 配置同一套机制 */
 const K_THEME = 'ui_theme';
 /** 字号档位（v0.26）。和明暗/风格一样是一条设置，不是每次进设置页才读 */
@@ -81,41 +95,64 @@ export default function App() {
   const preferenceQueue = useRef<Promise<void>>(Promise.resolve());
   const preferenceVersions = useRef<Record<string, number>>({});
   const [booted, setBooted] = useState(false);
+  /** 库打不开的原因。非空时整屏显示错误页，**不再照常进门** */
+  const [bootError, setBootError] = useState<unknown>(null);
+  /** 正在跑启动流程（首次或重试）。给错误页上的按钮一个反馈 */
+  const [booting, setBooting] = useState(false);
+
+  const boot = useCallback(async () => {
+    setBooting(true);
+    setBooted(false);
+    try {
+      await repo.init();
+      setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
+      setStyle(normalizeThemeStyle(await repo.getSetting('ui_style')));
+      /*
+       * 字号要**先改模块里的 TYPE 再改 state**：样式工厂在渲染时读 TYPE，
+       * 反过来的话第一帧还是旧字号，要等下一次重渲染才跳一下。
+       */
+      const scale = normalizeTypeScale(await repo.getSetting(K_TYPE_SCALE));
+      setTypeScale(scale);
+      setTypeScaleState(scale);
+      /*
+       * 文档任务服务必须在库就绪之后启动：它启动时要扫一遍
+       * `state = 'parsing'` 但没有对应任务的记录，把它们标成「上次没跑完」。
+       * 库还没开就去扫，只会报错然后静默跳过 —— 那界面会一直显示「解析中」。
+       *
+       * 它起不来**不该挡住整个应用**：页面能看能写，只是「准备文档」不能用。
+       * 归到 BootError 会把「任务服务挂了」说成「数据打不开」，那是假话。
+       */
+      try {
+        await initDocumentJobs();
+      } catch (e) {
+        console.warn('[fragments] 文档任务服务启动失败', e);
+      }
+      /*
+       * 回收站里超过 30 天的条目，启动时清一次（v0.28）。
+       *
+       * 不 await：清的文件可能很多（几百张配图），启动不该等它。
+       * 放在库就绪之后、不阻塞首屏 —— 清理失败也只是晚一天，
+       * 而它删的是「用户 30 天前就不要了」的东西。
+       */
+      void runTrashCleanup();
+      // 走到这里才算真的打开了：失败时保留上一次的错误信息，别让错误页闪成空白
+      setBootError(null);
+    } catch (e) {
+      /*
+       * 不能再「只 warn 一句然后照常开门」：那样列表是空的、统计是 0 条，
+       * 首页还写着「还没有碎片，记一条试试」—— 用户看到的是「记录没了」。
+       */
+      console.warn('[fragments] 初始化失败', e);
+      setBootError(e);
+    } finally {
+      setBooting(false);
+      setBooted(true);
+    }
+  }, []);
 
   useEffect(() => {
-    (async () => {
-      try {
-        await repo.init();
-        setMode(normalizeThemeMode(await repo.getSetting(K_THEME)));
-        setStyle(normalizeThemeStyle(await repo.getSetting('ui_style')));
-        /*
-         * 字号要**先改模块里的 TYPE 再改 state**：样式工厂在渲染时读 TYPE，
-         * 反过来的话第一帧还是旧字号，要等下一次重渲染才跳一下。
-         */
-        const scale = normalizeTypeScale(await repo.getSetting(K_TYPE_SCALE));
-        setTypeScale(scale);
-        setTypeScaleState(scale);
-        /*
-         * 文档任务服务必须在库就绪之后启动：它启动时要扫一遍
-         * `state = 'parsing'` 但没有对应任务的记录，把它们标成「上次没跑完」。
-         * 库还没开就去扫，只会报错然后静默跳过 —— 那界面会一直显示「解析中」。
-         */
-        await initDocumentJobs();
-        /*
-         * 回收站里超过 30 天的条目，启动时清一次（v0.28）。
-         *
-         * 不 await：清的文件可能很多（几百张配图），启动不该等它。
-         * 放在库就绪之后、不阻塞首屏 —— 清理失败也只是晚一天，
-         * 而它删的是「用户 30 天前就不要了」的东西。
-         */
-        void runTrashCleanup();
-      } catch (e) {
-        console.warn('[fragments] 初始化失败', e);
-      } finally {
-        setBooted(true);
-      }
-    })();
-  }, []);
+    void boot();
+  }, [boot]);
 
   const persistPreference = useCallback((key: string, value: string) => {
     const version = (preferenceVersions.current[key] ?? 0) + 1;
@@ -167,7 +204,15 @@ export default function App() {
         onChangeTypeScale={changeTypeScale}
         saveError={saveError}
       >
-        <Shell booted={booted} />
+        {bootError ? (
+          <BootError
+            detail={describeBootError(bootError)}
+            busy={booting}
+            onRetry={() => void boot()}
+          />
+        ) : (
+          <Shell booted={booted} />
+        )}
       </ThemeProvider>
     </SafeAreaProvider>
   );

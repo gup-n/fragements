@@ -35,6 +35,21 @@ export function normalizeTagName(raw: string): string {
 }
 
 /**
+ * 标签的**比较键**：全角半角、大小写、开头 `#` 与多余空白都不敏感。
+ *
+ * 只用于查重，**存库仍然是 `normalizeTagName` 的显示形式** ——
+ * 把 NAS 存成 nas，界面上看着就像个错别字。
+ *
+ * 标点不折叠：文档标签是用户手写的短名字，「读/写」和「读写」
+ * 可能是他有意分开的两件事，合并掉就等于改了他的组织方式。
+ */
+export function docTagKey(raw: string): string {
+  return normalizeTagName(raw)
+    .replace(/[\uFF01-\uFF5E]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
+    .toLowerCase();
+}
+
+/**
  * 一串原始输入 → 干净的标签名数组。
  *
  * 判重按**归一化键**（大小写不敏感、全角半角不敏感）：存两个只差大小写的标签，
@@ -46,7 +61,7 @@ export function cleanTagNames(raw: readonly string[]): string[] {
   for (const item of raw) {
     const name = normalizeTagName(item);
     if (!name) continue;
-    const key = name.toLowerCase();
+    const key = docTagKey(name);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(name);

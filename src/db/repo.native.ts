@@ -24,7 +24,7 @@ import type {
 } from '../types';
 import { normalizeQaScope } from '../util/qaScope';
 import { countChars } from '../util/text';
-import { normalizeTagName } from '../util/docTags';
+import { docTagKey, normalizeTagName } from '../util/docTags';
 import { parseProposalPayload, serializeProposalPayload } from '../util/proposal';
 import { planToggle } from '../util/todoTree';
 import { trashDetail, trashTitle } from '../util/trash';
@@ -1035,6 +1035,33 @@ function toDocTag(row: { id: number; name: string; state: string; created_at: nu
   };
 }
 
+/**
+ * 按名字确保标签存在，返回那一行。**调用方拥有事务**。
+ *
+ * 查重走 `docTagKey`（全半角、大小写折叠），但不改已有那条的写法 ——
+ * 显示形式是用户的（NAS 不该变成 nas），比较键只用来认「这是同一件事」。
+ * 标签总量是几十条，整表读出来在 JS 里比，比在 SQL 里写一堆 lower()/replace() 可靠。
+ */
+function ensureDocTagIn(
+  d: SQLite.SQLiteDatabase,
+  name: string,
+  state: 'approved' | 'pending',
+): { id: number; name: string; state: string; created_at: number } {
+  const rows = d.getAllSync<{ id: number; name: string; state: string; created_at: number }>(
+    'SELECT id, name, state, created_at FROM doc_tags',
+  );
+  const key = docTagKey(name);
+  const hit = rows.find((row) => docTagKey(row.name) === key);
+  if (hit) return hit;
+  const createdAt = Date.now();
+  const res = d.runSync('INSERT INTO doc_tags (name, state, created_at) VALUES (?, ?, ?)', [
+    name,
+    state,
+    createdAt,
+  ]);
+  return { id: Number(res.lastInsertRowId), name, state, created_at: createdAt };
+}
+
 interface ProposalRow {
   id: number;
   kind: string;
@@ -1855,6 +1882,50 @@ export const repo: Repo = {
     return Number(res.lastInsertRowId);
   },
 
+  async createDocumentWithContent(input) {
+    /*
+     * 记录、正文+切片、标签在**同一个事务**里落。分成三步调用时，第二步失败会
+     * 留下一篇空壳：它在列表里看得见、点开是空的，也没有任何任务会去补它
+     * （`state` 已经是 parsing 的话任务会扫到，但那时正文本来就是空的）。
+     */
+    const d = db();
+    // withTransactionSync 不回传任务的值，id 从闭包里带出来
+    let id = 0;
+    d.withTransactionSync(() => {
+      const now = Date.now();
+      const res = d.runSync(
+        `INSERT INTO documents (name, ext, size, file_uri, body_md, pages, char_count, state, error,
+                                origin, origin_id, stage, excerpt, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, '', NULL, 0, 'parsing', NULL, ?, ?, 'library', ?, ?, ?)`,
+        [
+          input.name,
+          input.ext,
+          input.size,
+          input.origin ?? 'authored',
+          input.originId ?? null,
+          input.excerpt ?? '',
+          now,
+          now,
+        ],
+      );
+      id = Number(res.lastInsertRowId);
+      // 刚插的记录版本号必然是 0；走不到 false，走到了说明有人并发改了它
+      if (!replaceDocumentContentIn(d, id, input.content, 0)) {
+        throw new Error('文档刚被改过，正文没有写进去');
+      }
+      for (const raw of input.tagNames ?? []) {
+        const name = normalizeTagName(raw);
+        if (!name) continue;
+        const tag = ensureDocTagIn(d, name, input.tagState ?? 'approved');
+        d.runSync('INSERT OR IGNORE INTO doc_tag_links (document_id, tag_id) VALUES (?, ?)', [
+          id,
+          tag.id,
+        ]);
+      }
+    });
+    return id;
+  },
+
   async updateDocument(id, patch) {
     const sets: string[] = [];
     const params: (string | number | null)[] = [];
@@ -2047,18 +2118,9 @@ export const repo: Repo = {
   async createDocTag(name, state = 'approved') {
     const clean = normalizeTagName(name);
     if (!clean) throw new Error('标签名不能为空');
-    const d = db();
-    const existing = d.getFirstSync<{ id: number; name: string; state: string; created_at: number }>(
-      'SELECT id, name, state, created_at FROM doc_tags WHERE name = ?',
-      [clean],
-    );
-    // 重名直接把已有那条返回：用户第二次输入「工作」要的就是那个「工作」
-    if (existing) return toDocTag({ ...existing, n: 0 });
-    const res = d.runSync(
-      'INSERT INTO doc_tags (name, state, created_at) VALUES (?, ?, ?)',
-      [clean, state, Date.now()],
-    );
-    return { id: Number(res.lastInsertRowId), name: clean, state, createdAt: Date.now(), count: 0 };
+    // 重名直接把已有那条返回：用户第二次输入「工作」要的就是那个「工作」。
+    // 比较键折叠全半角与大小写，否则「ＡＩ」会新造一条，而它和「AI」在列表里是同一件事。
+    return toDocTag({ ...ensureDocTagIn(db(), clean, state), n: 0 });
   },
 
   async deleteDocTag(id) {

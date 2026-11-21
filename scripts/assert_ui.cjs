@@ -738,7 +738,7 @@ test('文档行不再常驻删除按钮：左滑露出删除，长按弹菜单',
   assert.ok(!row.includes('name="trash-outline"'), '卡片上不许再常驻垃圾桶（用户 2026-11-19）');
   assert.ok(row.includes('<SwipeRow'), '改成一行的滑动手势');
   assert.ok(row.includes("label: '删除'"), '左滑露出的就是删除');
-  assert.ok(row.includes('onLongPress={selectMode ? undefined : onMenu}'), '长按要能弹菜单');
+  assert.ok(row.includes('onLongPress={selectMode ? undefined : () => onMenu(doc)}'), '长按要能弹菜单');
   assert.ok(docs.includes('function DocMenuSheet'), '菜单本身要有');
   for (const needle of ['编辑正文', '移到回收站']) {
     assert.ok(docs.includes(needle), `菜单里缺少「${needle}」`);
@@ -762,9 +762,9 @@ test('滑开的文档行会自己收回，文档行也只写一份', () => {
   assert.ok(docs.includes('renderItem={({ item }) => renderRow(item)}'), '主列表走 renderRow');
   assert.ok(docs.includes('onScrollBeginDrag'), '滚动时要把滑开的那行收回去');
 
-  const at = docs.indexOf('function renderRow(');
+  const at = docs.indexOf('const selectedSet');
   const end = docs.indexOf('const picked', at);
-  assert.ok(at > 0 && end > at, 'renderRow 要挨着列表数据之前');
+  assert.ok(at > 0 && end > at, '行回调与 renderRow 要挨着列表数据之前');
   const body = docs.slice(at, end);
   assert.equal(
     (body.match(/setOpenRow\(null\)/g) || []).length,
@@ -776,6 +776,24 @@ test('滑开的文档行会自己收回，文档行也只写一份', () => {
     true,
     '再加上滚动与进多选，收回的地方至少四处',
   );
+});
+
+/*
+ * 打字时整列重渲染是 v0.34 记账没做的那一条。判据是**两件事一起成立**：
+ * 行组件 memo 了，且它收到的每个回调都是稳定引用（`useCallback`）。
+ * 只做到一半时看起来「已经优化」，但 props 每次全新，memo 一次都不会命中。
+ */
+test('文档行是 memo 的，行回调也在渲染之外稳定下来', () => {
+  const docs = parseSource('src/screens/DocsScreen.tsx').getText();
+  assert.ok(docs.includes('const DocRow = memo(function DocRow('), '行组件要 memo');
+  for (const name of ['rowSwipe', 'rowOpen', 'rowToggle', 'rowMenu', 'rowDelete', 'rowLocal', 'rowCloud']) {
+    assert.ok(
+      new RegExp(`const ${name} = useCallback\\(`).test(docs),
+      `${name} 要用 useCallback 稳定引用，否则 memo 收到的新 props 每次都不一样`,
+    );
+  }
+  assert.ok(docs.includes('const renderRow = useCallback('), 'renderRow 自己也要稳定');
+  assert.ok(docs.includes('selectedSet.has(item.id)'), '选中判断走 Set，别对每一行 includes 一遍');
 });
 
 /*
