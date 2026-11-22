@@ -1,6 +1,7 @@
 /** 小结全屏阅读器：滑动顺序来自调用方列表，等实测宽度后才挂分页FlatList。 */
 import { useEffect, useRef, useState } from 'react';
-import { BackHandler, FlatList, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { BackHandler, FlatList, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import type { Note } from '../types';
 import { dayKey, periodLabel } from '../util/date';
 import { SPACE, TYPE, surfaceStroke, useTheme, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
@@ -16,12 +17,16 @@ interface Props {
   notes: Note[];
   initialIndex: number;
   onClose: () => void;
+  /** 删除当前这篇小结。删除进回收站；调用方负责重读列表（列表一变阅读器会自己关） */
+  onDeleteNote: (id: number) => void;
 }
 
-export function NoteViewer({ notes, initialIndex, onClose }: Props) {
-  const { styles } = useThemedStyles(makeStyles);
+export function NoteViewer({ notes, initialIndex, onClose, onDeleteNote }: Props) {
+  const { c, styles } = useThemedStyles(makeStyles);
   const { reduceMotion } = useTheme();
   const [width, setWidth] = useState(0);
+  /** 删除要二次确认：第一次把按钮换成「确认删除」，第二次才真删 */
+  const [armed, setArmed] = useState(false);
   const first = Math.min(Math.max(initialIndex, 0), Math.max(notes.length - 1, 0));
   const [current, setCurrent] = useState(first);
   const listRef = useRef<FlatList<Note>>(null);
@@ -35,6 +40,7 @@ export function NoteViewer({ notes, initialIndex, onClose }: Props) {
 
   useEffect(() => {
     currentIdRef.current = notes[current]?.id ?? null;
+    setArmed(false);
   }, [current, notes]);
 
   useEffect(() => {
@@ -60,6 +66,11 @@ export function NoteViewer({ notes, initialIndex, onClose }: Props) {
   const cur = notes[current];
   if (!cur) return null;
 
+  const onPressDelete = () => {
+    if (!armed) { setArmed(true); return; }
+    onDeleteNote(cur.id);
+  };
+
   return (
     <View
       style={styles.root} accessibilityViewIsModal
@@ -72,6 +83,17 @@ export function NoteViewer({ notes, initialIndex, onClose }: Props) {
         title={periodLabel(cur.period) || dayKey(cur.createdAt)}
         subtitle={`${KIND_LABEL[cur.type]}${notes.length > 1 ? ` · ${current + 1} / ${notes.length}` : ''}`}
         backIcon="close" backLabel="关闭小结" onBack={onClose}
+        right={
+          <Pressable
+            onPress={onPressDelete}
+            style={({ pressed }) => [styles.delBtn, armed && styles.delArmed, pressed && { opacity: 0.7 }]}
+            accessibilityRole="button"
+            accessibilityLabel={armed ? '确认删除这篇小结' : '删除这篇小结'}
+          >
+            <Ionicons name={armed ? 'warning-outline' : 'trash-outline'} size={16} color={armed ? c.danger : c.text2} />
+            <Text style={[styles.delText, armed && styles.delTextArmed]}>{armed ? '确认删除' : '删除'}</Text>
+          </Pressable>
+        }
       />
       {width > 0 ? (
         <FlatList
@@ -126,5 +148,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   footerInfo: { flex: 1, minWidth: 0, alignItems: 'center', gap: SPACE.xxs },
   pageCount: { ...TYPE.label, color: c.text, fontVariant: ['tabular-nums'] },
+  delBtn: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xxs, paddingHorizontal: SPACE.sm, minHeight: metrics.controlHeight },
+  delArmed: { backgroundColor: c.dangerBg, borderRadius: metrics.buttonRadius },
+  delText: { ...TYPE.label, color: c.text2 },
+  delTextArmed: { color: c.danger },
   hint: { ...TYPE.meta, color: c.text2, textAlign: 'center' },
 });

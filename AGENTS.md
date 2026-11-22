@@ -148,8 +148,9 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **分享接收有硬上限，复制不在主线程**（v0.36）：最多 20 份、单份 200 MB、合计 500 MB。原生先写 `copying=true` 的占位，再在后台 `Thread` 里复制；JS 必须等到 `copying=false` 才消费，并把 `skipped` 里的名字和原因说出来。**别把 `copyTo` 放回 `onCreate`/`onNewIntent` 的主线程** —— 一个大文件就是一次 ANR。
 - **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。
 
-- **删除一律是软删**（v0.28）。`deleteFragment` / `deleteDocument` / `deleteAskSession`
-  只写 `deleted_at`，**不删行、不删文件** —— 30 天内恢复要能看到图、能打开原件。
+- **删除一律是软删**（v0.28；v0.36 起含小结）。`deleteFragment` / `deleteDocument` /
+  `deleteAskSession` / `deleteNote` 只写 `deleted_at`，**不删行、不删文件** ——
+  30 天内恢复要能看到图、能打开原件。
   真删只有一条路：`purgeRefs`（`purgeTrash` / `purgeExpiredTrash` 共用它）。
 - **每一条列表查询都要带 `deleted_at IS NULL`**，这是软删唯一的系统性风险：
   漏一条不会有任何报错，界面上只是删掉的东西又冒出来一条。

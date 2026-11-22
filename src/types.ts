@@ -385,8 +385,8 @@ export interface DocTag {
   count: number;
 }
 
-/** 回收站里的三种东西。三种都只是「原表那一行加了 deleted_at」 */
-export type TrashKind = 'fragment' | 'document' | 'ask_session';
+/** 回收站里的四种东西。四种都只是「原表那一行加了 deleted_at」 */
+export type TrashKind = 'fragment' | 'document' | 'ask_session' | 'note';
 
 export interface TrashRef {
   kind: TrashKind;

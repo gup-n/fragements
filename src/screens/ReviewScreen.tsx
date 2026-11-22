@@ -174,6 +174,18 @@ export function ReviewScreen({
   useEffect(() => {
     reload();
   }, [reload]);
+  /** 删除一篇小结。软删进回收站，30 天内能从设置 → 回收站恢复 */
+  async function handleDeleteNote(id: number) {
+    try {
+      await repo.deleteNote(id);
+      setViewerNoteId(null);
+      await reload();
+      await onChanged?.();
+    } catch (e) {
+      setLoadError(e instanceof Error ? `没删掉：${e.message}` : '没删掉，请重试');
+    }
+  }
+
 
   /*
    * 阅读器开着的时候这篇被删掉了：得关掉，否则 NoteViewer 拿不到 note 会返回 null，
@@ -346,6 +358,7 @@ export function ReviewScreen({
           notes={notes}
           initialIndex={Math.max(0, viewerIndex ?? 0)}
           onClose={() => setViewerNoteId(null)}
+          onDeleteNote={(id) => void handleDeleteNote(id)}
         />
       ) : null}
 

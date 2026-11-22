@@ -79,7 +79,7 @@ function withoutMigrations(text) {
   return text.slice(0, start) + text.slice(start, end).replace(/[^\n]/g, ' ') + text.slice(end);
 }
 
-const TABLE_RE = /\b(?:FROM|JOIN)\s+(fragments|documents|ask_sessions)\b/;
+const TABLE_RE = /\b(?:FROM|JOIN)\s+(fragments|documents|ask_sessions|notes)\b/;
 
 test('native 里每条查询都挡住了回收站里的行', () => {
   const text = withoutMigrations(read('src/db/repo.native.ts'));
@@ -98,19 +98,20 @@ test('native 里每条查询都挡住了回收站里的行', () => {
   assert.deepEqual(bad, [], '这些查询没排除回收站里的行（或没有 trash:ok 说明理由）');
 });
 
-test('删除是软删：deleteFragment / deleteDocument / deleteAskSession 不删行', () => {
-  const text = read('src/db/repo.native.ts');
+test('删除是软删：deleteFragment / deleteDocument / deleteAskSession / deleteNote 不删行', () => {
+  // 迁移里 v11 那句「删掉日/周小结」是历史脚本，不受今天的软删规则约束
+  const text = withoutMigrations(read('src/db/repo.native.ts'));
   const body = (name) => {
     const at = text.indexOf(`async ${name}(`);
     assert.ok(at > 0, `找不到 ${name}`);
     const next = text.indexOf('\n  async ', at + 10);
     return text.slice(at, next > 0 ? next : undefined);
   };
-  for (const name of ['deleteFragment', 'deleteDocument', 'deleteAskSession']) {
+  for (const name of ['deleteFragment', 'deleteDocument', 'deleteAskSession', 'deleteNote']) {
     const src = body(name);
     assert.ok(/deleted_at/.test(src), `${name} 要写 deleted_at`);
     assert.ok(
-      !/DELETE FROM (fragments|documents|ask_sessions)\b/i.test(src),
+      !/DELETE FROM (fragments|documents|ask_sessions|notes)\b/i.test(src),
       `${name} 不许真的删行 —— 那是回收站「彻底删除」的事`,
     );
   }
@@ -120,8 +121,9 @@ test('删除是软删：deleteFragment / deleteDocument / deleteAskSession 不�
   const purge = text.slice(purgeAt, text.indexOf('export const repo', purgeAt));
   assert.ok(/DELETE FROM fragments/.test(purge), 'purgeRefs 要删碎片行');
   assert.ok(/DELETE FROM documents/.test(purge), 'purgeRefs 要删文档行');
+  assert.ok(/DELETE FROM notes/.test(purge), 'purgeRefs 要删小结行');
   const others = text.replace(purge, '');
-  for (const table of ['fragments', 'documents']) {
+  for (const table of ['fragments', 'documents', 'ask_sessions', 'notes']) {
     assert.ok(
       !new RegExp(`DELETE FROM ${table}\\b`).test(others),
       `除了 purgeRefs，别处不许 DELETE FROM ${table}`,
@@ -129,9 +131,9 @@ test('删除是软删：deleteFragment / deleteDocument / deleteAskSession 不�
   }
 });
 
-test('web 侧三个列表都必须走 live* 过滤，不能直接读全量数组', () => {
+test('web 侧列表都必须走 live* 过滤，不能直接读全量数组', () => {
   const text = read('src/db/repo.web.ts');
-  for (const helper of ['liveFragments', 'liveDocuments', 'liveSessions']) {
+  for (const helper of ['liveFragments', 'liveDocuments', 'liveSessions', 'liveNotes']) {
     assert.ok(text.includes(`function ${helper}(d: WebDb)`), `缺少 ${helper}`);
   }
   assert.ok(/function isTrashed\(d: WebDb, kind: TrashKind, id: number\)/.test(text), '回收站判定只有一处');
@@ -153,6 +155,8 @@ test('web 侧三个列表都必须走 live* 过滤，不能直接读全量数组
     findDocument: 'liveDocuments(',
     listAskSessions: 'liveSessions(',
     findAskSession: 'liveSessions(',
+    listNotes: 'liveNotes(',
+    findNote: 'liveNotes(',
   };
   for (const [name, needle] of Object.entries(expect)) {
     assert.ok(body(name).includes(needle), `web 的 ${name} 要用 ${needle}`);

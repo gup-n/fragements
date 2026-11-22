@@ -54,13 +54,14 @@ export function trashTitle(kind: TrashKind, raw: string): string {
   }
   const text = String(raw ?? '').trim();
   if (text) return text;
-  return kind === 'document' ? '（未命名文档）' : '（未命名会话）';
+  return kind === 'document' ? '（未命名文档）' : kind === 'note' ? '（无标题小结）' : '（未命名会话）';
 }
 
-/** 回收站那一行的副标题：碎片与文档报字数，会话报轮数 */
+/** 回收站那一行的副标题：碎片/文档/小结报字数，会话报轮数 */
 export function trashDetail(kind: TrashKind, chars: number, turns: number): string {
   if (kind === 'fragment') return `${chars} 字`;
   if (kind === 'document') return chars > 0 ? `${chars} 字` : '没有正文';
+  if (kind === 'note') return chars > 0 ? `${chars} 字` : '空小结';
   return turns > 0 ? `${turns} 轮对话` : '空会话';
 }
 
@@ -70,14 +71,15 @@ export function trashLeftText(deletedAt: number, now: number): string {
   return days <= 0 ? '今天到期' : `还有 ${days} 天`;
 }
 
-/** 三类分开，每类内部按删除时间倒序（最近删的在最上面） */
+/** 四类分开，每类内部按删除时间倒序（最近删的在最上面） */
 export function groupTrash(entries: TrashEntry[]): Record<TrashKind, TrashEntry[]> {
-  const out: Record<TrashKind, TrashEntry[]> = { fragment: [], document: [], ask_session: [] };
+  const out: Record<TrashKind, TrashEntry[]> = { fragment: [], document: [], ask_session: [], note: [] };
   for (const entry of entries) out[entry.kind].push(entry);
   const byNewest = (a: TrashEntry, b: TrashEntry) => b.deletedAt - a.deletedAt || b.id - a.id;
   out.fragment.sort(byNewest);
   out.document.sort(byNewest);
   out.ask_session.sort(byNewest);
+  out.note.sort(byNewest);
   return out;
 }
 
@@ -88,13 +90,14 @@ export function groupTrash(entries: TrashEntry[]): Record<TrashKind, TrashEntry[
  * 用户是来找回东西的，得先知道东西在不在这儿。
  */
 export function trashSummary(entries: TrashEntry[], now: number): string {
-  if (!entries.length) return '删除的碎片、文档和问答会话会先到这里，30 天后自动清空。';
-  const counts: Record<TrashKind, number> = { fragment: 0, document: 0, ask_session: 0 };
+  if (!entries.length) return '删除的碎片、文档、问答会话和月总结会先到这里，30 天后自动清空。';
+  const counts: Record<TrashKind, number> = { fragment: 0, document: 0, ask_session: 0, note: 0 };
   for (const entry of entries) counts[entry.kind] += 1;
   const parts: string[] = [];
   if (counts.fragment) parts.push(`碎片 ${counts.fragment} 条`);
   if (counts.document) parts.push(`文档 ${counts.document} 篇`);
   if (counts.ask_session) parts.push(`会话 ${counts.ask_session} 场`);
+  if (counts.note) parts.push(`小结 ${counts.note} 篇`);
   const soonest = Math.min(...entries.map((e) => trashDaysLeft(e.deletedAt, now)));
   const tail = soonest <= 0 ? '最早的一条今天就会被清掉。' : `最早的一条还有 ${soonest} 天。`;
   return `${parts.join('、')}，30 天后自动清空，${tail}`;

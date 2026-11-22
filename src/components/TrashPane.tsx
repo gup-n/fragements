@@ -34,6 +34,7 @@ const KIND_LABEL: Record<TrashKind, string> = {
   fragment: '碎片',
   document: '文档',
   ask_session: '问答',
+  note: '小结',
 };
 
 export function TrashPane({ onChanged }: Props) {
@@ -180,7 +181,7 @@ export function TrashPane({ onChanged }: Props) {
           <EmptyState
             icon="trash-outline"
             title="回收站是空的"
-            body="删除的碎片、文档和问答会话会先到这里，30 天后自动清空。"
+            body="删除的碎片、文档、问答会话和月总结会先到这里，30 天后自动清空。"
           />
         ) : (
           <View style={styles.card}>

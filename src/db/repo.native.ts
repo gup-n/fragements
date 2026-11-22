@@ -428,6 +428,14 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX IF NOT EXISTS idx_doc_proposals_state ON doc_proposals(state, created_at DESC);
   `,
+  // v18：月总结删除进回收站（v0.36）。
+  //      notes 之前 `deleteNote` 是物理 DELETE —— 小结是要长期留着的档案，
+  //      手滑删掉就再也找不回来。现在和碎片/文档/会话一样加 `deleted_at`，
+  //      删除进回收站，30 天后悔期内能恢复。
+  `
+  ALTER TABLE notes ADD COLUMN deleted_at INTEGER;
+  CREATE INDEX IF NOT EXISTS idx_notes_live ON notes(deleted_at, created_at DESC);
+  `,
 ];
 
 /**
@@ -587,6 +595,7 @@ interface NoteRow {
   body_md: string;
   period: string | null;
   created_at: number;
+  deleted_at: number | null;
 }
 
 function toNote(r: NoteRow): Note {
@@ -1005,6 +1014,13 @@ function purgeRefs(d: SQLite.SQLiteDatabase, refs: TrashRef[]): string[] {
     const slice = sessionIds.slice(i, i + 400);
     const ph = slice.map(() => '?').join(',');
     d.runSync(`DELETE FROM ask_sessions WHERE id IN (${ph})`, slice);
+  }
+
+  const noteIds = idsOf('note');
+  for (let i = 0; i < noteIds.length; i += 400) {
+    const slice = noteIds.slice(i, i + 400);
+    const ph = slice.map(() => '?').join(',');
+    d.runSync(`DELETE FROM notes WHERE id IN (${ph})`, slice);
   }
   return files;
 }
@@ -1726,7 +1742,7 @@ export const repo: Repo = {
     // period 为空的没有「同一周期」的概念，直接新增
     if (input.period) {
       const hit = db().getFirstSync<{ id: number }>(
-        'SELECT id FROM notes WHERE type = ? AND period = ? ORDER BY created_at DESC LIMIT 1',
+        'SELECT id FROM notes WHERE type = ? AND period = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1',
         [input.type, input.period],
       );
       if (hit) {
@@ -1747,22 +1763,24 @@ export const repo: Repo = {
   },
 
   async listNotes(limit = 30) {
-    const rows = db().getAllSync<NoteRow>('SELECT * FROM notes ORDER BY created_at DESC LIMIT ?', [
-      limit,
-    ]);
+    const rows = db().getAllSync<NoteRow>(
+      'SELECT * FROM notes WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT ?',
+      [limit],
+    );
     return rows.map(toNote);
   },
 
   async findNote(type, period) {
     const row = db().getFirstSync<NoteRow>(
-      'SELECT * FROM notes WHERE type = ? AND period = ? ORDER BY created_at DESC LIMIT 1',
+      'SELECT * FROM notes WHERE type = ? AND period = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 1',
       [type, period],
     );
     return row ? toNote(row) : null;
   },
 
   async deleteNote(id) {
-    db().runSync('DELETE FROM notes WHERE id = ?', [id]);
+    // 软删：小结进回收站，30 天内能从设置 → 回收站恢复
+    db().runSync('UPDATE notes SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL', [Date.now(), id]);
   },
 
   async listAskSessions(includeArchived = false) {
@@ -2052,6 +2070,9 @@ export const repo: Repo = {
        UNION ALL
        SELECT 'ask_session', id, deleted_at, COALESCE(title, ''), length(turns_json), turns_json
          FROM ask_sessions WHERE deleted_at IS NOT NULL
+       UNION ALL
+       SELECT 'note', id, deleted_at, COALESCE(title, substr(body_md, 1, 200)), length(body_md), ''
+         FROM notes WHERE deleted_at IS NOT NULL
        ORDER BY deleted_at DESC, id DESC`,
     );
     if (!rows.length) return [];
@@ -2073,7 +2094,7 @@ export const repo: Repo = {
     }
 
     return rows.map((row): TrashEntry => {
-      const kind = (row.kind === 'document' ? 'document' : row.kind === 'ask_session' ? 'ask_session' : 'fragment');
+      const kind = (row.kind === 'document' ? 'document' : row.kind === 'ask_session' ? 'ask_session' : row.kind === 'note' ? 'note' : 'fragment');
       const extra = row.extra ?? '';
       const parsed = parseJson(extra, []);
       const turns = kind === 'ask_session' && Array.isArray(parsed) ? parsed.length : 0;
@@ -2093,7 +2114,8 @@ export const repo: Repo = {
     // trash:ok 这三个数就是回收站里的条数，本来就要数 deleted_at 非空的
     return countOf(d, `SELECT (SELECT COUNT(*) FROM fragments WHERE deleted_at IS NOT NULL)
         + (SELECT COUNT(*) FROM documents WHERE deleted_at IS NOT NULL)
-        + (SELECT COUNT(*) FROM ask_sessions WHERE deleted_at IS NOT NULL) AS n`);
+        + (SELECT COUNT(*) FROM ask_sessions WHERE deleted_at IS NOT NULL)
+        + (SELECT COUNT(*) FROM notes WHERE deleted_at IS NOT NULL) AS n`);
   },
 
   async restoreTrash(refs) {
@@ -2105,6 +2127,7 @@ export const repo: Repo = {
         ['fragment', 'fragments'],
         ['document', 'documents'],
         ['ask_session', 'ask_sessions'],
+        ['note', 'notes'],
       ] as const) {
         const ids = refs.filter((r) => r.kind === kind).map((r) => r.id).filter((n) => Number.isFinite(n));
         for (let i = 0; i < ids.length; i += 400) {
@@ -2147,8 +2170,9 @@ export const repo: Repo = {
     const refs = d.getAllSync<TrashRef>(
       `SELECT 'fragment' AS kind, id FROM fragments WHERE deleted_at IS NOT NULL AND deleted_at < ?
        UNION ALL SELECT 'document', id FROM documents WHERE deleted_at IS NOT NULL AND deleted_at < ?
-       UNION ALL SELECT 'ask_session', id FROM ask_sessions WHERE deleted_at IS NOT NULL AND deleted_at < ?`,
-      [before, before, before],
+       UNION ALL SELECT 'ask_session', id FROM ask_sessions WHERE deleted_at IS NOT NULL AND deleted_at < ?
+       UNION ALL SELECT 'note', id FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?`,
+      [before, before, before, before],
     );
     if (!refs.length) return [];
     let files: string[] = [];

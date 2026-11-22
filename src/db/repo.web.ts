@@ -129,6 +129,7 @@ function purgeIn(d: WebDb, keys: Set<string>): string[] {
   }
 
   d.askSessions = d.askSessions.filter((s) => !hit('ask_session', s.id));
+  d.notes = d.notes.filter((n) => !hit('note', n.id));
   d.trash = d.trash.filter((t) => !keys.has(`${t.kind}:${t.id}`));
   return files;
 }
@@ -144,6 +145,9 @@ function liveDocuments(d: WebDb): Document[] {
 
 function liveSessions(d: WebDb): AskSession[] {
   return d.askSessions.filter((s) => !isTrashed(d, 'ask_session', s.id));
+}
+function liveNotes(d: WebDb): Note[] {
+  return d.notes.filter((n) => !isTrashed(d, 'note', n.id));
 }
 
 /**
@@ -839,7 +843,7 @@ export const repo: Repo = {
   async upsertNote(input) {
     return writeAtomically((d) => {
       const hit = input.period
-        ? d.notes.find((n) => n.type === input.type && n.period === input.period)
+        ? d.notes.find((n) => n.type === input.type && n.period === input.period && !isTrashed(d, 'note', n.id))
         : undefined;
       if (hit) {
         hit.title = input.title;
@@ -854,16 +858,16 @@ export const repo: Repo = {
   },
 
   async listNotes(limit = 30) {
-    return [...load().notes].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
+    return [...liveNotes(load())].sort((a, b) => b.createdAt - a.createdAt).slice(0, limit);
   },
 
   async findNote(type, period) {
-    return load().notes.find((n) => n.type === type && n.period === period) ?? null;
+    return liveNotes(load()).find((n) => n.type === type && n.period === period) ?? null;
   },
 
   async deleteNote(id) {
     writeAtomically((d) => {
-      d.notes = d.notes.filter((x) => x.id !== id);
+      markTrashed(d, 'note', id);
     });
   },
 
@@ -1159,6 +1163,16 @@ export const repo: Repo = {
           title: trashTitle('document', doc?.name ?? ''),
           detail: trashDetail('document', doc?.charCount ?? 0, 0),
           files: doc?.fileUri ? [doc.fileUri] : [],
+        };
+      }
+      if (item.kind === 'note') {
+        const note = d.notes.find((x) => x.id === item.id);
+        const chars = note ? countChars(note.bodyMd) : 0;
+        return {
+          kind: 'note', id: item.id, deletedAt: at,
+          title: trashTitle('note', note?.title ?? note?.bodyMd ?? ''),
+          detail: trashDetail('note', chars, 0),
+          files: [],
         };
       }
       const s = d.askSessions.find((x) => x.id === item.id);
