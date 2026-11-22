@@ -1121,7 +1121,7 @@ export const repo: Repo = {
       } catch (e) {
         /*
          * 快照没写成就不要迁移：迁移里的 DELETE/UPDATE 一旦提交就不可逆，
-         * 而这正是「升级后数据不对」最难查的一类。宁可停在 BootError。
+         * 而这正是「升级后数据不对」最难查的一类。宁可停在 ErrorScreen。
          */
         const reason = e instanceof Error ? e.message : String(e);
         throw new Error(`升级前没能留下库快照，已停止迁移（数据没有改动）：${reason}`);

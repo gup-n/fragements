@@ -35,7 +35,7 @@ import { duplicateFragment } from './src/db/duplicate';
 import { runTrashCleanup } from './src/db/trashFiles';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
 import { Toast, TAB_BAR_HEIGHT } from './src/components/Toast';
-import { BootError } from './src/components/BootError';
+import { ErrorScreen } from './src/components/ErrorScreen';
 import { describeImage } from './src/ai/vision';
 import { loadAiConfig } from './src/ai/config';
 import { isQuickRecordEnabled, showQuickRecord, watchQuickRecord } from './src/quickRecord';
@@ -123,7 +123,7 @@ export default function App() {
        * 库还没开就去扫，只会报错然后静默跳过 —— 那界面会一直显示「解析中」。
        *
        * 它起不来**不该挡住整个应用**：页面能看能写，只是「准备文档」不能用。
-       * 归到 BootError 会把「任务服务挂了」说成「数据打不开」，那是假话。
+       * 归到 ErrorScreen 会把「任务服务挂了」说成「数据打不开」，那是假话。
        */
       try {
         await initDocumentJobs();
@@ -208,7 +208,7 @@ export default function App() {
         saveError={saveError}
       >
         {bootError ? (
-          <BootError
+          <ErrorScreen
             detail={describeBootError(bootError)}
             busy={booting}
             onRetry={() => void boot()}
@@ -888,7 +888,7 @@ function Shell({ booted }: { booted: boolean }) {
                * 库已经打开，但这一次没读出列表。和「数据打不开」分开说：
                * 说成数据库坏了会让用户去卸载重装，那才是真的丢数据。
                */
-              <BootError
+              <ErrorScreen
                 title="数据没读出来"
                 body="本地库已经打开，但这次没能读出列表。记录还在手机上，不是被删掉了。"
                 warn="先不要卸载应用，也不要清数据 —— 那会真的删掉这些记录。"

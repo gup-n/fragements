@@ -1,5 +1,5 @@
 /**
- * 整屏兜底：库打不开，或者库打开了但首屏读不出来（v0.35 / v0.36）。
+ * 整屏兜底：库打不开，或者库打开了但首屏读不出来（v0.35 的 BootError，v0.36 改名 ErrorScreen）。
  *
  * 之前 `repo.init()` 失败只 `console.warn`，然后 `setBooted(true)` 照常进门：
  * 列表是空的、统计是 0 条，首页还写着「还没有碎片，记一条试试」——
@@ -9,14 +9,15 @@
  * 不做「从备份恢复」入口：那条路依赖已经打开的库，正是现在没有的东西。
  *
  * 默认文案是「库打不开」；首屏读库失败复用同一个组件，只换标题/正文/重试文案
- * （`App.tsx` 的 `loadError`）。**不要再写第二块错误屏** —— 两份文案迟早不一致。
+ * （`App.tsx` 的 `loadError`）。**全 App 只有这一块全屏错误屏** —— 再写第二份，
+ * 文案迟早不一致。
  */
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 
-export function BootError({
+export function ErrorScreen({
   detail,
   busy,
   onRetry,

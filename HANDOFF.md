@@ -31,7 +31,7 @@
 迁移前快照做完，第四批补搜索续页。**计划书里能落地的代码项都做了；剩下的只有真机与实测。**
 
 - **首屏读库失败不再装成空库**：`Shell` 新增 `loadError` / `loadBusy`，首屏加载收成
-  `loadInitial` 一个入口；失败停在 `BootError` 的「数据没读出来」变体（同一组件、换文案），
+  `loadInitial` 一个入口；失败停在 `ErrorScreen` 的「数据没读出来」变体（同一组件、换文案），
   重试走 `loadInitial`。`reload` 仍然抛错，写操作后的刷新失败继续在调用处说
   「已保存，列表暂未刷新」——两种失败不混。
 - **软删的写闸门补齐五条**：`updateFragmentContent` / `insertFragmentImages` /
@@ -62,7 +62,7 @@
 - **草稿落盘**：输入框文字 800ms 防抖写 `composer.draft.v1`，保存前剥掉图片标记；
   启动恢复并提示；图片不落（选择器缓存重启后可能失效）。
 - **迁移前快照**：`snapshotBeforeMigration` 在迁移前 `VACUUM INTO` 一份
-  `pre-migrate-vN-*.db`；快照失败就不迁移，停在 BootError。
+  `pre-migrate-vN-*.db`；快照失败就不迁移，停在 ErrorScreen。
 - **CI 自检**：`scripts/check_ci.mjs` 逐条比对 `test` 链与 workflow；少一步就红。
 - **搜索续页**：`searchFragments(query, limit, offset)` 下推到 SQL；时间轴命中满时说
   「已显示 N 条」并给「继续加载」，按 id 去重接页。
@@ -97,7 +97,7 @@
 - **新建文档只有一个入口**：`repo.createDocumentWithContent`（同一事务里插记录 + 写正文切片 + 挂标签）。
   别再在调用侧拼 `insertDocument` + `replaceDocumentContent` + `setDocumentTags` ——
   第二步失败会留下「列表里有、点开是空的」空壳。切片仍由调用方算（`contentFromText`），repo 不管。
-- **启动失败不能「照常进门」**：`App.boot()` 失败设 `bootError`，渲染 `components/BootError`。
+- **启动失败不能「照常进门」**：`App.boot()` 失败设 `bootError`，渲染 `components/ErrorScreen`（旧名 BootError）。
   文案里「不要卸载」是重点（卸载会连库一起删），改动时别删。重试走 `boot()` 本身，不是另一条路。
 - **文档行是 memo 的**：回调一律「传 doc 进来」，不闭包捕获 `item`；新增行回调必须 `useCallback`，
   否则 memo 一次都不会命中。`assert_ui` 有一条同时钉住这两半。
@@ -700,6 +700,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2394 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
 | `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1340 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 526 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复走 `.new`/`.old` 两阶段换名，失败回退，启动兜底；恢复点列表与恢复 |
+| `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
 | `src/db/draftCommit.ts` [打开](<src/db/draftCommit.ts>) | 135 | 输入/凭据验证、稳定key、共享提交项处理，平台事务内调用 |
 | `src/db/importMd.ts` [打开](<src/db/importMd.ts>) | 187 | 系统选文件、预览、完整分钟判重、串行单条原子导入与部分失败说明 |

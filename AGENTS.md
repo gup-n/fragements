@@ -178,7 +178,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **`repo.web.ts` 只有一条写路径 `writeAtomically`**（v0.35）。`persist()` 已删；新增写方法就
   `return writeAtomically((d) => { ... })`，回调必须同步、不许调公开的 async Repo 方法。
   没有 localStorage 时它抛错 —— 不要再加 `?.` 或 `catch`，那等于把「没存上」说成「存上了」。
-- **启动/首屏失败要停在 `components/BootError`**（v0.35 / v0.36），不许「warn 一句然后照常进门」：
+- **启动/首屏失败要停在 `components/ErrorScreen`**（v0.35 的 BootError，v0.36 改名），不许「warn 一句然后照常进门」：
   那样列表是空的、统计 0 条，首页还写着「还没有碎片，记一条试试」，用户会以为记录没了。
   `App.boot()` 管「库打不开」，`Shell.loadInitial()` 管「库打开了但读不出列表」；
   两者各自只有一条重试路径，别再写第二条初始化入口。
