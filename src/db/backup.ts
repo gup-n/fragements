@@ -48,7 +48,7 @@ async function collect(dir: Directory): Promise<Collected[]> {
   if (!dir.exists) return [];
   const out: Collected[] = [];
   for (const item of dir.list()) {
-    if (!(item instanceof File)) continue;
+    if (!(item instanceof File) || !item.name.startsWith('pre-restore-') || !item.name.endsWith('.db')) continue;
     try {
       const bytes = await item.bytes();
       out.push({ name: item.name, bytes, size: bytes.byteLength });
@@ -191,6 +191,190 @@ export interface RestoreResult {
   missing: string[];
 }
 
+/* ------------------------------------------------------------------ *
+ * 恢复的中间态与启动兜底
+ *
+ * 恢复不是「删掉主库再写一份」：中途磁盘满、迁移报错或进程被杀，
+ * 库里就没有一份可用的主文件；下次启动会 open 出一个空库再迁移，
+ * 用户看到的是一份空记录 —— 而 `backups/` 里的恢复点没有任何入口。
+ *
+ * 现在的顺序是「先写 .new → 旧库改名 .old → .new 换名成主库 → 重新打开并迁移」。
+ * 每一步都只做一次改名，窗口很短；启动时 `recoverInterruptedRestore()`
+ * 会把「主库不在、.old 还在」这种半截态退回去。
+ * ------------------------------------------------------------------ */
+
+const DB_OLD = `${DB_NAME}.old`;
+const DB_NEW = `${DB_NAME}.new`;
+
+function dbDir(): Directory {
+  const dir = new Directory(Paths.document, DB_DIR);
+  dir.create({ intermediates: true, idempotent: true });
+  return dir;
+}
+
+function sidecar(base: string, suffix: '-wal' | '-shm'): File {
+  return new File(Paths.document, DB_DIR, `${base}${suffix}`);
+}
+
+function deleteSidecars(base: string): void {
+  for (const suffix of ['-wal', '-shm'] as const) {
+    const file = sidecar(base, suffix);
+    if (file.exists) file.delete();
+  }
+}
+
+/** 把 `fromBase` 的 WAL/SHM 跟着主库一起改名。SQLite 的副文件名跟着主库名走 */
+function moveSidecars(fromBase: string, toBase: string): void {
+  for (const suffix of ['-wal', '-shm'] as const) {
+    const from = sidecar(fromBase, suffix);
+    if (!from.exists) continue;
+    const to = sidecar(toBase, suffix);
+    if (to.exists) to.delete();
+    from.moveSync(to, { overwrite: true });
+  }
+}
+
+/**
+ * 启动时收拾上一次恢复留下的中间文件。**必须在 `db()` 打开之前调用。**
+ *
+ * 三种半截态：
+ * - 主库在：`.new` 是上次没换进去的残留，删掉；`.old` 留到迁移成功后再删。
+ * - 主库不在、`.old` 在：改名到一半被杀，退回旧库（保守，宁可用恢复前的）。
+ * - 主库不在、只有 `.new`：第一次恢复在换名前被杀，`.new` 已经是完整库，换进来。
+ */
+export function recoverInterruptedRestore(): void {
+  const dir = new Directory(Paths.document, DB_DIR);
+  if (!dir.exists) return;
+  const live = new File(dir, DB_NAME);
+  const old = new File(dir, DB_OLD);
+  const next = new File(dir, DB_NEW);
+  const liveSize = live.exists ? live.info().size ?? 0 : 0;
+
+  if (liveSize === 0) {
+    if (old.exists) {
+      if (live.exists) live.delete();
+      old.moveSync(live, { overwrite: true });
+      moveSidecars(DB_OLD, DB_NAME);
+    } else if (next.exists) {
+      next.moveSync(live, { overwrite: true });
+    }
+  } else if (next.exists) {
+    next.delete();
+  }
+}
+
+/** 迁移失败时把旧库换回来。只在启动兜底里用；返回是否真的换回了 */
+export function restoreOldDatabase(): boolean {
+  const dir = new Directory(Paths.document, DB_DIR);
+  if (!dir.exists) return false;
+  const live = new File(dir, DB_NAME);
+  const old = new File(dir, DB_OLD);
+  if (!old.exists) return false;
+  try {
+    if (live.exists) live.delete();
+    old.moveSync(live, { overwrite: true });
+    moveSidecars(DB_OLD, DB_NAME);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 启动与迁移都成功之后清掉恢复中间件。`.old` 只是恢复窗口里的回退点 */
+export function cleanupRestoreLeftovers(): void {
+  const dir = new Directory(Paths.document, DB_DIR);
+  if (!dir.exists) return;
+  for (const name of [DB_NEW, DB_OLD, `${DB_OLD}-wal`, `${DB_OLD}-shm`]) {
+    const file = new File(dir, name);
+    if (file.exists) file.delete();
+  }
+}
+
+/** 安全副本名。同一秒里连续恢复两次时不要覆盖上一份 */
+function uniqueSafetyName(dir: Directory, now: number): string {
+  const base = safetyCopyName(now).replace(/\.db$/, '');
+  let name = `${base}.db`;
+  for (let i = 1; new File(dir, name).exists; i++) name = `${base}-${i}.db`;
+  return name;
+}
+
+/** 只留最近 5 份恢复点；刚生成的那份永远保留 */
+function pruneSafetyCopies(dir: Directory, keepName: string): void {
+  const list = dir.list().filter((item): item is File => item instanceof File && item.name.endsWith('.db'));
+  list.sort((a, b) => (b.info().modificationTime ?? 0) - (a.info().modificationTime ?? 0));
+  for (const file of list.slice(5)) {
+    if (file.name === keepName) continue;
+    try { file.delete(); } catch { /* 删不掉只是多占一点空间 */ }
+  }
+}
+
+async function stageBytes(bytes: Uint8Array): Promise<File> {
+  const dir = dbDir();
+  const next = new File(dir, DB_NEW);
+  if (next.exists) next.delete();
+  next.create({ overwrite: true });
+  await next.write(bytes);
+  return next;
+}
+
+function assertStagedSqlite(next: File): void {
+  if (!next.exists || (next.info().size ?? 0) <= 0) throw new Error('没能写出新的数据库文件，请重试');
+}
+
+/**
+ * 把已经写好的 `fragments.db.new` 换进来。
+ *
+ * **调用前数据库必须是打开的**（这里要 close）。失败时尽力退回旧库并重新打开；
+ * 回退也失败时把 `.old` 留在磁盘上，交给下次启动的 `recoverInterruptedRestore()`。
+ */
+async function swapStagedDatabase(deps: RestoreDeps): Promise<void> {
+  const dir = dbDir();
+  const live = new File(dir, DB_NAME);
+  const old = new File(dir, DB_OLD);
+  const next = new File(dir, DB_NEW);
+  assertStagedSqlite(next);
+
+  deps.close();
+  let oldMoved = false;
+  try {
+    if (live.exists) {
+      // 先清掉上一次可能留下的 .old，避免下面改名失败时把陌生文件当成回退点
+      if (old.exists) old.delete();
+      live.moveSync(old, { overwrite: true });
+      oldMoved = true;
+      moveSidecars(DB_NAME, DB_OLD);
+    } else {
+      deleteSidecars(DB_NAME);
+    }
+    next.moveSync(live, { overwrite: true });
+    await deps.reopen();
+  } catch (e) {
+    // 迁移失败时连接还开着：先关掉，否则删/换主库文件会踩到已打开的句柄
+    deps.close();
+    try {
+      if (oldMoved && old.exists) {
+        // 旧库已经移走：删掉可能半截的新主库，把旧库换回来
+        if (live.exists) live.delete();
+        deleteSidecars(DB_NAME);
+        old.moveSync(live, { overwrite: true });
+        moveSidecars(DB_OLD, DB_NAME);
+      } else {
+        // 旧库还没动过（改名失败）：主库就是当前库，删的只能是暂存文件
+        if (next.exists) next.delete();
+      }
+    } catch {
+      /* 回退也失败：.old 留在磁盘上，下次启动 recoverInterruptedRestore 会用它 */
+    }
+    try { await deps.reopen(); } catch { /* 下面把「重启应用」说清楚 */ }
+    const reason = e instanceof Error ? e.message : String(e);
+    throw new Error(`恢复没有完成，当前数据已保留；如果界面仍不可用，请重启应用再试（${reason}）`);
+  }
+
+  // 成功：旧库与它的副文件都可以删了（恢复点还在 backups/ 里）
+  deleteSidecars(DB_OLD);
+  try { if (old.exists) old.delete(); } catch { /* 下次启动的 cleanup 会删 */ }
+}
+
 export async function restoreBackup(zipUri: string, deps: RestoreDeps): Promise<RestoreResult> {
   let entries: Record<string, Uint8Array>;
   try {
@@ -216,30 +400,17 @@ export async function restoreBackup(zipUri: string, deps: RestoreDeps): Promise<
   // ---- 先留恢复点，再动任何东西 ----
   const safetyDir = new Directory(Paths.document, SAFETY_DIR);
   safetyDir.create({ intermediates: true, idempotent: true });
-  const safetyName = safetyCopyName(Date.now());
+  const safetyName = uniqueSafetyName(safetyDir, Date.now());
   const safetyFile = new File(safetyDir, safetyName);
-  if (safetyFile.exists) safetyFile.delete();
   deps.snapshot(fsPath(safetyFile.uri));
   const safetyBytes = safetyFile.exists ? safetyFile.info().size ?? 0 : 0;
 
-  // ---- 替换数据库 ----
-  deps.close();
-  const dbDir = new Directory(Paths.document, DB_DIR);
-  dbDir.create({ intermediates: true, idempotent: true });
   /*
-   * WAL / SHM 必须一起删。留着它们再放进一个新主库，SQLite 会把旧日志
-   * 往新库上重放 —— 那是能把库写坏的组合。
+   * ---- 图片与文档：先写，再换库 ----
+   * 反过来的话，换库成功、写文件失败，库里会指向一批不存在的原件。
+   * 先写文件最坏只是「旧库看到几个新文件」——它们本身都是合法文件。
+   * 同名覆盖，别的保留。
    */
-  for (const suffix of ['-wal', '-shm']) {
-    const side = new File(dbDir, `${DB_NAME}${suffix}`);
-    if (side.exists) side.delete();
-  }
-  const target = new File(dbDir, DB_NAME);
-  if (target.exists) target.delete();
-  target.create();
-  await target.write(dbBytes);
-
-  // ---- 图片与文档：按清单写回，同名的覆盖，别的保留 ----
   const imgDir = new Directory(Paths.document, IMG_DIR);
   imgDir.create({ intermediates: true, idempotent: true });
   for (const name of plan.images) {
@@ -261,8 +432,52 @@ export async function restoreBackup(zipUri: string, deps: RestoreDeps): Promise<
     await f.write(data);
   }
 
-  await deps.reopen();
+  // ---- 新库先完整写到 .new，再换名 ----
+  const next = await stageBytes(dbBytes);
+  assertStagedSqlite(next);
+  await swapStagedDatabase(deps);
   return { counts: check.manifest.counts, safetyName, safetyBytes, missing: plan.missing };
+}
+
+/**
+ * 从「恢复点」（`backups/pre-restore-*.db`）恢复。
+ *
+ * 这是给设置页那个「后悔药」列表用的：先再留一份当前库，再用选中的旧库覆盖。
+ * 文件与 zip 恢复走同一套换名逻辑，失败退款路径也一致。
+ */
+export async function restoreSafetyCopy(
+  name: string,
+  deps: RestoreDeps,
+): Promise<{ safetyName: string; safetyBytes: number }> {
+  if (name.includes('/') || name.includes('\\') || !name.startsWith('pre-restore-') || !name.endsWith('.db')) {
+    throw new Error('恢复点文件名不合法');
+  }
+  const safetyDir = new Directory(Paths.document, SAFETY_DIR);
+  const source = new File(safetyDir, name);
+  if (!source.exists) throw new Error('这份恢复点已经不在了');
+  /*
+   * 不读前 16 字节做 header 校验：`File.slice().bytes()` 在不同平台上的
+   * Blob 实现不一致，而恢复点是我们自己用 VACUUM INTO 写的。
+   * 大小为零直接拒；真坏了，迁移失败会回退到当前库。
+   */
+  if ((source.info().size ?? 0) <= 0) throw new Error('这份恢复点是空文件，拒绝覆盖当前数据');
+
+  // 先留一份当前库，恢复点本身也可能是唯一一份
+  safetyDir.create({ intermediates: true, idempotent: true });
+  const safetyName = uniqueSafetyName(safetyDir, Date.now());
+  const safetyFile = new File(safetyDir, safetyName);
+  deps.snapshot(fsPath(safetyFile.uri));
+  const safetyBytes = safetyFile.exists ? safetyFile.info().size ?? 0 : 0;
+
+  const dir = dbDir();
+  const next = new File(dir, DB_NEW);
+  if (next.exists) next.delete();
+  await source.copy(next, { overwrite: true });
+  assertStagedSqlite(next);
+  pruneSafetyCopies(safetyDir, safetyName);
+
+  await swapStagedDatabase(deps);
+  return { safetyName, safetyBytes };
 }
 
 /** 恢复点列表：设置页要能看到「上一份库还在哪」 */

@@ -1352,4 +1352,8 @@ export const repo: Repo = {
   async listSafetyCopies() {
     return [];
   },
+
+  async restoreSafetyCopy() {
+    throw new Error('网页版没有恢复点，请在手机上操作');
+  },
 };

@@ -18,7 +18,7 @@ import { humanBytes } from '../util/backupPlan';
 import { isQuickRecordBlocked, isQuickRecordEnabled, setQuickRecordEnabled } from '../quickRecord';
 import { digestReminderState, setDigestReminderEnabled } from '../digestReminder';
 import { reminderWhenLabel } from '../util/digestReminder';
-import type { SearchProbe } from '../db/types';
+import type { SafetyCopy, SearchProbe } from '../db/types';
 import {
   R,
   SPACE,
@@ -58,6 +58,7 @@ import {
 } from '../update/check';
 import { getDownloadBase, setDownloadBase } from '../update/mirror';
 import { getMineruToken, setMineruToken } from '../ai/mineru';
+import { cancelAllDocumentJobs, restartDocumentJobsAfterRestore } from '../documents/jobs';
 import { versionLabel } from '../util/semver';
 import { IconButton, type IoniconName } from '../components/IconButton';
 
@@ -176,6 +177,14 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
     blocked: string | null;
   } | null>(null);
   /**
+   * 恢复点列表与待确认的那一份（v0.36）。
+   *
+   * 恢复点以前只存在于 `backups/` 里：成功提示报了文件名，App 里却没有入口。
+   * 现在列出最近 5 份，恢复走同一套两阶段换名，覆盖前再留一份当前库。
+   */
+  const [safetyCopies, setSafetyCopies] = useState<SafetyCopy[]>([]);
+  const [safetyAsk, setSafetyAsk] = useState<SafetyCopy | null>(null);
+  /**
    * 数据区自己的反馈位。
    *
    * 原来所有操作共用上面那个 `msg`，而 `msg` 渲染在「AI 接口」卡片里 ——
@@ -236,6 +245,7 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
     try { setIndexState(await repo.searchIndexStats()); } catch { /* 已有「检查失败」态 */ }
     try { setProbe(await repo.selfTestSearch(5)); } catch { /* 同上 */ }
     try { setTrashCount(await repo.trashCount()); } catch { /* 同上 */ }
+    try { setSafetyCopies(await repo.listSafetyCopies()); } catch { /* 没有恢复点就空着 */ }
   }, []);
 
   useEffect(() => {
@@ -519,6 +529,11 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
     const name = restoreAsk.name;
     setBusy('restoring');
     setBkMsg(null);
+    /*
+     * 先停掉所有文档任务：云解析的结果带着旧库的代次，恢复后 id 可能撞上新库，
+     * 迟到的写回会盖掉刚恢复的内容。恢复完再重新对一次账。
+     */
+    cancelAllDocumentJobs();
     try {
       const out = await repo.restoreBackup(restoreAsk.uri);
       setRestoreAsk(null);
@@ -537,6 +552,31 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
       setBkMsg({ kind: 'err', text: (e as Error).message || '恢复失败' });
     } finally {
       setBusy('idle');
+      void restartDocumentJobsAfterRestore();
+    }
+  }
+
+  /** 用一份恢复点覆盖当前库。和 zip 恢复共用两阶段换名，覆盖前再留一份当前库 */
+  async function handleConfirmSafetyRestore() {
+    if (!safetyAsk || busy === 'restoring') return;
+    const target = safetyAsk;
+    setBusy('restoring');
+    setBkMsg(null);
+    cancelAllDocumentJobs();
+    try {
+      const out = await repo.restoreSafetyCopy(target.name);
+      setSafetyAsk(null);
+      onChanged();
+      await refreshStats();
+      setBkMsg({
+        kind: 'ok',
+        text: `已恢复到 ${new Date(target.at).toLocaleString()} 的恢复点。覆盖前的库已另存为 ${out.safetyName}（${humanBytes(out.safetyBytes)}）`,
+      });
+    } catch (e) {
+      setBkMsg({ kind: 'err', text: (e as Error).message || '从恢复点恢复失败' });
+    } finally {
+      setBusy('idle');
+      void restartDocumentJobsAfterRestore();
     }
   }
 
@@ -1174,6 +1214,64 @@ export function SettingsScreen({ embedded = false, onClose, onChanged, onReminde
                 {bkMsg.text}
               </Text>
             )}
+
+            {safetyCopies.length ? (
+              <View style={styles.safetyList}>
+                <Text style={styles.safetyTitle}>恢复点（覆盖前的旧库）</Text>
+                {safetyCopies.slice(0, 5).map((copy) => (
+                  <Pressable
+                    key={copy.name}
+                    style={[styles.safetyRow, styles.touchTarget]}
+                    onPress={() => { setRestoreAsk(null); setSafetyAsk(copy); }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`用 ${new Date(copy.at).toLocaleString()} 的恢复点覆盖当前数据`}
+                  >
+                    <View style={styles.safetyCopy}>
+                      <Text style={styles.safetyName} numberOfLines={1}>
+                        {new Date(copy.at).toLocaleString()}
+                      </Text>
+                      <Text style={styles.safetyMeta}>{copy.name} · {humanBytes(copy.bytes)}</Text>
+                    </View>
+                    <Text style={styles.safetyAction}>恢复</Text>
+                  </Pressable>
+                ))}
+                <Text style={styles.safetyMeta}>只留最近 5 份；只含数据库，不含配图与文档原件；恢复前会再留一份当前库。</Text>
+              </View>
+            ) : null}
+
+            {safetyAsk ? (
+              <View style={styles.warnBox}>
+                <Text style={styles.warnTitle}>用这份旧库覆盖当前数据？</Text>
+                <Text style={styles.warnLine}>
+                  {new Date(safetyAsk.at).toLocaleString()} · {humanBytes(safetyAsk.bytes)}
+                </Text>
+                <Text style={styles.warnLine}>
+                  当前 {stats.total} 条会被覆盖。覆盖前会先把现在这份库再另存一份。
+                </Text>
+                <Text style={styles.warnLine}>
+                  恢复点只含数据库；配图与文档原件不会跟着回退。
+                </Text>
+                <View style={styles.warnActions}>
+                  <Pressable
+                    style={styles.warnGhost}
+                    onPress={() => setSafetyAsk(null)}
+                    disabled={busy === 'restoring'}
+                  >
+                    <Text style={styles.ghostBtnText}>取消</Text>
+                  </Pressable>
+                  <Pressable
+                    style={styles.warnSolid}
+                    onPress={handleConfirmSafetyRestore}
+                    disabled={busy === 'restoring'}
+                  >
+                    <Text style={styles.warnSolidText}>
+                      {busy === 'restoring' ? '正在恢复…' : '覆盖并恢复'}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+
             <Text style={styles.fieldHint}>
               一个 zip：数据库、配图、文档原件。
             </Text>
@@ -1613,6 +1711,20 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     backgroundColor: c.danger,
   },
   warnSolidText: { ...TYPE.label, color: c.onDanger },
+  safetyList: { marginTop: SPACE.sm, gap: SPACE.xxs },
+  safetyTitle: { ...TYPE.label, color: c.text },
+  safetyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: SPACE.xs,
+    paddingVertical: SPACE.xs,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: c.hairSoft,
+  },
+  safetyCopy: { flex: 1, minWidth: 0 },
+  safetyName: { ...TYPE.compact, color: c.text },
+  safetyMeta: { ...TYPE.meta, color: c.text3 },
+  safetyAction: { ...TYPE.label, color: c.accentText },
 
   toggleRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   /** 同一张卡里的第二条：一条发丝线分开，否则两眼开关挤成一块 */

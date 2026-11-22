@@ -177,9 +177,17 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
 - **`repo.web.ts` 只有一条写路径 `writeAtomically`**（v0.35）。`persist()` 已删；新增写方法就
   `return writeAtomically((d) => { ... })`，回调必须同步、不许调公开的 async Repo 方法。
   没有 localStorage 时它抛错 —— 不要再加 `?.` 或 `catch`，那等于把「没存上」说成「存上了」。
-- **启动失败要停在 `components/BootError`**（v0.35），不许「warn 一句然后照常进门」：
+- **启动/首屏失败要停在 `components/BootError`**（v0.35 / v0.36），不许「warn 一句然后照常进门」：
   那样列表是空的、统计 0 条，首页还写着「还没有碎片，记一条试试」，用户会以为记录没了。
-  `App.boot()` 是唯一入口，重试也走它 —— 别再写第二条初始化路径。
+  `App.boot()` 管「库打不开」，`Shell.loadInitial()` 管「库打开了但读不出列表」；
+  两者各自只有一条重试路径，别再写第二条初始化入口。
+- **恢复备份是两阶段换名**（v0.36）：`backup.ts` 先把新库完整写 `fragments.db.new`，
+  关库后旧库改名 `.old`（WAL/SHM 跟着改名），`.new` 换名成主库，再重开并迁移。
+  任何一步失败必须把 `.old` 换回来；`repo.init()` 先 `recoverInterruptedRestore()`，
+  迁移失败再 `restoreOldDatabase()`。**不许写回「先删主库再写」** —— 那会在磁盘满/迁移报错时
+  留下半截库，下次启动直接变成空记录。恢复点入口在设置 → 数据与备份；
+  恢复前后用 `cancelAllDocumentJobs` / `restartDocumentJobsAfterRestore`，
+  迟到的云解析结果不能写进刚恢复的库。
 - **标签查重只有一把尺子 `util/docTags.docTagKey`**（v0.35）：全半角与大小写折叠，**标点不折**。
   native / web / `attachTagNames` 三处同源。**不做数据迁移、不自动合并已有标签** ——
   合并标签是在改用户的组织方式（他可能故意用「读/写」和「读写」区分两件事）。

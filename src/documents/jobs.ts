@@ -157,6 +157,33 @@ export function initDocumentJobs(): Promise<void> {
   return initPromise;
 }
 
+/**
+ * 恢复备份前把所有在跑的任务取消掉（v0.36）。
+ *
+ * 云解析的结果带着旧库的 `runId/expectedRevision`；恢复后 id 可能撞上新库里的
+ * 另一篇文档，迟到的写回就会盖掉刚恢复的内容。这里直接 abort 并清空登记表：
+ * 任务自己的 `writeIfCurrent` 找不到当前代次，后面的写回都会丢弃。
+ * **不等待网络请求收尾** —— 它们可能很久才回来，而恢复不能等。
+ */
+export function cancelAllDocumentJobs(): void {
+  for (const entry of entries.values()) {
+    entry.running = false;
+    entry.controller.abort();
+  }
+  entries.clear();
+  emit();
+}
+
+/**
+ * 恢复完成之后重新对一次账：新库里可能还留着 `parsing`，而内存里已经没有任务了。
+ * `initPromise` 是一次性的，这里要重置它，否则重跑会直接返回旧结果。
+ */
+export async function restartDocumentJobsAfterRestore(): Promise<void> {
+  cancelAllDocumentJobs();
+  initPromise = null;
+  await initDocumentJobs();
+}
+
 async function reconcileInterrupted(): Promise<void> {
   let list;
   try {

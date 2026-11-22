@@ -232,6 +232,40 @@ check('超过单次上限要拒绝，而不是让系统把 App 杀掉', () => {
   eq(plan.overSizeLimit(plan.BACKUP_SIZE_LIMIT + 1), true, '超一点就拒');
 });
 
+/* ------------------------------------------------------------------ */
+/* 源码契约：恢复必须是两阶段换名，启动要能收拾中间态                    */
+/* ------------------------------------------------------------------ */
+
+check('恢复先写 .new 再换名，不许先删主库', () => {
+  const src = fs.readFileSync(path.join(root, 'src/db/backup.ts'), 'utf8');
+  assert(src.includes("const DB_NEW = `${DB_NAME}.new`"), '要有 .new 暂存名');
+  assert(src.includes('swapStagedDatabase'), '要有一个统一的换名函数');
+  assert(src.includes('recoverInterruptedRestore'), '要有启动兜底');
+  assert(src.includes('restoreSafetyCopy'), '恢复点要能恢复');
+  const fn = src.slice(
+    src.indexOf('export async function restoreBackup('),
+    src.indexOf('export async function restoreSafetyCopy('),
+  );
+  assert(fn.length > 0, '找不到 restoreBackup');
+  assert(!/target\.delete\(\)/.test(fn), '恢复备份里还有「先删主库」的旧写法');
+});
+
+check('启动先收拾恢复中间件，迁移失败能退回 .old', () => {
+  const repo = fs.readFileSync(path.join(root, 'src/db/repo.native.ts'), 'utf8');
+  const init = repo.slice(repo.indexOf('async init()'), repo.indexOf('async commitDraft'));
+  assert(init.includes('recoverInterruptedRestore()'), 'init 要先处理半截恢复');
+  assert(init.includes('restoreOldDatabase()'), '迁移失败要能换回旧库');
+  assert(init.includes('cleanupRestoreLeftovers()'), '成功之后要清掉 .old/.new');
+});
+
+check('设置页能列出恢复点并二次确认', () => {
+  const src = fs.readFileSync(path.join(root, 'src/screens/SettingsScreen.tsx'), 'utf8');
+  assert(src.includes('repo.listSafetyCopies()'), '要读恢复点列表');
+  assert(src.includes('repo.restoreSafetyCopy('), '要能恢复选中的那一份');
+  assert(src.includes('恢复点（覆盖前的旧库）'), '列表要有标题');
+  assert(src.includes('handleConfirmSafetyRestore'), '要二次确认，不能点一下就覆盖');
+});
+
 // ---------------------------------------------------------------------------
 fs.rmSync(outDir, { recursive: true, force: true });
 

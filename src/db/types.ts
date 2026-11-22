@@ -498,6 +498,14 @@ export interface Repo {
   }>;
   /** 恢复点列表。设置页用它告诉用户「上一份库还在哪」 */
   listSafetyCopies(): Promise<SafetyCopy[]>;
+
+  /**
+   * 用一份恢复点覆盖当前库。
+   *
+   * 覆盖前会再留一份当前库（`backups/pre-restore-*.db`），返回值里带上它的名字与体积。
+   * 文件名由 `listSafetyCopies()` 给出，调用方不要自己拼路径。
+   */
+  restoreSafetyCopy(name: string): Promise<{ safetyName: string; safetyBytes: number }>;
 }
 
 export function parseTags(raw: unknown): string[] {

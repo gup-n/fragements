@@ -24,10 +24,10 @@
 
 ## 2. 当前进度与未覆盖项
 
-### v0.36.0：先修「看起来正常」的三件事（第一批，未发布）
+### v0.36.0：先修「看起来正常」的事（两批，未发布）
 
-用户 2026-11-22：「开始优化」。按计划书 D-01 → D-02 → D-03 的顺序做，
-这一批完成 D-01、D-03、D-04、D-06；**D-02（恢复备份回退）与 D-05（分享上限）还没做**。
+用户 2026-11-22：「开始优化」。第一批做 D-01 / D-03 / D-04 / D-06，
+第二批做 D-02（恢复备份回退与恢复点入口）；**D-05（分享上限）还没做**。
 
 - **首屏读库失败不再装成空库**：`Shell` 新增 `loadError` / `loadBusy`，首屏加载收成
   `loadInitial` 一个入口；失败停在 `BootError` 的「数据没读出来」变体（同一组件、换文案），
@@ -41,10 +41,17 @@
   问答流顶部一条 `AgentError`「这次会话没存上」，带重试。离开页面 / 新建 / 切换会话
   都先等最后一次保存；失败第一次拦住并说清会丢什么，再按一次才放行。
 - **CI 补上 `test:recycle`**：38 项软删/迁移/标签断言终于会在 tag 和 PR 上跑。
+- **恢复备份可回退、恢复点有入口**：`backup.ts` 改成两阶段换名
+  （新库先写 `.new` → 旧库改名 `.old` → 换名 → 重新打开并迁移），任何一步失败都回退 `.old`；
+  `repo.init()` 启动先 `recoverInterruptedRestore()`，迁移失败再 `restoreOldDatabase()`。
+  设置 → 数据与备份新增「恢复点」列表（最近 5 份），`repo.restoreSafetyCopy` 走同一套换名，
+  覆盖前再留一份当前库；恢复前后取消/重启文档任务，避免迟到写回盖掉新库。
 - 断言：`test:ask` 99 → 100、`test:ui` 47 → 48（recycle 仍 38，但 CI 开始跑它）。
-  本地 `npm test` **490 项**全绿；`tsc --noUnusedLocals` 0 告警。
+  本地 `npm test` **493 项**全绿；`tsc --noUnusedLocals` 0 告警。
 - **没验**：真机上的错误页观感、保存失败横幅与键盘/返回键的层叠；
-  D-02 的备份恢复回退还没有实现，也谈不上验收。
+  恢复点的两阶段换名与「恢复中途杀进程」只能真机做故障注入，桌面桩不算。
+  D-05（分享后台复制与体积上限）还没做。
+  D-05（分享后台复制与体积上限）还没做。
 
 ### 2026-11-21 全仓复审（只有文档，没有代码改动）
 
@@ -589,7 +596,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run test:ask` | **100 项通过**（v0.33 回答版本 + v0.34 顶层数组/花括号噪声/保留项计数；v0.36 会话保存失败可见） |
 | `npm run test:reliability` | 88 项通过（既有真实控制流+内存桩） |
 | `npm run test:appearance` | 46 项通过 |
-| `npm run test:backup` | 19 项通过 |
+| `npm run test:backup` | 22 项通过（v0.36 增两阶段换名与恢复点契约） |
 | `npm run test:reminder` | 13 项通过 |
 | `npm run test:paging` | 10 项通过 |
 | `npm run test:update` | **7 项通过**（v0.32：残包续传判据 + 「后台不算卡死」+ 两处源码卫生） |
@@ -599,7 +606,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `npm run build:web` | 通过，4.72 MiB；产物已删除，不供预览 |
 | `node scripts/prepare_pdf.mjs --check` | 通过；本轮未改PDF模板、协议或生成物 |
 
-当前已有490项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
+当前已有493项回归保持通过（上表逐项相加）。此前的一次性Node内存SQLite实验仍只属于历史记录，本轮没有重跑，也不能代替手机SQLite驱动、真实文件或升级迁移验证。
 
 **不能据此宣称通过的项目：** 真机布局/字体/配色、中文输入法、TalkBack与回焦、手势跟手感、原生WebView/PDF、覆盖安装、原生SQLite迁移及故障恢复、真实模型输出。源码与内存桩不等于原生端到端验收。
 
@@ -651,7 +658,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/util/askText.ts` [打开](<src/util/askText.ts>) | 71 | 引用编号排序、历史预览、读了多少（coverageLine）；纯函数，无状态 |
 | `src/screens/ReviewScreen.tsx` [打开](<src/screens/ReviewScreen.tsx>) | 808 | 待办/日历/小结三个tab（可由 `focusTab` 指定落在哪个），日历为42格月历与当天明细，作为底栏一页时不画返回 |
 | `src/screens/DocsScreen.tsx` [打开](<src/screens/DocsScreen.tsx>) | 1682 | 原件导入、搜索/多选、任务状态、逐次云授权、删除确认与阅读入口 |
-| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1708 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
+| `src/screens/SettingsScreen.tsx` [打开](<src/screens/SettingsScreen.tsx>) | 1820 | 四模块四子页、两轴外观、配置、文字迁出/导入、索引与更新、通知组两个开关 |
 | `src/theme.tsx` [打开](<src/theme.tsx>) | 117 | 动态ThemeProvider、useTheme/useThemedStyles与系统减少动效 |
 | `src/util/appearance.ts` [打开](<src/util/appearance.ts>) | 306 | 四套完整色表（主色靛蓝、无绿）、两轴规范化、语义色和metrics，纯函数可测试 |
 | `src/util/uiTokens.ts` [打开](<src/util/uiTokens.ts>) | 117 | 无颜色 TYPE/SPACE、四档字号倍数与 `setTypeScale`、装饰边线与显式 outline 判据 |
@@ -670,10 +677,10 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 
 | 文件 | 行 | 当前职责 |
 |---|---|---|
-| `src/db/types.ts` [打开](<src/db/types.ts>) | 512 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2349 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
-| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1355 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
-| `src/db/backup.ts` | 283 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复前先留 `backups/pre-restore-*.db`，替换时连 `-wal`/`-shm` 一起删 |
+| `src/db/types.ts` [打开](<src/db/types.ts>) | 520 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2394 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1359 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
+| `src/db/backup.ts` | 498 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复走 `.new`/`.old` 两阶段换名，失败回退，启动兜底；恢复点列表与恢复 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
 | `src/db/draftCommit.ts` [打开](<src/db/draftCommit.ts>) | 135 | 输入/凭据验证、稳定key、共享提交项处理，平台事务内调用 |
@@ -724,7 +731,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 |---|---|---|
 | `src/documents/importLocal.ts` [打开](<src/documents/importLocal.ts>) | 55 | 本地文件入库的唯一顺序：先落原文件→再写记录→失败删原件；选择器与系统分享共用 |
 | `src/documents/formats.ts` [打开](<src/documents/formats.ts>) | 128 | 本机格式、容量、能问判据和真实定位标签 |
-| `src/documents/jobs.ts` [打开](<src/documents/jobs.ts>) | 487 | 应用级本地/云准备任务，每文档互斥、取消与版本写回 |
+| `src/documents/jobs.ts` [打开](<src/documents/jobs.ts>) | 514 | 应用级本地/云准备任务，每文档互斥、取消与版本写回 |
 | `src/documents/readers/DocumentReader.tsx` [打开](<src/documents/readers/DocumentReader.tsx>) | 80 | 只读分派，嵌入时不再外包滚动容器 |
 | `src/documents/readers/readerAvailability.ts` [打开](<src/documents/readers/readerAvailability.ts>) | 18 | original/snapshot/unavailable纯判据，不依赖能问索引状态 |
 | `src/documents/readers/extract.ts` [打开](<src/documents/readers/extract.ts>) | 164 | 本地提取分派，完整正文/切片/定位 |
@@ -820,7 +827,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `scripts/assert_md.cjs` [打开](<scripts/assert_md.cjs>) | 303 | 原有Markdown往返断言 |
-| `scripts/assert_backup.cjs` | 243 | 完整备份的 19 项断言：命名、清单、四种拒绝、路径穿越过滤、SQLite 头、体积上限 |
+| `scripts/assert_backup.cjs` | 277 | 完整备份的 22 项断言：命名、清单、四种拒绝、路径穿越过滤、SQLite 头、体积上限、两阶段换名与恢复点源码契约 |
 | `scripts/assert_document_qa.cjs` [打开](<scripts/assert_document_qa.cjs>) | 508 | 限定文档问答/预算/引用 |
 | `scripts/assert_document_jobs.cjs` [打开](<scripts/assert_document_jobs.cjs>) | 576 | 文档任务控制流 |
 | `scripts/assert_readers.cjs` [打开](<scripts/assert_readers.cjs>) | 730 | 读取/切片/表格/协议等纯逻辑 |

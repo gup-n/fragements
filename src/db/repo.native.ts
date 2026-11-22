@@ -33,10 +33,14 @@ import { docImageNames, removeImageToken, resolvePendingTokens, stripImageTokens
 import { fragmentSearchText } from '../util/fragmentText';
 import { commitDraftEntries, draftCommitKey, positiveIds, readDraftReceipt, serializeDraftReceipt, validateDraftCommit } from './draftCommit';
 import {
+  cleanupRestoreLeftovers,
   createBackup,
   listSafetyCopies as readSafetyCopies,
   peekBackup as peekBackupFile,
+  recoverInterruptedRestore,
   restoreBackup as restoreBackupFile,
+  restoreOldDatabase,
+  restoreSafetyCopy as restoreSafetyCopyFile,
 } from './backup';
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -44,6 +48,14 @@ let _db: SQLite.SQLiteDatabase | null = null;
 function db(): SQLite.SQLiteDatabase {
   if (!_db) _db = SQLite.openDatabaseSync('fragments.db');
   return _db;
+}
+
+/** 打开连接并设好库级 pragma。启动与恢复回退共用，别再各写一遍 */
+function openAndPrepare(): SQLite.SQLiteDatabase {
+  const d = db();
+  d.execSync('PRAGMA journal_mode = WAL;');
+  d.execSync('PRAGMA foreign_keys = ON;');
+  return d;
 }
 
 /**
@@ -1086,10 +1098,33 @@ function toProposal(r: ProposalRow): DocProposal {
 
 export const repo: Repo = {
   async init() {
-    const d = db();
-    d.execSync('PRAGMA journal_mode = WAL;');
-    d.execSync('PRAGMA foreign_keys = ON;');
-    migrate(d);
+    /*
+     * 恢复被打断时留下的半截文件要在**打开库之前**收拾：
+     * 主库不在、`.old` 还在，就先退回旧库；否则 open 会新建一个空库，
+     * 迁移再跑一遍，用户看到的就是一份空记录。
+     */
+    recoverInterruptedRestore();
+    let d: SQLite.SQLiteDatabase;
+    try {
+      d = openAndPrepare();
+    } catch (e) {
+      // 主库坏了但 `.old` 还在：换回旧库再开一次
+      if (!restoreOldDatabase()) throw e;
+      d = openAndPrepare();
+    }
+    try {
+      migrate(d);
+    } catch (e) {
+      /*
+       * 换进来的新库迁移失败：把旧库换回来再迁移一次。
+       * 旧库本来就在当前版本（或更低），这次迁移要么成功，要么真的坏。
+       */
+      closeDatabase();
+      if (!restoreOldDatabase()) throw e;
+      d = openAndPrepare();
+      migrate(d);
+    }
+    cleanupRestoreLeftovers();
     ensureSearchIndex(d);
   },
 
@@ -2334,13 +2369,23 @@ export const repo: Repo = {
        * 手动跑一次 migrate —— 它按 user_version 只补缺的那几段，跑到当前版本就停。
        */
       reopen: async () => {
-        migrate(db());
+        migrate(openAndPrepare());
       },
     });
   },
 
   async peekBackup(zipUri) {
     return peekBackupFile(zipUri, databaseSchemaVersion());
+  },
+  async restoreSafetyCopy(name) {
+    return restoreSafetyCopyFile(name, {
+      snapshot: snapshotDatabaseTo,
+      close: closeDatabase,
+      schemaVersion: databaseSchemaVersion,
+      reopen: async () => {
+        migrate(openAndPrepare());
+      },
+    });
   },
 
   async listSafetyCopies() {
