@@ -123,7 +123,7 @@
   - **落地（v0.36.0）**：`persistSession` 返回结果并设 `saveError`；横幅带重试；离开/新建/切换都等保存，失败二次放行。
 ### D-05 分享接收在主线程整文件复制，且没有大小上限（P1）
 
-- [ ] **修：复制挪到后台线程、加单文件/总大小上限，并把跳过项告诉 JS。**
+- [x] **修：复制挪到后台线程、加单文件/总大小上限，并把跳过项告诉 JS。**
   - 证据：`plugins/withShareReceiver.js` 的 `saveStream()`（第 84 行）用 `input.copyTo(output)`
     同步复制；`captureShare()`（第 114 行）在 `onCreate` 注入点（第 203 行）
     与 `onNewIntent`（第 154–157 行）里直接调用，也就是主线程。
@@ -136,6 +136,8 @@
     JS 侧在提示里说「N 份太大没接住」，不要只说成功。
   - 验收：分享一个 >上限 的文件 → App 不 ANR、提示明确；分享 3 份同名文件 → 三份都在；
     分享过程中切走再回来，JSON 仍能被读取（文件落盘完成才算一次分享）。
+
+  - **落地（v0.36.0 第三批）**：原生复制放进后台 `Thread`，先写 `copying=true` 占位；单文件 200 MB、总量 500 MB、最多 20 份，超限与复制失败写进 `skipped`；JS 等占位收尾并提示被跳过的文件。
 
 ### D-06 CI 少跑 `test:recycle`（P1）
 
@@ -152,7 +154,7 @@
   - **落地（v0.36.0）**：workflow 在 `test:update` 后加了 `test:recycle`，当前 38 项。
 ### D-07 搜索 200 上限却报「找到 N 条」（P1）
 
-- [ ] **修：上限要可见，或给「继续加载」。**
+- [x] **修：上限要可见，或给「继续加载」。**
   - 证据：`TimelineScreen.tsx` 第 398 行 `repo.searchFragments(q, 200)`；
     统计行（第 993–996 行）用合并后的 `visibleFragments.length` 直接说「找到 N 条」。
   - 后果：命中超过 200 条时，界面很确定地报一个偏小的数，且没有任何「还有更多」。
@@ -162,9 +164,11 @@
     并让「继续加载」走 offset。先做前者，等真机上真的遇到再升级。
   - 验收：内存桩造 250 条命中 → 文案包含「前 200 条」；不超过 200 时不多这句话。
 
+  - **落地（v0.36.0 第三批）**：`SEARCH_LIMIT` 一处定义；命中满时统计行补「已显示前 200 条」，不再把 200 说成全部。
+
 ### D-08 首页「今天 N 条」只数已加载窗口（P1）
 
-- [ ] **修：条数与字数都从 `dayCounts` 聚合来。**
+- [x] **修：条数与字数都从 `dayCounts` 聚合来。**
   - 证据：`TimelineScreen.tsx` 第 618–621 行 `fragments.filter(f => dayKey(f.createdAt) === key).length`；
     同一句里的字数来自 `App.tsx` 传入的 `todayChars`（SQL 聚合）。
   - 后果：今天记了 200 条以上时，一句话里的「N 条」和「M 字」来自两个口径；
@@ -172,9 +176,11 @@
   - 做法：`dayCounts` 已经带 `count`，App 直接传 `todayCount`；删掉页面里的 filter。
   - 验收：`test:paging` 或 `test:ui` 增加源码断言：时间轴里不许再用 `fragments.filter` 做统计。
 
+  - **落地（v0.36.0 第三批）**：App 把 `dayCounts` 里的 `count` 传给时间轴，页面上不再对 `fragments` 做 filter。
+
 ### D-09 小结在时间轴与回顾里是两个上限（P2）
 
-- [ ] **修：统一常量，或给回顾页分页。**
+- [x] **修：统一常量，或给回顾页分页。**
   - 证据：`App.tsx` 第 406 行 `listNotes(120)` 供时间轴；`ReviewScreen.tsx` 第 166 行
     `listNotes(60)` 供回顾。同一批月总结，两个页面能看到的最早一篇不同。
   - 后果：写到第 61 篇月总结之后，时间轴还看得到那一篇，回顾里已经没有它了。
@@ -182,9 +188,11 @@
   - 做法：抽 `NOTES_WINDOW` 一个常量；或两处都改成「最近 60 + 加载更早」。
     在没做分页之前，至少让两个页面用同一个数。
 
+  - **落地（v0.36.0 第三批）**：两处都用 `util/windows.NOTES_WINDOW`（120），不再 120/60 各一份。
+
 ### D-10 内容截断仍有裸 `slice`（P2）
 
-- [ ] **修：用户文字一律走 `clip` / `shortPreview` / `clampTitle`。**
+- [x] **修：用户文字一律走 `clip` / `shortPreview` / `clampTitle`。**
   - 证据（5 处落库/落文件 + 1 处纯显示）：
     `AskScreen.tsx` 第 511 行会话标题 `.slice(0, 32)`；
     `organize/useOrganize.ts` 第 158 行标题 `.slice(0, 32)`；
@@ -198,17 +206,21 @@
     加一条源码断言：`screens/`、`organize/`、`util/` 里对 `content/title/question/bodyMd`
     的 `.slice(0, 数字)` 一律拦下。
 
+  - **落地（v0.36.0 第三批）**：六处改为 `clip`/`clampTitle`/`cutPrefix`；`test:ui` 增加源码断言，拦住对 content/title/question/bodyMd/flat 的裸 slice。
+
 ### D-11 文档搜索 60 条上限没有说明（P2）
 
-- [ ] **修：命中被截断时说出来。**
+- [x] **修：命中被截断时说出来。**
   - 证据：`DocsScreen.tsx` 第 221 行 `repo.searchDocuments(q, 60)`；结果直接铺列表。
   - 后果：文档上百篇、搜一个常用词时只显示 60 篇，没有「还有更多」也没有计数。
     用户会以为「就这些」。
   - 做法：与 D-07 同一套：`=== limit` 时在结果头补一句「已显示前 60 篇」。
 
+  - **落地（v0.36.0 第三批）**：`DOC_SEARCH_LIMIT` 一处定义；命中满时列表头说明「已显示前 60 篇」。
+
 ### D-12 没有调用方的导出与 Repo 方法（P2）
 
-- [ ] **修：能用的接上，没用的删掉。**
+- [x] **修：能用的接上，没用的删掉。**
   - 证据（全库导出扫描 + Repo 方法逐个 grep）：
     - 导出：`qaScopeKey`、`DigestKind` 在 `src/`、`App.tsx`、`scripts/` 都没有第二个引用。
     - Repo 方法：`insertFragmentImage`（单图包装，现全部走 `insertFragmentImages`）、
@@ -217,6 +229,8 @@
   - 判断：`listSafetyCopies` **保留并接上**（F-02）；其余五个删掉。
     `listProposals` 若将来要做「提案收件箱」再按需加回，不要留一个没人读的表接口。
   - 验收：删完 `tsc --noUnusedLocals` 仍 0 告警；导出扫描不再出现这些名字。
+
+  - **落地（v0.36.0 第三批）**：删掉 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、`markAskSessionConverted`；`listSafetyCopies` 已在 D-02 接上。
 
 ### D-13 ROADMAP 顶部与 P0-1 已过期（P2，本轮顺手改）
 
@@ -229,10 +243,12 @@
 
 ### D-14 HANDOFF 的 Web 产物体积与实际差 0.01 MiB（P3）
 
-- [ ] **改：要么更新成 4.73，要么别在文档里记两位小数。**
+- [x] **改：要么更新成 4.73，要么别在文档里记两位小数。**
   - 证据：HANDOFF 验证表写「4.72 MiB」，本轮 `npm run build:web` 输出 4.73 MiB。
   - 判断：这不是缺陷，是「记录了一个会漂的数字」。`check:docs` 不查它，所以会一直漂。
     下次发版顺手改；或者写成「约 4.7 MiB」。
+
+  - **落地（v0.36.0 第三批）**：HANDOFF 验证表改成 4.73 MiB。
 
 ### D-15 `listAskSessions` 会解析全部 `turns_json`（P3，先量）
 
@@ -247,7 +263,7 @@
 
 ### F-01 迁移前自动快照（P1，HANDOFF 里挂了很久的 F11）
 
-- [ ] **做：升级前先留一份库快照，迁移失败能退。**
+- [x] **做：升级前先留一份库快照，迁移失败能退。**
   - 为什么：v0.34 把「每版 SQL + `user_version`」包进同一事务，解决了「半截迁移」；
     但没有解决「迁移本身写坏了数据」。`ALTER TABLE` 之外还有 `DELETE`/`UPDATE`（v7、v11），
     一旦逻辑错，事务提交之后就不可逆。
@@ -260,6 +276,8 @@
     把迁移 SQL 故意改错 → 启动停在 BootError，原库仍是 v16 且可被安全副本恢复。
   - 需要真机：只有原生 SQLite 能做这个验收，Node 内存桩不算。
 
+  - **落地（v0.36.0 第三批）**：`snapshotBeforeMigration(fromVersion, snapshot)` 在迁移前 `VACUUM INTO` 一份 `pre-migrate-vN-*.db`；快照失败就不迁移，停在 BootError。
+
 ### F-02 「从安全副本恢复」入口（P1，D-02 的 UI 半边）
 
 - [ ] **做：设置 → 数据与备份 → 安全副本，能看到、能预览、能恢复。**
@@ -270,7 +288,7 @@
 
 ### F-03 记录草稿落盘（P2）
 
-- [ ] **做：只落文字，进程被杀后能恢复；图片不落。**
+- [x] **做：只落文字，进程被杀后能恢复；图片不落。**
   - 为什么：`App.tsx` 的正文/待发图只活在内存（AGENTS 明确写了「不等于重启恢复」）。
     一个随手记应用，写到一半被系统杀掉，回来一个字都不剩 —— 这是真实痛点。
   - 做法：`draft` 变化后 800ms 防抖写 `settings` 的 `composer.draft.v1`（纯文本 + 时间）；
@@ -278,6 +296,8 @@
     **不落待发图片的 URI**：那是选择器的缓存路径，重启后可能已经失效，恢复一半比不恢复更糟。
   - 代价：每次打字多一次 settings 写（防抖后）；纯本地，不出手机。
   - 验收：输入一段 → 杀进程 → 重开，输入框有那段字和提示；提交后重开为空。
+
+  - **落地（v0.36.0 第三批）**：输入框文字 800ms 防抖写 `composer.draft.v1`，保存前剥掉图片标记；启动恢复并提示；图片不落。
 
 ### F-04 分享接收的体积/数量上限（P2，D-05 的完整形态）
 
@@ -323,21 +343,27 @@
 
 ### O-03 截断与上限各留一份（P2）
 
-- [ ] **做：`clip`/`clampTitle` + `NOTES_WINDOW` + `SEARCH_LIMIT` 三个常量。**
+- [x] **做：`clip`/`clampTitle` + `NOTES_WINDOW` + `SEARCH_LIMIT` 三个常量。**
   - 对应 D-09、D-10、D-11。加源码断言拦裸 `slice`，比逐个 review 可靠。
+
+  - **落地（v0.36.0 第三批）**：`util/windows` 统一三个上限；截断走 `clip`/`clampTitle`/`cutPrefix`，`test:ui` 扫描裸 slice。
 
 ### O-04 CI 步骤清单脚本化（P2）
 
-- [ ] **做：`scripts/check_ci.mjs` 或 `check_docs` 的一条检查。**
+- [x] **做：`scripts/check_ci.mjs` 或 `check_docs` 的一条检查。**
   - 比对 `package.json` 的 `test` 链与 workflow 的 `run: npm run test:*` 步骤，
     缺一个就报错。这次是 `test:recycle`，下次可能是新脚本。
 
+  - **落地（v0.36.0 第三批）**：新增 `scripts/check_ci.mjs`（`npm run check:ci`），逐条比对 test 链与 workflow；workflow 已加这一步。
+
 ### O-05 清理死导出与死 Repo 方法（P2）
 
-- [ ] **做：删 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、
+- [x] **做：删 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、
   `markAskSessionConverted`（两侧实现 + 接口 + web 占位）；接上 `listSafetyCopies`。**
   - 对应 D-12。删之前再跑一次导出扫描与 `grep repo.方法名`，确认断言脚本没有间接引用；
     `assert_recycle` 里若按名字扫过这些方法，要一起改。
+
+  - **落地（v0.36.0 第三批）**：对应 D-12；删完 `tsc --noUnusedLocals` 仍 0 告警。
 
 ### O-06 AskScreen 继续外搬纯逻辑（P3，等设备轮）
 
@@ -401,7 +427,7 @@
 > 这张表的勾只代表「本轮确实做了」，不代表「功能已验」。真机与真实数据的结论，
 > 必须另起一行、写明设备与包来源，按 AGENTS 第 3 节来。
 
-## 8. 2026-11-22 执行记录（v0.36.0 第一批）
+## 8. 2026-11-22 执行记录（v0.36.0，三批）
 
 - [x] **D-01** 首屏读库失败停在 `BootError` 的「数据没读出来」，重试走 `loadInitial`；
   `test:ui` 48 项钉住，旧写法（失败也 `setReady(true)`）被源码断言拦下。
@@ -411,9 +437,19 @@
   离开/新建/切换会话都等保存，失败第一次拦住、第二次放行。
 - [x] **D-06** Android CI 在 `test:update` 之后跑 `test:recycle`（38 项）。
 - [x] **D-02** 恢复备份的两阶段替换、启动兜底、安全副本入口、恢复前排空文档任务（v0.36.0 第二批）。
-- [ ] **D-05** 分享接收后台复制、单文件/总量上限、跳过清单 —— 下一批。
+- [x] **D-05** 分享接收后台复制、单文件 200 MB / 总量 500 MB / 20 份上限、`skipped` 清单；
+  JS 等 `copying` 占位收尾并提示被跳过的文件。
+- [x] **D-07 / D-08 / D-09 / D-11** 搜索满 200/60 时说「已显示前 N」；今日条数改走 `dayCounts`；
+  小结统一 `NOTES_WINDOW`。
+- [x] **D-10** 六处裸 `slice` 改 `clip`/`clampTitle`/`cutPrefix`，`test:ui` 加源码断言。
+- [x] **D-12 / O-05** 删 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、
+  `markAskSessionConverted`。
+- [x] **F-01** 迁移前 `VACUUM INTO` 快照；失败就不迁移。
+- [x] **F-03** 输入框文字草稿落盘（`composer.draft.v1`，不落图片）。
+- [x] **O-03 / O-04** 上限与截断各留一份；新增 `check:ci` 逐条比对 test 链与 workflow。
+- [x] **D-14** HANDOFF 的 Web 产物改成 4.73 MiB。
 - [ ] **真机** 错误页观感、保存失败横幅与键盘/返回键层叠、软删迟到写入的实际时序。
   没有设备，不勾。
 
-本地验证：`npm test` **493 项**全绿；`tsc --noEmit --noUnusedLocals` 0 告警；
+本地验证：`npm test` **494 项**全绿；`tsc --noEmit --noUnusedLocals` 0 告警；
 `build:web` 4.73 MiB。CI 由本轮提交触发（只构建，不打 tag、不发 Release）。

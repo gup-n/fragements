@@ -126,7 +126,6 @@ export interface Note {
  * 留着枚举值，早晚会有某条路径把它接回来。旧数据里仍可能有 daily/weekly 的
  * note 行（迁移会清掉），但代码不再有任何生成入口。
  */
-export type DigestKind = 'monthly';
 
 /**
  * 思考强度。DeepSeek 会把请求值映射到实际强度：

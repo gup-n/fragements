@@ -558,10 +558,6 @@ export const repo: Repo = {
     });
   },
 
-  async insertFragmentImage(fragmentId, path) {
-    return (await repo.insertFragmentImages(fragmentId, [{ path }]))[0].id;
-  },
-
   async setFragmentImageText(imageId, text) {
     writeAtomically((d) => {
       for (const f of d.fragments) {
@@ -925,14 +921,6 @@ export const repo: Repo = {
     });
   },
 
-  async markAskSessionConverted(id, fragmentId) {
-    writeAtomically((d) => {
-      if (isTrashed(d, 'ask_session', id)) return;
-      const s = d.askSessions.find((x) => x.id === id);
-      if (s) s.fragmentId = fragmentId;
-    });
-  },
-
   async markAskSessionDocument(id, documentIds, sourceIds) {
     writeAtomically((d) => {
       if (isTrashed(d, 'ask_session', id)) return;
@@ -1285,13 +1273,6 @@ export const repo: Repo = {
       });
       return id;
     });
-  },
-
-  async listProposals(state) {
-    return load()
-      .docProposals.filter((p) => !state || p.state === state)
-      .sort((a, b) => b.createdAt - a.createdAt)
-      .map((p) => ({ ...p, payload: { ...p.payload } }));
   },
 
   async findProposal(id) {

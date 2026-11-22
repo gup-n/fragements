@@ -6,6 +6,7 @@
  * 用户隔两周打开一次，看到的会是「还剩 28 天」这种早就过期的数字。
  */
 import type { TrashEntry, TrashKind } from '../types';
+import { clip } from './text';
 
 /** 保留天数。30 天是用户 2026-11-18 定的 */
 export const TRASH_KEEP_DAYS = 30;
@@ -49,7 +50,7 @@ export function trashTitle(kind: TrashKind, raw: string): string {
   if (kind === 'fragment') {
     const first = String(raw ?? '').split('\n').map((line) => line.trim()).find(Boolean) ?? '';
     const flat = first.replace(/\s+/g, ' ');
-    return flat ? (flat.length > 60 ? `${flat.slice(0, 60)}…` : flat) : '（无正文的碎片）';
+    return flat ? clip(flat, 61) : '（无正文的碎片）';
   }
   const text = String(raw ?? '').trim();
   if (text) return text;

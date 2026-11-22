@@ -16,6 +16,7 @@ import { getContentUriAsync, readAsStringAsync, deleteAsync, copyAsync, getInfoA
 import * as DocumentPicker from 'expo-document-picker';
 import * as Sharing from 'expo-sharing';
 import * as IntentLauncher from 'expo-intent-launcher';
+import { clip } from '../util/text';
 
 /** 原文件存放目录名（App 私有目录下） */
 const DOC_DIR = 'documents';
@@ -71,7 +72,7 @@ export function extOf(name: string): string {
 function safeFileName(name: string): string {
   const base = name.split(/[\\/]/).pop() || 'document';
   const cleaned = base.replace(/[^\w.\-\u4e00-\u9fa5]+/g, '_');
-  return cleaned.slice(0, 80) || 'document';
+  return clip(cleaned, 80) || 'document';
 }
 
 function documentsDir(): Directory {

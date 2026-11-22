@@ -32,6 +32,7 @@ import { useKeyboardHeight } from '../util/keyboard';
 import { fragmentSearchText, imageStateOf, imageTextsOf } from '../util/fragmentText';
 import { imageToken, removeToken, stripImageTokens } from '../util/inlineImages';
 import { mergeWindowHits, olderCount } from '../util/paging';
+import { SEARCH_LIMIT } from '../util/windows';
 import { fragmentImageUri } from '../db/fragmentImages';
 import { repo } from '../db/repo';
 
@@ -167,6 +168,8 @@ interface Props {
   loadingOlder?: boolean;
   /** 今天一共写了多少字（v0.27）。页头那一小块显示「N 字 · M 条」 */
   todayChars?: number;
+  /** 今天记了几条。由 `dayCounts` 聚合给出，不在页面上对窗口 filter */
+  todayCount?: number;
   onLoadOlder?: () => void;
   /** 正在读字的**配图 id**（不是碎片 id：一条可能有好几张图，各读各的） */
   imageBusy: Set<number>;
@@ -202,6 +205,7 @@ export function TimelineScreen({
   total = 0,
   loadingOlder = false,
   todayChars = 0,
+  todayCount = 0,
   onLoadOlder,
   imageBusy,
   imageFail,
@@ -395,7 +399,7 @@ export function TimelineScreen({
     // 150ms：打字过程里不必每敲一个字就查一次库，但也不能等太久
     const timer = setTimeout(() => {
       repo
-        .searchFragments(q, 200)
+        .searchFragments(q, SEARCH_LIMIT)
         /*
          * 结果连同**它对应的那个词**一起存。只存数组的话，关键词从「a」改成
          * 「ab」的这段空窗里，界面会把上一批结果当成新词的命中并进列表 ——
@@ -615,19 +619,17 @@ export function TimelineScreen({
     return out;
   }, [detail, fragments]);
 
-  const todayCount = useMemo(() => {
-    const key = dayKey(Date.now());
-    return fragments.filter((f) => dayKey(f.createdAt) === key).length;
-  }, [fragments]);
-
   const searchStat = useMemo(() => {
     if (!narrowed) return null;
+    const q = query.trim().toLowerCase();
     return {
       total: visibleFragments.length,
       // 「还没整理」按 organizedAt 算。用 status 的话永远是全部条数（v0.7 之后没人改它）
       pending: visibleFragments.filter((f) => !f.organizedAt).length,
+      /* 整库那一路被 limit 截断：命中数可能还有更多，统计行不能说得太确定 */
+      capped: !!dbHits && dbHits.q.toLowerCase() === q && dbHits.list.length >= SEARCH_LIMIT,
     };
-  }, [narrowed, visibleFragments]);
+  }, [narrowed, visibleFragments, dbHits, query]);
 
   /**
    * 每条碎片正文里命中几处。只算 `visibleFragments` —— 列表里没有的东西数了也没人看。
@@ -990,10 +992,10 @@ export function TimelineScreen({
             {searchStat.total === 0
               ? '没有匹配的碎片'
               : !searching
-                ? `找到 ${searchStat.total} 条${searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''}`
+                ? `找到 ${searchStat.total} 条${searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''}${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`
                 : hitTotal > 0 || imageHitTotal > 0
-                  ? `找到 ${searchStat.total} 条 · 正文 ${hitTotal} 处${imageHitTotal ? ` · 图片文字 ${imageHitTotal} 处` : ''}`
-                  : `找到 ${searchStat.total} 条 · 事项匹配`}
+                  ? `找到 ${searchStat.total} 条 · 正文 ${hitTotal} 处${imageHitTotal ? ` · 图片文字 ${imageHitTotal} 处` : ''}${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`
+                  : `找到 ${searchStat.total} 条 · 事项匹配${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`}
           </Text>
         ) : null}
       </View>

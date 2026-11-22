@@ -42,7 +42,7 @@ jobs:
         run: npm run prepare:pdf
 
       - name: 类型检查
-        run: npx tsc --noEmit
+        run: npm run typecheck
 
       - name: 导入导出往返断言
         run: npm run test:md
@@ -102,6 +102,11 @@ jobs:
       # 放这一步是因为它秒级完成 —— 失败得越早越好定位
       - name: 文档一致性检查
         run: npm run check:docs
+
+      # package.json 的 test 链与上面的步骤必须逐条对上；少跑一组不会报错，
+      # 只会让「CI 绿」少证明一件事（test:recycle 就是这样漏了一版）。
+      - name: CI 步骤完整性检查
+        run: npm run check:ci
 
       # ---- Android ----
       - uses: actions/setup-java@v4

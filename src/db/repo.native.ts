@@ -41,6 +41,7 @@ import {
   restoreBackup as restoreBackupFile,
   restoreOldDatabase,
   restoreSafetyCopy as restoreSafetyCopyFile,
+  snapshotBeforeMigration,
 } from './backup';
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -1112,6 +1113,19 @@ export const repo: Repo = {
       if (!restoreOldDatabase()) throw e;
       d = openAndPrepare();
     }
+    const fromVersion = d.getFirstSync<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0;
+    if (fromVersion > 0 && fromVersion < MIGRATIONS.length) {
+      try {
+        snapshotBeforeMigration(fromVersion, snapshotDatabaseTo);
+      } catch (e) {
+        /*
+         * 快照没写成就不要迁移：迁移里的 DELETE/UPDATE 一旦提交就不可逆，
+         * 而这正是「升级后数据不对」最难查的一类。宁可停在 BootError。
+         */
+        const reason = e instanceof Error ? e.message : String(e);
+        throw new Error(`升级前没能留下库快照，已停止迁移（数据没有改动）：${reason}`);
+      }
+    }
     try {
       migrate(d);
     } catch (e) {
@@ -1379,10 +1393,6 @@ export const repo: Repo = {
       reindexFragment(d, fragmentId);
     });
     return added;
-  },
-
-  async insertFragmentImage(fragmentId, path) {
-    return (await repo.insertFragmentImages(fragmentId, [{ path }]))[0].id;
   },
 
   async setFragmentImageText(imageId, text) {
@@ -1825,10 +1835,6 @@ export const repo: Repo = {
     db().runSync('UPDATE ask_sessions SET archived = ? WHERE id = ?', [archived ? 1 : 0, id]);
   },
 
-  async markAskSessionConverted(id, fragmentId) {
-    db().runSync('UPDATE ask_sessions SET fragment_id = ? WHERE id = ?', [fragmentId, id]);
-  },
-
   /**
    * 记下「这场会话整理出的那些文档」。
    *
@@ -2214,13 +2220,6 @@ export const repo: Repo = {
       [input.kind, input.documentId, serializeProposalPayload(input.payload), 'pending', Date.now()],
     );
     return Number(res.lastInsertRowId);
-  },
-
-  async listProposals(state) {
-    const rows = state
-      ? db().getAllSync<ProposalRow>('SELECT * FROM doc_proposals WHERE state = ? ORDER BY created_at DESC', [state])
-      : db().getAllSync<ProposalRow>('SELECT * FROM doc_proposals ORDER BY created_at DESC');
-    return rows.map(toProposal);
   },
 
   async findProposal(id) {

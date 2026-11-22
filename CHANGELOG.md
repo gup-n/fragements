@@ -157,12 +157,37 @@ v0.34 定了「写也要挡回收站」，但只覆盖文档/会话/`applyTags`�
 设置 → 数据与备份（最近 5 份），`restoreSafetyCopy` 走同一套换名，覆盖前再留一份当前库。
 恢复前后取消/重启文档任务，迟到的云解析结果不会再写进新库。
 
-### 6. 没做 / 没验
+### 6. 第三批：口径、上限、清理
 
-- **D-05 没做**：分享接收仍在主线程整文件复制、没有体积上限。
+- `util/windows` 统一 `NOTES_WINDOW` / `SEARCH_LIMIT` / `DOC_SEARCH_LIMIT`。
+  碎片搜索与文档搜索命中满时说「已显示前 N」；今日条数改走 `dayCounts`，
+  不再对已加载窗口 `filter`；时间轴与回顾的小结都用 120。
+- 6 处用户文字裸 `slice` 改用 `clip` / `clampTitle` / `cutPrefix`；
+  `test:ui` 增加源码断言，拦住对 content/title/question/bodyMd/flat 的裸 slice。
+- 删掉 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、
+  `markAskSessionConverted` 及两侧实现。
+
+### 7. 分享接收：后台复制与硬上限
+
+原生 `captureShare` 先写 `copying=true` 的占位，再在后台 `Thread` 里复制；
+最多 20 份、单份 200 MB、合计 500 MB，超限/复制失败写进 `skipped`。
+JS 的 `takeIncomingShare` 等到 `copying=false` 才消费（最多 12 秒，占位超过 60 秒视为
+上次进程被杀），并把没接住的文件名与原因显示出来 —— 不再「分享三份，只进来两份还报成功」。
+
+### 8. 草稿落盘与迁移前快照
+
+- 输入框文字 800ms 防抖写 `composer.draft.v1`，保存前剥掉 `![](img:...)`；
+  启动恢复并提示「已恢复上次没发布的内容」。**图片不落**：选择器缓存重启后可能失效，
+  恢复一半比不恢复更糟。
+- `snapshotBeforeMigration()` 在迁移前 `VACUUM INTO` 一份 `pre-migrate-vN-*.db`；
+  快照失败就不迁移，停在 BootError。恢复点列表也认 `pre-migrate-*`。
+
+### 9. 没做 / 没验
+
 - 真机没验：错误页观感、保存失败横幅与键盘/返回键的层叠、软删迟到写入的实际时序；
-  恢复中途杀进程、迁移失败回退、恢复点列表与换名只能做真机故障注入。
-  断言数 488 → **493**（ask +1、ui +1、backup +3；recycle 仍 38）。
+  恢复中途杀进程、迁移失败回退、恢复点列表与换名；分享后台复制与新上限（Kotlin 只过了 CI 编译）。
+- 搜索续页（F-05）与附录里的懒加载/量测项仍未做。
+- 断言数 488 → **494**（ask +1、ui +2、backup +3；recycle 仍 38）。
 
 ## v0.35.0 — 把 v0.34 记的账做掉：原子写、单事务、启动兜底、列表 memo
 

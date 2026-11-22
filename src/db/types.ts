@@ -169,7 +169,6 @@ export interface Repo {
   /** 同一碎片的一批图片与索引原子加入；失败不留下部分图片行。 */
   insertFragmentImages(fragmentId: number, images: { path: string; text?: string | null }[]): Promise<import('../types').FragmentImage[]>;
   /** 给已有碎片补一张图，返回这张图的 id（详情页「加一张」用） */
-  insertFragmentImage(fragmentId: number, path: string): Promise<number>;
   /** 某张图解析完：把文字层写回去，并重建这一条的全文索引（图里的字要能搜到） */
   setFragmentImageText(imageId: number, text: string): Promise<void>;
   /** 删掉一张图，返回它的文件名（调用方负责删文件）；这张图不存在返回 null */
@@ -288,7 +287,6 @@ export interface Repo {
     fragmentId?: number | null;
   }): Promise<number>;
   setAskSessionArchived(id: number, archived: boolean): Promise<void>;
-  markAskSessionConverted(id: number, fragmentId: number): Promise<void>;
   /**
    * 记下这场会话整理出的知识文档（传空数组 = 解绑）。
    * v0.17 起一次整理可能产出多篇，所以传的是 id 列表。
@@ -452,7 +450,6 @@ export interface Repo {
 
   /* ---- AI 提案（v0.28） ---- */
   insertProposal(input: { kind: ProposalKind; documentId: number | null; payload: DocProposalPayload }): Promise<number>;
-  listProposals(state?: DocProposal['state']): Promise<DocProposal[]>;
   findProposal(id: number): Promise<DocProposal | null>;
   decideProposal(id: number, state: 'approved' | 'rejected'): Promise<void>;
 

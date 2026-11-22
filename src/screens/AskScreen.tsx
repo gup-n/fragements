@@ -66,6 +66,7 @@ import { docProblem, type DraftMode } from '../util/knowledgeDoc';
 import { planDraftInput, routeAsk, showsDraftAsk, TASK_LABEL, TASK_SEED } from '../util/askIntent';
 import { KnowledgeDraftCard } from '../components/KnowledgeDraft';
 import { AgentError, errorDetailOf } from '../components/AgentError';
+import { clampTitle, cutPrefix } from '../util/text';
 import { DraftDocPage } from '../components/DraftDocPage';
 import { SummarySheet } from '../components/SummarySheet';
 import { DocViewer } from '../components/DocViewer';
@@ -522,9 +523,8 @@ export function AskScreen({
       const sessionScope = scopeRef.current;
       const rawTitle = (titleHint ?? sessionTitle ?? list[0]?.question ?? '新会话')
         .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 32);
-      const title = rawTitle || '新会话';
+        .trim();
+      const title = clampTitle(rawTitle, 32) || '新会话';
       try {
         const nextId = await repo.saveAskSession({
           id: id ?? undefined,
@@ -1047,7 +1047,7 @@ export function AskScreen({
       setTurns(next);
       turnsRef.current = next;
       // 这一轮的思维链默认摊开：否则用户看到的还是「闪一下就没了」
-      setOpenReasoningKey(`${target ?? base.length}-${question.slice(0, 8)}`);
+      setOpenReasoningKey(`${target ?? base.length}-${cutPrefix(question, 8)}`);
       dirtyRef.current = true;
       // 改的是第一问时，标题跟着换 —— 会话列表里还挂着旧问题会让人以为是另一场
       void persistSession(next, target === 0 ? question : null);
@@ -1438,7 +1438,7 @@ export function AskScreen({
                 </View>
               </View>
             ) : (
-              <View key={`${i}-${t.question.slice(0, 8)}`}>
+              <View key={`${i}-${cutPrefix(t.question, 8)}`}>
                 <View style={styles.qRow}>
                   <View style={styles.qBubble}>
                     <Text style={styles.qText}>{t.question}</Text>
@@ -1447,7 +1447,7 @@ export function AskScreen({
                 {t.reasoning ? (
                   <ReasoningFold
                     text={t.reasoning}
-                    defaultOpen={openReasoningKey === `${i}-${t.question.slice(0, 8)}`}
+                    defaultOpen={openReasoningKey === `${i}-${cutPrefix(t.question, 8)}`}
                   />
                 ) : null}
                 <TurnAnswer

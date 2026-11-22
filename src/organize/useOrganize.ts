@@ -10,6 +10,7 @@ import { docNameOf, describeForHistory, excerptOf, type DraftMode, type Knowledg
 import { hasReadableText } from '../util/fragmentText';
 import { wantsAll } from '../util/askIntent';
 import { errorDetailOf } from '../components/AgentError';
+import { clampTitle } from '../util/text';
 import { createWorkspaceStore, readCommittedWorkspace } from './storage';
 import {
   createWorkspace, ensureDraftIdentity, hasUnfinishedWork, ownerOfSession, remainingIds, selectDraftTargets,
@@ -155,7 +156,7 @@ export function useOrganize(options: Options) {
       sourceIds: [...work.draft.sourceIds], kind: 'organize', organizeDraftId: work.draft.draftId,
     };
     const turns = [...owner.turns.filter((t) => (t as OrganizeTurn).organizeDraftId !== work.draft.draftId), turn];
-    const title = owner.title || work.request.instruction.slice(0, 32) || '整理';
+    const title = clampTitle(owner.title || work.request.instruction, 32) || '整理';
     const id = await repo.saveAskSession({ id: owner.id ?? undefined, title, turns, scope: owner.scope, createdAt: owner.createdAt });
     if (!current(gen)) return work;
     const updatedOwner = { ...owner, id, title, turns };

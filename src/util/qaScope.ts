@@ -56,10 +56,3 @@ export function normalizeQaScope(value: unknown, allowLegacyMissing = false): Qa
   if (allowLegacyMissing && raw.kind === undefined) return { kind: 'records' };
   throw new Error('问答范围的类型无法识别');
 }
-
-/** 范围的稳定字符串，用于判断「是不是同一场会话」 */
-export function qaScopeKey(scope: QaScope): string {
-  if (scope.kind === 'records') return 'records';
-  // 排序：勾选顺序不同但集合相同应当算同一个范围，否则会白开一场新会话
-  return `documents:${[...scope.documentIds].sort((a, b) => a - b).join(',')}`;
-}

@@ -30,7 +30,7 @@ import { TabBar, type MainTab } from './src/components/TabBar';
 import { useKeyboardHeight } from './src/util/keyboard';
 import { DocumentRuntime } from './src/documents/readers';
 import { initDocumentJobs } from './src/documents/jobs';
-import { stripStoredImageTokens } from './src/util/inlineImages';
+import { stripImageTokens, stripStoredImageTokens } from './src/util/inlineImages';
 import { duplicateFragment } from './src/db/duplicate';
 import { runTrashCleanup } from './src/db/trashFiles';
 import { readImageBase64, removeFragmentImage, saveFragmentImage } from './src/db/fragmentImages';
@@ -44,6 +44,7 @@ import { dropIncomingFile, rewindIncomingShare, takeIncomingShare, type Incoming
 import { PAGE_SIZE, appendPage } from './src/util/paging';
 import { keyToTs, type DayCount } from './src/util/calendar';
 import { dayKey } from './src/util/date';
+import { NOTES_WINDOW } from './src/util/windows';
 import type { MonthCount } from './src/util/digest';
 
 /** 一天的毫秒数。只用来把「某一天」换算成 `[from, to)` —— 夏令时地区也不会有 23/25 小时的问题，因为按本地日界算是 CalendarTab 的事 */
@@ -79,6 +80,8 @@ function describeBootError(error: unknown): string {
 const K_THEME = 'ui_theme';
 /** 字号档位（v0.26）。和明暗/风格一样是一条设置，不是每次进设置页才读 */
 const K_TYPE_SCALE = 'ui_type_scale';
+/** 输入框草稿的本地键。只存文字：待发图片是选择器缓存，重启后可能已经失效 */
+const DRAFT_KEY = 'composer.draft.v1';
 
 /**
  * 外层只做两件事：把库打开、把外观偏好读出来，然后把整棵树包进 ThemeProvider。
@@ -240,6 +243,8 @@ function Shell({ booted }: { booted: boolean }) {
    * 打了半句去翻一张卡，回来输入框是空的 —— 这不是「没保存」，是根本没留住。
    */
   const [draft, setDraft] = useState('');
+  /** 草稿是否已经从库里读过。读之前不许保存，否则会把上一份草稿用空串覆盖 */
+  const draftLoaded = useRef(false);
   const [pendingImages, setPendingImages] = useState<PendingFragmentImage[]>([]);
   const pendingImageSequence = useRef(0);
   const nextImageKey = useCallback(() => `p${++pendingImageSequence.current}`, []);
@@ -413,7 +418,7 @@ function Shell({ booted }: { booted: boolean }) {
      */
     const [list, noteList, done, dayCounts, monthCounts, total] = await Promise.all([
       repo.listFragmentsPage(0, PAGE_SIZE),
-      repo.listNotes(120),
+      repo.listNotes(NOTES_WINDOW),
       repo.listDoneTodoSourceIds(),
       repo.dayCounts(),
       repo.monthCounts(),
@@ -498,6 +503,39 @@ function Shell({ booted }: { booted: boolean }) {
     if (!booted) return;
     void loadInitial();
   }, [booted, loadInitial]);
+  /*
+   * 输入框草稿落盘（v0.36）。
+   *
+   * 只落文字，不落待发图片：图片是选择器的缓存 URI，重启后可能已经失效，
+   * 恢复一半比不恢复更糟。保存前把 `![](img:...)` 标记全部剥掉 ——
+   * 那些标记指向的图片没有一起恢复，留着就是坏引用。
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const saved = await repo.getSetting(DRAFT_KEY);
+        if (alive && saved) {
+          setDraft((cur) => cur || saved);
+          setWriteNotice('已恢复上次没发布的内容，确认后再发布');
+        }
+      } catch {
+        /* 读不到就当没有草稿；不影响正常记录 */
+      } finally {
+        draftLoaded.current = true;
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!draftLoaded.current) return;
+    const timer = setTimeout(() => {
+      // 空串也写：提交成功后要把上一份草稿清掉
+      void repo.setSetting(DRAFT_KEY, stripImageTokens(draft)).catch(() => undefined);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [draft]);
 
   /**
    * 底栏切换。
@@ -681,6 +719,14 @@ function Shell({ booted }: { booted: boolean }) {
         const images = share.files.filter((f) => f.kind === 'image');
         const docs = share.files.filter((f) => f.kind !== 'image');
         const notices: string[] = [];
+        /*
+         * 原生按大小/数量跳过的那几份要说出来。不说的话，用户只看到「已存 2 份」，
+         * 以为分享的三份都进来了 —— 和 v0.25.3 的静默丢内容同一类。
+         */
+        if (share.skipped.length) {
+          const names = share.skipped.slice(0, 3).map((s) => `${s.name}（${s.reason}）`).join('、');
+          notices.push(`${share.skipped.length} 份没接住：${names}${share.skipped.length > 3 ? ' 等' : ''}`);
+        }
 
         if (images.length) {
           await handleAdd(share.text, images.map((f, i) => ({ key: `p${share.at}-${i}`, uri: f.uri })));
@@ -718,13 +764,13 @@ function Shell({ booted }: { booted: boolean }) {
 
         if (!share.files.length) {
           if (!share.text.trim()) {
-            setWriteNotice('这次分享里没有可保存的内容');
+            setWriteNotice(notices.join('；') || '这次分享里没有可保存的内容');
             return;
           }
           // 拼在已有草稿后面：用户可能已经写了一半，直接覆盖等于把他的话删了
           setDraft((prev) => (prev.trim() ? `${prev}\n${share.text}` : share.text));
           setRoute('timeline');
-          setWriteNotice('已把分享的文字放进输入框，确认后再发布');
+          setWriteNotice(`已把分享的文字放进输入框，确认后再发布${notices.length ? `；${notices.join('；')}` : ''}`);
           return;
         }
 
@@ -817,6 +863,8 @@ function Shell({ booted }: { booted: boolean }) {
   );
 
 
+  const today = days.find((d) => d.day === dayKey(Date.now()));
+
   return (
     <>
       <StatusBar style={dark ? 'light' : 'dark'} />
@@ -880,7 +928,8 @@ function Shell({ booted }: { booted: boolean }) {
                     focusSignal={quickTap}
                     total={fragmentTotal}
                     loadingOlder={loadingOlder}
-                    todayChars={days.find((d) => d.day === dayKey(Date.now()))?.chars ?? 0}
+                    todayChars={today?.chars ?? 0}
+                    todayCount={today?.count ?? 0}
                     onLoadOlder={() => void loadOlder()}
                   />
                 )}

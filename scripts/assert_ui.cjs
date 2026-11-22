@@ -494,11 +494,16 @@ test('多选分享：声明 SEND_MULTIPLE，原生读列表，JS 按条解析', 
   assert.ok(body.includes('org.json.JSONArray'), '多个文件要写成数组，不能只剩最后一个');
   assert.ok(body.includes('"$stamp-$index-"'), '同名文件靠 index 前缀区分，否则后一个覆盖前一个');
   assert.ok(body.includes('json.put("files", files)'), 'json 里要带 files 列表');
+  assert.ok(body.includes('Thread {'), '复制要放后台线程，否则大文件会把主线程卡到 ANR');
+  assert.ok(body.includes('maxFileBytes'), '要有单文件体积上限');
+  assert.ok(body.includes('"skipped"'), '超限/失败的文件要写进 skipped，不能静默少几项');
 
   const inbox = parseSource('src/shareInbox.ts').getText();
   assert.ok(inbox.includes('Array.isArray(parsed.files)'), 'JS 要能读 files 列表');
   assert.ok(inbox.includes('pick(parsed.file, parsed.name)'), '升级前留下的旧 json 仍然要能读');
   assert.ok(inbox.includes("kind: 'image' | 'other'"), '每个文件各自判类型（同一次分享可能图文混着）');
+  assert.ok(inbox.includes('copying'), 'JS 要等原生的 copying 占位收尾，否则会读到空文件列表');
+  assert.ok(inbox.includes('skipped'), 'JS 要读 skipped 并让界面说出来');
 });
 
 /*
@@ -839,6 +844,28 @@ test('读库失败停在错误页，不装成空库', () => {
   assert.ok(app.includes('title="数据没读出来"'), '文案要和「数据库打不开」分开');
   assert.ok(!/await reload\(\);\s*\}\s*catch \(e\) \{\s*console\.warn\('\[fragments\] 读取数据失败', e\);\s*\}\s*finally \{\s*setReady\(true\)/.test(app),
     '旧写法：reload 失败也 setReady(true) 照常进门');
+});
+
+/*
+ * 用户文字截断必须走 `clip` / `clampTitle` / `shortPreview`。
+ * 裸 `slice(0, N)` 正切在 emoji 代理对中间时，半个字符会变成 `�` 并被写进库、
+ * 文件名或引用快照 —— v0.34 定了 `safeCutIndex` 是唯一口径，这里钉住别退回去。
+ */
+test('用户文字截断走统一实现，不裸 slice', () => {
+  for (const file of [
+    'src/screens/AskScreen.tsx',
+    'src/organize/useOrganize.ts',
+    'src/util/proposal.ts',
+    'src/db/docFiles.ts',
+    'src/documents/readers/chunk.ts',
+    'src/util/trash.ts',
+  ]) {
+    const text = parseSource(file).getText();
+    assert(
+      !/\b(content|title|question|bodyMd|flat)\b[^\n;]*\.slice\(0, \d+\)/.test(text),
+      `${file} 里还有对用户文字裸 slice(0, N)`,
+    );
+  }
 });
 
 if (require.main === module) {

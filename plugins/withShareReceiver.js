@@ -111,6 +111,16 @@ const KOTLIN_BODY = `
    * \`files[].file\` 是磁盘上的名字（ASCII 安全化过），\`files[].name\` 是给人看的原名 ——
    * 两者必须分开：中文文件名换了安全字符之后在文档库里就是一片下划线。
    */
+  /**
+   * 文件的字节数。取不到就返回 null —— 不因为量不出大小把整次分享拒掉。
+   * OpenableColumns.SIZE 在部分 provider 上是 -1，这里统一当「不知道」。
+   */
+  private fun sizeOf(uri: Uri): Long? = try {
+    contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length }?.takeIf { it >= 0L }
+  } catch (e: Exception) {
+    null
+  }
+
   private fun captureShare(incoming: Intent?) {
     val action = incoming?.action ?: return
     if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
@@ -130,25 +140,68 @@ const KOTLIN_BODY = `
     }
     // EXTRA_TITLE 只对单选有意义（多选时它是整次分享的标题，不是文件名）
     val fallback = if (single) incoming.getStringExtra(Intent.EXTRA_TITLE) else null
+    if (text.isEmpty() && uris.isEmpty()) return
 
-    val files = org.json.JSONArray()
-    uris.forEachIndexed { index, uri ->
-      val saved = saveStream(uri, dir, stamp, index, fallback) ?: return@forEachIndexed
-      files.put(
-        org.json.JSONObject()
-          .put("file", saved.first)
-          .put("name", saved.second),
-      )
-    }
+    /*
+     * 先写一份「复制中」的占位，JS 看到 copying=true 会等最终文件列表。
+     * 复制放后台线程：一个几百 MB 的文件同步 copyTo 会把主线程卡到 ANR。
+     */
+    val placeholder = org.json.JSONObject()
+    placeholder.put("at", stamp)
+    placeholder.put("mime", mime)
+    placeholder.put("text", text)
+    placeholder.put("copying", true)
+    placeholder.put("files", org.json.JSONArray())
+    File(dir, "incoming-share.json").writeText(placeholder.toString())
 
-    if (text.isEmpty() && files.length() == 0) return
+    Thread {
+      val maxFiles = 20
+      val maxFileBytes = 200L * 1024L * 1024L
+      val maxTotalBytes = 500L * 1024L * 1024L
+      val files = org.json.JSONArray()
+      val skipped = org.json.JSONArray()
+      var total = 0L
+      try {
+        uris.forEachIndexed { index, uri ->
+          val shown = displayNameOf(uri) ?: ("文件 " + (index + 1))
+          if (index >= maxFiles) {
+            skipped.put(org.json.JSONObject().put("name", shown).put("reason", "一次最多接 20 份"))
+            return@forEachIndexed
+          }
+          val size = sizeOf(uri)
+          if (size != null && size > maxFileBytes) {
+            skipped.put(org.json.JSONObject().put("name", shown).put("reason", "单份超过 200 MB"))
+            return@forEachIndexed
+          }
+          if (size != null && total + size > maxTotalBytes) {
+            skipped.put(org.json.JSONObject().put("name", shown).put("reason", "合计超过 500 MB"))
+            return@forEachIndexed
+          }
+          val saved = saveStream(uri, dir, stamp, index, fallback)
+          if (saved == null) {
+            skipped.put(org.json.JSONObject().put("name", shown).put("reason", "复制失败"))
+            return@forEachIndexed
+          }
+          if (size != null) total += size
+          files.put(
+            org.json.JSONObject()
+              .put("file", saved.first)
+              .put("name", saved.second),
+          )
+        }
+      } catch (e: Exception) {
+        skipped.put(org.json.JSONObject().put("name", "分享").put("reason", e.message ?: "复制失败"))
+      }
 
-    val json = org.json.JSONObject()
-    json.put("at", stamp)
-    json.put("mime", mime)
-    json.put("text", text)
-    json.put("files", files)
-    File(dir, "incoming-share.json").writeText(json.toString())
+      val json = org.json.JSONObject()
+      json.put("at", stamp)
+      json.put("mime", mime)
+      json.put("text", text)
+      json.put("copying", false)
+      json.put("files", files)
+      json.put("skipped", skipped)
+      File(dir, "incoming-share.json").writeText(json.toString())
+    }.start()
   }
 
   override fun onNewIntent(intent: Intent) {

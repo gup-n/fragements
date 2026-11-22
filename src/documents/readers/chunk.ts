@@ -19,7 +19,7 @@ import type {
   DocumentContentSource,
   DocumentLocator,
 } from '../../types';
-import { safeCutIndex } from '../../util/text';
+import { clip, safeCutIndex } from '../../util/text';
 import { LOCAL_READER_LIMITS } from '../formats';
 import { bodyTooLong, ReaderError } from './errors';
 
@@ -94,7 +94,7 @@ export function headingOf(line: string): string | null {
   if (!m) return null;
   const title = m[1].trim();
   if (!title) return null;
-  return title.length > 40 ? `${title.slice(0, 40)}…` : title;
+  return clip(title, 41);
 }
 
 /**

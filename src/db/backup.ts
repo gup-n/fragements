@@ -48,7 +48,7 @@ async function collect(dir: Directory): Promise<Collected[]> {
   if (!dir.exists) return [];
   const out: Collected[] = [];
   for (const item of dir.list()) {
-    if (!(item instanceof File) || !item.name.startsWith('pre-restore-') || !item.name.endsWith('.db')) continue;
+    if (!(item instanceof File) || !/^pre-(restore|migrate)-/.test(item.name) || !item.name.endsWith('.db')) continue;
     try {
       const bytes = await item.bytes();
       out.push({ name: item.name, bytes, size: bytes.byteLength });
@@ -440,6 +440,34 @@ export async function restoreBackup(zipUri: string, deps: RestoreDeps): Promise<
 }
 
 /**
+ * 升级前留一份库快照（v0.36，F-01）。
+ *
+ * 迁移本身包在事务里，但事务只保证「要么全成、要么全败」；
+ * 迁移语句写坏了数据（v7/v11 有 DELETE/UPDATE）提交之后就不可逆。
+ * 所以在跑迁移之前 `VACUUM INTO` 一份，失败就**不要迁移** —— 宁可这次不开，
+ * 也不带病开。快照与恢复点同一目录，设置页能看到、能恢复。
+ *
+ * 返回快照文件名；版本为 0（新库）或无需迁移时返回 null。
+ */
+export function snapshotBeforeMigration(
+  fromVersion: number,
+  snapshot: (targetFsPath: string) => void,
+): string | null {
+  if (fromVersion <= 0) return null;
+  const dir = new Directory(Paths.document, SAFETY_DIR);
+  dir.create({ intermediates: true, idempotent: true });
+  const base = safetyCopyName(Date.now())
+    .replace('pre-restore-', `pre-migrate-v${fromVersion}-`)
+    .replace(/\.db$/, '');
+  let name = `${base}.db`;
+  for (let i = 1; new File(dir, name).exists; i++) name = `${base}-${i}.db`;
+  const file = new File(dir, name);
+  snapshot(fsPath(file.uri));
+  pruneSafetyCopies(dir, name);
+  return name;
+}
+
+/**
  * 从「恢复点」（`backups/pre-restore-*.db`）恢复。
  *
  * 这是给设置页那个「后悔药」列表用的：先再留一份当前库，再用选中的旧库覆盖。
@@ -449,7 +477,7 @@ export async function restoreSafetyCopy(
   name: string,
   deps: RestoreDeps,
 ): Promise<{ safetyName: string; safetyBytes: number }> {
-  if (name.includes('/') || name.includes('\\') || !name.startsWith('pre-restore-') || !name.endsWith('.db')) {
+  if (name.includes('/') || name.includes('\\') || !/^pre-(restore|migrate)-/.test(name) || !name.endsWith('.db')) {
     throw new Error('恢复点文件名不合法');
   }
   const safetyDir = new Directory(Paths.document, SAFETY_DIR);

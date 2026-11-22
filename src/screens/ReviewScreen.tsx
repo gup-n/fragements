@@ -25,6 +25,7 @@ import type { Fragment, Note, Todo } from '../types';
 import { SPACE, TYPE, useThemedStyles, type Palette, type ThemeMetrics } from '../theme';
 import { repo } from '../db/repo';
 import { dayKey, daySubLabel, formatTime, periodAnchor, periodLabel } from '../util/date';
+import { NOTES_WINDOW } from '../util/windows';
 import { NOTE_GROUP_LABEL, groupNotes, missingDigests, reviewSubtitle, type MonthCount } from '../util/digest';
 import { WEEKDAY_HEADS, keyToTs, monthCells, monthTitle, shiftMonth, type DayCount, type MonthRef } from '../util/calendar';
 import { stripImageTokens } from '../util/inlineImages';
@@ -163,7 +164,7 @@ export function ReviewScreen({
   const reload = useCallback(async () => {
     setLoadError('');
     try {
-      const [t, n, m] = await Promise.all([repo.listTodos(), repo.listNotes(60), repo.listMergedTodos()]);
+      const [t, n, m] = await Promise.all([repo.listTodos(), repo.listNotes(NOTES_WINDOW), repo.listMergedTodos()]);
       setTodos(t); setNotes(n); setMerged(m);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : '暂时没有读到数据，请重试');

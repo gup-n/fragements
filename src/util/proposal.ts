@@ -7,7 +7,7 @@
  */
 import type { DocProposal, DocProposalPayload, ProposalKind } from '../types';
 import { cleanTagNames } from './docTags';
-import { clampTitle } from './text';
+import { clampTitle, clip } from './text';
 
 export const PROPOSAL_LABEL: Record<ProposalKind, string> = {
   optimize: '优化',
@@ -64,7 +64,7 @@ export function parseProposalPayload(raw: unknown): DocProposalPayload {
     if (clean.length) out.tags = clean;
   }
 
-  if (typeof src.note === 'string' && src.note.trim()) out.note = src.note.trim().slice(0, 200);
+  if (typeof src.note === 'string' && src.note.trim()) out.note = clip(src.note.trim(), 200);
   return out;
 }
 

@@ -145,6 +145,7 @@ const { c, styles, metrics } = useThemedStyles(makeStyles);
   不要在模块顶层把 `TYPE.body` 存进常量（那时读到的是标准档，之后永远不变）。
 - **系统分享的 json 有两个形状**：v0.25 起是 `files: [{file, name}]`，之前是单个 `file`/`name`。读的时候两条都要认 —— 升级前分享、升级后才打开 App 的机器上，磁盘里躺的是旧形状。`disk`（安全名）只用来删文件，`name`（原名）才入库。
 - **分享的幂等键在读的时候就推进了**（`share_last_at`），所以「读到了」不等于「存进去了」。一份都没存成功时必须 `rewindIncomingShare(prevAt)` 退回去，否则文件还在私有目录、界面什么都没有 —— 静默丢内容。已经存进去一部分时不许退（会让那部分再进一遍）。
+- **分享接收有硬上限，复制不在主线程**（v0.36）：最多 20 份、单份 200 MB、合计 500 MB。原生先写 `copying=true` 的占位，再在后台 `Thread` 里复制；JS 必须等到 `copying=false` 才消费，并把 `skipped` 里的名字和原因说出来。**别把 `copyTo` 放回 `onCreate`/`onNewIntent` 的主线程** —— 一个大文件就是一次 ANR。
 - **两条本地通知各认各的 `kind`**（`quick-record` / `digest-reminder`）。都靠 `getLastNotificationResponseAsync` 补冷启动那一次点击，所以谁都不许无条件 `clearLastNotificationResponseAsync` —— 那会把另一条的手势吞掉。新增第三种通知时同样处理。
 
 - **删除一律是软删**（v0.28）。`deleteFragment` / `deleteDocument` / `deleteAskSession`

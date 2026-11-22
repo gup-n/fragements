@@ -49,6 +49,8 @@ export interface IncomingShare {
   text: string;
   /** 已复制到私有目录的文件，可能 0 个（纯文字分享）或好几个（多选分享） */
   files: IncomingFile[];
+  /** 因为太大/太多/复制失败被跳过的条目。界面要说出来，不能静默少几项 */
+  skipped: { name: string; reason: string }[];
 }
 
 const IMAGE_EXT = /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i;
@@ -68,9 +70,7 @@ function kindOf(mime: string, ...names: string[]): IncomingFile['kind'] {
  * 判定「新」用的是 `at > 上次处理的时间戳`，并且**先落库再返回** ——
  * 反过来的话，读取过程中用户切走，下次启动会把同一条当新的再来一次。
  */
-export async function takeIncomingShare(): Promise<IncomingShare | null> {
-  if (Platform.OS !== 'android') return null;
-
+async function readPayload(): Promise<Record<string, unknown> | null> {
   let raw = '';
   try {
     const json = new File(Paths.document, DIR, JSON_NAME);
@@ -79,16 +79,33 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
   } catch {
     return null;
   }
-
-  let parsed: Record<string, unknown> | null = null;
   try {
-    parsed = JSON.parse(raw) as Record<string, unknown>;
+    return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return null;
   }
+}
 
-  const at = typeof parsed?.at === 'number' ? parsed.at : 0;
+export async function takeIncomingShare(): Promise<IncomingShare | null> {
+  if (Platform.OS !== 'android') return null;
+
+  let parsed = await readPayload();
+  if (!parsed) return null;
+
+  const at = typeof parsed.at === 'number' ? parsed.at : 0;
   if (!at) return null;
+
+  /*
+   * 原生把复制放在后台线程，先写一份 copying=true 的占位。这里等它收尾：
+   * 最多 12 秒；占位超过 60 秒还停着，说明上次进程被杀在半路，直接放弃。
+   * 不等待的话，大文件分享会在「文件列表还是空」的那一刻被消费掉，等于丢了。
+   */
+  for (let i = 0; i < 40 && parsed?.copying === true; i++) {
+    if (Date.now() - at > 60_000) return null;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    parsed = await readPayload();
+  }
+  if (!parsed || parsed.copying === true) return null;
 
   let last = 0;
   try {
@@ -139,7 +156,18 @@ export async function takeIncomingShare(): Promise<IncomingShare | null> {
     if (legacy) files.push(legacy);
   }
 
-  return { at, prevAt: last, mime, text, files };
+  const skipped: { name: string; reason: string }[] = [];
+  if (Array.isArray(parsed.skipped)) {
+    for (const item of parsed.skipped) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Record<string, unknown>;
+      const name = typeof row.name === 'string' && row.name ? row.name : '文件';
+      const reason = typeof row.reason === 'string' && row.reason ? row.reason : '没有接住';
+      skipped.push({ name, reason });
+    }
+  }
+
+  return { at, prevAt: last, mime, text, files, skipped };
 }
 
 /**

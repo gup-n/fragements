@@ -65,6 +65,7 @@ import { DocEditor } from '../components/DocEditor';
 import { SwipeRow } from '../components/SwipeRow';
 import { BatchSheet } from '../components/DocBatchSheet';
 import { filterDocsByTag, sortTags, tagChipText } from '../util/docTags';
+import { DOC_SEARCH_LIMIT } from '../util/windows';
 
 interface Props {
   /** 作为底栏 tab 常驻时不画返回箭头（多选态仍然要「取消」，那是页内状态） */
@@ -218,7 +219,7 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
     setSearching(true);
     const timer = setTimeout(async () => {
       try {
-        const found = await repo.searchDocuments(q, 60);
+        const found = await repo.searchDocuments(q, DOC_SEARCH_LIMIT);
         if (!cancelled) setHits(found);
       } catch (e) {
         if (!cancelled) {
@@ -550,6 +551,10 @@ export function DocsScreen({ embedded = false, onClose, onAsk }: Props) {
           <IconButton name="close" size={18} diameter={28} onPress={() => setQuery('')} accessibilityLabel="清空搜索" />
         ) : null}
       </View>
+
+      {query.trim() && hits && hits.length >= DOC_SEARCH_LIMIT ? (
+        <Text style={styles.searchCap}>已显示前 {DOC_SEARCH_LIMIT} 篇，换个更具体的词能缩小范围</Text>
+      ) : null}
 
       {/*
         标签栏是**平铺**的（用户 2026-11-18 定）：一行能滑的芯片，没有层级。
@@ -1532,6 +1537,7 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
   },
   writeText: { ...TYPE.body, color: c.text, fontWeight: '600' },
   /* ---- 标签栏（平铺） ---- */
+  searchCap: { ...TYPE.meta, color: c.text3, paddingTop: SPACE.xxs },
   tagBar: { flexGrow: 0, marginTop: SPACE.xxs },
   tagBarContent: { paddingHorizontal: metrics.pagePadding, gap: SPACE.xs, alignItems: 'center' },
   chip: {
