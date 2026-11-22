@@ -635,7 +635,7 @@ export const repo: Repo = {
     });
   },
 
-  async searchFragments(query, limit = 40) {
+  async searchFragments(query, limit = 40, offset = 0) {
     const tokens = tokenizeText(query);
     if (!tokens.length) return [];
     const scored: { f: Fragment; score: number }[] = [];
@@ -647,8 +647,8 @@ export const repo: Repo = {
       if (score > 0) scored.push({ f, score });
     }
     return scored
-      .sort((a, b) => b.score - a.score || b.f.createdAt - a.f.createdAt)
-      .slice(0, limit)
+      .sort((a, b) => b.score - a.score || b.f.createdAt - a.f.createdAt || b.f.id - a.f.id)
+      .slice(offset, offset + limit)
       .map((x) => x.f);
   },
 

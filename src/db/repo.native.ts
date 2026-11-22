@@ -823,7 +823,7 @@ function reindexFragment(d: SQLite.SQLiteDatabase, id: number) {
  * FTS 检索的实现。抽成模块函数而不是对象方法，是为了让自检能直接调它 ——
  * 走 `this` 在解构调用时会丢上下文。
  */
-function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragment[] {
+function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number, offset: number): Fragment[] {
   const match = buildFtsQuery(query);
   if (match) {
     try {
@@ -831,11 +831,12 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
         `SELECT f.*, bm25(fragment_fts) AS rank FROM fragment_fts
            JOIN fragments f ON f.id = fragment_fts.rowid
           WHERE fragment_fts MATCH ? AND f.merged_into IS NULL AND f.deleted_at IS NULL
-          ORDER BY rank
-          LIMIT ?`,
-        [match, limit],
+          ORDER BY rank, f.id
+          LIMIT ? OFFSET ?`,
+        [match, limit, offset],
       );
-      if (rows.length) return attachImages(d, rows.map(toFragment));
+      // offset > 0 时 0 行就是「后面没有了」，不能退回 LIKE 再从头捞一遍
+      if (rows.length || offset > 0) return attachImages(d, rows.map(toFragment));
     } catch {
       /* FTS 语法/扩展异常时退回 LIKE，不能让问答整条挂掉 */
     }
@@ -854,7 +855,7 @@ function searchIn(d: SQLite.SQLiteDatabase, query: string, limit: number): Fragm
   const needle = query.trim().toLowerCase();
   return attachImages(d, rows.map(toFragment))
     .filter((f) => fragmentSearchText(f).toLowerCase().includes(needle))
-    .slice(0, limit);
+    .slice(offset, offset + limit);
 }
 
 /** 按 200 条一页重建索引。迁移回填和设置页「重建索引」共用 */
@@ -1509,8 +1510,8 @@ export const repo: Repo = {
     });
   },
 
-  async searchFragments(query, limit = 40) {
-    return searchIn(db(), query, limit);
+  async searchFragments(query, limit = 40, offset = 0) {
+    return searchIn(db(), query, limit, offset);
   },
 
   async searchIndexStats() {
@@ -1559,7 +1560,7 @@ export const repo: Repo = {
 
       for (const needle of needles) {
         // limit 给到 50：高频词在小库上也可能命中很多条
-        const found = searchIn(d, needle, 50);
+        const found = searchIn(d, needle, 50, 0);
         if (found.some((f) => f.id === r.id)) {
           ok = true;
           break;

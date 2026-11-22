@@ -84,6 +84,9 @@ test('搜索两路合并：窗口内命中 + 整库检索，按 id 去重', () =
   assert.ok(timeline.includes('mergeWindowHits(local, remote)'), '两路结果必须合并');
   assert.ok(timeline.includes('setDbHits(null)'), '清空搜索词要清掉上一次的库命中');
   assert.ok(/clearTimeout\(timer\)/.test(timeline), '防抖要能取消，否则打完字还在查上一串');
+  assert.ok(timeline.includes('loadMoreSearch'), '命中满 200 条时要能继续加载');
+  assert.ok(timeline.includes('searchFragments(hit.q, SEARCH_LIMIT, hit.list.length)'), '续页要带 offset');
+  assert.ok(read('src/db/repo.native.ts').includes('LIMIT ? OFFSET ?'), 'FTS 分页要下推到 SQL');
 });
 
 test('SQL 的分组口径必须带 localtime，且与 JS 的 dayKey/monthKey 对齐', () => {

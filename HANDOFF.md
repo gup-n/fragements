@@ -63,6 +63,8 @@
 - **迁移前快照**：`snapshotBeforeMigration` 在迁移前 `VACUUM INTO` 一份
   `pre-migrate-vN-*.db`；快照失败就不迁移，停在 BootError。
 - **CI 自检**：`scripts/check_ci.mjs` 逐条比对 `test` 链与 workflow；少一步就红。
+- **搜索续页**：`searchFragments(query, limit, offset)` 下推到 SQL；时间轴命中满时说
+  「已显示 N 条」并给「继续加载」，按 id 去重接页。
 - 断言：`test:ask` 99 → 100、`test:ui` 47 → 48（recycle 仍 38，但 CI 开始跑它）。
   本地 `npm test` **494 项**全绿；`tsc --noUnusedLocals` 0 告警。
 - **没验**：真机上的错误页观感、保存失败横幅与键盘/返回键的层叠；
@@ -667,7 +669,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/digestReminder.ts` | 215 | 月度小结提醒：DEFAULT 渠道、先要权限再落库、固定 id 排/撤那条通知、点通知落回顾页；冷启动那次单独捞 |
 | `src/util/digestReminder.ts` | 102 | 纯函数：`nextRemindAt`（最近一个 20:00）、`planDigestReminder`（keep/cancel/schedule）、提醒正文本 |
 | `src/util/notifyPerm.ts` | 41 | 通知权限只有一份：`ensureNotifyPermission` 当场要权限、`hasNotifyPermission` 只查不问（null = 查不出来），两个通知入口共用 |
-| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2031 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
+| `src/screens/TimelineScreen.tsx` [打开](<src/screens/TimelineScreen.tsx>) | 2070 | 日/月折叠、可见文字/OCR搜索、事项筛选、输入与外置附件、手势和详情入口 |
 | `src/screens/AskScreen.tsx` [打开](<src/screens/AskScreen.tsx>) | 2141 | 问答聊天流、输入区、引用与文档范围、整理控制器接线；历史抽屉已搬成组件；v0.33 起回答可重新生成 / 改问题 / 切版本 |
 | `src/components/AskHistoryPanel.tsx` [打开](<src/components/AskHistoryPanel.tsx>) | 159 | 历史抽屉外壳：压暗层、页头、分组、空屏、滚动容器；状态全在页面，自己只读 props |
 | `src/components/AskHistoryRow.tsx` [打开](<src/components/AskHistoryRow.tsx>) | 116 | 历史会话一行：标题、时间与轮数、状态徽标、那句预览、「⋯」；不持有状态，点击全部上抛 |
@@ -695,7 +697,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | 文件 | 行 | 当前职责 |
 |---|---|---|
 | `src/db/types.ts` [打开](<src/db/types.ts>) | 517 | 两端Repo唯一接口、原子草稿输入/回执等共享契约 |
-| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2393 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
+| `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2394 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
 | `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1340 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 526 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复走 `.new`/`.old` 两阶段换名，失败回退，启动兜底；恢复点列表与恢复 |
 | `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
@@ -854,7 +856,7 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `scripts/assert_appearance.cjs` [打开](<scripts/assert_appearance.cjs>) | 447 | 两轴外观、真实对比度、PDF与阅读器契约 |
 | `scripts/assert_ui.cjs` [打开](<scripts/assert_ui.cjs>) | 877 | 48项纯内存UI布局/控件回归：语义字号、窄屏底栏、间距 token、空屏与分享契约，非真机视觉验收 |
 | `scripts/assert_reminder.cjs` [打开](<scripts/assert_reminder.cjs>) | 227 | 13项：提醒时刻、不重排、3天冷却、账清就撤、正文与权限失配口径，外加「用 createSuite 的脚本必须设退出码」的卫生检查 |
-| `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 159 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
+| `scripts/assert_paging.cjs` [打开](<scripts/assert_paging.cjs>) | 162 | 10项：页大小、去重接页、剩余条数、SQL 的 localtime 口径、四处不再依赖全量数组、筛选只覆盖已加载、搜索两路合并 |
 | `scripts/assert_update.cjs` [打开](<scripts/assert_update.cjs>) | 121 | 7项：残包续传的四个判据（版本/源/大小/已下全）、切后台不算卡死、百分比、以及「下载不许退回一次性任务」「面板卸载不许删残包」两条源码卫生 |
 | `scripts/assert_recycle.cjs` | 629 | 38项：逐条扫 SQL 的软删过滤、五条写路径不碰回收站、迁移与版本号同事务、恢复只补真恢复的行、标签查重同源 |
 | `scripts/test_loader.cjs` [打开](<scripts/test_loader.cjs>) | 305 | 测试用内存编译/依赖桩/AST抽取，不加载真实数据库或网络 |

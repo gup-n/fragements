@@ -191,7 +191,7 @@ export interface Repo {
    * 本地全文检索。native 走 FTS5（中文 bigram），web 走 includes。
    * 结果已按相关度排序；调用方不再自己排序。
    */
-  searchFragments(query: string, limit?: number): Promise<Fragment[]>;
+  searchFragments(query: string, limit?: number, offset?: number): Promise<Fragment[]>;
   /**
    * 把这些碎片标成「已整理」。整理产出真正写进库之后才调。
    *

@@ -164,6 +164,8 @@ v0.34 定了「写也要挡回收站」，但只覆盖文档/会话/`applyTags`�
   不再对已加载窗口 `filter`；时间轴与回顾的小结都用 120。
 - 6 处用户文字裸 `slice` 改用 `clip` / `clampTitle` / `cutPrefix`；
   `test:ui` 增加源码断言，拦住对 content/title/question/bodyMd/flat 的裸 slice。
+- 搜索续页：`searchFragments(query, limit, offset)` 下推到 SQL；命中满时说「已显示 N 条」
+  并给「继续加载」，按 id 去重接页。
 - 删掉 `qaScopeKey`、`DigestKind`、`insertFragmentImage`、`listProposals`、
   `markAskSessionConverted` 及两侧实现。
 
@@ -186,7 +188,7 @@ JS 的 `takeIncomingShare` 等到 `copying=false` 才消费（最多 12 秒，�
 
 - 真机没验：错误页观感、保存失败横幅与键盘/返回键的层叠、软删迟到写入的实际时序；
   恢复中途杀进程、迁移失败回退、恢复点列表与换名；分享后台复制与新上限（Kotlin 只过了 CI 编译）。
-- 搜索续页（F-05）与附录里的懒加载/量测项仍未做。
+- 附录里的懒加载/量测项（O-06/O-07）仍未做；需要设备或实测数据。
 - 断言数 488 → **494**（ask +1、ui +2、backup +3；recycle 仍 38）。
 
 ## v0.35.0 — 把 v0.34 记的账做掉：原子写、单事务、启动兜底、列表 memo

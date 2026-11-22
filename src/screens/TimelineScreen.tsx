@@ -388,7 +388,8 @@ export function TimelineScreen({
    * 那是这个版本最容易犯、也最难被自己发现的错。
    * FTS 分不出 1 个字或 emoji，所以本地那一路留着，两路按 id 合并。
    */
-  const [dbHits, setDbHits] = useState<{ q: string; list: Fragment[] } | null>(null);
+  const [dbHits, setDbHits] = useState<{ q: string; list: Fragment[]; hasMore: boolean } | null>(null);
+  const [searchMoreBusy, setSearchMoreBusy] = useState(false);
   useEffect(() => {
     const q = query.trim();
     if (!q) {
@@ -405,12 +406,33 @@ export function TimelineScreen({
          * 「ab」的这段空窗里，界面会把上一批结果当成新词的命中并进列表 ——
          * 出现「找到 37 条」，逐条看却一条都对不上。
          */
-        .then((list) => { if (alive) setDbHits({ q, list }); })
+        .then((list) => { if (alive) setDbHits({ q, list, hasMore: list.length >= SEARCH_LIMIT }); })
         // 检索失败就只说本地命中的那些，别把「库搜不了」说成「搜不到」
         .catch(() => { if (alive) setDbHits(null); });
     }, 150);
     return () => { alive = false; clearTimeout(timer); };
   }, [query]);
+
+  /** 搜索续页：按 offset 再取一页，按 id 去重后接在已有结果后面 */
+  async function loadMoreSearch() {
+    const hit = dbHits;
+    if (!hit || !hit.hasMore || searchMoreBusy) return;
+    setSearchMoreBusy(true);
+    try {
+      const more = await repo.searchFragments(hit.q, SEARCH_LIMIT, hit.list.length);
+      setDbHits((prev) => {
+        if (!prev || prev.q !== hit.q) return prev;
+        const seen = new Set(prev.list.map((f) => f.id));
+        const list = [...prev.list, ...more.filter((f) => !seen.has(f.id))];
+        return { q: prev.q, list, hasMore: more.length >= SEARCH_LIMIT };
+      });
+    } catch {
+      // 这一页取不到就停在已有结果，不要把「还能继续」一直挂着
+      setDbHits((prev) => (prev && prev.q === hit.q ? { ...prev, hasMore: false } : prev));
+    } finally {
+      setSearchMoreBusy(false);
+    }
+  }
 
   const visibleFragments = useMemo(() => {
     const base = filter ? fragments.filter((f) => f.project === filter.value) : fragments;
@@ -627,7 +649,7 @@ export function TimelineScreen({
       // 「还没整理」按 organizedAt 算。用 status 的话永远是全部条数（v0.7 之后没人改它）
       pending: visibleFragments.filter((f) => !f.organizedAt).length,
       /* 整库那一路被 limit 截断：命中数可能还有更多，统计行不能说得太确定 */
-      capped: !!dbHits && dbHits.q.toLowerCase() === q && dbHits.list.length >= SEARCH_LIMIT,
+      capped: !!dbHits && dbHits.q.toLowerCase() === q && dbHits.hasMore,
     };
   }, [narrowed, visibleFragments, dbHits, query]);
 
@@ -988,15 +1010,30 @@ export function TimelineScreen({
           </View>
         ) : null}
         {searchStat ? (
-          <Text style={styles.searchStat}>
-            {searchStat.total === 0
-              ? '没有匹配的碎片'
-              : !searching
-                ? `找到 ${searchStat.total} 条${searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''}${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`
-                : hitTotal > 0 || imageHitTotal > 0
-                  ? `找到 ${searchStat.total} 条 · 正文 ${hitTotal} 处${imageHitTotal ? ` · 图片文字 ${imageHitTotal} 处` : ''}${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`
-                  : `找到 ${searchStat.total} 条 · 事项匹配${searchStat.capped ? `（已显示前 ${SEARCH_LIMIT} 条）` : ''}`}
-          </Text>
+          <View style={styles.searchStatRow}>
+            <Text style={styles.searchStat}>
+              {searchStat.total === 0
+                ? '没有匹配的碎片'
+                : `${searchStat.capped ? '已显示' : '找到'} ${searchStat.total} 条${
+                    !searching
+                      ? searchStat.pending > 0 ? ` · ${searchStat.pending} 条还没整理` : ''
+                      : hitTotal > 0 || imageHitTotal > 0
+                        ? ` · 正文 ${hitTotal} 处${imageHitTotal ? ` · 图片文字 ${imageHitTotal} 处` : ''}`
+                        : ' · 事项匹配'
+                  }`}
+            </Text>
+            {searchStat.capped ? (
+              <Pressable
+                onPress={() => void loadMoreSearch()}
+                disabled={searchMoreBusy}
+                accessibilityRole="button"
+                accessibilityLabel={searchMoreBusy ? '正在加载更多搜索结果' : '继续加载搜索结果'}
+                hitSlop={8}
+              >
+                <Text style={styles.searchMore}>{searchMoreBusy ? '加载中…' : '继续加载'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
         ) : null}
       </View>
 
@@ -1700,7 +1737,9 @@ const makeStyles = (c: Palette, metrics: ThemeMetrics) => StyleSheet.create({
     paddingHorizontal: SPACE.md,
   },
   searchInput: { ...TYPE.body, flex: 1, color: c.text, paddingVertical: 0, ...WEB_INPUT_RESET },
-  searchStat: { ...TYPE.meta, color: c.text3, marginTop: 5, paddingLeft: 2 },
+  searchStat: { ...TYPE.meta, color: c.text3, flexShrink: 1 },
+  searchStatRow: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: 5, paddingLeft: 2 },
+  searchMore: { ...TYPE.meta, color: c.accentText, fontWeight: '600' },
 
   listContent: { paddingBottom: SPACE.xs },
   /** 「加载更早的」：列表最后一行，和空屏一样低调，不抢记录的注意力 */
