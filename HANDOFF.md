@@ -700,7 +700,6 @@ v0.20.6 的完整备份、快速记录、分享接收和可靠性代码保留；
 | `src/db/repo.native.ts` [打开](<src/db/repo.native.ts>) | 2394 | SQLite、17段历史迁移（含软删/标签/提案）、FTS投影、记录/图片与草稿原子提交 |
 | `src/db/repo.web.ts` [打开](<src/db/repo.web.ts>) | 1340 | localStorage平台实现与回滚边界；不证明原生迁移通过 |
 | `src/db/backup.ts` | 526 | 完整备份的文件层：`VACUUM INTO` 快照 → 库 + 配图 + 文档原件打 zip；恢复走 `.new`/`.old` 两阶段换名，失败回退，启动兜底；恢复点列表与恢复 |
-| `src/db/backup.web.ts` | 22 | 网页端占位：没有私有目录和本地库文件，直接抛一句人话，不假装备份成功 |
 | `src/db/repo.ts` [打开](<src/db/repo.ts>) | 7 | 平台分流入口 |
 | `src/db/draftCommit.ts` [打开](<src/db/draftCommit.ts>) | 135 | 输入/凭据验证、稳定key、共享提交项处理，平台事务内调用 |
 | `src/db/importMd.ts` [打开](<src/db/importMd.ts>) | 187 | 系统选文件、预览、完整分钟判重、串行单条原子导入与部分失败说明 |
